@@ -1,0 +1,8 @@
+.DS_Store
+*.log
+scripts/
+
+AGENTS.md
+CLAUDE.md
+.evolab/
+.claude/
