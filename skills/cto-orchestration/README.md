@@ -37,6 +37,10 @@
 
 它编码的不是"怎么派工"，是**派发链路里所有会骗你的静默失败**：假完成、假评审、假绿灯、孤儿进程空转。
 
+> **为什么是 tmux 交互，而不是 `claude -p` / subagent 派发？** 编排不是"发了就等结果"——你要在 agent
+> 跑偏时纠偏、塞进新事实、插入临时任务。headless / subagent 跑完才回、中途插不进话；tmux `send-keys`
+> 让你随时 steering，这是这套工作流能用的前提。
+
 ## 效果示例
 
 让谁执行、谁评审，不靠拍脑袋——跑一次 **plan-first A/B**：同一个 goal 同时派给两个模型，各自只产出"排查结论 + 方案 plan + 风险"（**先不改代码**），再对比 plan 质量。上方截图是一次真实对比，要点如下（原文见[致谢](#致谢)）：
@@ -72,29 +76,16 @@
 
 ## 前置依赖与安装
 
-### 依赖
+**依赖**：`tmux` + 一个执行 agent CLI（[`omp`/oh-my-pi](https://github.com/can1357/oh-my-pi)，也可换 **Claude Code**）+ `codex`（[评审，异构推荐绑它](https://github.com/openai/codex)）。三个**首次用前都要登录、配好模型**；分工见[上一节](#三层异构模型策略)。
 
-- **`tmux`** — 派发与监控的载体　`brew install tmux`（macOS）/ `apt install tmux`（Debian/Ubuntu）
-- **`omp`** — 执行 agent，[oh-my-pi](https://github.com/can1357/oh-my-pi)：可路由 Opus / GPT 等模型的 agent CLI，执行效率高。**可换成 Claude Code**，无区别。
-- **`codex`** — 评审 agent，[OpenAI Codex CLI](https://github.com/openai/codex)。异构评审推荐绑它。
-
-### 装这个 skill
-
-**Claude Code plugin marketplace（推荐）：**
+**装**（Claude Code plugin marketplace，推荐）：
 
 ```text
 /plugin marketplace add martin1847/evolab
 /plugin install cto-orchestration@evolab
 ```
 
-**或手动拷贝：**
-
-```bash
-git clone https://github.com/martin1847/evolab.git
-cp -R evolab/skills/cto-orchestration ~/.claude/skills/
-```
-
-> 其他 agent（Cursor / Codex / Cline …）：把 `SKILL.md` 当规则/上下文喂进去即可——它是工具无关的方法论，不绑 runtime。
+> 手动拷贝、其他 runtime（Cursor / Cline…）、以及**配套的 `repo-governance-bootstrap`**（cto 派工依赖项目先有治理骨架，二者一起装才成体系）——完整装法见[仓库 README](../../README.md)。
 
 ### 装完第一句话
 
