@@ -1,5 +1,6 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 # Watcher template — poll a tmux agent session, report a TYPED terminal state.
+# POSIX-ish bash (no zsh-isms); works under bash 3.2+ (macOS) and modern Linux bash.
 # Usage: watcher.sh <tmux-session> [busy-marker] [shell-regex]
 #   omp busy marker:   '⟦esc⟧'
 #   codex busy marker: 'esc to interrupt'
@@ -33,7 +34,12 @@ SHELL_RE="${3:-^(-?zsh|-?bash|-?sh|login)$}"
 # shows "no busy marker". This is WAITING, not DONE. Heuristic, checked only when
 # idle and only on the last few lines; keep it specific to avoid agents that
 # merely print y/n mid-analysis.
-INPUT_RE='(\(y/n\)|\[y/N\]|Do you want to proceed|Allow this|press enter|❯ 1\.|password:)'
+# Includes TUI radio-select menus (e.g. omp): a settled menu shows the selected
+# option as a filled radio '◉' plus an arrow-nav hint '↑/↓' — both distinctive
+# glyphs agents don't emit mid-stream, so they won't false-positive while busy.
+# (Learned: a radio menu has no busy marker, so marker-absence alone mis-read it
+#  as DONE and the orchestrator dispatched a still-waiting agent to review.)
+INPUT_RE='(\(y/n\)|\[y/N\]|Do you want to proceed|Allow this|press enter|❯ [0-9]|◉|↑/↓|password:)'
 
 idle=0; samehash=0; lasthash=""
 for i in {1..130}; do

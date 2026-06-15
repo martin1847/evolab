@@ -24,6 +24,17 @@ metadata:
 实证：omp（oh-my-pi+Opus）强在自主执行，codex（gpt）强在严苛评审，交叉评审屡次抓到双方都漏的
 真问题。默认 omp 执行、codex 评审，不倒置。
 
+**契约（角色按能力定义，工具可换）**——方法论只依赖这四个能力，不绑具体工具：
+
+| 角色 | 必备能力 | 参考实现（可换） |
+|---|---|---|
+| 执行 agent | 吃 goal 文档、交互式可 steering、有忙碌信号 + 存活信号 | omp / Claude Code / aider… |
+| 评审 agent | 异构（与执行不同 lineage）、只读 | codex / 另一家强模型 |
+| 派发载体 | 能发指令进、能抓屏出的交互会话 | tmux / 其他复用器 |
+| watcher | 轮询"存活+忙碌+等输入"、返 typed 状态 | `references/watcher.sh` |
+
+下文点名的 omp/codex/tmux 是**参考实现**；换栈时照此契约替换，§1.4 的忙碌标记/存活信号按你的工具校准。
+
 ## 1. 派工协议（每次走全流程）
 
 1. **Rebase**：派工前 `git fetch` + 基于最新远端目标分支开 worktree
