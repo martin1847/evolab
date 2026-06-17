@@ -6,11 +6,23 @@
 # nothing regresses when a session was launched without the hook.
 # Usage: watch <tmux-session> [busy-marker] [shell-regex]
 # Exit codes (same vocabulary as scrape-fallback): 0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD
-#   / 3 HANG / 4 WAITING-INPUT.
+#   / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL (provider-error retry-loop).
 set -u
 SESSION="${1:?usage: watch <session> [marker] [shell-regex]}"
 MARKER="${2:-⟦esc⟧}"
 SHELL_RE="${3:-^(-?zsh|-?bash|-?sh|login)$}"
+# (C) External-provider stall: the agent is alive + WORKING but hot-retrying a TRANSIENT
+# provider error (overload / rate-limit / 5xx). omp auto-retries it in place (auto_retry_start ->
+# backoff -> continue, capped at retry.maxRetries~10): a fresh turn_start (WORKING) fires each retry
+# but a terminal turn_end/DONE never does (only a non-retryable output-blocked error emits turn_end),
+# and the screen repaints each retry — so neither DONE nor the hang heuristic (frozen screen) ever
+# fires; the orchestrator waits silently for a terminal event that never comes (learned the hard way:
+# a ~13min silent stall on overloaded_error).
+# Detect the provider-error chrome repeated across consecutive polls and surface it. Pattern
+# is intentionally SPECIFIC to error chrome (not bare "error" an agent writes while analyzing)
+# and gated on WORKING + repetition, so an agent merely discussing errors won't false-positive.
+# Override via AGENT_WATCH_EXT_ERR_RE.
+EXT_ERR_RE="${AGENT_WATCH_EXT_ERR_RE:-(overloaded_error|rate_limit_error|stream error|429 Too Many|529 |Too Many Requests|insufficient_quota|service unavailable|Overloaded)}"
 DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
 EVENTS="$DIR/$SESSION.events"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -26,7 +38,7 @@ if [ ! -f "$EVENTS" ]; then
   fi
 fi
 
-idle=0; lastline=""; stalls=0
+idle=0; lastline=""; stalls=0; exterr=0
 for i in {1..260}; do
   sleep 20
   # (A) liveness backstop FIRST — a hard crash fires no hook; foreground back to a
@@ -66,6 +78,19 @@ for i in {1..260}; do
       fi
     else stalls=0; fi
   fi
+
+  # (C) external-provider stall (see header): WORKING + provider-error chrome on screen for
+  #     ~3 consecutive polls (~1min) => hot-retry loop, not progress. Surface it (exit 5)
+  #     instead of waiting silently for a DONE that won't come. NOT gated on a frozen screen
+  #     (B's condition) because a retry loop keeps repainting.
+  if [ "$state" = "WORKING" ] \
+     && tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -15 | grep -qiE "$EXT_ERR_RE"; then
+    exterr=$((exterr+1))
+    if [ "$exterr" -ge 3 ]; then
+      echo "=== [$SESSION] STALLED-EXTERNAL at $(date '+%H:%M:%S') — provider-error retry-loop ~$((exterr*20))s ==="
+      tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 5
+    fi
+  else exterr=0; fi
   lastline="$line"
   [ $((i % 9)) -eq 0 ] && echo "[$SESSION] heartbeat iter $i state=$state $(date '+%H:%M:%S')"
 done

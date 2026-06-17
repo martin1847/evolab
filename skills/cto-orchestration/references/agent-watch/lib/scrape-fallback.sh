@@ -16,9 +16,9 @@
 #   FIX: never infer DONE from marker-absence alone. Require POSITIVE liveness —
 #   the agent's TUI must still be the session's foreground process.
 #
-# Exit codes (orchestrator dispatches on these — DONE is only one of five):
+# Exit codes (orchestrator dispatches on these — DONE is only one of six):
 #   0 IDLE/DONE   2 AGENT DEAD (exited to shell)   3 SUSPECTED HANG
-#   1 SESSION GONE   4 WAITING FOR INPUT
+#   1 SESSION GONE   4 WAITING FOR INPUT   5 STALLED-EXTERNAL (provider-error retry-loop)
 
 SESSION="${1:?usage: scrape-fallback.sh <session> [marker] [shell-regex]}"
 MARKER="${2:-⟦esc⟧}"
@@ -47,8 +47,15 @@ SHELL_RE="${3:-^(-?zsh|-?bash|-?sh|login)$}"
 # still-waiting agent gets mis-reported. Keep patterns specific to settled prompts
 # (agents don't emit "up/down navigate"/"? Ask"/"Other (type your own)" mid-stream).
 INPUT_RE='(\(y/n\)|\[y/N\]|Do you want to proceed|Allow this|press enter|❯ [0-9]|[◉○]|↑/↓|up/down navigate|enter (select|to confirm)|esc cancel|Other \(type your own\)|\? Ask|password:)'
+# Provider-error retry-loop: agent is BUSY (marker present) but hot-retrying a TRANSIENT
+# provider error (overload / rate-limit / 5xx). The screen keeps repainting new error lines,
+# so the hang heuristic (frozen screen) never trips and no DONE ever comes — the orchestrator
+# waits silently (learned the hard way: ~13min on overloaded_error). Pattern is SPECIFIC to
+# error chrome (not bare "error" an agent writes while analyzing) + gated on BUSY + repetition.
+# Override via AGENT_WATCH_EXT_ERR_RE.
+EXT_ERR_RE="${AGENT_WATCH_EXT_ERR_RE:-(overloaded_error|rate_limit_error|stream error|429 Too Many|529 |Too Many Requests|insufficient_quota|service unavailable|Overloaded)}"
 
-idle=0; samehash=0; lasthash=""
+idle=0; samehash=0; lasthash=""; exterr=0
 # Immediate ARMED heartbeat so the orchestrator can confirm liveness by READING the
 # output file at t=0 (ps may not show the process under the harness's backgrounding).
 echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ marker=[$MARKER] — polling every 45s ==="
@@ -69,6 +76,17 @@ for i in {1..130}; do
     # (B) Busy. A frozen screen while "busy" => suspected hang — a live spinner /
     #     token stream / timer would keep the screen changing; total stillness won't.
     idle=0
+    # Provider-error retry-loop: busy + error chrome on screen for ~2 consecutive polls
+    # (~90s). Surface it (exit 5) — a retry loop keeps repainting so the frozen-screen hang
+    # check below won't catch it.
+    if echo "$pane" | tail -15 | grep -qiE "$EXT_ERR_RE"; then
+      exterr=$((exterr+1))
+      if [ $exterr -ge 2 ]; then
+        echo "=== [$SESSION] STALLED-EXTERNAL at $(date '+%H:%M:%S') — provider-error retry-loop ==="
+        echo "$pane" | tail -40
+        exit 5
+      fi
+    else exterr=0; fi
     h=$(echo "$pane" | cksum)
     if [ "$h" = "$lasthash" ]; then
       samehash=$((samehash+1))
@@ -81,6 +99,7 @@ for i in {1..130}; do
       samehash=0; lasthash="$h"
     fi
   else
+    exterr=0
     # (C) Not busy. Paused at an interactive prompt rather than finished?
     #     Scan a WIDE tail (-15): a radio menu's distinctive glyph/header can sit
     #     well above the bottom border + nav-hint lines.

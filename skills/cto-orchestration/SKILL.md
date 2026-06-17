@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.0.2
+version: 1.0.3
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -55,8 +55,16 @@ metadata:
 4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：`dispatch <omp|codex|claude>
    <session> <cwd>` 起 + `watch <session>` 监控 + `teardown` 收。机制细节（events sentinel、
    env-必须写进命令串、两层兜底、scrape fallback、codex hook-trust）见该目录 README；本节只留编排者纪律：
-   - **typed 状态**：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT（DEAD≠DONE、
-     WAITING 要回输入）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
+   - **typed 状态**：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL
+     （DEAD≠DONE、WAITING 要回输入）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
+   - **5 STALLED-EXTERNAL = 外部 provider 错误热重试**（overload / rate-limit / 5xx）。agent 活着且
+     WORKING、hook events 在 cycling、屏幕在刷新 → DONE 与 HANG（要屏冻）都不触发，纯事件驱动会**静默盲等**
+     一个永不来的终态（实证：overloaded_error 上盲等 ~13min）。watcher 现检测错误 chrome 连续命中→exit 5。
+     收到 5：**先核证再动手**——扫一眼 exit 5 附带的屏尾 dump，确是 provider chrome（非 agent 正在写错误处理
+     代码/看日志、把这些字符串刷上屏导致误报）；坐实后**别等了**——kill 掉热重试的 agent、换新会话（不带退避
+     状态，provider 缓过来即成功），或改用更省的方式做该步。模式 `AGENT_WATCH_EXT_ERR_RE` 可配。
+   - **纯事件驱动会盲等：挂 watcher 时同时设上限**。除 watcher 外，按"任务预期时长 ×2"设个 fallback 自检
+     （ScheduleWakeup），到点没终态就主动 capture-pane——"WORKING 但卡死/热重试"不发终态事件。
    - **判完成要正向证据、不凭 idle**（tmux 链路无失败信号：session 在则 send/capture 都"成功"）。两个坑：
      ① agent 死了退回 shell = 空屏+无忙碌 → 必须核 `pane_current_command` 仍是 agent 进程；
      ② **agent 自起后台 job 会 yield=发 DONE 但没完成**（bg 跑完自动续）——凡这类相把完成信号绑**正向
@@ -89,6 +97,8 @@ metadata:
 4. **收敛准则（防乒乓，编排者设定）**：
    - findings 三分类：`blocking`（必修才放行）/ `queued`（记下不阻塞、留 follow-up）/ `advisory`
      （建议）。只有 `blocking` 残留才继续循环。
+   - **advisory/非逻辑项 → follow-up，别挡已就绪的 push**：先 ship 已 Verified 的东西，nit 攒成后续；真要
+     并也先 push 再异步补（实证：为一行注释 fold-before-push，正撞 provider 过载、空耗一轮）。
    - **不重复 raise** 已 queued / 越界 / 上轮判过的 finding——除非本轮动了那块或让风险变差。
    - **stagnation 检测**：同一 finding 反复出现 = 卡住，该收敛或升级人介入，别无限对轰。
    - 质量类无限可挑的项（过滤规则、命名）明确"达标线":线内必修、线外进 `queued`。例:"确定性过滤是

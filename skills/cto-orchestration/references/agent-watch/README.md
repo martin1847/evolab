@@ -32,6 +32,13 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
    `WORKING`→keep polling. Reacts to the agent's real lifecycle, no glyph heuristics.
 2. **Backstop (kept from v1)**: liveness guard — `pane_current_command` back to a shell ⇒ AGENT-DEAD (exit 2),
    for a hard crash where NO hook fires. Hang heuristic — STATE=WORKING but file stale + screen frozen ⇒ exit 3.
+   External-provider stall — STATE=WORKING but provider-error chrome (overload/rate-limit/5xx) repeats on screen
+   ⇒ STALLED-EXTERNAL (exit 5). Catches a hot-retry loop the hang heuristic misses: a retryable provider error
+   is auto-retried in place (omp `auto_retry_start` → backoff → `continue`, capped at `retry.maxRetries`≈10), so a
+   fresh `turn_start` (WORKING) fires each retry but a terminal `turn_end`/DONE never does (only a non-retryable
+   output-blocked error emits turn_end). The screen repaints each retry so the frozen-screen check never trips
+   either → silent wait. Pattern overridable via `AGENT_WATCH_EXT_ERR_RE`. On exit 5:
+   don't wait — kill the hot-retrying agent and re-dispatch a fresh session (no back-off state) once the provider recovers.
 3. **Graceful degradation**: sentinel file absent (hook not loaded / older agent) ⇒ fall back to `lib/scrape-fallback.sh`
    screen-scraping. So nothing regresses if a session was launched without the hook.
 
@@ -42,6 +49,10 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   it (codex `notify` is turn-complete-only too). Screen-scrape fallback covers that gap for codex.
 - **Claude Code** `Notification` fires in INTERACTIVE mode only (not `claude -p`). We run interactive `claude` in
   tmux for steering, so it applies; headless would need `Stop`/`PostToolBatch` instead.
+- **STALLED-EXTERNAL (exit 5) can false-positive**: the `EXT_ERR_RE` chrome (e.g. `Too Many Requests`,
+  `service unavailable`, `Overloaded`) is also plausible content an agent prints while editing retry/error-handling
+  code or reading logs. BUSY/WORKING + N-poll repetition + a wide tail narrow it, but don't eliminate it. exit 5
+  dumps the pane tail so the orchestrator can eyeball it as provider chrome before killing — confirm, don't blind-kill.
 
 ## Launch (per agent, sets env + hook)
 > **CRITICAL (verified the hard way):** the `AGENT_WATCH_*` env MUST be set **INSIDE the command string**
