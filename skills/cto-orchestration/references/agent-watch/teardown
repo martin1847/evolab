@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Cleanly end a dispatched agent: kill the tmux session, remove its sentinel events
-# file, and remove the per-agent hook config dispatch.sh dropped into the worktree.
+# file, and remove the per-agent hook config dispatch dropped into the worktree.
 # Usage: teardown <session> [cwd]
-#   cwd = the worktree dispatch.sh used (to clean its .codex/hooks.json), optional.
+#   cwd = the worktree dispatch used (to clean its .codex/hooks.json), optional.
 set -u
 SESSION="${1:?usage: teardown <session> [cwd]}"
 CWD="${2:-}"

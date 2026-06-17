@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.0.0
+version: 1.0.1
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -52,15 +52,30 @@ metadata:
    坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；codex 启动弹更新提示先发 `2`+Enter。
    **派发后、动手前先过理解门**：第一轮要 agent 复述"这改动碰哪些文件/契约、有哪些风险"，核对无误
    再放行；弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
-4. **挂 watcher**（`references/agent-watch/`：`dispatch <agent> <session> <cwd>` 起 + `watch <session>` 监控 + `teardown` 收；hook 主信号、抓屏 `lib/scrape-fallback.sh` 降级，运行态在 `~/.agents/run/`）：后台轮询、完成自动通知。**根因铁律：tmux 链路无
-   失败信号**——`send-keys`/`capture-pane` 只要 session 在就成功；agent 死了/没起退回 shell =
-   "成功+空屏+无忙碌标记"，裸 idle 检测把**死亡误判成完成**派去评审。故判完成必须有**正向存活证据**
-   （`pane_current_command` 仍是 agent 进程、非 shell），不能只凭忙碌标记（omp=`⟦esc⟧`/codex=
-   `esc to interrupt`）缺失。watcher 返 typed 状态：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD /
-   3 HANG / 4 WAITING-INPUT（DEAD≠DONE、WAITING 要回输入）。首接新 agent 校准存活信号（活着+空闲跑一次
-   `tmux display-message -p '#{pane_current_command}'` 记进程名）。长跑批超上限输出"still busy"重挂、非故障。
-   **启动纪律（屡次踩坑）**：watcher 必须作为**单独一条** `run_in_background` 命令启动——**绝不加 shell `&`、绝不和其他命令拼在一行**（`&` 会让它随包裹 shell 退出变孤儿、不回调）。启动后立刻 **Read 它的 output 文件确认 `WATCHER ARMED` 行**再走开（ps 在某些 harness 下看不到 watcher 进程，armed 心跳是唯一可靠的"它活着"信号）。
-   **WAITING 检测的脆点**：交互菜单的 nav 提示可能是**文字**（"up/down navigate"）而非字形（`↑/↓`），选中项 `◉` 可能在屏幕**靠上**——所以匹配模式要同时含字形与文字、扫描窗口要**宽**（tail -15 非 -6），否则 settled 菜单被当 idle/DONE、还在等输入的 agent 被误判完成。**完成通知触发时仍要自己 capture-pane + 核证，不盲信 watcher 判定。**
+4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**——取代旧的字形抓屏为主）：
+   `dispatch <omp|codex|claude> <session> <cwd>` 起 + `watch <session>` 监控 + `teardown` 收。
+   **运行态**：agent 自己的生命周期 hook 往 sentinel `~/.agents/run/<session>.events` 追加
+   `<ISO-UTC> <STATE>` 行（`STATE ∈ WORKING/WAITING/DONE`），当前态 = 最后一行；watch 读它
+   DONE→exit 0 / WAITING→exit 4 / WORKING→继续轮询。这是确定性真生命周期，不靠字形启发。
+   **env 必须写进 tmux 跑的命令串内**（`dispatch` 已内建）——running tmux server 环境冻结，
+   `tmux new-session` 前缀的 env 到不了 pane 进程 → hook 读到空 env 静默 no-op、events 文件永远空。
+   **两层兜底**（hook 在 agent 进程内，硬崩 SIGKILL 不发事件）：① 存活守卫——`pane_current_command`
+   退回 shell ⇒ AGENT-DEAD（exit 2）；② hang 启发——STATE=WORKING 但 events ~6min 不前进且屏冻 ⇒
+   exit 3。**根因铁律：tmux 链路无失败信号**，`send-keys`/`capture-pane` 只要 session 在就成功，
+   故判完成必须有**正向存活证据**（hook 的 DONE 事件 + pane 仍是 agent 进程），不能把"空屏退回 shell"
+   当完成。typed 状态：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT
+   （DEAD≠DONE、WAITING 要回输入）。首接新 agent 先确认 hook 真发事件（看 events 文件有 WORKING 行）。
+   **降级路径**：sentinel 缺失（hook 没加载／老 agent／**codex hooks 未 trust** ⇒ 无事件）⇒ watch 自动
+   退回 `lib/scrape-fallback.sh` 抓屏。codex 要真 hook 信号需持久化 hook trust 或
+   `--dangerously-bypass-hook-trust`，否则就是抓屏兜底（能用、非确定性）。**抓屏路径的脆点（仅 fallback
+   才相关）**：WAITING 菜单 nav 提示可能是文字（"up/down navigate"）非字形（`↑/↓`）、选中项 `◉` 可能
+   靠屏上——匹配要含字形+文字、扫描窗口要宽（tail -15 非 -6），否则 settled 菜单被当 idle/DONE。
+   omp/codex 的忙碌字形（`⟦esc⟧`/`esc to interrupt`）只在这条 fallback 路上用。
+   **启动纪律（屡次踩坑）**：watch 必须作为**单独一条** `run_in_background` 命令启动——**绝不加 shell `&`、
+   绝不和其他命令拼在一行**（`&` 会让它随包裹 shell 退出变孤儿、不回调）。启动后立刻 **Read 它的 output
+   确认 `WATCH ARMED` 行**再走开（ps 在某些 harness 看不到 watcher 进程，armed 心跳是唯一可靠的"它活着"
+   信号）。**完成通知触发时仍要自己 capture-pane + 核证，不盲信 watcher 判定。** 长跑批超上限输出
+   "still busy"重挂、非故障。
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当

@@ -6,10 +6,10 @@
 #   2) ABS substitution in codex/claude hook configs.
 # Non-destructive: omp is fully automatic; codex/claude configs are CREATED only if
 # absent, and if present we WARN + print the snippet (never clobber a user config).
-# Usage:   dispatch.sh <omp|codex|claude> <session> <cwd> [extra agent args...]
+# Usage:   dispatch <omp|codex|claude> <session> <cwd> [extra agent args...]
 # Monitor: watch <session> [busy-marker]
 set -uo pipefail
-AGENT="${1:?usage: dispatch.sh <omp|codex|claude> <session> <cwd> [args...]}"
+AGENT="${1:?usage: dispatch <omp|codex|claude> <session> <cwd> [args...]}"
 SESSION="${2:?session}"
 CWD="${3:?cwd}"
 shift 3 2>/dev/null || true

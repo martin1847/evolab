@@ -54,7 +54,7 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 - claude: merge `hooks/claude-hooks.json` (`ABS` replaced) into `<cwd>/.claude/settings.json`; then
   `tmux new-session -d -s <s> -c <cwd> 'AGENT_WATCH_SESSION=<s> AGENT_WATCH_DIR=<dir> claude'`
 **Canonical commands (use these, not the raw recipes above):**
-- `dispatch.sh <omp|codex|claude> <session> <cwd>` — launches the agent wired to the hook (bakes in the
+- `dispatch <omp|codex|claude> <session> <cwd>` — launches the agent wired to the hook (bakes in the
   env-in-command rule + ABS sub; truncates the session sentinel; age-purges old ones).
 - `watch <session> [busy-marker]` — monitor (hook-primary, scrape-fallback). Run via the orchestrator's
   background mechanism (NOT shell `&`); read its output for the `WATCH ARMED` line to confirm liveness.
@@ -63,12 +63,12 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 ## Validation status (2026-06-16)
 - ✅ omp adapter e2e: hook loads (omp 15.12.4), `turn_start`→WORKING / `turn_end`→DONE fire + write the sentinel.
 - ✅ emit.sh / emit-from-stdin.sh (drains stdin, state-from-arg) / watch tail-parse / fallback-to-scrape.
-- ✅ omp via `dispatch.sh` (real dispatch): hook fires the full lifecycle (turn_start/tool_call→WORKING,
+- ✅ omp via `dispatch` (real dispatch): hook fires the full lifecycle (turn_start/tool_call→WORKING,
   turn_end→DONE); watch reads the sentinel (NOT fallback) and detects DONE correctly. Full dogfood passed.
 - ⚠️ **codex hooks need TRUST**: a freshly-dropped `.codex/hooks.json` does NOT run until trusted (codex has
   `--dangerously-bypass-hook-trust`); until then no events fire → **watch falls back to screen-scrape**
   (graceful, by design). To get the real codex signal, persist hook trust once or launch codex with the bypass
   flag. Until then codex monitoring = screen-scrape fallback (works, just not hook-deterministic).
 - ⏳ Claude (`Stop`/`Notification`/`PostToolUse`) wiring built per docs — validate on first real Claude dispatch.
-- Note: `dispatch.sh` writes `.codex/hooks.json` into the worktree and auto-adds `.codex/` to that repo's
+- Note: `dispatch` writes `.codex/hooks.json` into the worktree and auto-adds `.codex/` to that repo's
   `.git/info/exclude` (so it can't be `git add -A`'d). `teardown` removes the file itself.
