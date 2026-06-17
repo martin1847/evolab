@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Unified dispatch: launch a coding agent in a tmux session wired to the hook-based
+# agent-state watch (see README.md). Bakes in the two things that bite otherwise:
+#   1) env set INSIDE the tmux command (a running tmux server freezes its env, so a
+#      client-side prefix never reaches the pane → hook no-ops silently).
+#   2) ABS substitution in codex/claude hook configs.
+# Non-destructive: omp is fully automatic; codex/claude configs are CREATED only if
+# absent, and if present we WARN + print the snippet (never clobber a user config).
+# Usage:   dispatch.sh <omp|codex|claude> <session> <cwd> [extra agent args...]
+# Monitor: watch <session> [busy-marker]
+set -uo pipefail
+AGENT="${1:?usage: dispatch.sh <omp|codex|claude> <session> <cwd> [args...]}"
+SESSION="${2:?session}"
+CWD="${3:?cwd}"
+shift 3 2>/dev/null || true
+EXTRA="$*"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
+ENVP="AGENT_WATCH_SESSION=$SESSION AGENT_WATCH_DIR=$DIR"
+
+[ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
+mkdir -p "$DIR" 2>/dev/null || true
+if tmux has-session -t "$SESSION" 2>/dev/null; then echo "ERR: tmux session '$SESSION' already exists" >&2; exit 1; fi
+: > "$DIR/$SESSION.events" 2>/dev/null || true                                  # fresh sentinel per dispatch
+find "$DIR" -maxdepth 1 -name '*.events' -mtime +7 -delete 2>/dev/null || true  # age-purge stale sentinels
+
+# Drop a per-agent hook config without clobbering an existing one.
+# $1 = target config path, $2 = template filename under hooks/
+install_cfg() {
+  local target="$1" tmpl="$HERE/hooks/$2"
+  if [ -f "$target" ]; then
+    echo "WARN: $target exists — NOT modifying. Merge this for the watch to work:" >&2
+    sed "s#ABS#$HERE/hooks#g" "$tmpl" >&2
+    return 0
+  fi
+  mkdir -p "$(dirname "$target")"
+  sed "s#ABS#$HERE/hooks#g" "$tmpl" > "$target" && echo "wrote $target"
+}
+
+case "$AGENT" in
+  omp)
+    CMD="$ENVP omp --hook $HERE/hooks/omp-watch.ts $EXTRA" ;;
+  codex)
+    install_cfg "$CWD/.codex/hooks.json" codex-hooks.json
+    # keep our tooling out of the tree: local exclude (not the shared .gitignore)
+    if EX=$(git -C "$CWD" rev-parse --git-path info/exclude 2>/dev/null); then
+      grep -qxF '.codex/' "$EX" 2>/dev/null || printf '.codex/\n' >> "$EX"
+    fi
+    CMD="$ENVP codex $EXTRA" ;;
+  claude)
+    install_cfg "$CWD/.claude/settings.json" claude-hooks.json
+    CMD="$ENVP claude $EXTRA" ;;
+  *) echo "ERR: unknown agent '$AGENT' (omp|codex|claude)" >&2; exit 1 ;;
+esac
+
+tmux new-session -d -s "$SESSION" -c "$CWD" "$CMD"
+echo "dispatched $AGENT → tmux session '$SESSION' (cwd $CWD)"
+echo "events : $DIR/$SESSION.events"
+echo "monitor: bash $HERE/watch $SESSION"

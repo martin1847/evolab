@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Unified hook-based agent-state watcher (see README.md). PRIMARY signal = the
+# sentinel events file written by the agent's lifecycle hook (deterministic, not
+# screen-scraping). BACKSTOP = liveness guard (a hard crash emits no hook). FALLBACK
+# = if no sentinel file appears, delegate to the screen-scrape (lib/scrape-fallback.sh) so
+# nothing regresses when a session was launched without the hook.
+# Usage: watch <tmux-session> [busy-marker] [shell-regex]
+# Exit codes (same vocabulary as scrape-fallback): 0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD
+#   / 3 HANG / 4 WAITING-INPUT.
+set -u
+SESSION="${1:?usage: watch <session> [marker] [shell-regex]}"
+MARKER="${2:-⟦esc⟧}"
+SHELL_RE="${3:-^(-?zsh|-?bash|-?sh|login)$}"
+DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
+EVENTS="$DIR/$SESSION.events"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ events=$EVENTS ==="
+
+# Grace window for the hook to produce the first event; else fall back to scrape.
+if [ ! -f "$EVENTS" ]; then
+  sleep 6
+  if [ ! -f "$EVENTS" ]; then
+    echo "=== [$SESSION] no sentinel (hook not wired) → fallback to lib/scrape-fallback.sh ==="
+    exec bash "$HERE/lib/scrape-fallback.sh" "$SESSION" "$MARKER" "$SHELL_RE"
+  fi
+fi
+
+idle=0; lastline=""; stalls=0
+for i in {1..260}; do
+  sleep 20
+  # (A) liveness backstop FIRST — a hard crash fires no hook; foreground back to a
+  #     shell => agent gone, not done.
+  cmd=$(tmux display-message -p -t "$SESSION" '#{pane_current_command}' 2>/dev/null) \
+    || { echo "=== [$SESSION] SESSION GONE at $(date '+%H:%M:%S') ==="; exit 1; }
+  if [[ "$cmd" =~ $SHELL_RE ]]; then
+    echo "=== [$SESSION] AGENT DEAD at $(date '+%H:%M:%S') — foreground '$cmd' ==="
+    tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 2
+  fi
+
+  line=$(tail -1 "$EVENTS" 2>/dev/null)
+  state=$(printf '%s' "$line" | awk '{print $2}')
+  case "$state" in
+    WAITING)
+      echo "=== [$SESSION] WAITING FOR INPUT at $(date '+%H:%M:%S') — $line ==="
+      tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 4 ;;
+    DONE)
+      # Confirm a STABLE done (≥2 reads) so we don't exit on a transient turn
+      # boundary right before an auto-continued next turn.
+      idle=$((idle+1))
+      if [ "$idle" -ge 2 ]; then
+        echo "=== [$SESSION] DONE at $(date '+%H:%M:%S') — $line ==="
+        tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 0
+      fi ;;
+    *) idle=0 ;;  # WORKING / unknown
+  esac
+
+  # (B) hang heuristic: WORKING but the events file hasn't advanced for ~6min AND the
+  #     screen is frozen => suspected stuck tool. Report, don't auto-kill.
+  if [ "$state" = "WORKING" ]; then
+    if [ "$line" = "$lastline" ]; then
+      stalls=$((stalls+1))
+      if [ "$stalls" -ge 18 ]; then
+        echo "=== [$SESSION] SUSPECTED HANG at $(date '+%H:%M:%S') — WORKING, no new event ~6min ==="
+        tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 3
+      fi
+    else stalls=0; fi
+  fi
+  lastline="$line"
+  [ $((i % 9)) -eq 0 ] && echo "[$SESSION] heartbeat iter $i state=$state $(date '+%H:%M:%S')"
+done
+echo "=== [$SESSION] WATCH TIMEOUT — still active, last=$(tail -1 "$EVENTS" 2>/dev/null) ==="

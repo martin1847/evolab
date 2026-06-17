@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Watcher template — poll a tmux agent session, report a TYPED terminal state.
 # POSIX-ish bash (no zsh-isms); works under bash 3.2+ (macOS) and modern Linux bash.
-# Usage: watcher.sh <tmux-session> [busy-marker] [shell-regex]
+# Usage: scrape-fallback.sh <tmux-session> [busy-marker] [shell-regex]
 #   omp busy marker:   '⟦esc⟧'
 #   codex busy marker: 'esc to interrupt'
 # Run via the orchestrator's background-task mechanism so completion notifies you.
@@ -39,9 +39,19 @@ SHELL_RE="${3:-^(-?zsh|-?bash|-?sh|login)$}"
 # glyphs agents don't emit mid-stream, so they won't false-positive while busy.
 # (Learned: a radio menu has no busy marker, so marker-absence alone mis-read it
 #  as DONE and the orchestrator dispatched a still-waiting agent to review.)
-INPUT_RE='(\(y/n\)|\[y/N\]|Do you want to proceed|Allow this|press enter|❯ [0-9]|◉|↑/↓|password:)'
+# NOTE on glyph-vs-text (learned the hard way): a TUI may render nav hints as TEXT
+# ("up/down navigate", "enter select") rather than glyphs ("↑/↓"), and the selected
+# radio "◉" can sit MANY lines above the bottom in a multi-option menu with
+# descriptions. So match BOTH glyphs and the literal chrome text, and scan a WIDE
+# tail (not just the last few lines) — else a settled menu reads as idle/DONE and a
+# still-waiting agent gets mis-reported. Keep patterns specific to settled prompts
+# (agents don't emit "up/down navigate"/"? Ask"/"Other (type your own)" mid-stream).
+INPUT_RE='(\(y/n\)|\[y/N\]|Do you want to proceed|Allow this|press enter|❯ [0-9]|[◉○]|↑/↓|up/down navigate|enter (select|to confirm)|esc cancel|Other \(type your own\)|\? Ask|password:)'
 
 idle=0; samehash=0; lasthash=""
+# Immediate ARMED heartbeat so the orchestrator can confirm liveness by READING the
+# output file at t=0 (ps may not show the process under the harness's backgrounding).
+echo "=== [$SESSION] WATCHER ARMED at $(date '+%H:%M:%S') pid $$ marker=[$MARKER] — polling every 45s ==="
 for i in {1..130}; do
   sleep 45
   pane=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null) || { echo "[$SESSION] SESSION GONE"; exit 1; }
@@ -72,7 +82,9 @@ for i in {1..130}; do
     fi
   else
     # (C) Not busy. Paused at an interactive prompt rather than finished?
-    if echo "$pane" | tail -6 | grep -qE "$INPUT_RE"; then
+    #     Scan a WIDE tail (-15): a radio menu's distinctive glyph/header can sit
+    #     well above the bottom border + nav-hint lines.
+    if echo "$pane" | tail -15 | grep -qE "$INPUT_RE"; then
       echo "=== [$SESSION] WAITING FOR INPUT at $(date '+%H:%M:%S') — interactive prompt, not done ==="
       echo "$pane" | tail -20
       exit 4
@@ -85,6 +97,9 @@ for i in {1..130}; do
       exit 0
     fi
   fi
+  # Periodic heartbeat (~every 3min) → orchestrator can Read the output file to
+  # confirm the watcher is still alive without relying on ps.
+  [ $((i % 4)) -eq 0 ] && echo "[$SESSION] heartbeat iter $i idle=$idle samehash=$samehash $(date '+%H:%M:%S')"
 done
 echo "=== [$SESSION] WATCHER TIMEOUT — still busy ==="
 tmux capture-pane -t "$SESSION" -p | tail -25

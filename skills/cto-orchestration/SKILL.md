@@ -31,7 +31,7 @@ metadata:
 | 执行 agent | 吃 goal 文档、交互式可 steering、有忙碌信号 + 存活信号 | omp / Claude Code / aider… |
 | 评审 agent | 异构（与执行不同 lineage）、只读 | codex / 另一家强模型 |
 | 派发载体 | 能发指令进、能抓屏出的交互会话 | tmux / 其他复用器 |
-| watcher | 轮询"存活+忙碌+等输入"、返 typed 状态 | `references/watcher.sh` |
+| watcher | 轮询"存活+忙碌+等输入"、返 typed 状态 | `references/agent-watch/`（`dispatch`/`watch`/`teardown` + 生命周期 hook;hook 主信号、抓屏降级） |
 
 下文点名的 omp/codex/tmux 是**参考实现**；换栈时照此契约替换，§1.4 的忙碌标记/存活信号按你的工具校准。
 
@@ -52,13 +52,15 @@ metadata:
    坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；codex 启动弹更新提示先发 `2`+Enter。
    **派发后、动手前先过理解门**：第一轮要 agent 复述"这改动碰哪些文件/契约、有哪些风险"，核对无误
    再放行；弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
-4. **挂 watcher**（模板 `references/watcher.sh`）：后台轮询、完成自动通知。**根因铁律：tmux 链路无
+4. **挂 watcher**（`references/agent-watch/`：`dispatch <agent> <session> <cwd>` 起 + `watch <session>` 监控 + `teardown` 收；hook 主信号、抓屏 `lib/scrape-fallback.sh` 降级，运行态在 `~/.agents/run/`）：后台轮询、完成自动通知。**根因铁律：tmux 链路无
    失败信号**——`send-keys`/`capture-pane` 只要 session 在就成功；agent 死了/没起退回 shell =
    "成功+空屏+无忙碌标记"，裸 idle 检测把**死亡误判成完成**派去评审。故判完成必须有**正向存活证据**
    （`pane_current_command` 仍是 agent 进程、非 shell），不能只凭忙碌标记（omp=`⟦esc⟧`/codex=
    `esc to interrupt`）缺失。watcher 返 typed 状态：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD /
    3 HANG / 4 WAITING-INPUT（DEAD≠DONE、WAITING 要回输入）。首接新 agent 校准存活信号（活着+空闲跑一次
    `tmux display-message -p '#{pane_current_command}'` 记进程名）。长跑批超上限输出"still busy"重挂、非故障。
+   **启动纪律（屡次踩坑）**：watcher 必须作为**单独一条** `run_in_background` 命令启动——**绝不加 shell `&`、绝不和其他命令拼在一行**（`&` 会让它随包裹 shell 退出变孤儿、不回调）。启动后立刻 **Read 它的 output 文件确认 `WATCHER ARMED` 行**再走开（ps 在某些 harness 下看不到 watcher 进程，armed 心跳是唯一可靠的"它活着"信号）。
+   **WAITING 检测的脆点**：交互菜单的 nav 提示可能是**文字**（"up/down navigate"）而非字形（`↑/↓`），选中项 `◉` 可能在屏幕**靠上**——所以匹配模式要同时含字形与文字、扫描窗口要**宽**（tail -15 非 -6），否则 settled 菜单被当 idle/DONE、还在等输入的 agent 被误判完成。**完成通知触发时仍要自己 capture-pane + 核证，不盲信 watcher 判定。**
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
@@ -94,7 +96,11 @@ metadata:
 - **旗标门控**：行为变更默认藏 env flag 后，默认 OFF = 字节级零变化；例外：ReOpen 批准的修复可默认
   ON（goal 写明理由）。性能/实验类一律 OFF。
 - **measure-before-more**：第一刀砍下后绑定约束会换人——先实测再决定第二刀，别按推算连实现多个
-  lever。修 bug 同理：先确认观测值真被某机制约束（观测 5 < 上限 10 ⇒ 上限不是约束）再动它。
+  lever。修 bug 同理：动手前先验证 ① bug 在**当前态真能复现**（可能是历史 artifact／配置未生效前／部署前／
+  测量harness 错／查错数据源，并非当前缺陷），② 观测值真被某机制约束（观测 5 < 上限 10 ⇒ 上限不是约束）。
+  某项目两次实证:一个"报错"先验证才发现是查错表（空表 vs 真表）根本无 bug；另一个"功能失效"报告先验证才区分
+  出"真当前缺陷"还是"功能上线前的历史数据"。便宜的当前态求证（现在还复现吗／相关功能何时上线／报告的失败在
+  其前后）挡在昂贵的代码调查之前。
 - **commit 留本地，push/PR 必须用户明示批准**；批准一次只覆盖那次。
 - **验证诚实**：交付三段式——验证了什么（真跑过）/ 没验证什么 / 剩余风险。本地打桩绕过的环节（真
   LLM、真队列）显式标注，部署后运维补验。实证：本地 LLM 打桩致 un-awaited coroutine 逃逸生产。
