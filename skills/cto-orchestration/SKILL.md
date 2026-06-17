@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.0.4
+version: 1.1.0
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -16,7 +16,7 @@ metadata:
 
 | 角色 | 谁 | 干什么 | 不干什么 |
 |---|---|---|---|
-| 编排者（你） | Claude Code 主会话 | 写 goal/取证提示词、派工、watcher 监控、转述评审、向用户汇报、memory/docs 落盘、任务系统操作 | 写产品代码、自己跑长 E2E/批量验证（收工的独立复跑 test+lint 不算，见 §1.6） |
+| 编排者（你） | **满足下方编排者能力的任意 agent**（参考:Claude Code / codex；见契约表） | 写 goal/取证提示词、派工、watcher 监控、转述评审、向用户汇报、memory/docs 落盘、任务系统操作 | 写产品代码、自己跑长 E2E/批量验证（收工的独立复跑 test+lint 不算，见 §1.6） |
 | 执行者 | omp（tmux 会话） | 按 goal 实现 + 自测 + E2E + findings 文档 | 超出 goal scope 的改动 |
 | 评审者 | codex（tmux 会话） | 只读对抗式评审，severity 分级 + verdict | 改代码、commit |
 | 运维 agent | 用户转交提示词 | 够不着的环境（prod/独立 dev DB）只读取证与部署后验证 | 修复、配置变更 |
@@ -24,16 +24,19 @@ metadata:
 实证：omp（oh-my-pi+Opus）强在自主执行，codex（gpt）强在严苛评审，交叉评审屡次抓到双方都漏的
 真问题。默认 omp 执行、codex 评审，不倒置。
 
-**契约（角色按能力定义，工具可换）**——方法论只依赖这四个能力，不绑具体工具：
+**契约（角色按能力定义，工具可换）**——方法论只依赖这五个能力，不绑具体工具（**含编排者本身**）：
 
 | 角色 | 必备能力 | 参考实现（可换） |
 |---|---|---|
+| **编排者**（CTO 本人） | 编辑文件(goal/findings/状态)、驱动派发载体、**起 watcher 并取其终态裁决**、有定时/轮询兜底、与人交互；**自己绝不写产品代码** | **后台型**(起 watcher 后读交付的终态)：Claude Code(`run_in_background`+完成通知+`ScheduleWakeup`) / omp(原生 bg-job)；**阻塞型**：codex(同步 `watch` 读 exit code + cron/轮询，需 `--dangerously-bypass`)；通用:任何 shell+文件 agent。**三者均已实跑验证**——omp 虽是最强执行者，坐编排位仍守铁律、不自写码。 |
 | 执行 agent | 吃 goal 文档、交互式可 steering、有忙碌信号 + 存活信号 | omp / Claude Code / aider… |
 | 评审 agent | 异构（与执行不同 lineage）、只读 | codex / 另一家强模型 |
 | 派发载体 | 能发指令进、能抓屏出的交互会话 | tmux / 其他复用器 |
 | watcher | 轮询"存活+忙碌+等输入"、返 typed 状态 | `references/agent-watch/`（`dispatch`/`watch`/`teardown` + 生命周期 hook;hook 主信号、抓屏降级） |
 
-下文点名的 omp/codex/tmux 是**参考实现**；换栈时照此契约替换，§1.4 的忙碌标记/存活信号按你的工具校准。
+下文点名的 omp/codex/tmux（含"你=Claude Code"的口吻）都是**参考实现**；换栈时照此契约替换——
+**编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位），§1.4 的 watcher 起法/忙碌标记/存活信号
+按你的工具校准。frontmatter `requires.bins` 列的 tmux/omp/codex 是参考栈，非硬依赖。
 
 ## 1. 派工协议（每次走全流程）
 
@@ -57,21 +60,19 @@ metadata:
    env-必须写进命令串、两层兜底、scrape fallback、codex hook-trust）见该目录 README；本节只留编排者纪律：
    - **typed 状态**：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL
      （DEAD≠DONE、WAITING 要回输入）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
-   - **5 STALLED-EXTERNAL = 外部 provider 错误热重试**（overload / rate-limit / 5xx）。agent 活着且
-     WORKING、hook events 在 cycling、屏幕在刷新 → DONE 与 HANG（要屏冻）都不触发，纯事件驱动会**静默盲等**
-     一个永不来的终态（实证：overloaded_error 上盲等 ~13min）。watcher 现检测错误 chrome 连续命中→exit 5。
-     收到 5：**先核证再动手**——扫一眼 exit 5 附带的屏尾 dump，确是 provider chrome（非 agent 正在写错误处理
-     代码/看日志、把这些字符串刷上屏导致误报）；坐实后**别等了**——kill 掉热重试的 agent、换新会话（不带退避
-     状态，provider 缓过来即成功），或改用更省的方式做该步。模式 `AGENT_WATCH_EXT_ERR_RE` 可配。
+   - **5 STALLED-EXTERNAL = 外部 provider 错误热重试盲区**（overload/rate-limit/5xx；agent 活着 WORKING 却永不
+     DONE，机制见 README，实证盲等 ~13min）。收到 5：**先核证再动手**——扫 exit 5 附带的屏尾，确是 provider
+     chrome（非 agent 写错误处理代码刷屏误报）再 kill 热重试 agent、换新会话（不带退避状态）。
    - **纯事件驱动会盲等：挂 watcher 时同时设上限**。除 watcher 外，按"任务预期时长 ×2"设个 fallback 自检
-     （ScheduleWakeup），到点没终态就主动 capture-pane——"WORKING 但卡死/热重试"不发终态事件。
+     （定时兜底——CC:`ScheduleWakeup`；codex/shell 编排者:cron 或有界轮询），到点没终态就主动 capture-pane
+     ——"WORKING 但卡死/热重试"不发终态事件。
    - **判完成要正向证据、不凭 idle**（tmux 链路无失败信号：session 在则 send/capture 都"成功"）。两个坑：
      ① agent 死了退回 shell = 空屏+无忙碌 → 必须核 `pane_current_command` 仍是 agent 进程；
      ② **agent 自起后台 job 会 yield=发 DONE 但没完成**（bg 跑完自动续）——凡这类相把完成信号绑**正向
      交付物**（本地 commit／产物计数达标／显式 review 标记），别把"等自己 bg"误判成"等编排者"（实证：重批量
      抽取走 agent 自起 bg，按 idle 轮询屡误报，改判"出现本地 commit + idle 稳定"才准）。是 `沉默≠交付` 的同族。
-   - **启动纪律**：`watch` 作**单独一条** `run_in_background` 启动（绝不加 `&`、绝不拼行，否则随壳退出变孤儿
-     不回调），起后立刻 Read output 确认 `WATCH ARMED`。**完成通知触发仍自己 capture-pane 核证，不盲信。**
+   - **起 watcher 取终态裁决**（后台型 CC/omp、阻塞型 codex 两路见 §0 契约 + README）：不管哪路，**裁决只是
+     线索——自己 capture-pane 正向核证、不盲信**；后台型注意别用 shell `&`（变孤儿不回调）。
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
@@ -117,6 +118,9 @@ metadata:
 - **commit 留本地，push/PR 必须用户明示批准**；批准一次只覆盖那次。
 - **验证诚实**：交付三段式——验证了什么（真跑过）/ 没验证什么 / 剩余风险。本地打桩绕过的环节（真
   LLM、真队列）显式标注，部署后运维补验。实证：本地 LLM 打桩致 un-awaited coroutine 逃逸生产。
+- **代验路径 ≠ 真路径**（后端/agent/前端通用）：mock / 打桩 / stream smoke 全绿 **≠ 真实路径成立**——
+  按**真实部署路径**验收，别拿代验当真验，真路径常和你 mock 的那条不是同一条（前端实例见 §7：卡片走
+  `execute/async` 非 `execute/stream`，三段绿仍 ReOpen）。
 
 ## 4. 间接环境访问（运维 agent 模式）
 
@@ -152,9 +156,10 @@ metadata:
 
 ## 7. 前端 fix 验证（浏览器联调）
 
-派完前端任务，**验收纪律：代码 review + 单测都不够，必须回浏览器看真实渲染**。完整方法论（MCP 主
-CLI 补、a11y 优先、网络面板诊断联网 bug、CLI 抓 SSE）见 `references/frontend-verify.md`。本地起服务的
-具体坑高度项目特定，写进**该前端项目自己的 `AGENTS.md`**，不进通用 skill。
+派完前端任务，**验收纪律：代码 review + 单测都不够，必须回浏览器看真实渲染；且 mock / SSE 帧 / 本地都过
+≠ 真用户能看到——闭环要登已发布的真应用跑真实一轮 + 截图才算数**（`代验路径≠真路径` 的前端实例，通用原则
+见 §3）。完整方法论（MCP 主 CLI 补、a11y 优先、网络面板诊断联网 bug、CLI 抓 SSE、**交付闭环**、本地起服务
+坑入项目 `AGENTS.md`）见 `references/frontend-verify.md`。
 
 ## 8. 新项目接入清单
 

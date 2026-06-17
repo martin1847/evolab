@@ -38,7 +38,7 @@ if [ ! -f "$EVENTS" ]; then
   fi
 fi
 
-idle=0; lastline=""; stalls=0; exterr=0
+idle=0; lastline=""; stalls=0; exterr=0; empties=0
 for i in {1..260}; do
   sleep 20
   # (A) liveness backstop FIRST — a hard crash fires no hook; foreground back to a
@@ -52,6 +52,24 @@ for i in {1..260}; do
 
   line=$(tail -1 "$EVENTS" 2>/dev/null)
   state=$(printf '%s' "$line" | awk '{print $2}')
+
+  # Empty-sentinel fallback: dispatch CREATES the events file empty, so the t=0
+  # `! -f` grace above never trips when the hook simply never fires (e.g. codex
+  # hooks not trusted → no events EVER). Result was a blind heartbeat spin. If the
+  # file is still empty after ~2min (6 polls — generous vs an agent that just
+  # hasn't started its first turn), the hook isn't delivering → switch to scrape.
+  if [ -z "$line" ]; then
+    empties=$((empties+1))
+    if [ "$empties" -ge 6 ]; then
+      echo "=== [$SESSION] sentinel empty ~2min (hook not firing / untrusted) → fallback to scrape ==="
+      exec bash "$HERE/lib/scrape-fallback.sh" "$SESSION" "$MARKER" "$SHELL_RE"
+    fi
+    lastline="$line"
+    [ $((i % 9)) -eq 0 ] && echo "[$SESSION] heartbeat iter $i state=empty $(date '+%H:%M:%S')"
+    continue
+  fi
+  empties=0
+
   case "$state" in
     WAITING)
       echo "=== [$SESSION] WAITING FOR INPUT at $(date '+%H:%M:%S') — $line ==="

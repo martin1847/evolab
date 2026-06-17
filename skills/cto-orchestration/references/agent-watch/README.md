@@ -39,8 +39,9 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
    output-blocked error emits turn_end). The screen repaints each retry so the frozen-screen check never trips
    either → silent wait. Pattern overridable via `AGENT_WATCH_EXT_ERR_RE`. On exit 5:
    don't wait — kill the hot-retrying agent and re-dispatch a fresh session (no back-off state) once the provider recovers.
-3. **Graceful degradation**: sentinel file absent (hook not loaded / older agent) ⇒ fall back to `lib/scrape-fallback.sh`
-   screen-scraping. So nothing regresses if a session was launched without the hook.
+3. **Graceful degradation**: sentinel file absent (hook not loaded / older agent) — OR present but still empty after
+   ~2min (hook wired but never firing, e.g. codex hooks untrusted) — ⇒ fall back to `lib/scrape-fallback.sh`
+   screen-scraping. So nothing regresses whether a session launched without the hook, or with a silent one.
 
 ## Honest limits
 - Hooks fire INSIDE the agent process → a hard crash (SIGKILL/segfault) emits nothing. The liveness guard, not
@@ -53,6 +54,10 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   `service unavailable`, `Overloaded`) is also plausible content an agent prints while editing retry/error-handling
   code or reading logs. BUSY/WORKING + N-poll repetition + a wide tail narrow it, but don't eliminate it. exit 5
   dumps the pane tail so the orchestrator can eyeball it as provider chrome before killing — confirm, don't blind-kill.
+- **codex launch frictions (per-machine, not skill bugs)**: a malformed GLOBAL `~/.codex/hooks.json` makes codex
+  warn at every launch (`failed to parse hooks config … unknown field`) but does NOT block — the skill installs a
+  project-local `.codex/hooks.json`, unaffected. And codex prompts for directory-trust on first launch in a new cwd
+  (send `1`+Enter) — separate from any bypass flags. Both observed while driving codex as the orchestrator.
 
 ## Launch (per agent, sets env + hook)
 > **CRITICAL (verified the hard way):** the `AGENT_WATCH_*` env MUST be set **INSIDE the command string**
@@ -67,8 +72,12 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 **Canonical commands (use these, not the raw recipes above):**
 - `dispatch <omp|codex|claude> <session> <cwd>` — launches the agent wired to the hook (bakes in the
   env-in-command rule + ABS sub; truncates the session sentinel; age-purges old ones).
-- `watch <session> [busy-marker]` — monitor (hook-primary, scrape-fallback). Run via the orchestrator's
-  background mechanism (NOT shell `&`); read its output for the `WATCH ARMED` line to confirm liveness.
+- `watch <session> [busy-marker]` — monitor (hook-primary, scrape-fallback). It BLOCKS until a terminal state,
+  then exits a typed code (0–5). **Default (any shell orchestrator — codex etc.): run it synchronously and read
+  the code** — `bash <dir>/watch <session>; rc=$?` then branch on `$rc`. A **background orchestrator (Claude Code)**
+  instead launches it via its background mechanism (NOT shell `&`, which orphans it) + reads the `WATCH ARMED`
+  line + completion notification. Either way, confirm with capture-pane — the code is a lead, not gospel.
+  (Validated: a codex shell-orchestrator independently built `…/watch <s>; rc=$?`, read `0=DONE`, then verified.)
 - `teardown <session> [cwd]` — kill the session + remove its sentinel + remove the worktree's `.codex` hook config.
 
 ## Validation status (2026-06-16)
