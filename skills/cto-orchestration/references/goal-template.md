@@ -23,9 +23,16 @@
 4. 文档：findings 写入 `docs/orchestration/<NAME>_<FINDINGS|IMPL>_omp.md`，
    含 what-changed / what-verified(真跑过) / NOT-verified / 剩余假设。
 
+## Done when（完成判定 — 逐条须有当前态证据，验证范围匹配声明范围）
+
+- [ ] <可验证后置条件：行为变了 / bug 不再复现 / 产出存在——写成"两个评审独立判会得同一 pass/fail"的无歧义形态>
+- [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立，E2E 范围匹配声明范围。
+- 不确定 = 未完成；预算/时间耗尽 ≠ 完成。未达成就保持任务 active + STOP and report，别把易达成的子集当目标。
+
 ## Guardrails
 
 - Scope = <精确边界>。No refactors of neighboring code, no format changes.
+- 禁止删 / 改 / 跳过测试、断言或 grader 来让验收通过——测试集对执行者只读（成功标准"红→绿"最易被 game）。
 - 旗标门控：<flag 名，默认 ON/OFF + 理由>。
 - 遇到需要超出 scope 的改动：STOP and report，不要自行扩权。
 - 遵守仓库自身规则（AGENTS.md / GitNexus impact analysis 等）。
