@@ -1,6 +1,7 @@
 .DS_Store
 *.log
 scripts/
+test/
 
 AGENTS.md
 CLAUDE.md
