@@ -81,5 +81,11 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   (graceful, by design). To get the real codex signal, persist hook trust once or launch codex with the bypass
   flag. Until then codex monitoring = screen-scrape fallback (works, just not hook-deterministic).
 - ⏳ Claude (`Stop`/`Notification`/`PostToolUse`) wiring built per docs — validate on first real Claude dispatch.
+- ◑ STALLED-EXTERNAL (exit 5): detection PREDICATE validated offline against provider-error-chrome fixtures —
+  true positives (529/overloaded, 429 rate-limit, 503 unavailable, insufficient_quota, stream error) and true
+  negatives (normal edits, an agent merely reasoning about "error") classify correctly; watch↔scrape regex parity
+  asserted. **KNOWN false positives**: the same tokens appear when an agent edits rate-limit/error-handling code
+  or reads provider logs (predicate matches) — so exit 5 is advisory: eyeball the dumped tail (provider chrome vs
+  file content) before killing. NOT yet validated: the WORKING/BUSY + N-poll gates and a live provider stall e2e.
 - Note: `dispatch` writes `.codex/hooks.json` into the worktree and auto-adds `.codex/` to that repo's
   `.git/info/exclude` (so it can't be `git add -A`'d). `teardown` removes the file itself.
