@@ -46,7 +46,8 @@ tmux new-session -d -s demo-ratelimit-omp -c ../wt-ratelimit 'omp'
 sleep 12
 tmux send-keys -t demo-ratelimit-omp 'goal：/abs/path/docs/orchestration/RATELIMIT_GOAL.md'
 sleep 1 && tmux send-keys -t demo-ratelimit-omp Enter
-bash skills/cto-orchestration/references/watcher.sh demo-ratelimit-omp &
+# 挂 watcher（hook 主信号、抓屏降级；返 typed 退出码。可先 dispatch 装 hook，此处直接 watch 走降级）
+bash skills/cto-orchestration/references/agent-watch/watch demo-ratelimit-omp; rc=$?
 ```
 
 watcher 轮询返回（typed 状态）：

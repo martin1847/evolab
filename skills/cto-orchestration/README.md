@@ -112,7 +112,7 @@
 |---|---|
 | `*_GOAL.md` | 带 file:line 预判、交付物清单、guardrails 的派工文档 |
 | `*_REVIEW_codex.md` | codex 异构评审的 severity 分级 findings + verdict，逐轮追加 |
-| watcher 状态 | typed 信号：DONE / SESSION-GONE / AGENT-DEAD / HANG / WAITING-INPUT |
+| watcher 状态 | typed 信号：DONE / SESSION-GONE / AGENT-DEAD / HANG / WAITING-INPUT / STALLED-EXTERNAL |
 | 复盘快照 | 交付清单 + 教训固化 + roadmap/ACTIVE_CONTEXT 翻转 |
 
 ## 它和同类有什么不同
@@ -138,14 +138,15 @@
 
 ```
 cto-orchestration/
-├── SKILL.md                          # 给 agent 看的完整编排方法论（8 节派工协议）
+├── SKILL.md                          # 给 agent 看的完整编排方法论（§0 角色 – §8 接入）
 ├── README.md                         # 本文件：给人看的安装+定位页（图存仓库根 assets/，不随 skill 安装）
 └── references/
     ├── goal-template.md              # 派工 goal 文档模板
-    ├── watcher.sh                    # 后台轮询 + 存活检测脚本
+    ├── agent-watch/                  # watcher 工具集：dispatch/watch/teardown + hook（hook 主信号、抓屏降级）
     ├── review-dispatch.md            # codex 评审指令模板（冷上下文防 anchoring）
     ├── ops-prompt-template.md        # 运维 agent 间接取证提示词模板
     ├── frontend-verify.md            # 前端 fix 浏览器联调验证方法
+    ├── retrospective.md              # 复盘仪式操作手册（memory 治理 + session 切换决策）
     └── agents-md-orchestration-section.md  # 接入项目 AGENTS.md 的委派边界增补
 ```
 

@@ -1,7 +1,7 @@
 # Playbook：那个"看起来做完了"的 agent
 
 > 一个真实工作流的端到端复盘（脱敏）。讲的不是某个 bug，是一类**结构性盲区**怎么被发现、
-> 怎么被根治。配套产物：`skills/cto-orchestration/references/watcher.sh`。
+> 怎么被根治。配套产物：`skills/cto-orchestration/references/agent-watch/`（dispatch/watch/teardown）。
 
 ## 场景
 
@@ -56,7 +56,8 @@ agent 像是根本没动过。但 watcher 言之凿凿说它"完成"了。
 | `WAITING INPUT` | 无忙碌标记但屏幕底部是交互提示 | 去回输入，不是完成 |
 | `SUSPECTED HANG` | 忙碌标记还在但屏幕长时间零变化 | 去看一眼 |
 
-完整实现见 `watcher.sh`，5 个退出码，编排者按码分流。
+完整实现见 `references/agent-watch/`（hook 主信号 + 抓屏降级），6 个退出码（0–5，上表外还有
+SESSION-GONE、STALLED-EXTERNAL=provider 错误热重试盲区），编排者按码分流。
 
 ## 教训
 

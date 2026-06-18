@@ -33,7 +33,7 @@
 
 ## 落地
 
-- `AGENTS.md` 里列三档清单（见 `templates/AGENTS.md`）。
+- 三档清单写进 `AGENTS.md` 的 Work Modes（DO / THINK FIRST / REQUIRE APPROVAL），由 `repo-governance-bootstrap` 落地。
 - 审批是**一次性**的：批准这次 push ≠ 批准下次。上下文换了，重新确认。
 - 配套一条："做不可逆操作前，先看证据是否真支持这个具体动作"——一个看起来像已知故障的
   信号，可能根因不同。restart / 删除 / 改配置之前，先验证因果，别凭 pattern-match 下手。
