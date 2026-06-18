@@ -1,5 +1,6 @@
 ---
 name: repo-governance-bootstrap
+version: 1.0.0
 description: 一次性初始化适合 AI 协作开发的轻量工程治理骨架（docs/INDEX、ADR、module、roadmap、ACTIVE_CONTEXT、AGENTS.md / CLAUDE.md）。新仓库 / 文档结构混乱 / 项目内文档治理初始化时调用。【定位】独立可用、不需要多 agent 编排；也是 cto-orchestration 新项目接入的第一步，但小项目只做文档治理时单独用即可。一次性建结构，区别于循环跑的 cto-orchestration。
 ---
 
@@ -51,6 +52,8 @@ docs/
 
 AGENTS.md                             # repo 治理规则（Codex 读）
 CLAUDE.md                             # 一行：@AGENTS.md（Claude 读）
+
+ACCESS.local.md                       # gitignored — 本机接入凭证 + 环境拓扑 + 验证配方
 ```
 
 ### 约定原则
@@ -61,6 +64,7 @@ CLAUDE.md                             # 一行：@AGENTS.md（Claude 读）
 - **不创建 generic backlog**（`future_plan.md` / `ideas.md` / TODO dump）；未来工作进 `roadmap/deferred/`。
 - **ACTIVE_CONTEXT 是快照不是日志**：完整契约见 `references/PROJECT_AGENT.md §6`（canonical，随成品写进项目 AGENTS.md）+ 下方「ACTIVE_CONTEXT.md 模板」的契约头。核心 = 每次收口**整篇重写**而非追加。实证（why）：某项目 ACTIVE_CONTEXT 被当 checkpoint 日志逐条 append，4 天涨到 190 行后整体冻结腐烂。
 - **外部任务系统优先**：若程序任务已在外部系统跟踪（Jira / Linear / 飞书 bitable 等），roadmap 是**映射层**不是第二任务系统——沿用外部 ID（如 T-NNN），在 roadmap README 和 AGENTS.md Traceability 里写明外部 SoT；只给外部系统没有记录的仓库内部项造 RD 号。两套任务账本必烂一套。
+- **接入凭证与操作配方进 `ACCESS.local.md`（gitignored）**：committed 治理骨架（INDEX/ADR/module/roadmap/ACTIVE_CONTEXT）回答 what/why，全部不含 secret；它们缺的那一块——"怎么真正连上、登录、验证运行中的系统，以及连上用的凭证"——落在一份 **gitignored 的 `ACCESS.local.md`**，三段式：① 接入凭证（URL/账号/token/cred）② 环境拓扑速查（部署布局/tenant id/env flags/调用路径）③ 验证配方与 gotcha（E2E 验收步骤、调试踩坑）。它是 `ACTIVE_CONTEXT.md` 的本地含密镜像兄弟（committed=what，local=how-to-reach），是新会话/新 agent 摸到系统的入口。**凭证口径必须一致**：canonical home 是外部 vault（如团队密钥库），此文件是本机缓存，靠 gitignore + 提交前 redaction sweep 兜底；secret 永不进 committed tree / traces / 对外消息。建文件即把 `ACCESS.local.md` 写进 `.gitignore`。
 - **治理目录值得 local-only git 化**（尤其多子 repo 的 umbrella——目录本身套着各有 remote 的子 repo、自己不是 git repo）：把 `docs/` + 治理文件纳入一个**无 remote 的本地 git**、gitignore 掉子 repo，换来文档变更历史、误删恢复、agent 派工后的 `git diff` 漂移审计。orchestration docs 一旦成为多 agent 并发写的 SoT 尤其值得（实证：曾发生 agent 误删关键 docs、无版本可恢复）。加 remote 前先做一次 secrets sweep（内网 IP/库名/拓扑也算敏感面），并在 AGENTS.md 写明这条。多 agent 编排场景配合 `cto-orchestration` skill。
 
 ---
@@ -85,11 +89,13 @@ CLAUDE.md                             # 一行：@AGENTS.md（Claude 读）
 
 7. **生成 `docs/ACTIVE_CONTEXT.md`**：当前焦点 + 在跑/在等的 workstream 表 + standing constraints + recent decisions（最近 3–5 条）。按"约定原则"的快照契约生成，头部带契约声明（见下方 ACTIVE_CONTEXT 模板）。
 
-8. **生成 `AGENTS.md`**：以 `references/PROJECT_AGENT.md`（中文成品宪法）为准落地，按其章节：Source of Truth 优先级 / 三档工作模式 / 模块边界（FOR / NOT FOR）/ Capability vs Component / 状态词汇 / 文档治理（已含**文档生命周期 anti-rot**：ACTIVE_CONTEXT 快照契约 + 收口归档仪式）/ Code Traceability / 完成标准。工具偏好若全局 agent 配置未覆盖项目特定项（如子仓库 toolchain）再补。
+8. **生成 `AGENTS.md`**：以 `references/PROJECT_AGENT.md`（中文成品宪法）为准落地，按其章节：Source of Truth 优先级 / 三档工作模式 / 模块边界（FOR / NOT FOR）/ Capability vs Component / 状态词汇 / 文档治理（已含**文档生命周期 anti-rot**：ACTIVE_CONTEXT 快照契约 + 收口归档仪式）/ Code Traceability / 完成标准。工具偏好若全局 agent 配置未覆盖项目特定项（如子仓库 toolchain）再补。**Redaction 边界**写明一条：secret/凭证只进 `ACCESS.local.md`（gitignored）与外部 vault，永不进 committed tree / traces / 日志 / 对外消息——避免 AGENTS.md 里 "creds never in repo tree" 与本机存明文凭证的口径自相矛盾。
 
 9. **生成 `CLAUDE.md`**：单行 `@AGENTS.md`。
 
-10. **完成时报告**：列出已建文件 + 用户下一步建议（填实 ADR-0001 内容 / 完成首个 module 的 FOR-NOT FOR / 把第一个 roadmap item 标 `active`）。
+10. **生成 `ACCESS.local.md` stub 并写进 `.gitignore`**：用下方「ACCESS.local.md 模板」建三段式骨架（接入凭证 / 环境拓扑 / 验证配方），字段留空待用户填实；同步在 `.gitignore` 加 `ACCESS.local.md` 一行（带注释说明含 creds、永不提交）。**绝不**把真实凭证写进 stub。
+
+11. **完成时报告**：列出已建文件 + 用户下一步建议（填实 ADR-0001 内容 / 完成首个 module 的 FOR-NOT FOR / 把第一个 roadmap item 标 `active` / 在 `ACCESS.local.md` 填本机接入凭证与验证配方）。
 
 ---
 
@@ -248,6 +254,36 @@ Last rewritten: YYYY-MM-DD
 
 ## Recent Decisions (last 3–5 — older: git history / ADRs)
 - YYYY-MM-DD — <decision>
+```
+
+## ACCESS.local.md 模板
+
+> **gitignored，永不提交/推送。** 含明文凭证，只在本机做快速反查。生成时字段留空待用户填，
+> stub 里绝不写真实 secret。凭证 canonical home 是外部 vault，此文件是本机缓存。
+
+```markdown
+# <项目> 接入与访问（仅本机 — 已 gitignore，永不提交/推送）
+
+> 此文件含凭证/环境/访问信息，供本机快速反查。**任何内容都不得**粘进 committed 文件、
+> 子仓库目录、traces、日志或对外消息。凭证 canonical home = 外部 vault；这里是本机缓存。
+
+## ① 接入凭证
+- **<环境名>**：`<登录 URL>` → 登录 → 选 `<租户/项目>`。
+  - 账号：`<account>`；密码：`<password 或"见 vault">`。
+  - token / cred 获取方式：`<如何拿到，例如 localStorage.token / vault 路径>`。
+
+## ② 环境拓扑速查
+- 部署布局：`<monorepo / 多服务 / 前后端目录>`。
+- 关键 id：`<tenant id / project id / 资源 id>`。
+- env flags：`<影响行为的开关>`。
+- 调用路径：`<请求怎么走到目标代码——关键分叉点 file:line>`。
+
+## ③ 验证配方与 gotcha
+- **E2E 验收 recipe**：`<最小可复现的"摸到运行系统并确认生效"步骤>`。
+- **调试踩坑**：`<本机/工具/环境特有的坑 + 绕过办法>`。
+
+## 构建 / 工具
+- `<本机构建、测试、跑服务的实际命令>`。
 ```
 
 ## INDEX.md 模板
