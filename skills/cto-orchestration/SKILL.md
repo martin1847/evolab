@@ -46,17 +46,22 @@ metadata:
 2. **写 goal**（模板 `references/goal-template.md`，放 `docs/orchestration/<NAME>_GOAL.md`）：含
    上下文+前置研究、带 file:line 的预判（标"verify, don't trust"）、交付物、验证要求、guardrails
    （scope / stop-and-report / redaction / commit-local-no-push）。
-3. **tmux 派发 + 理解门**：
+3. **派发（用 `dispatch` 起，别裸 tmux）+ 验 hook + 理解门**：
    ```bash
-   tmux new-session -d -s <proj>-<task>-omp -c <worktree> 'omp'
+   # 必须用 dispatch 起：它把 hook env 注进 tmux 命令串。裸 `tmux new-session 'omp'` 会让 hook
+   # 拿不到 env → 静默 no-op → watcher 退化抓屏（机制见 README）。
+   references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-omp <worktree>
    sleep 12
    tmux send-keys -t <session> 'goal：<abs-path>'; sleep 1; tmux send-keys -t <session> Enter
    ```
    坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；codex 启动弹更新提示先发 `2`+Enter。
+   **起后立刻验 hook（硬 gate，别跳）**：`watch` 一挂就 Read 输出——必须见 sentinel `WORKING` 行；见
+   `no sentinel (hook not wired) → fallback` = 没走 dispatch（或 codex 未 trust hook）→ **停下重起、别带病跑**
+   （实证：裸起整 session 退抓屏，误报 DONE + 漏 WAITING——澄清菜单挂 busy 标记 ⟦esc⟧、抓屏永判"忙"、卡 21min 零 ping）。
    **派发后、动手前先过理解门**：第一轮要 agent 复述"这改动碰哪些文件/契约、有哪些风险"，核对无误
    再放行；弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
-4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：`dispatch <omp|codex|claude>
-   <session> <cwd>` 起 + `watch <session>` 监控 + `teardown` 收。机制细节（events sentinel、
+4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：agent 已在 step 3 用 `dispatch` 起好
+   （hook 已注），本步只 `watch <session>` 监控 + 收工 `teardown`。机制细节（events sentinel、
    env-必须写进命令串、两层兜底、scrape fallback、codex hook-trust）见该目录 README；本节只留编排者纪律：
    - **typed 状态**：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL
      （DEAD≠DONE、WAITING 要回输入）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
