@@ -150,14 +150,13 @@ metadata:
   `ACCESS.local.md` 存怎么连上 + 凭证（how-to-reach，含密 gitignored，见 repo-governance-bootstrap）、memory 存
   编排者私有的教训 + 入口指针。**短期 working 记忆（当前任务草稿/进度/待办）不进这三类**——活在 context window
   或临时 `/tmp` NOTES、随手可弃，别塞进 memory（污染跨 session 私有层）或 ACTIVE_CONTEXT（那是收口快照非草稿）。
-  - **写时纪律（不等复盘）**：写 memory 的当下，事实细节（schema/config/creds/endpoint/长清单）就卸载到
-    环境文档（`ACCESS.local.md`）/ docs，正文只留指针 + 教训——即下方 memory 治理规则的写时前移。靠 skill
-    文本记不住的高频纪律配 **PostToolUse hook** 兜底（强制层补 salience 衰减；模板见 repo-governance-bootstrap）。
+  - **写时纪律（不等复盘）**：上面的卸载边写边做——写 memory 当下就把事实细节进 ACCESS/docs，别囤到复盘再清。
+    靠 skill 文本记不住的高频纪律配 **PostToolUse hook** 兜底（强制层补 salience 衰减；模板见 repo-governance-bootstrap）。
 - **复盘仪式（事件触发）**：收口 / 压缩前 / 任何 ReOpen 后主动提议——交付清单 → 什么有效 → 教训进
   memory → 上下文治理（关会话 + 扫孤儿 + worktree 核对 + 敞口清单=下会话入口）→ **治理同步**（文档归档
   + ACTIVE_CONTEXT 整篇重写 + roadmap 翻状态，与 memory 更新同级、不可省）→ **memory 治理**（COMPLETED
-  workstream 精简、事实细节卸载到环境文档 / memory 只留指针、索引按类型分组）→ **session 切换决策**
-  （压缩续跑 vs 新 session + handoff）。后两步操作清单见 `references/retrospective.md`。
+  workstream 精简、索引按类型分组——卸载规则同上）→ **session 切换决策**（压缩续跑 vs 新 session + handoff）。
+  后两步操作清单见 `references/retrospective.md`。
 - **孤儿扫**：关交付完的会话（持关键上下文且挂起的保留）；扫 agent 起的孤儿——`docker ps` / `ps` /
   后台 job。临时 compose 用 trap/finally `down --remove-orphans`，repro 禁裸 `while True`（用有界
   循环/deadline）。实证：某 repro 死循环空转 2.5 天、65% CPU。
