@@ -12,31 +12,21 @@ metadata:
 > 核心铁律：**编排者本人绝不写产品代码**——再小的改动也派给执行 agent。编排者的产出是
 > goal 文档、监控、评审调度、决策、状态落盘。来源：多 agent CTO 实战沉淀（2026-06 起）。
 
-## 0. 角色分工
+## 0. 角色分工（按能力定义，工具可换）
 
-| 角色 | 谁 | 干什么 | 不干什么 |
-|---|---|---|---|
-| 编排者（你） | **满足下方编排者能力的任意 agent**（参考:Claude Code / codex；见契约表） | 写 goal/取证提示词、派工、watcher 监控、转述评审、向用户汇报、memory/docs 落盘、任务系统操作 | 写产品代码、自己跑长 E2E/批量验证（收工的独立复跑 test+lint 不算，见 §1.6） |
-| 执行者 | omp（tmux 会话） | 按 goal 实现 + 自测 + E2E + findings 文档 | 超出 goal scope 的改动 |
-| 评审者 | codex（tmux 会话） | 只读对抗式评审，severity 分级 + verdict | 改代码、commit |
-| 运维 agent | 用户转交提示词 | 够不着的环境（prod/独立 dev DB）只读取证与部署后验证 | 修复、配置变更 |
+方法论只依赖这几个能力、不绑具体工具（**含编排者本身**）；下文点名的 omp/codex/tmux（含"你=Claude Code"口吻）都是参考实现，换栈照此替换。
 
-实证：omp（oh-my-pi+Opus）强在自主执行，codex（gpt）强在严苛评审，交叉评审屡次抓到双方都漏的
-真问题。默认 omp 执行、codex 评审，不倒置。
-
-**契约（角色按能力定义，工具可换）**——方法论只依赖这五个能力，不绑具体工具（**含编排者本身**）：
-
-| 角色 | 必备能力 | 参考实现（可换） |
+| 角色 | 干什么 / 不干什么 | 参考实现（可换） |
 |---|---|---|
-| **编排者**（CTO 本人） | 编辑文件(goal/findings/状态)、驱动派发载体、**起 watcher 并取其终态裁决**、有定时/轮询兜底、与人交互；**自己绝不写产品代码** | **后台型**(起 watcher 后读交付的终态)：Claude Code(`run_in_background`+完成通知+`ScheduleWakeup`) / omp(原生 bg-job)；**阻塞型**：codex(同步 `watch` 读 exit code + cron/轮询，需 `--dangerously-bypass`)；通用:任何 shell+文件 agent。**三者均已实跑验证**——omp 虽是最强执行者，坐编排位仍守铁律、不自写码。 |
-| 执行 agent | 吃 goal 文档、交互式可 steering、有忙碌信号 + 存活信号 | omp / Claude Code / aider… |
-| 评审 agent | 异构（与执行不同 lineage）、只读 | codex / 另一家强模型 |
-| 派发载体 | 能发指令进、能抓屏出的交互会话 | tmux / 其他复用器 |
-| watcher | 轮询"存活+忙碌+等输入"、返 typed 状态 | `references/agent-watch/`（`dispatch`/`watch`/`teardown` + 生命周期 hook;hook 主信号、抓屏降级） |
+| **编排者**（你/CTO） | 写 goal/取证提示词、派工、**起 watcher 取终态裁决**、转述评审、汇报、memory/docs 落盘、任务系统操作 + 定时/轮询兜底；**绝不写产品代码、不自己跑长 E2E·批量验证**（收工独立复跑 test+lint 不算，见 §1.6） | **后台型**(起 watcher 读交付终态)：Claude Code(`run_in_background`+通知+`ScheduleWakeup`) / omp(原生 bg-job)；**阻塞型**：codex(同步 `watch` 读 exit code + cron/轮询，需 `--dangerously-bypass`)；通用:任何 shell+文件 agent。三者均实跑验证 |
+| 执行 agent | 吃 goal 实现 + 自测 + E2E + findings；不做超 goal scope 改动。须交互可 steering + 忙碌信号 + 存活信号 | omp / Claude Code / aider… |
+| 评审 agent | 只读对抗式评审（review）、severity + verdict；不改码/commit。须**异构**（与执行不同 lineage） | codex / 另一家强模型 |
+| 运维 agent | 够不着的环境(prod/独立 dev DB)只读取证 + 部署后验证；不修复/改配置 | 用户转交提示词 |
+| 派发载体 | 发指令进、抓屏出的交互会话 | tmux / 其他复用器 |
+| watcher | 轮询"存活+忙碌+等输入"返 typed 状态 | `references/agent-watch/`（dispatch/watch/teardown + hook；hook 主信号、抓屏降级）|
 
-下文点名的 omp/codex/tmux（含"你=Claude Code"的口吻）都是**参考实现**；换栈时照此契约替换——
-**编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位），§1.4 的 watcher 起法/忙碌标记/存活信号
-按你的工具校准。frontmatter `requires.bins` 列的 tmux/omp/codex 是参考栈，非硬依赖。
+**默认 omp 执行、codex 评审，不倒置**——omp(oh-my-pi+Opus)强在自主执行、codex(gpt)强在严苛评审，交叉评审屡抓双方都漏的真问题。
+**编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位）；§1.4 的 watcher 起法/忙碌·存活信号按你的工具校准，`requires.bins` 的 tmux/omp/codex 是参考栈、非硬依赖。
 
 ## 1. 派工协议（每次走全流程）
 
@@ -76,7 +66,10 @@ metadata:
      交付物**（本地 commit／产物计数达标／显式 review 标记），别把"等自己 bg"误判成"等编排者"（实证：重批量
      抽取走 agent 自起 bg，按 idle 轮询屡误报，改判"出现本地 commit + idle 稳定"才准）。是 `沉默≠交付` 的同族。
    - **起 watcher 取终态裁决**（后台型 CC/omp、阻塞型 codex 两路见 §0 契约 + README）：不管哪路，**裁决只是
-     线索——自己 capture-pane 正向核证、不盲信**；后台型注意别用 shell `&`（变孤儿不回调）。
+     线索——自己 capture-pane 正向核证、不盲信**。
+   - **后台启动一律不加 shell `&`**：run_in_background / omp 原生 bg / 任何后台机制**已 detached**（CC Bash 工具
+     原话 "No `&` needed"）；再补 `&` = 双重后台 → 进程脱 wrapper 变**孤儿**（崩了不回调）+ wrapper 立即报"完成"
+     而真进程还跑 → 误判失联。watcher / dev server / 长跑通用（实证：本 session 手滑 `&` 致 server 成孤儿、watcher 不回调）。
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
@@ -87,6 +80,11 @@ metadata:
    ④ 测试计数用 `grep -E 'passed|failed'`，别信被截断的点行。
 
 ## 2. 对抗式评审循环
+
+**先按风险定评审深度**：日常/低风险改动 → 轻量标准 review（`codex review --base <base>` 原生子命令：自动算 diff +
+结构级只读，省 prompt，挡基本质量/回归）；高风险（鉴权/迁移/基建脚本/大重构）→ 走下面完整对抗循环。codex **无内置
+"对抗"强度档**——"对抗"是 prompt 层（即本节：自起会话点名轴 + severity/verdict + 多轮收敛），其 `review` 子命令只给
+"自动 diff + 只读 summary"、不给 verdict schema，故对抗循环**必须自起会话自控 prompt**，别用子命令。
 
 1. **起 codex + brief 冷上下文**：omp commit+核证后起 codex 于同一 worktree（模板
    `references/review-dispatch.md`）。**只给"查哪些轴 + verify don't trust + 收敛达标线"，不夹带自己的
