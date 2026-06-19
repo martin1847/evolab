@@ -60,13 +60,12 @@ metadata:
    - **纯事件驱动会盲等：挂 watcher 时同时设上限**。除 watcher 外，按"任务预期时长 ×2"设个 fallback 自检
      （定时兜底——CC:`ScheduleWakeup`；codex/shell 编排者:cron 或有界轮询），到点没终态就主动 capture-pane
      ——"WORKING 但卡死/热重试"不发终态事件。
-   - **判完成要正向证据、不凭 idle**（tmux 链路无失败信号：session 在则 send/capture 都"成功"）。两个坑：
+   - **判完成要正向证据、不凭 idle / watcher 裁决**（tmux 链路无失败信号：session 在则 send/capture 都"成功"；
+     watcher 裁决同样只是线索，后台型/阻塞型哪条消费路径[见 §0 + README]都要自己 capture-pane 正向核证、不盲信）。两个坑：
      ① agent 死了退回 shell = 空屏+无忙碌 → 必须核 `pane_current_command` 仍是 agent 进程；
      ② **agent 自起后台 job 会 yield=发 DONE 但没完成**（bg 跑完自动续）——凡这类相把完成信号绑**正向
      交付物**（本地 commit／产物计数达标／显式 review 标记），别把"等自己 bg"误判成"等编排者"（实证：重批量
      抽取走 agent 自起 bg，按 idle 轮询屡误报，改判"出现本地 commit + idle 稳定"才准）。是 `沉默≠交付` 的同族。
-   - **起 watcher 取终态裁决**（后台型 CC/omp、阻塞型 codex 两路见 §0 契约 + README）：不管哪路，**裁决只是
-     线索——自己 capture-pane 正向核证、不盲信**。
    - **后台启动一律不加 shell `&`**：run_in_background / omp 原生 bg / 任何后台机制**已 detached**（CC Bash 工具
      原话 "No `&` needed"）；再补 `&` = 双重后台 → 进程脱 wrapper 变**孤儿**（崩了不回调）+ wrapper 立即报"完成"
      而真进程还跑 → 误判失联。watcher / dev server / 长跑通用（实证：本 session 手滑 `&` 致 server 成孤儿、watcher 不回调）。
