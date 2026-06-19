@@ -32,15 +32,17 @@ for t in emit.test.sh watch.test.sh scrape-fallback.test.sh ext-err-detection.te
   run_one "$t" bash "$HERE/$t"
 done
 
-echo
-echo "==== omp-watch.bun.ts ===="
-if command -v bun >/dev/null 2>&1; then
-  run_one "omp-watch.bun.ts" bun "$HERE/omp-watch.bun.ts"
-else
-  echo "    bun not on PATH — TypeScript hook test skipped"
-  printf '[SKIP] omp-watch.bun.ts (no bun runtime)\n'
-  total_skip=$((total_skip+1))
-fi
+for bt in omp-watch.bun.ts memory-hook-omp.bun.ts; do
+  echo
+  echo "==== $bt ===="
+  if command -v bun >/dev/null 2>&1; then
+    run_one "$bt" bun "$HERE/$bt"
+  else
+    echo "    bun not on PATH — TypeScript test skipped"
+    printf '[SKIP] %s (no bun runtime)\n' "$bt"
+    total_skip=$((total_skip+1))
+  fi
+done
 
 echo
 echo "######## SUMMARY ########"

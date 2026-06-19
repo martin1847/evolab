@@ -131,9 +131,15 @@ extractor。起 codex 要带**两个** flag：`--dangerously-bypass-approvals-an
 （缺后者 project-local hook 不被信任、不加载）。坑：`~/.codex/hooks.json` 若有解析错误（如 `unknown field`）会让
 **整套 hook 加载失败**（含项目级）——先跑一次确认生效。
 
-**③ omp** — ⚠️ **暂不提供可用 hook**：event 形状已实测（`tool_result`，`toolName` 小写 `write`，路径 `event.input.path`），
-但 `pi.sendMessage` 注入对下一 turn 的**可见性未验通**（实测不报错但模型收不到）。omp 坐编排位时，memory 纪律靠
-cto §5 写时纪律（知识层）+ 复盘 memory 治理兜底；注入路径待后续验证再补 JS hook。
+**③ omp** — JS hook `references/memory-discipline-hook.ts`（实测可用），`omp --hook <S>/references/memory-discipline-hook.ts`
+或放 `.omp/hooks/`：
+```ts
+export default (pi)=>{ pi.on("tool_result", async (e)=>{ /* toolName 小写 write/edit、路径 e.input.path、排除 MEMORY.md */
+  await pi.sendUserMessage(REMINDER, { deliverAs:"followUp" }); }); }
+```
+⚠️ 实测：omp 无 command/stdin hook，走 `tool_result` 事件（`toolName` 小写 `write`/`edit`、路径 `event.input.path`）。注入**必须用
+`pi.sendUserMessage(text,{deliverAs:"followUp"})`**——落 `role:user` 进 transcript、模型下一轮读到并遵守；`pi.sendMessage` 是
+hidden/developer 通道、模型常忽略，别用。**措辞要中性**（普通提醒口吻），伪 SYSTEM/"你必须…"会被当 prompt-injection 拒绝。
 
 ---
 
