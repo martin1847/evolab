@@ -142,8 +142,10 @@ metadata:
   索引行），live 只留在跑/在等的；文档只生不死 → live 与历史混杂（实证：某项目积 38 个才首清）。
 - memory：每 workstream 一文件 + 索引一行（状态/PR/敞口/下一步入口），"压缩/等外部输入"前必更新。
   **memory 编排者私有，agent/新 session 只能读 docs**——只更 memory 不同步 docs = 共享治理层腐烂
-  （实证：某项目 ACTIVE_CONTEXT 冻 4 天变废纸）。分工：memory 存编排者视角的教训+入口，docs 存全
-  agent 共享的状态快照。
+  （实证：某项目 ACTIVE_CONTEXT 冻 4 天变废纸）。**三分工**：docs 存全 agent 共享的状态快照（what/why）、
+  `ACCESS.local.md` 存怎么连上 + 凭证（how-to-reach，含密 gitignored，见 repo-governance-bootstrap）、memory 存
+  编排者私有的教训 + 入口指针。**短期 working 记忆（当前任务草稿/进度/待办）不进这三类**——活在 context window
+  或临时 `/tmp` NOTES、随手可弃，别塞进 memory（污染跨 session 私有层）或 ACTIVE_CONTEXT（那是收口快照非草稿）。
   - **写时纪律（不等复盘）**：写 memory 的当下，事实细节（schema/config/creds/endpoint/长清单）就卸载到
     环境文档（`ACCESS.local.md`）/ docs，正文只留指针 + 教训——即下方 memory 治理规则的写时前移。靠 skill
     文本记不住的高频纪律配 **PostToolUse hook** 兜底（强制层补 salience 衰减；模板见 repo-governance-bootstrap）。
