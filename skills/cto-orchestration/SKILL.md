@@ -144,6 +144,9 @@ metadata:
   **memory 编排者私有，agent/新 session 只能读 docs**——只更 memory 不同步 docs = 共享治理层腐烂
   （实证：某项目 ACTIVE_CONTEXT 冻 4 天变废纸）。分工：memory 存编排者视角的教训+入口，docs 存全
   agent 共享的状态快照。
+  - **写时纪律（不等复盘）**：写 memory 的当下，事实细节（schema/config/creds/endpoint/长清单）就卸载到
+    环境文档（`ACCESS.local.md`）/ docs，正文只留指针 + 教训——即下方 memory 治理规则的写时前移。靠 skill
+    文本记不住的高频纪律配 **PostToolUse hook** 兜底（强制层补 salience 衰减；模板见 repo-governance-bootstrap）。
 - **复盘仪式（事件触发）**：收口 / 压缩前 / 任何 ReOpen 后主动提议——交付清单 → 什么有效 → 教训进
   memory → 上下文治理（关会话 + 扫孤儿 + worktree 核对 + 敞口清单=下会话入口）→ **治理同步**（文档归档
   + ACTIVE_CONTEXT 整篇重写 + roadmap 翻状态，与 memory 更新同级、不可省）→ **memory 治理**（COMPLETED
