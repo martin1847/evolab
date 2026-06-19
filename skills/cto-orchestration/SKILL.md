@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.1.1
+version: 1.1.2
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -90,6 +90,9 @@ metadata:
    轴（崩溃恢复、并发竞态、旗标关路径零泄漏、降级语义、安全契约；多租户加租户隔离 + 凭据**间接**泄漏:
    异常链/URL userinfo/日志；评测报告类加**指标诚实性**:指标虚高/证据越界泛化）。点名轴让 codex 主动写
    探针复现，命中率远高于泛泛 review；每轮追问"上轮修复引入了什么新洞"屡次抓到真问题。
+   **评审前先枚举执行路径分叉**（provider / mode、live vs rehydrate、suggestion-flow vs direct-save…），
+   点 codex 核"还有哪些分支没走到"——只覆盖一条分支 ≠ 全覆盖（实证：评审只盯主 controller 路径，真实用户
+   走另一个 provider 的独立分支，整条提取被绕过仍全绿）。
 2. **评审记录用 ledger 结构，不纯追加**：写 `docs/orchestration/<NAME>_REVIEW_codex.md`——severity
    分级 findings + verdict（approve / request-changes），并维护 `blocking / queued / advisory / 已修 /
    stagnation` 几栏，逐轮更新。结构化记录让收敛状态一眼可判，胜过流水账追加。
@@ -120,7 +123,9 @@ metadata:
   LLM、真队列）显式标注，部署后运维补验。实证：本地 LLM 打桩致 un-awaited coroutine 逃逸生产。
 - **代验路径 ≠ 真路径**（后端/agent/前端通用）：mock / 打桩 / stream smoke 全绿 **≠ 真实路径成立**——
   按**真实部署路径**验收，别拿代验当真验，真路径常和你 mock 的那条不是同一条（前端实例见 §7：卡片走
-  `execute/async` 非 `execute/stream`，三段绿仍 ReOpen）。
+  `execute/async` 非 `execute/stream`，三段绿仍 ReOpen）。最尖一条：**别 mock 你正在验证的那个边界**
+  ——stub 掉被测函数 = 测试零信息、恰好盖住 bug；真应用 E2E 才是「可测试」门（实证：一天内 4 个 bug
+  全过 review+单测，只它抓到）。
 
 ## 4. 间接环境访问（运维 agent 模式）
 
