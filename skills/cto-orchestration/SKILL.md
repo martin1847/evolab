@@ -46,10 +46,9 @@ metadata:
 2. **写 goal**（模板 `references/goal-template.md`，放 `docs/orchestration/<NAME>_GOAL.md`）：含
    上下文+前置研究、带 file:line 的预判（标"verify, don't trust"）、交付物、验证要求、guardrails
    （scope / stop-and-report / redaction / commit-local-no-push）。
-3. **派发（用 `dispatch` 起，别裸 tmux）+ 验 hook + 理解门**：
+3. **派发（用 `dispatch` 起）+ 验 hook + 理解门**：
    ```bash
-   # 必须用 dispatch 起：它把 hook env 注进 tmux 命令串。裸 `tmux new-session 'omp'` 会让 hook
-   # 拿不到 env → 静默 no-op → watcher 退化抓屏（机制见 README）。
+   # dispatch 把 hook env 注进 tmux 命令串——watcher 走 hook 主信号的前提，缺则退化抓屏（机制见 README）。
    references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-omp <worktree>
    sleep 12
    tmux send-keys -t <session> 'goal：<abs-path>'; sleep 1; tmux send-keys -t <session> Enter
