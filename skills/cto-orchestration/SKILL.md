@@ -66,9 +66,9 @@ metadata:
      ② **agent 自起后台 job 会 yield=发 DONE 但没完成**（bg 跑完自动续）——凡这类相把完成信号绑**正向
      交付物**（本地 commit／产物计数达标／显式 review 标记），别把"等自己 bg"误判成"等编排者"（实证：重批量
      抽取走 agent 自起 bg，按 idle 轮询屡误报，改判"出现本地 commit + idle 稳定"才准）。是 `沉默≠交付` 的同族。
-   - **后台启动一律不加 shell `&`**：run_in_background / omp 原生 bg / 任何后台机制**已 detached**（CC Bash 工具
-     原话 "No `&` needed"）；再补 `&` = 双重后台 → 进程脱 wrapper 变**孤儿**（崩了不回调）+ wrapper 立即报"完成"
-     而真进程还跑 → 误判失联。watcher / dev server / 长跑通用（实证：本 session 手滑 `&` 致 server 成孤儿、watcher 不回调）。
+   - **后台启动一律不加 shell `&`**（后台机制已 detached，再加 = 双重后台 → 孤儿 + 误判失联）；手滑挡不住
+     → **PreToolUse(Bash) 兜底**（同 §5 强制层思路）：`references/agent-watch/no-bg-amp-guard.sh` 拦带尾随
+     `&`/`disown` 的 `watch` 调用 deny（`&&`/前台/dispatch 放行），接项目 `.claude/settings.json`。
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
