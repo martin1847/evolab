@@ -67,8 +67,8 @@ metadata:
      交付物**（本地 commit／产物计数达标／显式 review 标记），别把"等自己 bg"误判成"等编排者"（实证：重批量
      抽取走 agent 自起 bg，按 idle 轮询屡误报，改判"出现本地 commit + idle 稳定"才准）。是 `沉默≠交付` 的同族。
    - **后台启动一律不加 shell `&`**（后台机制已 detached，再加 = 双重后台 → 孤儿 + 误判失联）；手滑挡不住
-     → **PreToolUse(Bash) 兜底**（同 §5 强制层思路）：`references/agent-watch/no-bg-amp-guard.sh` 拦带尾随
-     `&`/`disown` 的 `watch` 调用 deny（`&&`/前台/dispatch 放行），接项目 `.claude/settings.json`。
+     → **PreToolUse(Bash) 兜底**（同 §5 强制层思路）：`references/agent-watch/no-bg-amp-guard.sh` 拦**任何**带尾随
+     `&`/`& disown` 的命令 deny（`&&`/`2>&1` 重定向/引号内 `&`/前台 全放行），接项目 `.claude/settings.json`。
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
