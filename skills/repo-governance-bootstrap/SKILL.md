@@ -1,6 +1,6 @@
 ---
 name: repo-governance-bootstrap
-version: 1.0.1
+version: 1.1.0
 description: 一次性初始化适合 AI 协作开发的轻量工程治理骨架（docs/INDEX、ADR、module、roadmap、ACTIVE_CONTEXT、AGENTS.md / CLAUDE.md）。新仓库 / 文档结构混乱 / 项目内文档治理初始化时调用。【定位】独立可用、不需要多 agent 编排；也是 cto-orchestration 新项目接入的第一步，但小项目只做文档治理时单独用即可。一次性建结构，区别于循环跑的 cto-orchestration。
 ---
 
@@ -170,6 +170,30 @@ Date: YYYY-MM-DD
 ## Consequences
 <positive / negative / future evolution>
 ```
+
+### 组件引入 ADR 变体（lifecycle）
+
+引入**重依赖 / 重组件**（数据存储 / MQ / 缓存 / 搜索 / 新外部服务 / 新能力类别）的 ADR，在基础模板上**增 `Owner` / `Sunset Criteria` / `Review-by` 三段**——记录"何时该退役"，防止引入后无人清理、沦为死基础设施。这是 ADR 天然该承载的槽，bootstrap 直接建。
+
+```markdown
+# ADR-NNN: 引入 <组件>
+Status: accepted
+Date: YYYY-MM-DD
+Owner: <谁负责其存续与退役>
+
+## Context
+<问题 + 为何 stdlib / 现有依赖不够；评估过的替代方案>
+## Decision
+<引入什么；如何 wrap behind interface 保持可替换>
+## Sunset Criteria（退役判据）
+- <什么条件下应被移除：依赖它的 X 特性下线 / 长期 QPS < N / 被 Y 替代>
+## Review-by
+- YYYY-MM-DD（到期必须复审：仍需要？可降级/移除？）
+## Consequences
+<运维成本 / 锁定风险 / 退役难度>
+```
+
+> 更细的 lifecycle 规则（重组件阈值 / wrap-behind-interface / 情境绑定 hardcode 与 prompt 的 `EXPIRES`·`REVISIT-WHEN` 内联过期标记 / 配套 CI 门禁）属规划中的 `code-lifecycle`，本骨架不重复、只建 ADR 这个槽。
 
 ## 模块文档模板
 
