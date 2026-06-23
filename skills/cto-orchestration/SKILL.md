@@ -47,7 +47,8 @@ metadata:
    sleep 12
    tmux send-keys -t <session> 'goal：<abs-path>'; sleep 1; tmux send-keys -t <session> Enter
    ```
-   坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；codex 启动弹更新提示先发 `2`+Enter。
+   坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；codex 启动更新提示——一次性在
+   `~/.codex/config.toml` 设 `check_for_update_on_startup = false` 免掉（否则每次得先发 `2`+Enter）。
    **起后立刻验 hook（硬 gate，别跳）**：`watch` 一挂就 Read 输出——必须见 sentinel `WORKING` 行；见
    `no sentinel (hook not wired) → fallback` = 没走 dispatch（或 codex 未 trust hook）→ **停下重起、别带病跑**
    （实证：裸起整 session 退抓屏，误报 DONE + 漏 WAITING——澄清菜单挂 busy 标记 ⟦esc⟧、抓屏永判"忙"、卡 21min 零 ping）。
