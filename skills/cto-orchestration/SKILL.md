@@ -132,6 +132,9 @@ metadata:
   `execute/async` 非 `execute/stream`，三段绿仍 ReOpen）。最尖一条：**别 mock 你正在验证的那个边界**
   ——stub 掉被测函数 = 测试零信息、恰好盖住 bug；真应用 E2E 才是「可测试」门（实证：一天内 4 个 bug
   全过 review+单测，只它抓到）。
+- **编辑前重读会变的文件**：rebase / 另一 agent 动过同一 worktree / 你刚跑了改文件的 git 操作 之后，
+  in-context 文件视图已 stale——先重读再改。带 read-before-edit 护栏的工具会**拦** stale edit（报 `must be read
+  first` 不是 bug、是它在挡你拿过期视图覆盖别人的改动）；没护栏的会**静默覆盖**、更糟。别在读↔编辑间插改文件的命令。
 
 ## 4. 间接环境访问（运维 agent 模式）
 
