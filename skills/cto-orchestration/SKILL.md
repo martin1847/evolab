@@ -33,6 +33,10 @@ metadata:
 1. **Rebase**：派工前 `git fetch` + 基于最新远端目标分支开 worktree
    （`git worktree add ../wt-<name> -b feat/<name> origin/<base>`）；远端中途动了，评审/PR 前再
    rebase。不让 agent 在过期基线开工。
+   - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主 checkout、
+     非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout **显式指到新 worktree**，
+     可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。实证：审计跑在落后 70 commit 的
+     主 checkout、把已被某 PR 删净的子系统报成"待删"，靠对 origin 重核才在派删除前抓出。
 2. **写 goal**（模板 `references/goal-template.md`，放 `docs/orchestration/<NAME>_GOAL.md`）：含
    上下文+前置研究、带 file:line 的预判（标"verify, don't trust"）、交付物、验证要求、guardrails
    （scope / stop-and-report / redaction / commit-local-no-push）。
