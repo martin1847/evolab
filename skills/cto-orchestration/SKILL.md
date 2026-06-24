@@ -30,9 +30,15 @@ metadata:
 
 ## 1. 派工协议（每次走全流程）
 
-1. **Rebase**：派工前 `git fetch` + 基于最新远端目标分支开 worktree
-   （`git worktree add ../wt-<name> -b feat/<name> origin/<base>`）；远端中途动了，评审/PR 前再
-   rebase。不让 agent 在过期基线开工。
+1. **基线纪律（fetch+检查，按需 rebase，集成用 merge）**：派工前 `git fetch` + 基于最新远端目标分支开
+   worktree（`git worktree add ../wt-<name> -b feat/<name> origin/<base>`）。**不让 agent 在过期基线开工。**
+   - **rebase 不是仪式、是条件动作**：push/PR 前 `git fetch` 后查 base 有没有动
+     （`git log <branchpoint>..origin/<base>` 空=没动）。**没动 → 什么都不做**（别空转 rebase，否则看着像"忘了"其实是 no-op）。
+     **动了且碰了你改的文件 → rebase 或把 base merge 进来**解冲突再 PR；动了但文件不重叠 → 可不动（合并自然干净）。
+   - **集成（并回主干）用 merge（merge-commit），不强求线性历史**：非破坏性，且**保留多 commit 历史**
+     （对抗评审的多轮修复轨迹有价值，squash 会糊掉）；trivial 单 commit PR 可 squash。
+   - 多会话并发时 base 常被别的 PR 推进，所以 **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
+   - 按 SHA 部署的项目：merge 与 rebase 的 ancestry 都干净（`contains <sha>` 都成立），不构成选 rebase 的理由。
    - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主 checkout、
      非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout **显式指到新 worktree**，
      可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。实证：审计跑在落后 70 commit 的
