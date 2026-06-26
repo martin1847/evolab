@@ -193,7 +193,7 @@ Owner: <谁负责其存续与退役>
 <运维成本 / 锁定风险 / 退役难度>
 ```
 
-> 更细的 lifecycle 规则（重组件阈值 / wrap-behind-interface / 情境绑定 hardcode 与 prompt 的 `EXPIRES`·`REVISIT-WHEN` 内联过期标记 / 配套 CI 门禁）属 **code-lifecycle 规范**（公开镜像 `agent-backend-standard` 规划中）；本骨架不重复、只建 ADR 这个槽。
+> 更细的 lifecycle 规则（重组件阈值 / wrap-behind-interface / 情境绑定 hardcode 与 prompt 的 `EXPIRES`·`REVISIT-WHEN` 内联过期标记 / 配套 CI 门禁）见 `agent-backend-standard` 附录 A；本骨架不重复、只建 ADR 这个槽。
 
 ## 模块文档模板
 
