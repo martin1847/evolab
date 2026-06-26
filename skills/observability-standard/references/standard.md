@@ -4,8 +4,8 @@
 > 定位问题永远是 `拿到 trace 或业务 id → 查 trace 看哪步 → 查 log 看为什么 → 按业务 id 查 db 看数据对不对`,绝不靠时间戳猜。
 >
 > 适用范围:**所有后端服务** —— 普通微服务(auth / 网关 / 业务服务)、以及 agent(单 agent、orchestrator/worker、流水线)、RAG/知识库;Python / Go / Java / Rust 通用。
-> 读法:**普适核心(所有服务遵守):§1、§2 普适原则 + §2.1、§3、§4、§5.0、§7**;**§2 / §6 各取你的语言附录**(Python / Go / Java / Rust);**§5.1(agent)/ §5.2(RAG)按项目类型选增量**。
-> 维护契约:本文 §1–§7 在 `SKILL.md` 有压缩镜像;改任一条规则必须**同步两处**,不留分叉。
+> 读法:**普适核心(所有服务遵守):§1、§2 普适原则 + §2.1、§3、§4、§5.0、§7、§9**;**§2 / §6 / 附录 C 各取你的语言附录**(Python / Go / Java / Rust);**§5.1(agent)/ §5.2(RAG)按项目类型选增量**。
+> 维护契约:本文 §1–§9 在 `SKILL.md` 有压缩镜像;改任一条规则必须**同步两处**,不留分叉。
 
 ---
 
@@ -15,7 +15,7 @@
 2. **宽事件优先**:每个处理步骤输出一条富字段结构化事件,而非散文文本。事件名是稳定标识符(可聚合),变量进字段。指标从字段派生,不从 grep 派生。
 3. **三信号可关联**:trace 串 span;每条 log 带 `trace_id`+`span_id`(随 trace 同采样 / 保留);**业务 id(`order_id` / `run_id`)挂成 span 属性**以按业务 id 反查 trace。**不往业务行加 `trace_id` 列**——trace 被采样、保留期短,持久业务行存它多半成死指针(详见 §2.1)。
 4. **跨进程必传播 context**:任何跨进程边界(HTTP / gRPC / 消息队列 / agent-to-agent 协议)必须传播 W3C `traceparent`,入站 extract、出站 inject。**不传播 = trace 断成多棵互不相连的树 = 跨服务定位失效**。这是头号正确性要求,优先级高于功能。
-5. **标准在边界 + 后端无关**:跨进程、对外响应遵守 OTel 语义约定 + 类型校验;LLM 边界额外遵守 GenAI 语义约定;内部实现自由。**只依赖 OTel API/SDK + OTLP exporter,应用代码不 import 厂商 SDK(Langfuse / Datadog 等);标准组件优先用官方 `opentelemetry-instrumentation`(自动 / 零代码)埋点,手写 span 只补领域环节;厂商差异只在 Collector / exporter 配置层 —— 换后端(SigNoz / ClickStack / Langfuse,均支持 OTLP)不改一行埋点。**
+5. **标准在边界 + 后端无关**:跨进程、对外响应遵守 OTel 语义约定 + 类型校验;LLM 边界额外遵守 GenAI 语义约定;内部实现自由。**只依赖 OTel API/SDK + OTLP exporter,应用代码不 import 厂商 SDK(Langfuse / Datadog 等);标准组件优先用官方 auto-instrumentation(自动 / 零代码,包见附录 C)埋点,手写 span 只补领域环节;厂商差异只在 Collector / exporter 配置层 —— 换后端(SigNoz / ClickStack / Langfuse,均支持 OTLP)不改一行埋点。**
 
 ---
 
@@ -43,7 +43,7 @@
 2. **反转查找方向**:把业务 id 作为 **span 属性**,反过来按业务 id 查可观测库(`WHERE attributes->>'order.id' = '...'`)。业务 id 本就是业务主键、已在库里,只要它也是 span 属性,**零新增列**即可从业务 id 反查到 trace。
 3. **传播用 baggage,高基数 id 别进 metric label**。入口设业务 correlation id,用 baggage 传播,使其出现在 spans / logs / metric exemplars;Collector 的 baggage processor 自动注入;高基数 id 进 metric 标签会基数爆炸,指标到 trace 的链接靠 **exemplar**。
 
-**真要 `trace_id` ↔ `request_id` 映射时**:维护一个轻量 correlation 索引(Redis / 专用表)存 `requestId ↔ traceId ↔ 时间戳`,带 ~24h TTL —— 独立索引,不污染业务热表。常见实战:每请求生成 / 传播一个 UUID `correlation_id` 存进 contextvars,注入日志、并作为 `request_id` 写进 trace 元数据;**持久 id 是 `correlation_id`,trace 关联走日志**。
+**真要 `trace_id` ↔ `request_id` 映射时**:维护一个轻量 correlation 索引(Redis / 专用表)存 `requestId ↔ traceId ↔ 时间戳`,带 ~24h TTL —— 独立索引,不污染业务热表。常见实战:每请求生成 / 传播一个 UUID `correlation_id` 存进语言原生 ambient context,注入日志、并作为 `request_id` 写进 trace 元数据;**持久 id 是 `correlation_id`,trace 关联走日志**。
 
 **唯一该持久落库的场景:审计 / 溯源,且进专用 store**(AI 决策、报价 / 金额、对客最终输出、合规):
 - 审计事件在**发布到日志管道之前先落进持久存储**(下游日志系统挂了,审计仍正确);
@@ -90,7 +90,7 @@
    - ❌ `info("Failed to call search because timeout on attempt 2")`
 2. **日志即数据,不即叙事**。事件名是可查询/聚合的标识符,不是给人读的句子。
 3. **trace 绑定是默认**:日志在活跃 span 内打出,`trace_id`/`span_id` 由桥/处理器自动注入。**没有 `trace_id` 的 ERROR 视为 bug**。
-4. **上下文绑一次贯穿全程**:进入一次 run 时绑 `run_id`/`tenant_id`/`agent_role`(Python contextvars / Go context / Java MDC),之后每条日志自动带,不手传。
+4. **上下文绑一次贯穿全程**:进入一次 run 时绑 `run_id`/`tenant_id`/`agent_role`(语言原生 ambient context 机制,见 §6 附录 B),之后每条日志自动带,不手传。
 5. **不要 log-and-throw**:要么处理并记录,要么向上抛由处理者记录,别既记录又抛。
 6. **永不记录**:密钥/token/凭证、完整 PII、客户机密原文。在日志边界脱敏。
 7. **LLM 完整 prompt/completion 不进默认日志**:体积大且常含客户数据 → 走 DEBUG 或 OTel 内容捕获开关(opt-in、可采样)。
@@ -119,7 +119,7 @@
 ### §5.0 服务基线拓扑(所有服务)
 任何服务的最小 span 拓扑:**入站 server span = root**(带 `trace_id` / `run.id`、`tenant.id`)→ 每次**出站 client span**(HTTP / gRPC / MQ,**必须 inject `traceparent`**)→ DB / 缓存 / 外部 API 子 span。trace 是请求在系统里的因果树;§5.1 / §5.2 是 agent / RAG 在此基线上的**增量**。
 
-**这三类基线 span 优先用官方 `opentelemetry-instrumentation`(自动 / 零代码)产出**,而非手写:Python 用 `opentelemetry-instrument` + `opentelemetry-instrumentation-{fastapi,requests,sqlalchemy,…}`;Go 用 `otelhttp` / `otelgrpc` 等 contrib;Java 用 `-javaagent:opentelemetry-javaagent.jar`;Rust 用框架中间件(`tower-http` / `tracing`)。手写 span 只补自动埋点拿不到的领域环节(§5.1 / §5.2)。
+**这三类基线 span 优先用官方 auto-instrumentation(自动 / 零代码)产出**,而非手写;手写 span 只补自动埋点拿不到的领域环节(§5.1 / §5.2)。各语言 auto-instrumentation 包见**附录 C**。
 
 ### §5.1 Agent 增量(在 §5.0 基线上)
 
@@ -201,16 +201,68 @@
 
 ## §8 落地检查清单
 
-- [ ] 类型门禁进 CI(Python: pyright/mypy strict;Go: vet+staticcheck;Java: -Werror+NullAway;Rust: clippy `-D warnings`)
+- [ ] 类型检查器进 CI 门禁(工具见 §2 附录 A·<你的语言>)
 - [ ] 边界数据有 schema 校验;跨进程失败建模成结果类型,不靠异常穿透
-- [ ] 日志初始化在任何 `basicConfig`/默认 logger 之前;Go 用 `*Context` 方法;Java 配好 MDC pattern;Rust 用 `#[instrument]`、`enter()` guard 不跨 `.await`
+- [ ] 日志初始化 / trace-context 关联按语言正确接入(见 §6 附录 B)
 - [ ] 日志全部 `event_name + fields` 形式,无散文拼接
 - [ ] 一次 run 骨架仅靠 INFO 可重建;DEBUG 生产默认关、可按 trace 开
 - [ ] 密钥/PII/客户机密在日志边界脱敏;LLM 全文走 DEBUG/内容开关
 - [ ] **跨进程一律传播 W3C `traceparent`**;持久化执行恢复时重建 trace context
 - [ ] LLM / agent 场景:`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` 已设
-- [ ] 埋点只依赖 OTel API/SDK + OTLP;应用代码无厂商 SDK import;标准组件用 `opentelemetry-instrumentation` 自动埋点;厂商差异在 Collector / exporter 层
+- [ ] 埋点只依赖 OTel API/SDK + OTLP;应用代码无厂商 SDK import;标准组件用 auto-instrumentation(包见附录 C);厂商差异在 Collector / exporter 层
 - [ ] RAG 项目:开 embedding/retrieval span;答案可溯源到 chunk id
 - [ ] 业务实体 id(`order_id` / `run_id`)是 span 属性 → 可按业务 id 反查 trace(零新增列);**不往业务行加 `trace_id` 列**
 - [ ] 持久溯源(AI 决策 / 金额 / 对客输出 / 合规)落自己拥有的 `correlation_id`,进专用审计 / outbox store(非热表);`trace_id` 仅作受采样 / 保留约束的尽力而为链接
 - [ ] 对外响应回带 `trace_id`(调试)+ 业务 id
+- [ ] **本规范的每条铁律都绑了 CI gate(见 §9),不是只写在文档里**
+
+## §9 强制生效(让规范咬人,而非形式化)
+
+**核心命题:没有 gate 的规范 = 形式化,必然漂移。** 一份只写"应当"、靠人工自觉对照清单的规范,会在"没有测试看的地方"悄悄烂掉——埋点的洞恰好出现在没人 gate 的模块。实证:某 agent 服务有完整本规范,基建齐全、14 个模块有 span,但记忆抽取模块(13 文件)+ 一个后台任务整条链路**零埋点数月**,代码评审与单测全绿、"看着合规",直到线上"查不到任何 trace"才暴露。**强制手段是采纳可观测性的一等交付物,不是事后补丁。**
+
+落地一套规范时,除了写规则,必须同时立下面的 gate(语言无关,机制按栈替换):
+
+### 9.1 conformance 测试:断言 span 覆盖 + parent 正确,且**会变红**
+- 用**进程内 span 捕获**(语言的进程内 span 捕获器,见附录 C)写一个 conformance 测试:每条新的 LLM / 工具 / 检索 / 领域决策路径**必须发出其领域 span**,且 **parent 正确**(挂在请求 trace 下,不是孤儿 root)。
+- **必须带负例探针证明 gate 会咬人**:故意删掉 span 或断开 parent,测试必须变红。**只测 happy-path 的 conformance 测试不强制任何东西**——它对"漏埋"零敏感。两次运行(正常绿 / 故意破红)都贴出来。
+- 断言粒度到属性:领域 span 带规定的枚举/计数/id 属性;`gen_ai.*` generation span 的 parent 是领域 span 而非 root。
+
+### 9.2 gate 必须真在 CI 跑、且能 fail build
+- 把 conformance + 类型门禁(§8)接进 CI,**核它真触发**:workflow 放在工具识别的位置(GitHub Actions 只跑**仓库根** `.github/workflows/`,放子目录=静默不跑)、paths filter 覆盖所有该触发的改动、步骤**无 `|| true` / 无 soft-fail**。实证:首版 workflow 放进子目录,Actions 根本不跑、PR 全绿假象。**在一个真 PR 上验证 gate 确实触发并能挂,别假设。**
+
+### 9.3 每条铁律 → 一个机制,不只散文
+- **铁律5(应用代码不 import 厂商 SDK)** → 静态 import 契约强制(各语言 import 守卫见**附录 C**)。让"禁厂商 SDK"是一条会断构建的契约,不是口头约定。
+- **铁律4(跨进程传播 traceparent)** → 跨边界 contract / 集成测试断言下游 span 与上游**同 trace_id**。
+- **类型纪律(§2)** → 类型检查器进 CI(工具见 §2 附录 A)。
+- **孤儿 span 陷阱(可观测性最常见的隐形失败模式,值得点名)**:异步脱离上下文——`create_task` / goroutine / 线程池 / 队列交接——会丢掉 ambient context,子 span 变成孤儿 root,路径"埋了点却不可见"。跨脱离点**捕获并重 attach** context;conformance 测试必须断言异步边界两侧**同 trace_id**。
+
+### 9.4 宪法条款
+- 仓库 `AGENTS.md` / `CONTRIBUTING` 写明:**新增 LLM / 工具 / 检索 / 领域决策路径,必须有 parent 正确的领域 span**,指向本 skill。让它成为人 + agent 评审时会对照的成文规则,而非靠记忆。
+
+**达标线:规范里每一条会被违反且能自动检测的铁律,都要有一个会让 CI 变红的 gate。检测不了的(纯人工判断项)才进人工清单。** 立规范时若只产出文档不产出 gate,等于没立。
+
+---
+
+## 附录 C·埋点与 gate 工具链(选你的语言)
+
+正文(§5.0 auto-instrumentation、§9 import 守卫 / span 捕获器)只给语言无关机制名;具体包名在此一处。**类型检查器见 §2 附录 A,日志接入见 §6 附录 B**(不在此重复)。加一门语言只改本附录。
+
+### 附录 C·Python
+- **auto-instrumentation**:`opentelemetry-instrument` + `opentelemetry-instrumentation-{fastapi,requests,sqlalchemy,…}`(零代码产出 HTTP / DB / 框架基线 span)。
+- **进程内 span 捕获器**(conformance 测试):`InMemorySpanExporter`(`opentelemetry-sdk` `export.in_memory_span_exporter`)。
+- **import 守卫**(强制铁律5):`import-linter` `forbidden_modules`(禁应用层 import 厂商 SDK)。
+
+### 附录 C·Go
+- **auto-instrumentation**:`otelhttp` / `otelgrpc` 等 `go.opentelemetry.io/contrib` instrumentation。
+- **进程内 span 捕获器**:`tracetest.SpanRecorder`(`go.opentelemetry.io/otel/sdk/trace/tracetest`)。
+- **import 守卫**:`depguard`(golangci-lint)禁 import 厂商 SDK 包。
+
+### 附录 C·Java
+- **auto-instrumentation**:`-javaagent:opentelemetry-javaagent.jar`(自动织入 HTTP / DB / 框架 span)。
+- **进程内 span 捕获器**:`InMemorySpanExporter`(`opentelemetry-sdk-testing`)。
+- **import 守卫**:ArchUnit 规则禁应用包依赖厂商 SDK 包。
+
+### 附录 C·Rust
+- **auto-instrumentation**:框架中间件(`tower-http` 的 `TraceLayer` 等)+ `tracing` / `tracing-opentelemetry`。
+- **进程内 span 捕获器**:自建 in-memory `SpanExporter` 或 `tracing` 测试订阅器捕获导出的 span。
+- **import 守卫**:clippy `disallowed-types` / `disallowed-methods`(deny 级)或 `cargo-deny` 禁厂商 SDK crate。
