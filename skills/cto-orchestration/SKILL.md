@@ -11,6 +11,11 @@ metadata:
 
 > 核心铁律：**编排者本人绝不写产品代码**——再小的改动也派给执行 agent。编排者的产出是
 > goal 文档、监控、评审调度、决策、状态落盘。来源：多 agent CTO 实战沉淀（2026-06 起）。
+>
+> 第二铁律：**执行前先验证、不明先问。** 做不可逆/对外动作（push / merge / 部署 / 删除 / 对外消息）前，
+> 先**核实真实事实与当前状态**（实读 state，别凭假设/凭工具的一次输出——本地 ref 会骗你），范围或授权不清
+> 就**先问清再做**；**一次批准不自动延伸到另一个动作**。可逆只读动作直接做、不请示。实证：把用户的 "push"
+> 当成含 "merge" 去合共享分支被拦；一度误读 git 合并状态（单次工具输出有歧义，靠 `cat-file -p` 实读才定论）。
 
 ## 0. 角色分工（按能力定义，工具可换）
 
@@ -30,15 +35,18 @@ metadata:
 
 ## 1. 派工协议（每次走全流程）
 
-1. **基线纪律（fetch+检查，按需 rebase，集成用 merge）**：派工前 `git fetch` + 基于最新远端目标分支开
+1. **基线纪律（fetch+检查，按需 rebase，集成用 squash）**：派工前 `git fetch` + 基于最新远端目标分支开
    worktree（`git worktree add ../wt-<name> -b feat/<name> origin/<base>`）。**不让 agent 在过期基线开工。**
+   权威细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard` 规划中）；这里只留编排基线。
    - **rebase 不是仪式、是条件动作**：push/PR 前 `git fetch` 后查 base 有没有动
      （`git log <branchpoint>..origin/<base>` 空=没动）。**没动 → 什么都不做**（别空转 rebase，否则看着像"忘了"其实是 no-op）。
-     **动了且碰了你改的文件 → rebase 或把 base merge 进来**解冲突再 PR；动了但文件不重叠 → 可不动（合并自然干净）。
-   - **集成（并回主干）用 merge（merge-commit），不强求线性历史**：非破坏性，且**保留多 commit 历史**
-     （对抗评审的多轮修复轨迹有价值，squash 会糊掉）；trivial 单 commit PR 可 squash。
+     **动了且碰了你改的文件 → rebase**解冲突再 PR；动了但文件不重叠 → 可不动（合并自然干净）。
+   - **集成（并回主干）默认 squash（linear history）；merge-commit 已弃用**：全 agent
+     开发没人读 git 历史，agent 要逻辑原子 + message 清楚的 commit（squash 产物），中间 wip churn 是 context 污染。
+     出 artifact 的仓由 IaC ruleset 强制 linear，merge-commit 会被挡。对抗评审知识落 **ADR + PR 记录 + commit
+     trailer**（`Constraint:` / `Rejected-alternative:`），不靠 commit graph。
    - 多会话并发时 base 常被别的 PR 推进，所以 **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
-   - 按 SHA 部署的项目：merge 与 rebase 的 ancestry 都干净（`contains <sha>` 都成立），不构成选 rebase 的理由。
+   - 按 SHA 部署的项目：squash / rebase-merge 的 ancestry 都干净线性（`contains <sha>` 成立）。
    - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主 checkout、
      非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout **显式指到新 worktree**，
      可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。实证：审计跑在落后 70 commit 的
