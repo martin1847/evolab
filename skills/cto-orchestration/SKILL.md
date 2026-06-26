@@ -79,6 +79,12 @@ metadata:
    - **纯事件驱动会盲等：挂 watcher 时同时设上限**。除 watcher 外，按"任务预期时长 ×2"设个 fallback 自检
      （定时兜底——CC:`ScheduleWakeup`；codex/shell 编排者:cron 或有界轮询），到点没终态就主动 capture-pane
      ——"WORKING 但卡死/热重试"不发终态事件。
+   - **Agent 工具异步 subagent 的完成通知有黑洞：只在"停止且自身无存活后台子进程"时才发**。子 agent 若自起后台
+     fork（如它派 Playwright E2E、或为保活起 monitor），这些子进程一直活着 → 父 agent idle 等待却**永不发完成
+     通知** → 编排者盲等到天荒地老（实证 2026-06-26：某 agent 自起 E2E fork + 保活 monitor，完成
+     通知从不触发，靠主动 SendMessage 才发现它早停那了）。对策：① **别只信完成通知**——长/浏览器异步 dispatch 按上条配
+     fallback 自检（`ScheduleWakeup`/cron）兜底；② 派工时要求 agent **验证在本回合内同步做完、
+     不留孤儿后台 fork**，到里程碑 **SendMessage 回 main**，让父 agent 能干净收尾发通知。
    - **判完成要正向证据、不凭 idle / watcher 裁决**（tmux 链路无失败信号：session 在则 send/capture 都"成功"；
      watcher 裁决同样只是线索，后台型/阻塞型哪条消费路径[见 §0 + README]都要自己 capture-pane 正向核证、不盲信）。两个坑：
      ① agent 死了退回 shell = 空屏+无忙碌 → 必须核 `pane_current_command` 仍是 agent 进程；
