@@ -1,6 +1,6 @@
 ---
 name: git-workflow-standard
-version: 1.0.0
+version: 1.0.1
 description: 生产级 Git 协作 SOP——受保护分支(main/master/develop/dev/release/**/project/*)禁直推、改动从 feature 分支起、base 移动且与你改动重叠才 rebase(条件动作非仪式)、走 PR + 评审 + CI 合入、集成策略默认 squash(线性;merge-commit 弃用)、提交不加 AI 签名。任何 git commit / push / 开 PR / 建分支 / 合并场景加载;agent 写完代码准备提交前必读。Use when committing, pushing, opening a PR, branching, rebasing, or merging in any company repo.
 ---
 
@@ -32,10 +32,8 @@ canonical = 你的 IaC ruleset（两层 ruleset）,本 skill 镜像:
 **默认 squash**;可选 **rebase-merge**(同为线性)。**merge-commit 不是 sanctioned 选项。**
 - **squash**:线性、每 PR 一个原子全绿 commit、易 revert、bisect 友好 —— 默认。
 - **rebase-merge**:偏好保留 PR 内分块 commit 且要线性的仓。
-- **为何弃 merge-commit**:全 agent 开发、无人读 git 历史 → merge-commit 唯一卖点("给人读的修复故事")失效;对 agent 消费者,WIP/"改评论" churn 是 context 污染,它要的是逻辑成块 + 好 message 的 commit(= squash 产物)。**Tier 2(出 artifact 仓)由 ruleset 强制 linear。**
+- **为何弃 merge-commit**:全 agent、无人读 git 历史 → merge-commit 卖点失效(详见 references §4)。**Tier 2(出 artifact 仓)由 ruleset 强制 linear。**
 - **对抗评审的知识**(约束 / 被否方案)落 **ADR + PR 记录 + commit trailer**,不进 commit graph —— squash 丢 exhaust 不丢 knowledge。
-
-> bisect 健康 = **每个 commit 都绿** + `git bisect --first-parent`,与历史形态正交;squash 让主线全绿,正是 agent 驱动 bisect 要的。
 
 ## MUST NOT
 - 直推 / force push 受保护分支(靠硬层兜底,agent 不该去撞)。

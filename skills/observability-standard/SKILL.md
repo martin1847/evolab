@@ -1,6 +1,6 @@
 ---
 name: observability-standard
-version: 1.1.0
+version: 1.1.1
 description: 生产级可观测性与工程规范,适用于**所有后端服务** —— 普通微服务(auth / 网关 / 业务服务)与 agent / 多 agent / RAG 知识库项目通用。核心:用 trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点、跨进程 W3C traceparent 传播、日志级别纪律、边界类型纪律(含 id 持久化:不往业务行塞 trace_id);agent / RAG 场景在此基线上加 LLM / 工具 / 检索埋点与 GenAI 语义约定。Use this skill whenever writing or reviewing backend code that involves logging setup, OpenTelemetry tracing, structured logs, cross-process context propagation, choosing log levels (INFO vs DEBUG), correlating logs / traces / db to debug, defining types for boundary or inter-service data — and additionally agent orchestration / sub-agents, LLM / tool / retrieval calls, or GenAI semantic conventions. 适用 Python / Go / Java / Rust。Apply it even when the user only says things like "加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪",不限于显式提到规范时。目标:trace_id 串 trace/log、业务 id 反查 db,让线上问题最快定位。
 ---
 
@@ -53,7 +53,7 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 ## 强制生效(让规范咬人,而非形式化)
 
-**没有 gate 的规范 = 形式化,必然漂移**——靠人工对照清单的规范,会在"没测试看的地方"悄悄烂掉,埋点的洞恰好出现在没人 gate 的模块(实证:某服务规范齐全、14 模块有 span,却有一个模块整条链路零埋点数月,单测/评审全绿,直到线上查不到 trace 才暴露)。**强制手段是采纳可观测性的一等交付物,不是事后补丁。** 立规范必须同时立 gate(机制按栈替换):
+**没有 gate 的规范 = 形式化,必然漂移**——靠人工对照清单的规范,会在"没测试看的地方"悄悄烂掉,埋点的洞恰好出现在没人 gate 的模块(实证见 §9)。**强制手段是采纳可观测性的一等交付物,不是事后补丁。** 立规范必须同时立 gate(机制按栈替换):
 - **conformance 测试断 span 覆盖 + parent 正确,且会变红**:进程内捕获 span(语言的进程内 span 捕获器,见 references 附录 C),断言每条新 LLM/工具/检索/领域决策路径**发出领域 span 且 parent 正确**;**必带负例探针**(删 span / 断 parent → 测试变红),只测 happy-path 不强制任何东西。
 - **gate 真在 CI 跑、能 fail build**:workflow 放工具识别的位置(GitHub Actions 只跑**仓库根** `.github/workflows/`)、paths 覆盖、**无 `|| true`/soft-fail**;**在真 PR 上验证 gate 确实触发**,别假设。
 - **每条铁律 → 机制**:铁律5(禁厂商 SDK)→ 静态 import 契约(各语言 import 守卫,见 references 附录 C);铁律4(传 traceparent)→ 跨边界断言下游 span 同 trace_id;类型纪律 → 类型检查进 CI(见 references 附录 A)。

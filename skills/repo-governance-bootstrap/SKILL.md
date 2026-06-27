@@ -386,7 +386,7 @@ This index maps the repository source of truth.
 
 - [Active Context](ACTIVE_CONTEXT.md)
 
-##
+## Traceability
 | Capability | Component | ADR | Roadmap |
 | --- | --- | --- | --- |
 | <capability> | `<path>` | ADR-0001 | <ID> |
