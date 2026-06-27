@@ -119,6 +119,9 @@ metadata:
    **评审前先枚举执行路径分叉**（provider / mode、live vs rehydrate、suggestion-flow vs direct-save…），
    点 codex 核"还有哪些分支没走到"——只覆盖一条分支 ≠ 全覆盖（实证：评审只盯主 controller 路径，真实用户
    走另一个 provider 的独立分支，整条提取被绕过仍全绿）。
+   **门控/触发型功能必查 under-fire（"该触发时触发了没"），不只 over-fire**：有触发条件的特性（正则/旗标/
+   阈值门控）评审天然盯"会不会误触发"，常漏"真实输入下到底触发没"。实证：referent func-call 触发器检测的是
+   **抽取后被改写过的** content（指代已被改没）→ 真实场景永不触发；评审查了误触发、漏了漏触发，靠真模型验才抓出。
 2. **评审记录用 ledger 结构，不纯追加**：写 `docs/orchestration/<NAME>_REVIEW_codex.md`——severity
    分级 findings + verdict（approve / request-changes），并维护 `blocking / queued / advisory / 已修 /
    stagnation` 几栏，逐轮更新。结构化记录让收敛状态一眼可判，胜过流水账追加。
@@ -177,11 +180,11 @@ metadata:
   或临时 `/tmp` NOTES、随手可弃，别塞进 memory（污染跨 session 私有层）或 ACTIVE_CONTEXT（那是收口快照非草稿）。
   - **写时纪律（不等复盘）**：上面的卸载边写边做——写 memory 当下就把事实细节进 ACCESS/docs，别囤到复盘再清。
     靠 skill 文本记不住的高频纪律配 **PostToolUse hook** 兜底（强制层补 salience 衰减；模板见 repo-governance-bootstrap）。
-- **复盘仪式（事件触发）**：收口 / 压缩前 / 任何 ReOpen 后主动提议——交付清单 → 什么有效 → 教训进
-  memory → 上下文治理（关会话 + 扫孤儿 + worktree 核对 + 敞口清单=下会话入口）→ **治理同步**（文档归档
-  + ACTIVE_CONTEXT 整篇重写 + roadmap 翻状态，与 memory 更新同级、不可省）→ **memory 治理**（COMPLETED
-  workstream 精简、索引按类型分组——卸载规则同上）→ **session 切换决策**（压缩续跑 vs 新 session + handoff）。
-  后两步操作清单见 `references/retrospective.md`。
+- **复盘仪式（事件触发：收口 / 压缩前 / 任何 ReOpen 后主动提议）——是 CHECKLIST 不是即兴。**
+  听到"复盘 / 收口 / handoff" → **读 `references/retrospective.md` 七步逐条勾**，别凭记忆即兴（即兴版读着完整却静默漏
+  承重治理步——实证 2026-06-26：被要求"复盘仪式"却自由发挥，漏了 roadmap 翻状态 + ACTIVE_CONTEXT 整篇重写 + 上下文治理）。
+  - **硬门（未过不得宣布完成）**：跑 `bash references/retro-check.sh --base <branch> --docs <docs-dir> --memory <MEMORY.md>`
+    机械校验（已合分支无孤儿 worktree / ACTIVE_CONTEXT 今日重写 / roadmap 近期动 / MEMORY 未超行）；只验机械代理、语义靠你。
 - **孤儿扫**：关交付完的会话（持关键上下文且挂起的保留）；扫 agent 起的孤儿——`docker ps` / `ps` /
   后台 job。临时 compose 用 trap/finally `down --remove-orphans`，repro 禁裸 `while True`（用有界
   循环/deadline）。实证：某 repro 死循环空转 2.5 天、65% CPU。
