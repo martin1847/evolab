@@ -98,3 +98,61 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   file content) before killing. NOT yet validated: the WORKING/BUSY + N-poll gates and a live provider stall e2e.
 - Note: `dispatch` writes `.codex/hooks.json` into the worktree and auto-adds `.codex/` to that repo's
   `.git/info/exclude` (so it can't be `git add -A`'d). `teardown` removes the file itself.
+
+---
+
+## Orchestrator-side dispatch & watch discipline (SKILL §1.3–1.4 的展开)
+
+SKILL 主干只留三条 watch 判据（typed 状态 + DEAD≠DONE / 判完成要正向证据 / 后台启动不加 shell `&`）
+和派发的 hook-gate 判据。这里是派发命令、坑枚举、typed 状态全枚举、各失败态的实证。
+
+### 派发（用 `dispatch` 起 + 验 hook + 理解门）
+
+```bash
+# dispatch 把 hook env 注进 tmux 命令串——watcher 走 hook 主信号的前提，缺则退化抓屏（机制见上文）。
+references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-omp <worktree>
+sleep 12
+tmux send-keys -t <session> 'goal：<abs-path>'; sleep 1; tmux send-keys -t <session> Enter
+```
+
+坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；codex 启动更新提示——一次性在
+`~/.codex/config.toml` 设 `check_for_update_on_startup = false` 免掉（否则每次得先发 `2`+Enter）。
+
+**起后立刻验 hook（硬 gate，别跳）**：`watch` 一挂就 Read 输出——必须见 sentinel `WORKING` 行；见
+`no sentinel (hook not wired) → fallback` = 没走 dispatch（或 codex 未 trust hook）→ **停下重起、别带病跑**
+（实证：裸起整 session 退抓屏，误报 DONE + 漏 WAITING——澄清菜单挂 busy 标记 ⟦esc⟧、抓屏永判"忙"、卡 21min 零 ping）。
+
+**派发后、动手前先过理解门**：第一轮要 agent 复述"这改动碰哪些文件/契约、有哪些风险"，核对无误再放行；
+弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
+
+### typed 状态（编排者纪律）
+
+- **typed 状态**：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL
+  （DEAD≠DONE、WAITING 要回输入）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
+- **5 STALLED-EXTERNAL = 外部 provider 错误热重试盲区**（overload/rate-limit/5xx；agent 活着 WORKING 却永不
+  DONE，机制见上文 `watch` backstop + Honest limits）。收到 5：**先核证再动手**——扫 exit 5 附带的屏尾，确是
+  provider chrome（非 agent 写错误处理代码刷屏误报）再 kill 热重试 agent、换新会话（不带退避状态）。实证盲等 ~13min。
+- **纯事件驱动会盲等：挂 watcher 时同时设上限**。除 watcher 外，按"任务预期时长 ×2"设个 fallback 自检
+  （定时兜底——CC:`ScheduleWakeup`；codex/shell 编排者:cron 或有界轮询），到点没终态就主动 capture-pane
+  ——"WORKING 但卡死/热重试"不发终态事件。
+- **Agent 工具异步 subagent 的完成通知有黑洞：只在"停止且自身无存活后台子进程"时才发**。子 agent 若自起后台
+  fork（如它派 Playwright E2E、或为保活起 monitor），这些子进程一直活着 → 父 agent idle 等待却**永不发完成
+  通知** → 编排者盲等到天荒地老（实证 2026-06-26：某 agent 自起 E2E fork + 保活 monitor，完成通知从不触发，
+  靠主动 SendMessage 才发现它早停那了）。对策：① **别只信完成通知**——长/浏览器异步 dispatch 按上条配
+  fallback 自检（`ScheduleWakeup`/cron）兜底；② 派工时要求 agent **验证在本回合内同步做完、不留孤儿后台
+  fork**，到里程碑 **SendMessage 回 main**，让父 agent 能干净收尾发通知。
+
+### 判完成要正向证据、不凭 idle / watcher 裁决
+
+tmux 链路无失败信号：session 在则 send/capture 都"成功"；watcher 裁决同样只是线索，后台型/阻塞型哪条
+消费路径（见 SKILL §0 + 上文 `watch`）都要自己 capture-pane 正向核证、不盲信。两个坑：
+- ① agent 死了退回 shell = 空屏+无忙碌 → 必须核 `pane_current_command` 仍是 agent 进程；
+- ② **agent 自起后台 job 会 yield=发 DONE 但没完成**（bg 跑完自动续）——凡这类相把完成信号绑**正向交付物**
+  （本地 commit／产物计数达标／显式 review 标记），别把"等自己 bg"误判成"等编排者"（实证：重批量抽取走
+  agent 自起 bg，按 idle 轮询屡误报，改判"出现本地 commit + idle 稳定"才准）。是 `沉默≠交付` 的同族。
+
+### 后台启动一律不加 shell `&`
+
+后台机制已 detached，再加 `&` = 双重后台 → 孤儿 + 误判失联；手滑挡不住 → **PreToolUse(Bash) 兜底**（同
+SKILL §5 强制层思路）：`no-bg-amp-guard.sh` 拦**任何**带尾随 `&`/`& disown` 的命令 deny（`&&`/`2>&1`
+重定向/引号内 `&`/前台 全放行），接项目 `.claude/settings.json`。

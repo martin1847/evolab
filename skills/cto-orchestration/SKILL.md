@@ -27,7 +27,7 @@ metadata:
 
 | 角色 | 干什么 / 不干什么 | 参考实现（可换） |
 |---|---|---|
-| **编排者**（你/CTO） | 写 goal/取证提示词、派工、**起 watcher 取终态裁决**、转述评审、汇报、memory/docs 落盘、任务系统操作 + 定时/轮询兜底；**绝不写产品代码、不自己跑长 E2E·批量验证**（收工独立复跑 test+lint 不算，见 §1.6） | **后台型**(起 watcher 读交付终态)：Claude Code(`run_in_background`+通知+`ScheduleWakeup`) / omp(原生 bg-job)；**阻塞型**：codex(同步 `watch` 读 exit code + cron/轮询，需 `--dangerously-bypass`)；通用:任何 shell+文件 agent。三者均实跑验证 |
+| **编排者**（你/CTO） | 写 goal/取证提示词、派工、**起 watcher 取终态裁决**、转述评审、汇报、memory/docs 落盘、任务系统操作 + 定时/轮询兜底；**绝不写产品代码、不自己跑长 E2E·批量验证**（收工独立复跑 test+lint 不算，见 §1.6） | **后台型**(读交付终态)/**阻塞型**(同步读 exit code)；任何 shell+文件 agent 均可、三者实跑验证（消费路径细节见 `references/agent-watch/README.md`） |
 | 执行 agent | 吃 goal 实现 + 自测 + E2E + findings；不做超 goal scope 改动。须交互可 steering + 忙碌信号 + 存活信号 | omp / Claude Code / aider… |
 | 评审 agent | 只读对抗式评审（review）、severity + verdict；不改码/commit。须**异构**（与执行不同 lineage） | codex / 另一家强模型 |
 | 运维 agent | 够不着的环境(prod/独立 dev DB)只读取证 + 部署后验证；不修复/改配置 | 用户转交提示词 |
@@ -39,108 +39,53 @@ metadata:
 
 ## 1. 派工协议（每次走全流程）
 
-1. **基线纪律（fetch+检查，按需 rebase，集成用 squash）**：派工前 `git fetch` + 基于最新远端目标分支开
-   worktree（`git worktree add ../wt-<name> -b feat/<name> origin/<base>`）。**不让 agent 在过期基线开工。**
-   权威细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard` 规划中）；这里只留编排基线。
-   - **rebase 不是仪式、是条件动作**：push/PR 前 `git fetch` 后查 base 有没有动
-     （`git log <branchpoint>..origin/<base>` 空=没动）。**没动 → 什么都不做**（别空转 rebase，否则看着像"忘了"其实是 no-op）。
-     **动了且碰了你改的文件 → rebase**解冲突再 PR；动了但文件不重叠 → 可不动（合并自然干净）。
-   - **集成（并回主干）默认 squash（linear history）；merge-commit 已弃用**：全 agent
-     开发没人读 git 历史，agent 要逻辑原子 + message 清楚的 commit（squash 产物），中间 wip churn 是 context 污染。
-     出 artifact 的仓由 IaC ruleset 强制 linear，merge-commit 会被挡。对抗评审知识落 **ADR + PR 记录 + commit
-     trailer**（`Constraint:` / `Rejected-alternative:`），不靠 commit graph。
-   - 多会话并发时 base 常被别的 PR 推进，所以 **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
-   - 按 SHA 部署的项目：squash / rebase-merge 的 ancestry 都干净线性（`contains <sha>` 成立）。
-   - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主 checkout、
-     非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout **显式指到新 worktree**，
-     可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。实证：审计跑在落后 70 commit 的
-     主 checkout、把已被某 PR 删净的子系统报成"待删"，靠对 origin 重核才在派删除前抓出。
+1. **基线纪律（fetch+检查，按需 rebase，集成用 squash）**：派工前 `git fetch` + 基于最新远端目标分支
+   开 worktree，**不让 agent 在过期基线开工**。三条判据：① **rebase 是条件动作非仪式**——base 没动 →
+   什么都不做、别空转；② **集成默认 squash、merge-commit 已弃用**；③ **只读 scout/audit/Explore 经 Agent
+   工具派出会静默继承编排者 cwd**（落后的主 checkout）→ 幻影发现，须显式指 worktree + 对 base ref 复核。
+   命令全串 / rebase 三分支判定 / squash 论证 / scout 70-commit 实证见 `references/dispatch-baseline.md`；
+   权威 git 细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard` 规划中）。
 2. **写 goal**（模板 `references/goal-template.md`，放 `docs/orchestration/<NAME>_GOAL.md`）：含
    上下文+前置研究、带 file:line 的预判（标"verify, don't trust"）、交付物、验证要求、guardrails
    （scope / stop-and-report / redaction / commit-local-no-push）。
-3. **派发（用 `dispatch` 起）+ 验 hook + 理解门**：
-   ```bash
-   # dispatch 把 hook env 注进 tmux 命令串——watcher 走 hook 主信号的前提，缺则退化抓屏（机制见 README）。
-   references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-omp <worktree>
-   sleep 12
-   tmux send-keys -t <session> 'goal：<abs-path>'; sleep 1; tmux send-keys -t <session> Enter
-   ```
-   坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；codex 启动更新提示——一次性在
-   `~/.codex/config.toml` 设 `check_for_update_on_startup = false` 免掉（否则每次得先发 `2`+Enter）。
-   **起后立刻验 hook（硬 gate，别跳）**：`watch` 一挂就 Read 输出——必须见 sentinel `WORKING` 行；见
-   `no sentinel (hook not wired) → fallback` = 没走 dispatch（或 codex 未 trust hook）→ **停下重起、别带病跑**
-   （实证：裸起整 session 退抓屏，误报 DONE + 漏 WAITING——澄清菜单挂 busy 标记 ⟦esc⟧、抓屏永判"忙"、卡 21min 零 ping）。
-   **派发后、动手前先过理解门**：第一轮要 agent 复述"这改动碰哪些文件/契约、有哪些风险"，核对无误
+3. **派发（用 `dispatch` 起）+ 验 hook（硬 gate）+ 理解门**：用 `references/agent-watch/dispatch` 起会话、
+   send-keys 进 goal 路径（命令全串 + 坑：text/Enter 分发、`@` 补全、codex update 提示——见
+   `references/agent-watch/README.md`）。**起后立刻验 hook**：`watch` 一挂就 Read，必须见 sentinel `WORKING`
+   行；见 `no sentinel (hook not wired) → fallback` = 没走 dispatch / codex 未 trust hook → **停下重起、
+   别带病跑**。**派发后、动手前先过理解门**：第一轮要 agent 复述"碰哪些文件/契约、有哪些风险"，核对无误
    再放行；弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
-4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：agent 已在 step 3 用 `dispatch` 起好
-   （hook 已注），本步只 `watch <session>` 监控 + 收工 `teardown`。机制细节（events sentinel、
-   env-必须写进命令串、两层兜底、scrape fallback、codex hook-trust）见该目录 README；本节只留编排者纪律：
-   - **typed 状态**：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL
-     （DEAD≠DONE、WAITING 要回输入）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
-   - **5 STALLED-EXTERNAL = 外部 provider 错误热重试盲区**（overload/rate-limit/5xx；agent 活着 WORKING 却永不
-     DONE，机制见 README，实证盲等 ~13min）。收到 5：**先核证再动手**——扫 exit 5 附带的屏尾，确是 provider
-     chrome（非 agent 写错误处理代码刷屏误报）再 kill 热重试 agent、换新会话（不带退避状态）。
-   - **纯事件驱动会盲等：挂 watcher 时同时设上限**。除 watcher 外，按"任务预期时长 ×2"设个 fallback 自检
-     （定时兜底——CC:`ScheduleWakeup`；codex/shell 编排者:cron 或有界轮询），到点没终态就主动 capture-pane
-     ——"WORKING 但卡死/热重试"不发终态事件。
-   - **Agent 工具异步 subagent 的完成通知有黑洞：只在"停止且自身无存活后台子进程"时才发**。子 agent 若自起后台
-     fork（如它派 Playwright E2E、或为保活起 monitor），这些子进程一直活着 → 父 agent idle 等待却**永不发完成
-     通知** → 编排者盲等到天荒地老（实证 2026-06-26：某 agent 自起 E2E fork + 保活 monitor，完成
-     通知从不触发，靠主动 SendMessage 才发现它早停那了）。对策：① **别只信完成通知**——长/浏览器异步 dispatch 按上条配
-     fallback 自检（`ScheduleWakeup`/cron）兜底；② 派工时要求 agent **验证在本回合内同步做完、
-     不留孤儿后台 fork**，到里程碑 **SendMessage 回 main**，让父 agent 能干净收尾发通知。
-   - **判完成要正向证据、不凭 idle / watcher 裁决**（tmux 链路无失败信号：session 在则 send/capture 都"成功"；
-     watcher 裁决同样只是线索，后台型/阻塞型哪条消费路径[见 §0 + README]都要自己 capture-pane 正向核证、不盲信）。两个坑：
-     ① agent 死了退回 shell = 空屏+无忙碌 → 必须核 `pane_current_command` 仍是 agent 进程；
-     ② **agent 自起后台 job 会 yield=发 DONE 但没完成**（bg 跑完自动续）——凡这类相把完成信号绑**正向
-     交付物**（本地 commit／产物计数达标／显式 review 标记），别把"等自己 bg"误判成"等编排者"（实证：重批量
-     抽取走 agent 自起 bg，按 idle 轮询屡误报，改判"出现本地 commit + idle 稳定"才准）。是 `沉默≠交付` 的同族。
-   - **后台启动一律不加 shell `&`**（后台机制已 detached，再加 = 双重后台 → 孤儿 + 误判失联）；手滑挡不住
-     → **PreToolUse(Bash) 兜底**（同 §5 强制层思路）：`references/agent-watch/no-bg-amp-guard.sh` 拦**任何**带尾随
-     `&`/`& disown` 的命令 deny（`&&`/`2>&1` 重定向/引号内 `&`/前台 全放行），接项目 `.claude/settings.json`。
+4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：agent 已在 step 3 用 `dispatch`
+   起好，本步只 `watch <session>` 监控 + 收工 `teardown`。四条判据；机制全文 + typed 状态全枚举 +
+   STALLED-EXTERNAL / 异步完成通知黑洞 / 正向证据两坑 / fallback 自检 / no-bg-amp-guard 实证见该目录 README：
+   - **typed 状态存在、DEAD≠DONE、WAITING 要回输入**（别把 idle / watcher 裁决当终态）。
+   - **判完成要正向证据、不凭 idle / watcher 裁决**——tmux 链路无失败信号、watcher 裁决只是线索；把完成绑
+     正向交付物（本地 commit／产物计数／review 标记），自己 capture-pane 核证。
+   - **纯事件驱动会盲等 → 设超时上限兜底**：按预期时长 ×2 设 fallback 自检（`ScheduleWakeup`/cron），到点无终态
+     主动 capture-pane——治 "WORKING 卡死/热重试" 的**永不 DONE**（与上条**假 DONE** 是两个失败态）。
+   - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿 + 误判失联）；手滑兜底
+     `references/agent-watch/no-bg-amp-guard.sh`（PreToolUse Bash，拦尾随 `&`/`& disown`，接项目 `.claude/settings.json`）。
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
-   ①核证四件套过 + ②异构 codex 独立确认（执行者再严的完成自审——哪怕跑了结构化完成审计——仍是
-   同 lineage 自审 = self-preference bias，不可信）；
-   **roadmap / ACTIVE_CONTEXT / 关单只认 Verified**。四件套：① `git status -s` 干净（实证：omp 屡次
-   "声称完成没 commit"）；② `git log origin/<base>..HEAD` 与声明一致；③ 独立复跑 test+lint；
-   ④ 测试计数用 `grep -E 'passed|failed'`，别信被截断的点行。
+   ①核证四件套过 + ②异构 codex 独立确认（执行者再严的自审仍是同 lineage = self-preference bias，不可信）；
+   **roadmap / ACTIVE_CONTEXT / 关单只认 Verified**。核证四件套（git status / git log / 复跑 test+lint /
+   grep 计数 + 实证）见 `references/dispatch-baseline.md`。
 
 ## 2. 对抗式评审循环
 
-**先按风险定评审深度**：日常/低风险改动 → 轻量标准 review（`codex review --base <base>` 原生子命令：自动算 diff +
-结构级只读，省 prompt，挡基本质量/回归）；高风险（鉴权/迁移/基建脚本/大重构）→ 走下面完整对抗循环。codex **无内置
-"对抗"强度档**——"对抗"是 prompt 层（即本节：自起会话点名轴 + severity/verdict + 多轮收敛），其 `review` 子命令只给
-"自动 diff + 只读 summary"、不给 verdict schema，故对抗循环**必须自起会话自控 prompt**，别用子命令。
+**先按风险定评审深度**：低风险走轻量标准 review（`codex review --base`）、高风险（鉴权/迁移/基建/大重构）
+走完整对抗循环。codex 无内置"对抗"档——对抗在 prompt 层（自起会话点名轴 + severity/verdict + 多轮收敛），
+**必须自起会话自控 prompt、别用子命令**。完整模板 + 轴全枚举 + 实证 + ledger 栏目 + 达标线见
+`references/review-dispatch.md`。判据：
 
-1. **起 codex + brief 冷上下文**：omp commit+核证后起 codex 于同一 worktree（模板
-   `references/review-dispatch.md`）。**只给"查哪些轴 + verify don't trust + 收敛达标线"，不夹带自己的
-   结论/倾向**——喂 codex 我的判断 = anchoring，换模型却共享推理链 = 异构去相关价值白费。点名最易翻车的
-   轴（崩溃恢复、并发竞态、旗标关路径零泄漏、降级语义、安全契约；多租户加租户隔离 + 凭据**间接**泄漏:
-   异常链/URL userinfo/日志；评测报告类加**指标诚实性**:指标虚高/证据越界泛化）。点名轴让 codex 主动写
-   探针复现，命中率远高于泛泛 review；每轮追问"上轮修复引入了什么新洞"屡次抓到真问题。
-   **评审前先枚举执行路径分叉**（provider / mode、live vs rehydrate、suggestion-flow vs direct-save…），
-   点 codex 核"还有哪些分支没走到"——只覆盖一条分支 ≠ 全覆盖（实证：评审只盯主 controller 路径，真实用户
-   走另一个 provider 的独立分支，整条提取被绕过仍全绿）。
-   **门控/触发型功能必查 under-fire（"该触发时触发了没"），不只 over-fire**：有触发条件的特性（正则/旗标/
-   阈值门控）评审天然盯"会不会误触发"，常漏"真实输入下到底触发没"。实证：referent func-call 触发器检测的是
-   **抽取后被改写过的** content（指代已被改没）→ 真实场景永不触发；评审查了误触发、漏了漏触发，靠真模型验才抓出。
-2. **评审记录用 ledger 结构，不纯追加**：写 `docs/orchestration/<NAME>_REVIEW_codex.md`——severity
-   分级 findings + verdict（approve / request-changes），并维护 `blocking / queued / advisory / 已修 /
-   stagnation` 几栏，逐轮更新。结构化记录让收敛状态一眼可判，胜过流水账追加。
-3. **循环回修，每轮重贴不可变目标**：request-changes → 派回 omp 修 → codex 复审，循环到 approve。
-   **每轮派回时把原 goal 的不可变验收点重贴进 prompt 对照**——防多轮改着改着跑题、偏离初衷。
-4. **收敛准则（防乒乓，编排者设定）**：
-   - findings 三分类：`blocking`（必修才放行）/ `queued`（记下不阻塞、留 follow-up）/ `advisory`
-     （建议）。只有 `blocking` 残留才继续循环。
-   - **advisory/非逻辑项 → follow-up，别挡已就绪的 push**：先 ship 已 Verified 的东西，nit 攒成后续；真要
-     并也先 push 再异步补（实证：为一行注释 fold-before-push，正撞 provider 过载、空耗一轮）。
-   - **不重复 raise** 已 queued / 越界 / 上轮判过的 finding——除非本轮动了那块或让风险变差。
-   - **stagnation 检测**：同一 finding 反复出现 = 卡住，该收敛或升级人介入，别无限对轰。
-   - 质量类无限可挑的项（过滤规则、命名）明确"达标线":线内必修、线外进 `queued`。例:"确定性过滤是
-     兜底、LLM prompt 是主闸；常见形态全覆盖即达标，冷僻算 minor"。
-5. **评审期 omp 别动同一 worktree**（codex 在内跑测试会被污染）。串行十几分钟换干净结论，值得。
+- **brief 冷上下文、不夹带自己的结论**（喂 codex 我的判断 = anchoring，换模型却共享推理链 = 去相关价值白费）。
+- **点名最易翻车的轴**（崩溃恢复/并发/旗标关路径/降级/安全契约/多租户隔离/指标诚实性），让 codex 主动写探针。
+- **评审前先枚举执行路径分叉**（provider/mode、live vs rehydrate…），点 codex 核"还有哪些分支没走到"。
+- **门控/触发型功能必查 under-fire（该触发时触发了没），不只 over-fire**。
+- **评审记录用 ledger 结构、不纯追加**（blocking/queued/advisory/已修/stagnation 逐轮更新）；每轮回修重贴原 goal 不可变验收点。
+- **三分类收敛**：只有 `blocking` 残留才继续循环；**advisory→follow-up，别挡已就绪的 push**；不重复 raise 已判过的。
+- **stagnation 检测**：同一 finding 反复出现 = 卡住，该收敛或升级人介入，别无限对轰。
+- **评审期 omp 别动同一 worktree**（codex 在内跑测试会污染结论）。
 
 ## 3. 变更纪律
 
@@ -167,9 +112,9 @@ metadata:
 
 够不着的环境（prod、独立 dev 运行时库）不要猜——写**自包含取证提示词**（模板
 `references/ops-prompt-template.md`，放 `docs/orchestration/<NAME>_PROMPT.md`）让用户转交运维 agent。
-要点：只读约束写死、SQL/命令给全、预期读数+判定规则给全、回报格式给死（PASS/FAIL + 一行 verdict）、
-敏感数据只取元数据。运维回报**优先级高于自己的推断**——现场与 HEAD 代码矛盾时，先怀疑构建漂移
-（部署的是旧版本），再怀疑自己的控制流分析。
+要点（只读写死 / SQL 给全 / 预期读数+判定规则给全 / 回报格式给死 / 敏感只取元数据）见该模板。
+判据：**运维回报优先级高于自己的推断**——现场与 HEAD 代码矛盾时，先怀疑构建漂移（部署的是旧版本），
+再怀疑自己的控制流分析。
 
 ## 5. 状态落盘与节奏
 
@@ -211,14 +156,8 @@ metadata:
 
 ## 8. 新项目接入清单
 
-1. 项目无治理结构 → 先跑 `/repo-governance-bootstrap` 生成 docs/AGENTS.md 骨架。
-2. bootstrap 已生成完整 AGENTS.md（含 Work Modes / Validation）；再把
-   `references/agents-md-orchestration-section.md` 的 **委派 Agent 边界** 一节增补进去——多 agent 防
-   漂移，是 bootstrap 宪法没有的编排增量（不重复 Work Modes）。
-3. 建 `docs/orchestration/` + `docs/orchestration/archive/` 目录（生命周期见 §5）。
-4. 第一个任务走一遍 §1 全流程，校准该项目的忙碌标记/工具链差异。
-5. 在项目 memory 里建 working-style 条目（含本 skill 引用 + 项目特有的差异）。
-6. 建主理人的 `docs/DECISION_QUEUE.md`（模板见 §9 / `references/decision-queue.md`）——第一个 T2 决定就进队列。
+新项目接入 6 步（bootstrap 治理骨架 → 增补委派边界 → 建 orchestration 目录 → 首任务走 §1 全流程 →
+建 memory working-style 条目 → 建 DECISION_QUEUE）见 `references/onboarding-checklist.md`。
 
 ## 9. 主理人注意力与决策队列（降认知负载）
 
@@ -231,8 +170,4 @@ metadata:
 - **三层委派**：T0 直接做（可逆/已授权/无价值判断）· T1 做了+记一行（可逆但值得知会、可否决）· T2 动手前问
   （不可逆/对外、战略/优先级/钱/价值、有实质下行的真模糊）。减负=多往 T1 挪、少用 T2 当同步闸。
 - **静默默认**：主理人没回 → 可逆按写明默认前进、**不可逆一律 HOLD（永不自动越过不可逆）**。
-- **聚合绊线**：可逆累积变不可逆（lock-in/蔓延花费/scope drift）→ 升 T2。
-- **批处理 + 升级包**：不每事件 ping，攒到检查点成批给；每 T2 带 议题/影响/已做步骤/需你啥 + 推荐 + 默认。
-- **心跳 + HELD revisit**：每检查点刷队列给周期全局图（防橡皮图章/失态势感知）；每 HELD 项带 revisit 触发（防 HOLD 烂掉）。
-- **最弱点 = 队列腐烂**（编排者忘更新）→ 绑进检查点/复盘 checklist（§5），高频可配 hook 兜底。
-- 三层治理勿混：队列实例→项目 `docs/`；本实践→本 skill；编排者私有决策/教训→memory。
+- 其余机制（聚合绊线 / 批处理升级包 / 心跳 / HELD revisit / 队列腐烂兜底 / 三层治理勿混）见 `references/decision-queue.md`。
