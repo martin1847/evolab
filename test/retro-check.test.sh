@@ -69,5 +69,16 @@ out="$(run "$r")"; rc=$?
 assert_rc "$rc" 1 "E/missing-AC rc"
 assert_has "$out" "not found" "E/missing-AC flagged"
 
+# Case F — DECISION_QUEUE.md present but stale → warn only (opt-in soft check), exit 0
+r="$(mkrepo)"; printf '# queue\n' > "$r/docs/DECISION_QUEUE.md"; touch -t 202001010000 "$r/docs/DECISION_QUEUE.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "F/stale-queue rc (warn≠fail)"
+assert_has "$out" "DECISION_QUEUE.md not touched" "F/stale-queue warns"
+
+# Case G — no DECISION_QUEUE.md → skip (opt-in), still exit 0
+r="$(mkrepo)"; out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G/no-queue rc"
+assert_has "$out" "decision-queue 是 opt-in" "G/no-queue skips"
+
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

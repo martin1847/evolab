@@ -70,8 +70,15 @@ if [ -f "$RM" ]; then
   if [ -n "$(find "$RM" -mtime -1 2>/dev/null)" ]; then ok "roadmap modified within 24h"; else warn "roadmap not touched in 24h — confirm status-flip not skipped (ok if genuinely unchanged)"; fi
 else warn "$RM not found — skip"; fi
 
-# 4) MEMORY.md size (soft)
-echo "4) memory 治理 (索引行数):"
+# 4) decision-queue freshness (soft, opt-in — only if DECISION_QUEUE.md present; §9 mechanism)
+echo "4) 决策队列刷新 (DECISION_QUEUE.md 在则近期动过):"
+DQ="$DOCS/DECISION_QUEUE.md"
+if [ -f "$DQ" ]; then
+  if [ -n "$(find "$DQ" -mtime -1 2>/dev/null)" ]; then ok "DECISION_QUEUE.md modified within 24h"; else warn "DECISION_QUEUE.md not touched in 24h — refresh (清 ✅ / revisit 到期重浮 / 全局图); 队列腐烂是 §9 最弱点"; fi
+else echo "  [skip] no $DQ (decision-queue 是 opt-in)"; fi
+
+# 5) MEMORY.md size (soft)
+echo "5) memory 治理 (索引行数):"
 if [ -n "$MEMORY" ] && [ -f "$MEMORY" ]; then
   n="$(wc -l < "$MEMORY" | tr -d ' ')"
   if [ "$n" -le "$MEMCAP" ]; then ok "MEMORY.md $n lines (≤$MEMCAP)"; else warn "MEMORY.md $n lines > $MEMCAP — trim/group COMPLETED"; fi
