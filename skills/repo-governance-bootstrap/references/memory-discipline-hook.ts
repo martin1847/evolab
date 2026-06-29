@@ -1,4 +1,4 @@
-// memory-discipline-hook.ts — omp counterpart of memory-discipline-hook.sh (Claude Code + codex).
+// memory-discipline-hook.ts — omp counterpart of memory-discipline-hook.py (Claude Code + codex).
 //
 // omp has no command/stdin PostToolUse hook; it uses a JS factory + tool_result event.
 // Verified 2026-06 on omp/16.0.3: pi.sendUserMessage(text, { deliverAs: "followUp" })
