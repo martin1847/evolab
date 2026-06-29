@@ -7,14 +7,18 @@
 
 | 角色 | 工具 | 何时用 |
 |---|---|---|
-| **前端行为验证（主）** | chrome-devtools MCP（或 Playwright MCP） | 唯一能看"UI 真实渲染对不对"——有没有提前显示完成/重复/卡死/计时错乱。**前端 fix 必须靠它**。 |
-| **前端联网诊断（主）** | chrome-devtools MCP 网络面板 | 看请求 pending/失败/去向——能抓到**前端自己的联网 bug**（如代理目标没配，请求 pending）。CLI 直连会"恰好成功"从而**掩盖**这类 bug。 |
+| **前端行为验证（主）** | **Playwright MCP（默认首选）**；chrome-devtools MCP 仅当必须复用用户已登录的真实 Chrome（CDP attach） | 唯一能看"UI 真实渲染对不对"——有没有提前显示完成/重复/卡死/计时错乱。**前端 fix 必须靠它**。 |
+| **前端联网诊断（主）** | Playwright MCP 网络（`browser_network_requests`）；或 chrome-devtools 网络面板 | 看请求 pending/失败/去向——能抓到**前端自己的联网 bug**（如代理目标没配，请求 pending）。CLI 直连会"恰好成功"从而**掩盖**这类 bug。 |
 | **元素定位** | a11y/DOM 快照的 uid/ref | 比坐标/截图稳、可复现、token 省；坐标/vision 仅作 fallback（拿不到 ref 或纯视觉布局问题）。 |
 | **后端 ground-truth（补充）** | CLI `curl` + bearer token | 抓 SSE 逐事件时序（`curl -N` 比网络面板强）、探 API、提 token、脚本化/循环、token 省。**绕过前端网络层 → 验不了前端行为**。 |
 
 
 **判据**：纯 CLI 验不了前端渲染；纯 MCP 抓 SSE 时序笨。一个前端 fix 的最优是**混合**——
 MCP 驱动登录+渲染验证+网络诊断，CLI 抓 SSE/API ground-truth。
+
+> **为何 Playwright 优先**：独立 context、不与用户真实 Chrome 争 CDP、localhost E2E 实测稳；chrome-devtools MCP
+> 实测会与用户浏览器 + 多 agent 争用 CDP、易断连，仅当**必须 attach 用户已登录的真实会话**才值得。
+> 派浏览器子 agent 时在提示词里写明"优先 Playwright MCP"。
 
 ## 联调铁律
 
