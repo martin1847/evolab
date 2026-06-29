@@ -64,8 +64,11 @@ mock 契约 + 后端 SSE 帧 + 本地 dev 渲染**都过，也不等于真用户
 - **测试运行器怪癖**：`watch` 模式是否撞 `EMFILE` 等 → 单跑模式兜底。
 
 只有一条**跨项目通用手法**留在这里：运行时配置硬编码、要临时改指向又不污染正在被 review
-的工作树时，用浏览器 MCP 在页面加载前以 `initScript` 把配置对象
-`Object.defineProperty(..., {writable:false})` 锁住，让页面自身的注入脚本覆盖失败（零文件改动）。
+的工作树时，在页面加载前把配置对象用 `Object.defineProperty(..., {writable:false})` 锁住，
+让页面自身的注入脚本覆盖失败（零文件改动）。**关键是"加载前"**：用 Playwright 的
+`page.addInitScript`（经 `browser_run_code_unsafe` 调，每次导航在页面脚本前跑）——**不是** `browser_evaluate`
+/ chrome-devtools `evaluate_script`，那俩是加载后求值、抢不到页面自己注入之前。实测验证过此手法
+（addInitScript 先跑 + writable:false 挡掉页面覆盖）。
 
 ## 新项目接入
 

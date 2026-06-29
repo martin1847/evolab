@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.2.2
+version: 1.2.3
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -62,17 +62,17 @@ metadata:
      正向交付物（本地 commit／产物计数／review 标记），自己 capture-pane 核证。
      - **分阶段 commit 任务的 idle 是陷阱**（每个 part 边界都 idle 一瞬，裸 idle/「首个 commit」会中途误判；
        实证：3-part 重构在 Part A+C 后、Part B 前的瞬时 idle 骗了我手搓的轮询）。防复发靠**结构不靠自律**
-       （光记规则没用——我有规则还违反过）：consolidated guard **`references/agent-watch/cto-guard.sh`**
+       （光记规则没用——我有规则还违反过）：consolidated guard **`references/agent-watch/cto-guard.py`**
        在工具调用层 DENY「纯靠 idle-absence、无正向 grep」的裸轮询（git 交付物核验 / pane 抓 Verdict·prompt 放行）。
    - **纯事件驱动会盲等 → 设超时上限兜底**：按预期时长 ×2 设 fallback 自检（`ScheduleWakeup`/cron），到点无终态
      主动 capture-pane——治 "WORKING 卡死/热重试" 的**永不 DONE**（与上条**假 DONE** 是两个失败态）。
      - **浏览器/E2E subagent 的完成通知会黑洞**（活着的 Playwright 会话/dev server/bg fork 让通知不触发→盲等到死）。
        **派发即配 deadline 正向证据 watch**（盯输出文件增长/新截图/里程碑 SendMessage），到点没动就 SendMessage 戳、
-       再 kill+重启，**别盲等自动通知**。强制层：同一个 `references/agent-watch/cto-guard.sh`（PostToolUse·Agent 分支）
+       再 kill+重启，**别盲等自动通知**。强制层：同一个 `references/agent-watch/cto-guard.py`（PostToolUse·Agent 分支）
        在派发那一刻注入提醒（omission 无法硬 deny，只能在 launch 时强制 salience）。**一个脚本按 event+tool 内部分派**
        （PreToolUse·Bash = 拦 `&`/idle-poller；PostToolUse·Agent = browser-watch 提醒），接项目 `.claude/settings.json` 两处都指它。
    - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿 + 误判失联）；手滑兜底走上面同一个
-     `references/agent-watch/cto-guard.sh`（PreToolUse·Bash 分支拦尾随 `&`/`& disown`）。
+     `references/agent-watch/cto-guard.py`（PreToolUse·Bash 分支拦尾随 `&`/`& disown`）。
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
