@@ -7,8 +7,12 @@
 ## 七步 checklist
 
 1. **交付清单**：shipped / parked / 残留。
-2. **什么有效**：keep-doing（值得固化的做法）。
+2. **过程×结果四象限**（每个收口单元落唯一一格，禁「上线=好」塌缩）：好程好果=**实力赢**(固化做法) ·
+   坏程好果=**走运**(别奖励、补过程洞) · 好程坏果=**倒霉**(别改流程) · 坏程坏果=**实力输**(改)。
+   判「走运」即使 shipped 也标 outcome 星号 + 点出过程缺口（实证：PR 已交但 GUI 仅手动测试计划未跑 → 不给满分）。
 3. **教训进 memory**：每条带 **Why + How-to-apply**；事实细节（路径/凭据/执行路径）进 ACCESS/docs，memory 只留指针。
+   **升默认过样本门**（measure-before-more 的复盘版）：n=1 只标 `OBSERVATION`、不改 spec/默认；**≥2 例同向**才升为改默认的教训。
+   retro 只**提议**，改 spec 由主理人**裁定**（提议/批准分离，防按一次性事件堆规则）。
 4. **上下文治理**：关交付完的会话 + **扫孤儿**（见 SKILL §5「孤儿扫」纪律：`docker ps`/`ps`/后台 job + compose
    trap/finally + repro 禁裸 `while True`）+ **worktree 核对**（已合分支的 worktree 必清 `git worktree remove`）+
    **敞口清单**（=下会话入口）。

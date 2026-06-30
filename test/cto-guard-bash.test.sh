@@ -41,6 +41,9 @@ chk_eq "& inside quotes allowed" 0 "$RC"
 # embedded quotes/braces — the case shell-regex would choke on, python json parses
 run 'echo "a & b }" && ls'
 chk_eq "embedded quotes/braces allowed" 0 "$RC"
+# `&& disown` is a (nonsensical) && chain, not a trailing-& backgrounding -> allowed (one-regex simplification)
+run 'a && disown'
+chk_eq "&& disown allowed (not a bg &)" 0 "$RC"
 
 # (2) naive idle==done poller, DENY
 run 'while true; do tmux capture-pane -p | grep Working; sleep 5; done'
@@ -53,6 +56,22 @@ chk_eq "poller + Verdict positive allowed" 0 "$RC"
 # ALLOW: capture-pane but no loop
 run 'tmux capture-pane -p | grep Working'
 chk_eq "single capture (no loop) allowed" 0 "$RC"
+
+# (3) dispatch WITHOUT a later `watch <session>` -> ALLOW + JSON additionalContext reminder (omission)
+ctx() { printf '%s' "$1" | python3 -c 'import sys,json
+try: d=json.load(sys.stdin)
+except Exception: print(""); sys.exit()
+print(d.get("hookSpecificOutput",{}).get("additionalContext",""))'; }
+run 'bash references/agent-watch/dispatch omp mysess /wt'
+chk_eq "dispatch w/o watch exit 0" 0 "$RC"
+chk_contains "dispatch w/o watch reminds arm watcher" "watcher" "$(ctx "$OUT")"
+chk_contains "reminder names the session" "mysess" "$(ctx "$OUT")"
+# dispatch WITH watch on the same session in the same command -> silent (no double-nag)
+run 'dispatch omp mysess /wt && bash references/agent-watch/watch mysess'
+chk_eq "dispatch + watch same cmd exit 0" 0 "$RC"; chk_eq "dispatch + watch silent" "" "$OUT"
+# non-dispatch command -> silent
+run 'git status'
+chk_eq "non-dispatch silent" "" "$OUT"
 
 # degenerate: never block, exit 0
 run ''

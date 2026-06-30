@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 # cto-guard-bash — PreToolUse·Bash enforcement for cto-orchestration. Wire to the Bash matcher
-# (CC skill frontmatter `hooks:` / `.claude/settings.json`; Codex `hooks.json`). Denies two Bash
-# footguns the orchestrator keeps slipping (prose decays → enforce at tool-call time):
-#   (1) trailing shell `&` -> ORPHAN (no completion callback; wrapper falsely reports done)
-#   (2) naive "idle==done" poller (loop + capture-pane + idle grep, no positive-evidence check)
-# Deny = exit 2 + stderr (shown to the agent). Fail-open: any parse error exits 0, never blocks work.
-# All-Python: the job is parsing arbitrary command content out of hook JSON — stdlib json is correct
-# where shell-regex extraction would be fragile in a guard. (PostToolUse·Agent reminder = sibling
-# cto-guard-agent.py; one focused script per hook since the wiring layer already separates them.)
+# (CC skill frontmatter `hooks:` / `.claude/settings.json`; Codex `hooks.json`). Catches three Bash
+# slips the orchestrator keeps making (prose decays → enforce at tool-call time):
+#   (1) trailing shell `&` -> ORPHAN (no completion callback; wrapper falsely reports done)  [DENY]
+#   (2) naive "idle==done" poller (loop + capture-pane + idle grep, no positive-evidence check) [DENY]
+#   (3) `dispatch <agent> <session>` WITHOUT later arming `watch <session>` -> reminder to arm the
+#       watcher (the PRIMARY signal). This is an OMISSION, not a bad action -> can't DENY (there is no
+#       tool call to intercept); inject salience at dispatch time instead, same doctrine as the
+#       PostToolUse·Agent browser reminder (sibling cto-guard-agent.py). [ALLOW + additionalContext]
+# Deny = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON hookSpecificOutput.additionalContext
+# (only that reaches the agent). Fail-open: any parse error exits 0, never blocks work. All-Python: the
+# job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
+# extraction would be fragile in a guard.
 import sys, json, re
 
 
@@ -21,8 +25,9 @@ def main():
     if not cmd:
         return 0
 
-    # (1) trailing shell-& backgrounding -> orphan. Allow && / 2>&1 / quoted &.
-    if re.search(r"(^|[^&])&[ \t]*(disown[ \t]*)?$", cmd) or re.search(r"&[ \t]*disown[ \t]*$", cmd):
+    # (1) trailing shell-& backgrounding -> orphan. One regex covers `&`, `& disown`, `&disown`, and a
+    #     leading `& disown` (via `^`); `(^|[^&])` keeps `&&` chains / `2>&1` / quoted `&` allowed.
+    if re.search(r"(^|[^&])&[ \t]*(disown[ \t]*)?$", cmd):
         sys.stderr.write(
             "DENY: trailing shell & -> ORPHAN (no completion callback; wrapper falsely reports done). "
             "Drop the & and use the Bash tool run_in_background:true instead.\n"
@@ -47,6 +52,30 @@ def main():
             "Verdict/prompt for reviews.\n"
         )
         return 2
+
+    # (3) dispatch -> remind to arm watch. `dispatch <omp|codex|claude> <session> [cwd]` starts a tmux
+    #     agent; arming `watch <session>` (the primary, hook-driven signal) is a SEPARATE step the
+    #     orchestrator owns (Claude Code must background it via run_in_background — NOT shell &, which
+    #     orphans) -> easy to skip -> silent timer-guessing displaces the proper signal. Allow, but
+    #     inject the reminder so the omission can't pass silently. Don't fire if `watch <session>` is
+    #     already in the same command line.
+    m = re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
+    if m:
+        session = m.group(2)
+        if not re.search(r"\bwatch[\"'\s]+" + re.escape(session) + r"\b", cmd):
+            ctx = (
+                f"REMINDER (cto-guard): you are dispatching tmux session '{session}'. Arm the watcher "
+                f"as the PRIMARY signal right after it starts — run `bash <agent-watch>/watch {session}` "
+                f"via the Bash tool with run_in_background:true (NOT shell &, which orphans it). A "
+                f"ScheduleWakeup timer is only the BACKSTOP, not a substitute for the watcher."
+            )
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": ctx,
+                }
+            }))
+        return 0
 
     return 0
 
