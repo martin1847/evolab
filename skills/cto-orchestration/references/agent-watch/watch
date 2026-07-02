@@ -23,6 +23,12 @@ SHELL_RE="${3:-^(-?zsh|-?bash|-?sh|login)$}"
 # and gated on WORKING + repetition, so an agent merely discussing errors won't false-positive.
 # Override via AGENT_WATCH_EXT_ERR_RE.
 EXT_ERR_RE="${AGENT_WATCH_EXT_ERR_RE:-(overloaded_error|rate_limit_error|stream error|429 Too Many|529 |Too Many Requests|insufficient_quota|service unavailable|Overloaded)}"
+# (B2) Interactive-menu chrome: an agent's ask-user menu may NOT fire its WAITING hook
+# (verified 2026-07-02: omp's clarify-menu emitted no `waiting` event -> events stayed
+# stale-WORKING, screen frozen -> misclassified HANG exit 3, real state WAITING). Detect
+# the menu UI chrome on a stale screen and classify WAITING instead. Pattern is UI-chrome
+# specific (not content an agent typically prints); override via AGENT_WATCH_MENU_RE.
+MENU_RE="${AGENT_WATCH_MENU_RE:-(enter select|Type to search|navigate.+select.+cancel)}"
 DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
 EVENTS="$DIR/$SESSION.events"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -90,6 +96,13 @@ for i in {1..260}; do
   if [ "$state" = "WORKING" ]; then
     if [ "$line" = "$lastline" ]; then
       stalls=$((stalls+1))
+      # (B2) stale ~1min + menu chrome on screen => the agent is WAITING on an
+      # interactive menu whose hook never fired; don't let it ripen into a false HANG.
+      if [ "$stalls" -ge 3 ] \
+         && tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -15 | grep -qiE "$MENU_RE"; then
+        echo "=== [$SESSION] WAITING FOR INPUT (menu chrome, hook missed) at $(date '+%H:%M:%S') ==="
+        tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 4
+      fi
       if [ "$stalls" -ge 18 ]; then
         echo "=== [$SESSION] SUSPECTED HANG at $(date '+%H:%M:%S') — WORKING, no new event ~6min ==="
         tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 3
