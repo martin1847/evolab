@@ -32,6 +32,10 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
    `WORKING`→keep polling. Reacts to the agent's real lifecycle, no glyph heuristics.
 2. **Backstop (kept from v1)**: liveness guard — `pane_current_command` back to a shell ⇒ AGENT-DEAD (exit 2),
    for a hard crash where NO hook fires. Hang heuristic — STATE=WORKING but file stale + screen frozen ⇒ exit 3.
+   Menu guard (B2) — before HANG ripens: stale ~1min + interactive-menu chrome in the pane tail
+   (`enter select` / `Type to search`; override `AGENT_WATCH_MENU_RE`) ⇒ WAITING (exit 4), because an
+   agent's ask-user menu may not fire its WAITING hook (实证 2026-07-02: omp clarify-menu emitted no
+   `waiting` event → stale-WORKING + frozen screen misread as HANG; real state = waiting on the orchestrator).
    External-provider stall — STATE=WORKING but provider-error chrome (overload/rate-limit/5xx) repeats on screen
    ⇒ STALLED-EXTERNAL (exit 5). Catches a hot-retry loop the hang heuristic misses: a retryable provider error
    is auto-retried in place (omp `auto_retry_start` → backoff → `continue`, capped at `retry.maxRetries`≈10), so a
@@ -115,7 +119,12 @@ sleep 12
 tmux send-keys -t <session> 'goal：<abs-path>'; sleep 1; tmux send-keys -t <session> Enter
 ```
 
-坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；codex 启动更新提示——一次性在
+坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；**长中文/特殊符号
+（①②③、全角冒号）指令会触发 omp 的 skill 模糊搜索弹窗吃掉 Enter，且 Escape/Ctrl-C 关不掉**（实证
+2026-07-02）→ `C-u` 清输入框 + 改发一行短 ASCII 引用指令文件（评审回修/多段指令一律写成
+`docs/orchestration/*_TASK|FIXROUND*.md` 再让 agent 读）；**弹窗事故后 TUI 输入层可能整体楔死**
+（多词 send-keys / paste-buffer 全被吞、C-u 无效，仅单 token 偶通）→ 别恋战，teardown + 重派新会话
+（状态都在 commit/goal 文件里，无损）；codex 启动更新提示——一次性在
 `~/.codex/config.toml` 设 `check_for_update_on_startup = false` 免掉（否则每次得先发 `2`+Enter）。
 
 **起后立刻验 hook（硬 gate，别跳）**：`watch` 一挂就 Read 输出——必须见 sentinel `WORKING` 行；见
