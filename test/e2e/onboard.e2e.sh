@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# onboard.e2e.sh — LIVE consumer-path test of project onboarding (the install→onboard chain).
+# A fresh headless `claude` session in an empty repo must, from the installed skills alone,
+# initialize everything a new orchestration project needs. Asserts on FILES (durable
+# artifacts), never on model prose. This automates the 2026-07 manual E2E that validated:
+#   ① docs governance tree (repo-governance-bootstrap 步骤 1-10)
+#   ② project AGENTS.md incl. the two orchestration sections (委派边界 + 编排者行为内核)
+#   ③ hooks wired in .claude/settings.json (memory-discipline + both cto-guards, ABSOLUTE paths)
+#   ④ orchestration dirs + DECISION_QUEUE (cto onboarding checklist)
+# COST: one long claude session (~3-6 min, real tokens). Pre-release gate, not a dev loop.
+set -u
+cd "$(dirname "$0")"
+. ../lib-testkit.sh   # assertion helpers only
+
+echo "== onboard.e2e (live claude session; several minutes, uses API tokens) =="
+
+WT="$(mktemp -d "${TMPDIR:-/tmp}/e2e-onboard.XXXXXX")"
+WTBASE="$(basename "$WT")"
+cleanup() {
+  rm -rf "$WT"
+  # the onboarding writes orchestrator memory OUTSIDE the repo (~/.claude/projects/<flattened-cwd>).
+  # Flattening turns '.' into '-' (e2e-onboard.Xxx -> ...e2e-onboard-Xxx), so match the translated name.
+  find "$HOME/.claude/projects" -maxdepth 1 -type d -name "*$(printf '%s' "$WTBASE" | tr '.' '-')*" -exec rm -rf {} + 2>/dev/null || true
+}
+trap cleanup EXIT
+
+cd "$WT" && git init -q . && printf '# demo-proj\nA tiny demo service.\n' > README.md && git add -A && git commit -qm init
+
+timeout 570 claude -p "本项目要接入多 agent 编排开发。请依次完成：
+1) 用 repo-governance-bootstrap skill 初始化文档治理（项目名 demo-proj，定位：演示用微服务；capability: demo-api；module: api；需要 AGENTS.md）。所有该问用户的问题都按此给定信息处理，不要等待输入。
+2) 然后按 cto-orchestration 的新项目接入清单（references/onboarding-checklist.md）逐步完成接入，包含 AGENTS.md 编排增量增补 和 hook wiring。
+3) 只创建文件，不要 push。" --dangerously-skip-permissions < /dev/null >/dev/null 2>&1
+
+# ① docs governance tree
+for f in docs/INDEX.md docs/ACTIVE_CONTEXT.md docs/roadmap/active-roadmap.md AGENTS.md CLAUDE.md ACCESS.local.md; do
+  chk_eq "exists: $f" 1 "$([ -f "$WT/$f" ] && echo 1 || echo 0)"
+done
+chk_eq "ADR-0001 created" 1 "$(ls "$WT"/docs/decisions/ADR-0001* >/dev/null 2>&1 && echo 1 || echo 0)"
+chk_contains "CLAUDE.md imports AGENTS.md" "@AGENTS.md" "$(cat "$WT/CLAUDE.md" 2>/dev/null)"
+chk_eq "ACCESS.local.md gitignored" 0 "$(cd "$WT" && git check-ignore -q ACCESS.local.md; echo $?)"
+
+# ② AGENTS.md orchestration sections (the cto 编排增量两节)
+ag="$(cat "$WT/AGENTS.md" 2>/dev/null)"
+chk_contains "AGENTS.md has 委派 Agent 边界" "委派 Agent 边界" "$ag"
+chk_contains "AGENTS.md has 编排者行为内核" "编排者行为内核" "$ag"
+chk_contains "行为内核 has 角色绑定" "角色绑定" "$ag"
+
+# ③ hooks wired, absolute paths (hooks don't expand ~)
+SJ="$WT/.claude/settings.json"
+chk_eq "settings.json exists" 1 "$([ -f "$SJ" ] && echo 1 || echo 0)"
+if [ -f "$SJ" ]; then
+  cmds="$(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+for arr in d.get("hooks",{}).values():
+    for m in arr:
+        for h in m.get("hooks",[]):
+            print(h.get("command",""))' "$SJ" 2>/dev/null)"
+  chk_contains "wired: cto-guard-bash" "cto-guard-bash.py" "$cmds"
+  chk_contains "wired: cto-guard-agent" "cto-guard-agent.py" "$cmds"
+  chk_contains "wired: memory-discipline" "memory-discipline-hook" "$cmds"
+  chk_eq "no tilde paths in hook commands" 0 "$(printf '%s' "$cmds" | grep -c '~' || true)"
+  bad=0
+  while IFS= read -r c; do
+    [ -z "$c" ] && continue
+    case "$c" in /*|"python3 /"*|"bash /"*) : ;; *) bad=$((bad+1));; esac
+  done <<< "$cmds"
+  chk_eq "all hook paths absolute" 0 "$bad"
+fi
+
+# ④ orchestration dirs + decision queue
+chk_eq "docs/orchestration/ exists" 1 "$([ -d "$WT/docs/orchestration" ] && echo 1 || echo 0)"
+chk_eq "DECISION_QUEUE.md exists" 1 "$([ -f "$WT/docs/DECISION_QUEUE.md" ] && echo 1 || echo 0)"
+
+summary
