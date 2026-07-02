@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.2.5
+version: 1.2.6
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -14,8 +14,8 @@ metadata:
 >
 > 第二铁律：**执行前先验证、不明先问。** 做不可逆/对外动作（push / merge / 部署 / 删除 / 对外消息）前，
 > 先**核实真实事实与当前状态**（实读 state，别凭假设/凭工具的一次输出——本地 ref 会骗你），范围或授权不清
-> 就**先问清再做**；**一次批准不自动延伸到另一个动作**。可逆只读动作直接做、不请示。实证：把用户的 "push"
-> 当成含 "merge" 去合共享分支被拦；一度误读 git 合并状态（单次工具输出有歧义，靠 `cat-file -p` 实读才定论）。
+> 就**先问清再做**；**一次批准不自动延伸到另一个动作**。可逆只读动作直接做、不请示。
+> 实证：把用户的 "push" 当成含 "merge" 去合共享分支被拦。
 >
 > 第三铁律（第二铁律的操作化）：**把"降低主理人认知负载"当设计目标**——单一决策队列（编排者维护、
 > 主理人只读、完整性保证）+ 三层委派（T0 直接做 / T1 做了记一行 / T2 动手前问）+ 静默默认（可逆前进、
@@ -44,7 +44,7 @@ metadata:
    什么都不做、别空转；② **集成默认 squash、merge-commit 已弃用**；③ **只读 scout/audit/Explore 经 Agent
    工具派出会静默继承编排者 cwd**（落后的主 checkout）→ 幻影发现，须显式指 worktree + 对 base ref 复核。
    命令全串 / rebase 三分支判定 / squash 论证 / scout 70-commit 实证见 `references/dispatch-baseline.md`；
-   权威 git 细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard` 规划中）。
+   权威 git 细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard`）。
 2. **写 goal**（模板 `references/goal-template.md`，放 `docs/orchestration/<NAME>_GOAL.md`）：含
    上下文+前置研究、带 file:line 的预判（标"verify, don't trust"）、交付物、验证要求、guardrails
    （scope / stop-and-report / redaction / commit-local-no-push）。
@@ -55,25 +55,22 @@ metadata:
    别带病跑**。**派发后、动手前先过理解门**：第一轮要 agent 复述"碰哪些文件/契约、有哪些风险"，核对无误
    再放行；弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
 4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：agent 已在 step 3 用 `dispatch`
-   起好，本步只 `watch <session>` 监控 + 收工 `teardown`（漏挂 watch → `cto-guard-bash.py` 第③检查在 dispatch 那刻提醒）。四条判据；机制全文 + typed 状态全枚举 +
+   起好，本步只 `watch <session>` 监控 + 收工 `teardown`。四条判据；机制全文 + typed 状态全枚举 +
    STALLED-EXTERNAL / 异步完成通知黑洞 / 正向证据两坑 / fallback 自检 / cto-guard 实证见该目录 README：
    - **typed 状态存在、DEAD≠DONE、WAITING 要回输入**（别把 idle / watcher 裁决当终态）。
    - **判完成要正向证据、不凭 idle / watcher 裁决**——tmux 链路无失败信号、watcher 裁决只是线索；把完成绑
-     正向交付物（本地 commit／产物计数／review 标记），自己 capture-pane 核证。
-     - **分阶段 commit 任务的 idle 是陷阱**（每个 part 边界都 idle 一瞬，裸 idle/「首个 commit」会中途误判；
-       实证：3-part 重构在 Part A+C 后、Part B 前的瞬时 idle 骗了我手搓的轮询）。防复发靠**结构不靠自律**
-       （光记规则没用——我有规则还违反过）：guard **`references/agent-watch/cto-guard-bash.py`**
-       在工具调用层 DENY「纯靠 idle-absence、无正向 grep」的裸轮询（git 交付物核验 / pane 抓 Verdict·prompt 放行）。
+     正向交付物（本地 commit／产物计数／review 标记），自己 capture-pane 核证。**分阶段 commit 任务的 idle
+     是陷阱**——每个 part 边界都 idle 一瞬，裸 idle/「首个 commit」中途误判（实证：3-part 重构的瞬时 idle 骗过手搓轮询）。
    - **纯事件驱动会盲等 → 设超时上限兜底**：按预期时长 ×2 设 fallback 自检（`ScheduleWakeup`/cron），到点无终态
      主动 capture-pane——治 "WORKING 卡死/热重试" 的**永不 DONE**（与上条**假 DONE** 是两个失败态）。
-     - **浏览器/E2E subagent 的完成通知会黑洞**（活着的 Playwright 会话/dev server/bg fork 让通知不触发→盲等到死）。
-       **派发即配 deadline 正向证据 watch**（盯输出文件增长/新截图/里程碑 SendMessage），到点没动就 SendMessage 戳、
-       再 kill+重启，**别盲等自动通知**。强制层：`references/agent-watch/cto-guard-agent.py`（PostToolUse·Agent|Task）
-       在派发那一刻注入提醒（omission 无法硬 deny，只能 launch 时强制 salience；提醒走 JSON `additionalContext` 才送达 agent）。
-   - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿 + 误判失联）；手滑兜底走 PreToolUse·Bash 的
-     `references/agent-watch/cto-guard-bash.py`（拦尾随 `&`/`& disown`，与上条 idle-poller 同一脚本）。
-   - **wiring**：两条 hook entry 并进 `repo-governance-bootstrap` §11 已建的那份 settings.json（沿用其三调度者模式，
-     不另造脚手架）；CC frontmatter `hooks:` 实测 mid-session 激活不触发、不靠它。全表 + 两条 entry 见 `references/agent-watch/README.md` §Wiring。
+     **浏览器/E2E subagent 的完成通知会黑洞**（活着的 Playwright 会话/dev server/bg fork 让通知不触发）——
+     **派发即配 deadline 正向证据 watch**（输出文件增长/新截图/里程碑 SendMessage），到点没动 SendMessage 戳、再 kill+重启。
+   - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿 + 误判失联）；唯一后台正路 = Bash 工具 `run_in_background`。
+   - **强制层（防复发靠结构不靠自律——光记规则没用，我有规则还违反过）**：上述三坑已代码化——
+     `cto-guard-bash.py`（PreToolUse·Bash：DENY 尾随 `&`、DENY 无正向 grep 的裸 idle 轮询、dispatch 未挂 watch 提醒）+
+     `cto-guard-agent.py`（PostToolUse·Agent|Task：browser 派发注入 deadline-watch 提醒）。wiring 并进
+     `repo-governance-bootstrap` §11 的 settings.json（CC frontmatter `hooks:` 实测 mid-session 不注册、不靠它）；
+     全表 + entry 见 `references/agent-watch/README.md` §Wiring。
 5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
@@ -109,11 +106,10 @@ metadata:
 - **commit 留本地，push/PR 必须用户明示批准**；批准一次只覆盖那次。
 - **验证诚实**：交付三段式——验证了什么（真跑过）/ 没验证什么 / 剩余风险。本地打桩绕过的环节（真
   LLM、真队列）显式标注，部署后运维补验。实证：本地 LLM 打桩致 un-awaited coroutine 逃逸生产。
-- **代验路径 ≠ 真路径**（后端/agent/前端通用）：mock / 打桩 / stream smoke 全绿 **≠ 真实路径成立**——
-  按**真实部署路径**验收，别拿代验当真验，真路径常和你 mock 的那条不是同一条（前端实例见 §7：卡片走
-  `execute/async` 非 `execute/stream`，三段绿仍 ReOpen）。最尖一条：**别 mock 你正在验证的那个边界**
-  ——stub 掉被测函数 = 测试零信息、恰好盖住 bug；真应用 E2E 才是「可测试」门（实证：一天内 4 个 bug
-  全过 review+单测，只它抓到）。
+- **代验路径 ≠ 真路径**（后端/agent/前端通用）：mock / 打桩 / stream smoke 全绿 **≠ 真实路径成立**——按
+  **真实部署路径**验收，真路径常和你 mock 的那条不是同一条（前端实例见 §7）。最尖一条：**别 mock 你正在
+  验证的那个边界**——stub 掉被测函数 = 测试零信息、恰好盖住 bug；真应用 E2E 才是「可测试」门（实证：一天
+  4 个 bug 全过 review+单测，只它抓到）。
 - **编辑前重读会变的文件**：rebase / 另一 agent 动过同一 worktree / 你刚跑了改文件的 git 操作 之后，
   in-context 文件视图已 stale——先重读再改。带 read-before-edit 护栏的工具会**拦** stale edit（报 `must be read
   first` 不是 bug、是它在挡你拿过期视图覆盖别人的改动）；没护栏的会**静默覆盖**、更糟。别在读↔编辑间插改文件的命令。
@@ -133,12 +129,11 @@ metadata:
   索引行），live 只留在跑/在等的；文档只生不死 → live 与历史混杂（实证：某项目积 38 个才首清）。
 - memory：每 workstream 一文件 + 索引一行（状态/PR/敞口/下一步入口），"压缩/等外部输入"前必更新。
   **memory 编排者私有，agent/新 session 只能读 docs**——只更 memory 不同步 docs = 共享治理层腐烂
-  （实证：某项目 ACTIVE_CONTEXT 冻 4 天变废纸）。**三分工**：docs 存全 agent 共享的状态快照（what/why）、
-  `ACCESS.local.md` 存怎么连上 + 凭证（how-to-reach，含密 gitignored，见 repo-governance-bootstrap）、memory 存
-  编排者私有的教训 + 入口指针。**短期 working 记忆（当前任务草稿/进度/待办）不进这三类**——活在 context window
-  或临时 `/tmp` NOTES、随手可弃，别塞进 memory（污染跨 session 私有层）或 ACTIVE_CONTEXT（那是收口快照非草稿）。
-  - **写时纪律（不等复盘）**：上面的卸载边写边做——写 memory 当下就把事实细节进 ACCESS/docs，别囤到复盘再清。
-    靠 skill 文本记不住的高频纪律配 **PostToolUse hook** 兜底（强制层补 salience 衰减；模板见 repo-governance-bootstrap）。
+  （实证：某项目 ACTIVE_CONTEXT 冻 4 天变废纸）。**信息四分工**：docs=全 agent 共享状态快照（what/why）·
+  `ACCESS.local.md`=怎么连上+凭证（含密 gitignored，见 repo-governance-bootstrap）· memory=编排者私有教训+入口指针 ·
+  短期草稿/进度/待办=context window 或 `/tmp`（随手可弃，别塞 memory 或 ACTIVE_CONTEXT——那是收口快照非草稿）。
+  - **写时纪律（不等复盘）**：卸载边写边做——写 memory 当下就把事实细节进 ACCESS/docs，别囤到复盘再清；
+    高频纪律配 **PostToolUse hook** 兜底（强制层补 salience 衰减；模板见 repo-governance-bootstrap）。
 - **复盘仪式（事件触发：收口 / 压缩前 / 任何 ReOpen 后主动提议）——是 CHECKLIST 不是即兴。**
   听到"复盘 / 收口 / handoff" → **读 `references/retrospective.md` 七步逐条勾**，别凭记忆即兴（即兴版读着完整却静默漏
   承重治理步——实证 2026-06-26：被要求"复盘仪式"却自由发挥，漏了 roadmap 翻状态 + ACTIVE_CONTEXT 整篇重写 + 上下文治理）。
@@ -166,8 +161,8 @@ metadata:
 
 ## 8. 新项目接入清单
 
-新项目接入 6 步（bootstrap 治理骨架 → 增补委派边界 → 建 orchestration 目录 → 首任务走 §1 全流程 →
-建 memory working-style 条目 → 建 DECISION_QUEUE）见 `references/onboarding-checklist.md`。
+新项目接入 7 步（bootstrap 治理骨架 → AGENTS.md 编排两节 → wire 强制层 hooks → 建 orchestration 目录 →
+首任务走 §1 全流程 → memory working-style 条目 → 建 DECISION_QUEUE）见 `references/onboarding-checklist.md`。
 
 ## 9. 主理人注意力与决策队列（降认知负载）
 
