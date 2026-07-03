@@ -31,7 +31,10 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 1. **Primary**: tail `$AGENT_WATCH_DIR/<session>.events`. Last STATE: `DONE`→exit 0, `WAITING`→exit 4,
    `WORKING`→keep polling. Reacts to the agent's real lifecycle, no glyph heuristics.
 2. **Backstop (kept from v1)**: liveness guard — `pane_current_command` back to a shell ⇒ AGENT-DEAD (exit 2),
-   for a hard crash where NO hook fires. Hang heuristic — STATE=WORKING but file stale + screen frozen ⇒ exit 3.
+   for a hard crash where NO hook fires. Hang heuristic — STATE=WORKING + events file stale ~6min AND
+   the screen is genuinely frozen (two captures ~3s apart identical) ⇒ exit 3. The frozen-screen
+   re-check is load-bearing: event-staleness ALONE false-positives during a long recon/sub-agent phase
+   where the pane is alive and repainting (observed 2026-07-03) — such a case defers instead of firing.
    Menu guard (B2) — before HANG ripens: stale ~1min + interactive-menu chrome in the pane tail
    (`enter select` / `Type to search`; override `AGENT_WATCH_MENU_RE`) ⇒ WAITING (exit 4), because an
    agent's ask-user menu may not fire its WAITING hook (实证 2026-07-02: omp clarify-menu emitted no

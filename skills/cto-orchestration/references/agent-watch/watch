@@ -104,8 +104,22 @@ for i in {1..260}; do
         tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 4
       fi
       if [ "$stalls" -ge 18 ]; then
-        echo "=== [$SESSION] SUSPECTED HANG at $(date '+%H:%M:%S') — WORKING, no new event ~6min ==="
-        tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 3
+        # The events file can stall for ~6min during a long recon/sub-agent phase while the
+        # pane is very much alive (spinner + sub-agent progress repainting). Event-staleness
+        # alone therefore false-positives HANG (observed 2026-07-03: omp mid-recon, sub-agent
+        # running, tripped exit 3). Before declaring HANG, ACTUALLY verify the screen is frozen
+        # (the condition this heuristic always claimed): two captures ~3s apart must be identical.
+        # Differ (spinner animating / progress moving) ⇒ alive ⇒ defer, don't over-fire.
+        snap1=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null)
+        sleep 3
+        snap2=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null)
+        if [ "$snap1" = "$snap2" ]; then
+          echo "=== [$SESSION] SUSPECTED HANG at $(date '+%H:%M:%S') — WORKING, no new event ~6min AND screen frozen ==="
+          printf '%s\n' "$snap2" | tail -30; exit 3
+        fi
+        # screen still moving → not hung; hold the stall counter just below threshold so we
+        # re-check on the next quiet stretch instead of waiting another full 6min.
+        stalls=17
       fi
     else stalls=0; fi
   fi
