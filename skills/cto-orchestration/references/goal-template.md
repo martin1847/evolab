@@ -23,7 +23,7 @@
 4. 文档：findings 写入 `docs/orchestration/<NAME>_<FINDINGS|IMPL>_omp.md`，
    含 what-changed / what-verified(真跑过) / NOT-verified / 剩余假设。
 
-## Done when（完成判定 — 逐条须有当前态证据，验证范围匹配声明范围）
+## Done when（完成判定 — 逐条须有**本次会话工具结果**级证据，非记忆中的旧结果；验证范围匹配声明范围）
 
 - [ ] <可验证后置条件：行为变了 / bug 不再复现 / 产出存在——写成"两个评审独立判会得同一 pass/fail"的无歧义形态>
 - [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立，E2E 范围匹配声明范围。
