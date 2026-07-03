@@ -25,12 +25,16 @@ def main():
     if not cmd:
         return 0
 
-    # (1) trailing shell-& backgrounding -> orphan. One regex covers `&`, `& disown`, `&disown`, and a
-    #     leading `& disown` (via `^`); `(^|[^&])` keeps `&&` chains / `2>&1` / quoted `&` allowed.
-    if re.search(r"(^|[^&])&[ \t]*(disown[ \t]*)?$", cmd):
+    # (1) shell-& backgrounding -> orphan. Catches a background `&` at the end of ANY line (re.MULTILINE),
+    #     or followed by `disown` / `;` — so it fires on the TRAILING form AND the mid-command form
+    #     `foo & \n more` / `foo & disown; more` / `foo & ; more` (a mid-string `&` launches a detached
+    #     job the orchestrator can't track; observed twice self-inflicted). `[^&>]` before the `&` keeps
+    #     `&&` chains, `2>&1` / `N>&M` / `&>` redirects, and quoted-then-text `&` allowed.
+    if re.search(r"(^|[^&>])&[ \t]*(disown\b|;|$)", cmd, re.MULTILINE):
         sys.stderr.write(
-            "DENY: trailing shell & -> ORPHAN (no completion callback; wrapper falsely reports done). "
-            "Drop the & and use the Bash tool run_in_background:true instead.\n"
+            "DENY: shell & backgrounding -> ORPHAN (no completion callback; the orchestrator can't track "
+            "it and the wrapper falsely reports done). This includes a mid-command `& \\n ...` / `& disown` "
+            "/ `& ;`, not just a trailing &. Drop the & and use the Bash tool run_in_background:true instead.\n"
         )
         return 2
 
