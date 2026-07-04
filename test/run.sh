@@ -26,7 +26,7 @@ run_one() { # $1 label  $2... command
 
 echo "######## agent-watch test suite ########"
 
-for t in emit.test.sh watch.test.sh scrape-fallback.test.sh ext-err-detection.test.sh dispatch-teardown.test.sh hook.test.sh cto-guard-bash.test.sh cto-guard-agent.test.sh retro-check.test.sh agent-mail-bus.test.sh; do
+for t in emit.test.sh watch.test.sh scrape-fallback.test.sh ext-err-detection.test.sh dispatch-teardown.test.sh hook.test.sh cto-guard-bash.test.sh cto-guard-agent.test.sh retro-check.test.sh agent-mail-bus.test.sh mirror-sync.test.sh; do
   echo
   echo "==== $t ===="
   run_one "$t" bash "$HERE/$t"

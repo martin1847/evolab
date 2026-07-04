@@ -1,0 +1,4 @@
+interface:
+  display_name: "Source Coding Discipline"
+  short_description: "Load coding discipline only for source-code tasks."
+  default_prompt: "Apply source coding discipline to this code task."
