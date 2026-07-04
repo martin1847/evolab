@@ -1,7 +1,7 @@
 ---
 name: agent-backend-standard
 version: 1.0.2
-description: 生产级 agent 时代后端工程手册(hub)——建 / 评审 agent·LLM 后端代码时加载。覆盖:架构与控制流、上下文与 prompt 工程、工具设计(ACI)、记忆与状态、检索/RAG、韧性与幂等、人在环、安全护栏与生成操作的有界执行、评估、可观测与成本、代码/依赖生命周期与反死代码、数据访问与写纪律、规范治理。本文件是目录,深度按需读 references/。可观测性/Git/A2A 对外契约是独立 skill,本 hub 交叉引用不重复。Use when building or reviewing agent/LLM backend code: architecture, prompts, tools, memory, RAG, resilience, HITL, safety & bounded execution of generated ops, eval, cost, code/dependency lifecycle, data-write discipline.
+description: 生产级 agent 时代后端工程手册(hub)——建 / 评审 agent·LLM 后端、**及任何碰 DB 的持久层后端**代码时加载(数据访问/连接/事务纪律是通用后端规则,非 agent 专属)。覆盖:架构与控制流、上下文与 prompt 工程、工具设计(ACI)、记忆与状态、检索/RAG、韧性与幂等、人在环、安全护栏与生成操作的有界执行、评估、可观测与成本、代码/依赖生命周期与反死代码、**数据访问纪律(连接·读·写事务)**、规范治理。本文件是目录,深度按需读 references/。可观测性/Git/A2A 对外契约是独立 skill,本 hub 交叉引用不重复。Use when building or reviewing agent/LLM backend code — or ANY backend touching a database (connection/transaction/read-write discipline is universal persistence-layer guidance, not agent-only): architecture, prompts, tools, memory, RAG, resilience, HITL, safety & bounded execution of generated ops, eval, cost, code/dependency lifecycle, data-access & connection/transaction discipline.
 ---
 
 # IM Agent Backend — 后端工程手册（hub）
