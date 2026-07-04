@@ -1,6 +1,6 @@
 ---
 name: observability-standard
-version: 1.1.1
+version: 1.1.2
 description: 生产级可观测性与工程规范,适用于**所有后端服务** —— 普通微服务(auth / 网关 / 业务服务)与 agent / 多 agent / RAG 知识库项目通用。核心:用 trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点、跨进程 W3C traceparent 传播、日志级别纪律、边界类型纪律(含 id 持久化:不往业务行塞 trace_id);agent / RAG 场景在此基线上加 LLM / 工具 / 检索埋点与 GenAI 语义约定。Use this skill whenever writing or reviewing backend code that involves logging setup, OpenTelemetry tracing, structured logs, cross-process context propagation, choosing log levels (INFO vs DEBUG), correlating logs / traces / db to debug, defining types for boundary or inter-service data — and additionally agent orchestration / sub-agents, LLM / tool / retrieval calls, or GenAI semantic conventions. 适用 Python / Go / Java / Rust。Apply it even when the user only says things like "加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪",不限于显式提到规范时。目标:trace_id 串 trace/log、业务 id 反查 db,让线上问题最快定位。
 ---
 
@@ -10,7 +10,7 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 写或评审**任何后端服务**的代码时应用 —— 普通微服务(auth / 网关 / 业务服务)与 agent / 多 agent / RAG 知识库项目一视同仁,尤其涉及:日志接入、OpenTelemetry 埋点、跨进程 context 传播、日志级别选择、跨 trace/log/db 排障、边界数据建模;**agent 场景额外**涉及编排与子 agent、LLM/工具/检索调用。Python / Go / Java / Rust 通用。即使用户只说"加点日志""接一下 trace""这个错查不到""这请求怎么追",也按本规范做。
 
 ## 总纲
-**用一条关联主线贯穿定位**:`trace_id` 串起 trace + log;业务库这一环靠**业务 id(order_id / run_id)同时挂成 span 属性**双向关联,**不在业务行存 `trace_id`**(trace 受采样 / 短保留,持久行存它多半是死指针 —— 见 references §2.1)。定位永远是
+**用一条关联主线贯穿定位**:`trace_id` 串起 trace + log;业务库这一环靠**业务 id 同时挂成 span 属性(`order.id` / `run.id`)**双向关联,**不在业务行存 `trace_id`**(trace 受采样 / 短保留,持久行存它多半是死指针 —— 见 references §2.1)。定位永远是
 `trace 或业务 id → 查 trace 看哪步 → 查 log 看为什么 → 按业务 id 查 db 看数据对不对`,不靠时间戳猜。
 
 ## 五条铁律(所有服务,全部遵守)
@@ -24,7 +24,8 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 - 结构化优先:`event_name + fields`,**绝不字符串拼接**。日志即数据,不即叙事。
 - 日志在活跃 span 内打出,`trace_id`/`span_id` 自动注入;**没有 `trace_id` 的 ERROR 视为 bug**。
 - 上下文绑一次贯穿全程(语言原生 ambient context 机制,见 references 附录 B),不手传。
-- 不要 log-and-throw;密钥/PII/客户机密在边界脱敏;LLM 完整 prompt/completion 走 DEBUG 或内容开关,不进默认日志。
+- 不要 log-and-throw;密钥/PII/客户机密在边界脱敏;**明文 prompt/completion = 数据披露闸**(显式 flag + 非 prod + 脱敏;audit 仅哈希),非日志级别。
+- 统一 named logger 树(`getLogger(__name__)` 等),级别由配置控,**不用 `os.getenv(DEBUG)` 门控单条日志**。
 - 必记(≥ INFO):决策点 + 依据、状态转移、每次跨进程 / LLM / 工具 / 检索调用的边界与结果状态、重试/回退/降级/补偿、每步 token + 成本(agent 场景)。
 
 ## 日志级别判据
@@ -36,11 +37,12 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 ## 要开的 span
 ### 核心(所有服务)
-- 入站 **server span**(root,带 `trace_id` / `tenant.id`,并把**业务 id**如 `order_id` / `run_id` 挂成 span 属性 → 供按业务 id 反查 trace),出站 **client span**(每次跨进程调用,**必须传 `traceparent`**),DB / 缓存 / 外部 API 子 span。
+- 入站 **server span**(root,带 `trace_id` / `tenant.id`,并把**业务 id**挂成 span 属性(`order.id` / `run.id`)→ 供按业务 id 反查 trace),出站 **client span**(每次跨进程调用,**先开 span 再传 `traceparent`**),DB / 缓存 / 外部 API 子 span。
 - 这三类基线 span **优先用官方 auto-instrumentation(自动 / 零代码)产出**(HTTP / gRPC / DB 驱动 / 框架中间件;包见 references 附录 C),手写 span 只补领域环节(下方 agent / LLM / 工具 / 检索)。
 
 ### Agent / RAG 扩展(在核心基线上加)
 - agent:`invoke_workflow`(编排)、`invoke_agent`(子 agent,带 `agent.role` + 路由依据)、`inference`(LLM,带 `gen_ai.request.model` / `gen_ai.usage.*_tokens` / `gen_ai.response.finish_reasons`)、`execute_tool`。prompt 版本挂 inference span(`prompt.name/version/variant/tenant`)。
+- **工具调用 envelope**:稳定 `tool_call_id`(**不复用框架 run_id**)、start+finalize 完整生命周期(别永停 `running`)、`tool_status` 枚举 + `error_type`/`duration_ms`。完整字段见 references §5.1。
 - **RAG 额外**开 `embedding` + `retrieval` span,记 query / top-k / 命中 chunk 的 **id+score** / 最终进上下文的 chunk id;**答案要可溯源到 chunk**。
 - LLM 场景设 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` 锁属性命名(GenAI 约定 2026 仍 experimental)。
 - 持久化执行(Temporal/DBOS/Restate/自建)恢复时会丢 trace context,须持久化 `traceparent` 并重建。

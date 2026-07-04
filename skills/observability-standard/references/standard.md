@@ -1,6 +1,6 @@
 # 服务可观测性与工程规范(语言无关)
 
-> 总纲:**用一条关联主线贯穿定位**。`trace_id` 串起 trace + log;业务库这一环靠**业务 id(`order_id` / `run_id`)同时挂成 span 属性**关联,**不在业务行存 `trace_id`**(见 §2.1)。
+> 总纲:**用一条关联主线贯穿定位**。`trace_id` 串起 trace + log;业务库这一环靠**业务 id 同时挂成 span 属性(`order.id` / `run.id`)**关联,**不在业务行存 `trace_id`**(见 §2.1)。
 > 定位问题永远是 `拿到 trace 或业务 id → 查 trace 看哪步 → 查 log 看为什么 → 按业务 id 查 db 看数据对不对`,绝不靠时间戳猜。
 >
 > 适用范围:**所有后端服务** —— 普通微服务(auth / 网关 / 业务服务)、以及 agent(单 agent、orchestrator/worker、流水线)、RAG/知识库;Python / Go / Java / Rust 通用。
@@ -11,9 +11,9 @@
 
 ## §1 五条普适铁律(语言/项目无关)
 
-1. **一次对外请求 = 一棵 trace**。入站请求 handler 是 root span;所有下游(DB / 缓存 / 跨进程调用 —— agent 场景下还有子 agent / LLM 调用 / 工具调用 / 检索)都是子 span。agent 编排场景额外给整棵 trace 一个 `run_id`。
+1. **一次对外请求 = 一棵 trace**。入站请求 handler 是 root span;所有下游(DB / 缓存 / 跨进程调用 —— agent 场景下还有子 agent / LLM 调用 / 工具调用 / 检索)都是子 span。agent 编排场景额外给整棵 trace 一个 `run.id`(span 属性键用点号,与 `tenant.id` 一致;业务库列名仍是 `run_id`)。
 2. **宽事件优先**:每个处理步骤输出一条富字段结构化事件,而非散文文本。事件名是稳定标识符(可聚合),变量进字段。指标从字段派生,不从 grep 派生。
-3. **三信号可关联**:trace 串 span;每条 log 带 `trace_id`+`span_id`(随 trace 同采样 / 保留);**业务 id(`order_id` / `run_id`)挂成 span 属性**以按业务 id 反查 trace。**不往业务行加 `trace_id` 列**——trace 被采样、保留期短,持久业务行存它多半成死指针(详见 §2.1)。
+3. **三信号可关联**:trace 串 span;每条 log 带 `trace_id`+`span_id`(随 trace 同采样 / 保留);**业务 id 挂成 span 属性(`order.id` / `run.id`)**以按业务 id 反查 trace。**不往业务行加 `trace_id` 列**——trace 被采样、保留期短,持久业务行存它多半成死指针(详见 §2.1)。
 4. **跨进程必传播 context**:任何跨进程边界(HTTP / gRPC / 消息队列 / agent-to-agent 协议)必须传播 W3C `traceparent`,入站 extract、出站 inject。**不传播 = trace 断成多棵互不相连的树 = 跨服务定位失效**。这是头号正确性要求,优先级高于功能。
 5. **标准在边界 + 后端无关**:跨进程、对外响应遵守 OTel 语义约定 + 类型校验;LLM 边界额外遵守 GenAI 语义约定;内部实现自由。**只依赖 OTel API/SDK + OTLP exporter,应用代码不 import 厂商 SDK(Langfuse / Datadog 等);标准组件优先用官方 auto-instrumentation(自动 / 零代码,包见附录 C)埋点,手写 span 只补领域环节;厂商差异只在 Collector / exporter 配置层 —— 换后端(SigNoz / ClickStack / Langfuse,均支持 OTLP)不改一行埋点。**
 
@@ -93,8 +93,9 @@
 4. **上下文绑一次贯穿全程**:进入一次 run 时绑 `run_id`/`tenant_id`/`agent_role`(语言原生 ambient context 机制,见 §6 附录 B),之后每条日志自动带,不手传。
 5. **不要 log-and-throw**:要么处理并记录,要么向上抛由处理者记录,别既记录又抛。
 6. **永不记录**:密钥/token/凭证、完整 PII、客户机密原文。在日志边界脱敏。
-7. **LLM 完整 prompt/completion 不进默认日志**:体积大且常含客户数据 → 走 DEBUG 或 OTel 内容捕获开关(opt-in、可采样)。
+7. **明文 model I/O = 数据披露闸,非日志级别**:记明文 prompt/completion MUST 同时满足 **显式 flag + 非 prod 环境 + best-effort 脱敏**(不是"调成 DEBUG 就行");audit / 持久溯源 **MUST 仅存哈希**,不留明文。
 8. **必记点(均 ≥ INFO)**:路由/决策点及其依据、状态转移、每次 LLM/工具/检索/跨进程调用的边界与结果状态、重试/回退/降级/补偿、每步 token 与成本(也作 metric)。
+9. **统一 logger 树 + 级别由配置控**:用语言原生 named logger(如 `getLogger(__name__)`)落统一树,**MUST NOT 自造 logger 名**;级别由 env/config 统一控,**MUST NOT 用 `os.getenv(...DEBUG...)` 之类门控单条日志**(级别是配置事,不是代码里逐条判)。
 
 ---
 
@@ -117,7 +118,7 @@
 ## §5 OTel Span 拓扑
 
 ### §5.0 服务基线拓扑(所有服务)
-任何服务的最小 span 拓扑:**入站 server span = root**(带 `trace_id` / `run.id`、`tenant.id`)→ 每次**出站 client span**(HTTP / gRPC / MQ,**必须 inject `traceparent`**)→ DB / 缓存 / 外部 API 子 span。trace 是请求在系统里的因果树;§5.1 / §5.2 是 agent / RAG 在此基线上的**增量**。
+任何服务的最小 span 拓扑:**入站 server span = root**(带 `trace_id` / `run.id`、`tenant.id`)→ 每次**出站 client span**(HTTP / gRPC / MQ;**先开 client span 再 inject `traceparent`**——使注入的 header 带真实 parent span)→ DB / 缓存 / 外部 API 子 span。trace 是请求在系统里的因果树;§5.1 / §5.2 是 agent / RAG 在此基线上的**增量**。
 
 **这三类基线 span 优先用官方 auto-instrumentation(自动 / 零代码)产出**,而非手写;手写 span 只补自动埋点拿不到的领域环节(§5.1 / §5.2)。各语言 auto-instrumentation 包见**附录 C**。
 
@@ -130,11 +131,15 @@
 
 | 概念 | OTel span / 操作 | 关键属性 |
 |---|---|---|
-| 编排 | invoke workflow span | `gen_ai.operation.name=invoke_workflow` |
+| 编排 | invoke workflow span | `gen_ai.operation.name=invoke_workflow`;root 业务属性 `run.id` / `tenant.id`(承自 §5.0) |
 | 调用子 agent | invoke agent span | `gen_ai.agent.name`, `agent.role`, 路由依据 |
 | 每次 LLM 调用 | inference span | `gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens`, `gen_ai.response.finish_reasons` |
-| 每次工具调用 | execute tool span | 工具名、入参标识符、结果状态 |
+| 每次工具调用 | execute tool span | `tool_call_id`、`tool_name`、`tool_status`、`error_type`、`duration_ms`、`resource_identifier`(详见下「envelope 纪律」) |
 | prompt 版本 | 挂在 inference span 上 | `prompt.name/version/variant/tenant` |
+
+**工具调用 envelope 纪律(MUST)**:每个工具调用落一条结构化记录(execute_tool span / 持久 envelope),字段 ≥ `tool_call_id` / `tool_name` / `tool_status` / `error_type` / `duration_ms` / `trace_id` / `span_id` / `resource_identifier`。两条硬约束:
+- **稳定显式 id**:`tool_call_id` MUST 显式生成且稳定;**MUST NOT 复用底层框架的 run_id 当持久 id**——否则 parent→child→provider 跨跳无法 join。
+- **完整生命周期**:start **与** finalize 都要写,`tool_status` 必终结到 `success`/`failed`/`timeout`/`cancelled`/`blocked`;**只写 start 会让记录永停 `running`**(常见实漏)。
 
 拓扑铁律:子 agent 之间若不直连、只经编排者中转,则所有 agent span 都挂在编排 span 下,trace 天然呈**树**(= 编排拓扑的镜像),而非网,便于定位。
 
@@ -211,7 +216,7 @@
 - [ ] LLM / agent 场景:`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` 已设
 - [ ] 埋点只依赖 OTel API/SDK + OTLP;应用代码无厂商 SDK import;标准组件用 auto-instrumentation(包见附录 C);厂商差异在 Collector / exporter 层
 - [ ] RAG 项目:开 embedding/retrieval span;答案可溯源到 chunk id
-- [ ] 业务实体 id(`order_id` / `run_id`)是 span 属性 → 可按业务 id 反查 trace(零新增列);**不往业务行加 `trace_id` 列**
+- [ ] 业务实体 id 作 span 属性(`order.id` / `run.id`)→ 可按业务 id 反查 trace(零新增列);**不往业务行加 `trace_id` 列**
 - [ ] 持久溯源(AI 决策 / 金额 / 对客输出 / 合规)落自己拥有的 `correlation_id`,进专用审计 / outbox store(非热表);`trace_id` 仅作受采样 / 保留约束的尽力而为链接
 - [ ] 对外响应回带 `trace_id`(调试)+ 业务 id
 - [ ] **本规范的每条铁律都绑了 CI gate(见 §9),不是只写在文档里**

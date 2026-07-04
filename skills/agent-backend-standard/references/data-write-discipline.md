@@ -22,9 +22,28 @@
 ## 2. 业务关键写 —— 保留事务/同步/强一致
 订单、支付、状态机扭转、余额、任何需与其它写原子绑定或"不能丢"的写。**判不准时按"关键写"处理。**
 
+**⚠️ 但"保留事务"≠"持锁跨 LLM/外部/async"——这条对关键写同样是 MUST(实证补强)。**
+"关键写"保留的是**原子性/一致性**,不是"把事务/行锁持开很久"。§1.2「绝不在 LLM/外部调用期间持有 DB 事务」
+**对业务关键写(含状态机扭转)一样适用**——最易误读的点:把写判成"关键"→"保留事务"→就把 `FOR UPDATE`/事务
+**持过了下游执行/LLM/外部调用**,正中 idle-in-transaction 反模式。**§2 只说"保留事务"、不重复这条 caveat 时,反而
+把状态机写指向这个坑。**
+
+**正确姿势 = 短原子写 + 锁外执行**:
+- 状态机扭转用**单条原子语句**完成 claim/迁移,拿 `RETURNING` 判成败、**立即释放**;队列 claim 用
+  `UPDATE ... WHERE id=(SELECT id ... WHERE status='queued' ... FOR UPDATE SKIP LOCKED) RETURNING *`
+  ——`FOR UPDATE` 只活在这一条语句内(微秒),绝不跨 app await。
+- LLM / 执行 / task-status 同步之类下游工作,一律在**原子写提交之后、任何持锁之外**做。
+- 需与其它写原子绑定 → 用**短事务**包住那几个写即可,同样不跨任何 LLM/外部/async。
+
+**实证(某 agent 服务的委派队列)**:worker claim 用 `SELECT ... FOR UPDATE` 持锁后 await 执行 / task-status
+同步,行锁横跨整段——线程模式下直接死锁;prefork(多进程)部署下持 idle-in-transaction 事务 **279s+ 不释放**。
+改单条原子 `UPDATE ... FOR UPDATE SKIP LOCKED ... RETURNING` 后根除。
+**机械判据(可 lint,进硬层)**:任何 `with_for_update()` / `FOR UPDATE` 之后、同一事务作用域内 `await` 非 DB 工作
+(LLM/tool/http/子任务)= 反模式,不论是不是"关键写";`@transaction` 方法体内 `await` 外部调用同理。
+
 ## 3. 一句话
 > 记账型写(计数/时间戳/统计,best-effort 可丢):**移出主链路 + 不借业务事务 + per-statement 提交 + 批量服务端增量**;热行列不加索引。
-> 业务关键写:保留事务与同步语义。
+> 业务关键写:保留原子性/一致性 —— 但**同样不持锁跨 LLM/外部/async**(短原子写 `... FOR UPDATE SKIP LOCKED ... RETURNING` + 锁外执行)。
 > "去事务" = 显式 autocommit,不是省 BEGIN;批量计数 = 服务端 `+= delta`,不是写绝对值。
 
 ## 来源

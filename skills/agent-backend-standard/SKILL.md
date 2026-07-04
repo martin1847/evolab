@@ -1,6 +1,6 @@
 ---
 name: agent-backend-standard
-version: 1.0.1
+version: 1.0.2
 description: 生产级 agent 时代后端工程手册(hub)——建 / 评审 agent·LLM 后端代码时加载。覆盖:架构与控制流、上下文与 prompt 工程、工具设计(ACI)、记忆与状态、检索/RAG、韧性与幂等、人在环、安全护栏与生成操作的有界执行、评估、可观测与成本、代码/依赖生命周期与反死代码、数据访问与写纪律、规范治理。本文件是目录,深度按需读 references/。可观测性/Git/A2A 对外契约是独立 skill,本 hub 交叉引用不重复。Use when building or reviewing agent/LLM backend code: architecture, prompts, tools, memory, RAG, resilience, HITL, safety & bounded execution of generated ops, eval, cost, code/dependency lifecycle, data-write discipline.
 ---
 
@@ -22,7 +22,7 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 - **II-5 记忆 / 状态 / 持久** —— session/state、stateless-reducer、pause/resume。*TBD*
 - **II-6 检索 / RAG / grounding** —— chunking、faithfulness、向量弱点。*TBD*
 - **II-7 韧性 / 错误 / 幂等** → `references/resilience.md` —— 每个外部/LLM/工具调用:超时 + 有界重试 + 幂等 + 熔断 + 池/并发。
-- **II-8 人在环(HITL)** —— escalation 作一等工具、触发阈值。*TBD*(交叉引 A2A 对外契约规范 clarify/approve 协议)
+- **II-8 人在环(HITL)+ resume 安全** → `references/hitl-resume-safety.md` —— 可恢复 flow 的 resume 安全:**六道闸**防御(持久 checkpoint 校验请求 ctx、fail-closed、runtime 层)。clarify/approve 协议交叉引 A2A 对外契约规范。
 - **II-9 安全 · 护栏 · 生成操作的有界执行** → `references/safety-bounded-execution.md` —— 执行不可信生成操作(尤 SQL)的硬边界、安全分层、workflow 迭代上限。
 
 ## Book III — Operations & Governance
@@ -32,7 +32,7 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 
 ## 附(本仓并入,非 agent 专属但同一触发)
 - **A 代码 / 依赖生命周期 + 反死代码** → `references/code-dependency-lifecycle.md` —— 引入即退役(ADR-with-sunset)、stale-but-live(`EXPIRES`/`REVISIT-WHEN`)、**功能旗标生命周期(分类 + 毕业/退休 + 登记册)**、死代码检测 + 盲区、反 bloat、清扫。
-- **B 数据访问与写纪律** → `references/data-write-discipline.md` —— 记账写:移出主链路 / 不跨 LLM 持锁 / per-statement / 批量服务端增量;关键写保留事务。
+- **B 数据访问与写纪律** → `references/data-write-discipline.md` —— 记账写:移出主链路 / 不跨 LLM 持锁 / per-statement / 批量服务端增量;**关键写保留原子性但同样不持锁跨 LLM/执行**(短原子写 + 锁外执行)。
 
 ## 关联(独立 skill,不在本 hub 重复)
 - 埋点 / telemetry → `observability-standard`;Git SOP → `git-workflow-standard`;A2A 对外契约 → A2A 对外契约规范。
