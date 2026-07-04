@@ -1,6 +1,6 @@
 ---
 name: agent-mail
-version: 0.1.0
+version: 0.1.1
 description: 多编排者/长期 agent 身份之间的异步信箱总线——发信、收信、回信、归档、名册注册。每个身份一个 inbox，一封信只有一个去处（收件人 inbox），收信只查自己信箱。触发：给另一个编排者/CTO/agent 写信或提议、查我的信箱、跨编排者协调、看有哪些注册身份。可选伴随 cto-orchestration 使用（多编排者场景）。Use when writing to / reading mail from another orchestrator agent, coordinating across orchestrators, or managing the agent roster.
 ---
 
@@ -67,10 +67,10 @@ bus roster                                    # 打印名册
 ## 接入（新席位，两步，本 skill 自包含——不依赖任何编排 skill 的清单）
 
 1. **注册**：`bus register <席位id> <项目根绝对路径> <职责一句话>`（名册加行 + 信箱建好）。
-2. **wire 收信提醒 hook**：项目 settings.json（如 `.claude/settings.json`）加
-   `SessionStart → <skill绝对路径>/mail-check.py`（零参数——身份靠名册 workdir 反查、子目录也认；
-   hooks 不展开 `~`，用绝对路径）。开 session 即冒泡"你有 N 封未处理信"——「记得查信箱」不再靠记忆
-   （软规则必衰减，这是 forcing function）。接完设 `AGENT_MAIL_SELF=<席位id>` 跑一次脚本**验真触发**
+2. **wire 收信提醒 hook**：**entry 真源 = 本 skill `hooks.json`（别抄散文）**——读它、command 换安装根
+   绝对路径（hooks 不展开 `~`、不加 `python3 ` 前缀），并进项目 settings 的 SessionStart。开 session 即
+   冒泡"你有 N 封未处理信"——「记得查信箱」不再靠记忆（软规则必衰减，这是 forcing function；身份零参数，
+   靠名册 workdir 反查、子目录也认）。接完设 `AGENT_MAIL_SELF=<席位id>` 跑一次**验真触发**
    （有信应出 JSON、空箱应静默），别只信"配了"。
 
 ## 远程信箱（跨网络边界的收件人）

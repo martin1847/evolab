@@ -1,0 +1,6 @@
+{
+  "//": "agent-mail wiring 真源（canonical entries）。接入=把 command 换成本 skill 安装根的绝对路径（hooks 不展开 ~、不加 python3 前缀——脚本自带 shebang 直接 exec），并进项目 settings 的 SessionStart（CC .claude/settings.json；Codex/omp 见 SKILL「远程信箱」与接入节说明）。",
+  "SessionStart": [
+    { "command": "mail-check.py" }
+  ]
+}

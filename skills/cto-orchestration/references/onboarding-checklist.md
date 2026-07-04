@@ -8,8 +8,8 @@
    防漂移）+ ②编排者行为内核（人格纪律 + 角色绑定；放 AGENTS.md 使 CC/codex/omp 任一坐编排位
    都吃到，均实测）。是 bootstrap 宪法没有的编排增量（不重复 Work Modes）。
 3. **wire 强制层 hooks**：`cto-guard-bash.py` + `cto-guard-agent.py` 两条 entry 并进 bootstrap §11 已建的
-   settings.json（路径用**绝对路径**——hooks 不展开 `~`；entry 全文见 `references/agent-watch/README.md`
-   §Wiring）；接完各喂一条合成 payload **验真触发**（尾随 `&` 应 deny、browser 派发应出提醒），别只信"配了"。
+   settings.json（路径用**绝对路径**——hooks 不展开 `~`；entry 真源 `references/agent-watch/guard-hooks.json`——读它、
+   command 换安装根绝对路径后 merge，别抄散文；细节 README §Wiring）；接完各喂一条合成 payload **验真触发**（尾随 `&` 应 deny、browser 派发应出提醒），别只信"配了"。
    （多编排者场景装了 `agent-mail` 的，其席位注册 + 收信 hook 由该 skill 自己的「接入」节自包含，不在本清单。）
 4. 建 `docs/orchestration/` + `docs/orchestration/archive/` 目录（生命周期见 SKILL §5）。
 5. 第一个任务走一遍 SKILL §1 全流程，校准该项目的忙碌标记/工具链差异。

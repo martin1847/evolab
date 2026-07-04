@@ -1,0 +1,10 @@
+{
+  "//": "cto-guard wiring 真源（canonical entries）。接入=把 command 前缀替换为本 skill 安装根的绝对路径（hooks 不展开 ~、不加 python3/bash 前缀——脚本自带 shebang 直接 exec），按 event 并进项目 settings（CC .claude/settings.json / Codex .codex/hooks.json 同格式）。matcher 与脚本实现同包维护，一致性由发布门校验（skill-polish-check #4）。",
+  "PreToolUse": [
+    { "matcher": "Bash", "command": "references/agent-watch/cto-guard-bash.py" },
+    { "matcher": "Agent|Task|TaskStop|KillShell", "command": "references/agent-watch/cto-guard-agent.py" }
+  ],
+  "PostToolUse": [
+    { "matcher": "Agent|Task", "command": "references/agent-watch/cto-guard-agent.py" }
+  ]
+}

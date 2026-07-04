@@ -67,9 +67,14 @@ for arr in d.get("hooks",{}).values():
   bad=0
   while IFS= read -r c; do
     [ -z "$c" ] && continue
-    case "$c" in /*|"python3 /"*|"bash /"*) : ;; *) bad=$((bad+1));; esac
+    # BARE absolute path only — interpreter prefixes (python/python3/bash/sh) are works-by-luck
+    # (bet on PATH/venv; scripts ship shebang+exec bit). Tightened after a live audit hit.
+    case "$c" in /*) : ;; *) bad=$((bad+1));; esac
   done <<< "$cmds"
-  chk_eq "all hook paths absolute" 0 "$bad"
+  chk_eq "all hook commands are bare absolute paths (no interpreter prefix)" 0 "$bad"
+  # matcher must come from the shipped truth-source (guard-hooks.json), not from stale prose copies —
+  # KillShell only exists in the truth-source, so its presence proves the source was actually read
+  chk_contains "matcher taken from truth-source (has KillShell)" "KillShell" "$(cat "$SJ")"
 fi
 
 # ④ orchestration dirs + decision queue
