@@ -28,6 +28,14 @@
         "."
       ],
       "description": "多编排者/长期 agent 身份之间的异步信箱总线——单一去处 inbox、名册注册、纯 bash helper；信箱数据活在 ~/.agents/mail（skill 之外）。cto-orchestration 的可选伴随。"
+    },
+    {
+      "name": "source-coding-discipline",
+      "source": "./skills/source-coding-discipline",
+      "skills": [
+        "."
+      ],
+      "description": "写码纪律的 skill 形态（先思考/简单优先零投机/外科手术式/目标驱动+验证诚实）——给不支持条件 rules 的 agent（如 codex）；与 templates/rules/coding.md 镜像对（硬门锁同步），同一 agent 二选一勿同装。"
     }
   ]
 }

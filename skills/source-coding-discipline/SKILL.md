@@ -1,5 +1,6 @@
 ---
 name: source-coding-discipline
+version: 0.1.0
 description: Use when a task involves reading, editing, reviewing, testing, debugging, refactoring, or otherwise working with source code files. Source paths include **/*.{py,ts,tsx,js,jsx,mjs,go,rs,java,kt,swift,rb,c,cc,cpp,h,hpp,sh,bash,zsh,sql,vue,svelte}. Do not use for docs-only, planning-only, or non-code file tasks unless the task also touches source code.
 ---
 

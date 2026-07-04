@@ -55,6 +55,22 @@ SESSION="${2:?session}"
 CWD="${3:?cwd}"
 shift 3 2>/dev/null || true
 EXTRA="$*"
+# `--goal <file>` fuses launch + goal-delivery + hook-verify + watch into ONE call: invoke this whole
+# command via the Bash tool's run_in_background (NOT shell `&`) — no separate send step, no separate
+# `watch` step to slip an `&` onto. Watch arms AUTOMATICALLY with --goal (there is no --watch flag:
+# goal-without-watch has no doctrine-legit case, and watch-without-goal watches an idle agent and
+# exits immediately — a flag that must only be used with another flag is an API footgun; removed at
+# the source, design > guard). Two-step flows (codex multi-round brief) just don't pass --goal.
+WATCH_MODE=0; GOAL=""
+set -- $EXTRA; REST=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --goal)  shift; GOAL="${1:-}"; WATCH_MODE=1 ;;
+    *)       REST="$REST $1" ;;
+  esac
+  shift 2>/dev/null || break
+done
+EXTRA="$REST"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
 ENVP="AGENT_WATCH_SESSION=$SESSION AGENT_WATCH_DIR=$DIR"
@@ -97,4 +113,27 @@ esac
 tmux new-session -d -s "$SESSION" -c "$CWD" "$CMD"
 echo "dispatched $AGENT → tmux session '$SESSION' (cwd $CWD)"
 echo "events : $DIR/$SESSION.events"
-echo "monitor: bash $HERE/watch $SESSION"
+if [ -n "$GOAL" ]; then
+  [ -e "$GOAL" ] || { echo "ERR: --goal file not found: $GOAL" >&2; exit 1; }
+  sleep 2  # let the agent TUI come up before delivering
+  echo "── delivering goal via send: $GOAL ──"
+  bash "$0" send "$SESSION" -f "$GOAL" || echo "WARN: goal delivery reported non-zero (check the session)"
+fi
+if [ "$WATCH_MODE" = 1 ]; then
+  # verify hook wired (first WORKING sentinel within ~12s) — same load-bearing check as the old
+  # foreground "起后立刻验 hook" step, just written to output instead of returned synchronously.
+  ok=0
+  for _ in 1 2 3 4 5 6; do
+    sleep 2
+    grep -q "WORKING" "$DIR/$SESSION.events" 2>/dev/null && { ok=1; break; }
+  done
+  if [ "$ok" = 1 ]; then
+    echo "hook: WORKING sentinel present — hook wired ✓ (Read this output line to confirm, then wait for the completion notification)"
+  else
+    echo "hook: NO sentinel after 12s — hook not wired / codex untrusted / agent slow. watch falls back to scrape; if you meant hook-primary, STOP and re-dispatch."
+  fi
+  echo "── handing off to watch (blocks until terminal state; this background task completes when the agent is DONE/WAITING) ──"
+  exec bash "$HERE/watch" "$SESSION"
+else
+  echo "monitor: bash $HERE/watch $SESSION   (or dispatch with --goal <file> to fuse launch+goal+watch into one run_in_background call)"
+fi

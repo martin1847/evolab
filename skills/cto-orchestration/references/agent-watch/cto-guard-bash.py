@@ -101,7 +101,7 @@ def main():
     # not git policy. Don't re-add push checks here.
 
     m = re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
-    if m:
+    if m and "--goal" not in cmd:  # `dispatch … --goal` auto-arms the in-process watch → no reminder needed
         session = m.group(2)
         if not re.search(r"\bwatch[\"'\s]+" + re.escape(session) + r"\b", cmd):
             ctx = (

@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.2.8
+version: 1.2.9
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -56,8 +56,12 @@ metadata:
    行；见 `no sentinel (hook not wired) → fallback` = 没走 dispatch / codex 未 trust hook → **停下重起、
    别带病跑**。**派发后、动手前先过理解门**：第一轮要 agent 复述"碰哪些文件/契约、有哪些风险"，核对无误
    再放行；弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
-4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：agent 已在 step 3 用 `dispatch`
-   起好，本步只 `watch <session>` 监控 + 收工 `teardown`。四条判据；机制全文 + typed 状态全枚举 +
+4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：**首选融合 `dispatch <agent> <session> <cwd> --goal <goal文件>`
+   一条命令用 Bash 工具 `run_in_background:true` 调一次**——内建 launch→送 goal(agent 转 WORKING)→验 hook→**自动 watch**，
+   把"dispatch 后单独 send + 单独 `watch &`"三步收成一次调用，最高频的 `watch &` slip 从设计上无处发生（design > guard；
+   无独立 `--watch` flag——goal 不 watch 无正当场景、watch 无 goal 是看一个空转 agent 立即退出，"必须与另一 flag 同用的 flag"
+   本身就是 API 脚枪，源头删除）。派发后 Read 一次输出确认 `[send] OK…WORKING` + `hook: WORKING ✓`。
+   codex 评审(需先送 brief 再多轮)或首启 codex 目录信任提示的场景，仍用两步(`dispatch` 起 → `dispatch send` brief → 单独 `watch`，**必 run_in_background 禁 `&`**)。收工 `teardown`。四条判据；机制全文 + typed 状态全枚举 +
    STALLED-EXTERNAL / 异步完成通知黑洞 / 正向证据两坑 / fallback 自检 / cto-guard 实证见该目录 README：
    - **typed 状态存在、DEAD≠DONE、WAITING 要回输入**（别把 idle / watcher 裁决当终态）。
    - **判完成要正向证据、不凭 idle / watcher 裁决**——tmux 链路无失败信号、watcher 裁决只是线索；把完成绑

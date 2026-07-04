@@ -82,6 +82,9 @@ chk_contains "reminder names the session" "mysess" "$(ctx "$OUT")"
 # dispatch WITH watch on the same session in the same command -> silent (no double-nag)
 run 'dispatch omp mysess /wt && bash references/agent-watch/watch mysess'
 chk_eq "dispatch + watch same cmd exit 0" 0 "$RC"; chk_eq "dispatch + watch silent" "" "$OUT"
+# fused `dispatch … --goal g` auto-arms the watch in-process -> no reminder either (no --watch flag exists)
+run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
+chk_eq "fused --goal exit 0" 0 "$RC"; chk_eq "fused --goal silent (auto watch)" "" "$OUT"
 # non-dispatch command -> silent
 run 'git status'
 chk_eq "non-dispatch silent" "" "$OUT"
