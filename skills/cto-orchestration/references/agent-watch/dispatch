@@ -9,7 +9,48 @@
 # Usage:   dispatch <omp|codex|claude> <session> <cwd> [extra agent args...]
 # Monitor: watch <session> [busy-marker]
 set -uo pipefail
-AGENT="${1:?usage: dispatch <omp|codex|claude> <session> <cwd> [args...]}"
+HERE_EARLY="$(cd "$(dirname "$0")" && pwd)"
+RUN_EARLY="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
+
+# ── subcommand: dispatch send <session> -m "<text>" | -f <file> ───────────────
+# Safely deliver a follow-up instruction (理解门放行 / 回修 / steering) to a RUNNING
+# session AND verify it landed. Fixes the recurring stall: long 中文/①②③/全角冒号/@
+# send-keys triggers omp's skill-popup that EATS Enter → message stuck in buffer, session
+# sits idle, watcher can't tell "waiting for release" from "release didn't land" (2026-07-04
+# 实证卡 24min). So: write instruction to a FILE, send-keys only a short ASCII "read <file>",
+# clear any popup first, then poll events to CONFIRM transition to WORKING; retry once, warn if stuck.
+if [ "${1:-}" = "send" ]; then
+  sess="${2:?dispatch send <session> -m <text> | -f <file>}"; mode="${3:?-m|-f}"; arg="${4:?text-or-file}"
+  case "$mode" in
+    -f) file="$arg";;
+    -m) file="$(mktemp /tmp/dispatch-send-${sess}-XXXX.md)"; printf '%s\n' "$arg" > "$file";;
+    *) echo "usage: dispatch send <session> -m <text> | -f <file>" >&2; exit 1;;
+  esac
+  [ -e "$file" ] || { echo "instruction file not found: $file" >&2; exit 1; }
+  ev="$RUN_EARLY/$sess.events"; before="$(wc -l < "$ev" 2>/dev/null || echo 0)"
+  deliver() {
+    tmux send-keys -t "$sess" Escape 2>/dev/null || true; sleep 0.6
+    tmux send-keys -t "$sess" C-u 2>/dev/null || true; sleep 0.4
+    tmux send-keys -t "$sess" "read $file and follow it strictly, then stop-and-report" 2>/dev/null; sleep 0.6
+    tmux send-keys -t "$sess" Enter 2>/dev/null
+  }
+  # landed = agent started processing. Two signals: (a) omp writes "WORKING turn_start" to the events
+  # file; (b) codex has NO events sentinel (its hook doesn't emit turn_start) -> fall back to the pane
+  # busy marker ("Working (… esc to interrupt" / "esc to interrupt" / "Running"). Without (b) this
+  # ALWAYS false-negatives on codex sessions (empty events file) and cries STUCK on a message that landed fine.
+  landed() { local n; for _ in 1 2 3 4 5; do sleep 2
+    n="$(wc -l < "$ev" 2>/dev/null || echo 0)"
+    [ "$n" -gt "$before" ] && tail -n +"$((before+1))" "$ev" 2>/dev/null | grep -q "WORKING turn_start" && return 0
+    tmux capture-pane -t "$sess" -p 2>/dev/null | grep -qiE "esc to interrupt|Working \(|^[[:space:]]*Running " && return 0
+  done; return 1; }
+  echo "[send] delivering '$file' → '$sess', verifying WORKING…"; deliver
+  if landed; then echo "[send] OK — '$sess' is WORKING (landed)."; exit 0; fi
+  echo "[send] WARN — no transition in 10s; retry once (popup may have eaten Enter)."; deliver
+  if landed; then echo "[send] OK on retry."; exit 0; fi
+  echo "[send] STILL STUCK — TUI may be wedged. inspect: tmux capture-pane -t $sess -p | tail -8" >&2; exit 2
+fi
+# ── launch mode (default) ─────────────────────────────────────────────────────
+AGENT="${1:?usage: dispatch <omp|codex|claude> <session> <cwd> [args...]  |  dispatch send <session> -m/-f …}"
 SESSION="${2:?session}"
 CWD="${3:?cwd}"
 shift 3 2>/dev/null || true

@@ -16,9 +16,9 @@
 **判据**：纯 CLI 验不了前端渲染；纯 MCP 抓 SSE 时序笨。一个前端 fix 的最优是**混合**——
 MCP 驱动登录+渲染验证+网络诊断，CLI 抓 SSE/API ground-truth。
 
-> **为何 Playwright 优先**：独立 context、不与用户真实 Chrome 争 CDP、localhost E2E 实测稳；chrome-devtools MCP
-> 实测会与用户浏览器 + 多 agent 争用 CDP、易断连，仅当**必须 attach 用户已登录的真实会话**才值得。
-> 派浏览器子 agent 时在提示词里写明"优先 Playwright MCP"。
+> **Playwright 优先 = 硬规则(P0a hook 强制,不靠记得)**：独立 Chromium、不争用户 Chrome 的 CDP;chrome-devtools
+> 会与用户浏览器+多 agent 争 CDP 断连(实测坑两次),仅当必须 attach 用户已登录会话才值得。**派浏览器子 agent 的
+> prompt 里出现 `mcp__chrome-devtools` → `cto-guard-agent.py` PreToolUse:Agent 直接 DENY,逼你改 Playwright。**
 
 ## 联调铁律
 

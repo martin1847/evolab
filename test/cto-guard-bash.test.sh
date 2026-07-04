@@ -44,6 +44,19 @@ chk_eq "embedded quotes/braces allowed" 0 "$RC"
 # `&& disown` is a (nonsensical) && chain, not a trailing-& backgrounding -> allowed (one-regex simplification)
 run 'a && disown'
 chk_eq "&& disown allowed (not a bg &)" 0 "$RC"
+# mid-chain backgrounding `foo & bar` (background-then-chain) — the 2026-07-04 blind spot, now DENY
+run 'nohup poll.sh & echo started'
+chk_eq "background-then-chain denied" 2 "$RC"
+
+# (4) raw tmux send-keys with CJK / long payload -> DENY (popup eats Enter); safe path passes
+run 'tmux send-keys -t s1 "请把理解门复述发我，确认后开工①②③" Enter'
+chk_eq "send-keys CJK denied (exit 2)" 2 "$RC"; chk_contains "send-keys deny points to dispatch send" "dispatch send" "$ERR"
+run 'tmux send-keys -t s1 Escape'
+chk_eq "send-keys control key allowed" 0 "$RC"
+run 'tmux send-keys -t s1 "read /tmp/goal.md" Enter'
+chk_eq "send-keys short ASCII allowed" 0 "$RC"
+run 'bash references/agent-watch/dispatch send s1 -m "长中文放行指令：按评审意见回修①②"'
+chk_eq "dispatch send safe path allowed" 0 "$RC"
 
 # (2) naive idle==done poller, DENY
 run 'while true; do tmux capture-pane -p | grep Working; sleep 5; done'

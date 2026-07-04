@@ -35,6 +35,7 @@ metadata:
 | watcher | 轮询"存活+忙碌+等输入"返 typed 状态 | `references/agent-watch/`（dispatch/watch/teardown + hook；hook 主信号、抓屏降级）|
 
 **默认 omp 执行、codex 评审，不倒置**——omp(oh-my-pi+Opus)强在自主执行、codex(gpt)强在严苛评审，交叉评审屡抓双方都漏的真问题。
+**两条派工载体，按任务选**：① **tmux omp/codex** = 实现 + 对抗评审 + 需 steering/多轮回修（可 `dispatch send` 引导、watcher 取终态、会话持久）——核心开发循环走这条；② **Agent-工具 subagent** = 浏览器 E2E / 研究 / 读密集一次性（能载我的 MCP 如 Playwright、大 a11y 快照隔离在子上下文外、直接返结论、无 tmux 开销）。别用 subagent 干需反复 steering 的实现活、也别用 tmux omp 干要 MCP 的浏览器验。**派 Agent-工具 subagent 必显式 `model:"opus"`(4.8)/`"sonnet"`(5)**——不设=继承主会话模型(可能是弱模型)；fork 例外。见 [[subagent-model-opus]]。
 **编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位）；§1.4 的 watcher 起法/忙碌·存活信号按你的工具校准，`requires.bins` 的 tmux/omp/codex 是参考栈、非硬依赖。
 **多个编排者并行**（各管一摊）时，跨席位异步通信用可选伴随 skill `agent-mail`（信箱总线、各自 inbox 单一去处）。
 
@@ -64,22 +65,32 @@ metadata:
      是陷阱**——每个 part 边界都 idle 一瞬，裸 idle/「首个 commit」中途误判（实证：3-part 重构的瞬时 idle 骗过手搓轮询）。
    - **纯事件驱动会盲等 → 设超时上限兜底**：按预期时长 ×2 设 fallback 自检（`ScheduleWakeup`/cron），到点无终态
      主动 capture-pane——治 "WORKING 卡死/热重试" 的**永不 DONE**（与上条**假 DONE** 是两个失败态）。
-     **浏览器/E2E subagent 的完成通知会黑洞**（活着的 Playwright 会话/dev server/bg fork 让通知不触发）——
-     **派发即配 deadline 正向证据 watch**（输出文件增长/新截图/里程碑 SendMessage），到点没动 SendMessage 戳、再 kill+重启。
-   - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿 + 误判失联）；唯一后台正路 = Bash 工具 `run_in_background`。
-   - **强制层（防复发靠结构不靠自律——光记规则没用，我有规则还违反过）**：上述三坑已代码化——
-     `cto-guard-bash.py`（PreToolUse·Bash：DENY 尾随 `&`、DENY 无正向 grep 的裸 idle 轮询、dispatch 未挂 watch 提醒）+
-     `cto-guard-agent.py`（PostToolUse·Agent|Task：browser 派发注入 deadline-watch 提醒）。wiring 并进
-     `repo-governance-bootstrap` §11 的 settings.json（CC frontmatter `hooks:` 实测 mid-session 不注册、不靠它）；
-     全表 + entry 见 `references/agent-watch/README.md` §Wiring。
+     **浏览器/E2E subagent 完成通知会黑洞**（活 Playwright/dev server/bg fork 让通知不触发）——**派发即配 deadline
+     正向证据 watch：盯输出文件增长 + 里程碑 SendMessage（别数截图——a11y 驱动 agent 只产快照不产图片，"零截图"≠卡死，
+     2026-07-04 据此误杀两个在跑 agent）**，到点没动先 SendMessage 戳、确认卡死再 kill。
+   - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿）；唯一后台正路 = Bash 工具 `run_in_background`。
+   - **强制层（结构不靠自律——不 fire 的散文=净负债，见 memory `ineffective-prose-net-negative`）**：坑已代码化，
+     wiring 见项目 `.claude/settings.json` + README §Wiring：
+     - `cto-guard-bash.py`（PreToolUse·Bash）：DENY 背景 `&`（剥引号后任意单 `&`）· DENY 无正向 grep 的裸 idle 轮询 ·
+       DENY 长/CJK 裸 send-keys（逼 dispatch send，check4）· DENY `git push`/`gh pr create` 缺 `.local-e2e-pass`（check5）· dispatch 未挂 watch 提醒。
+     - `cto-guard-agent.py`（Pre+Post·Agent|Task|TaskStop）：DENY 浏览器派发用 chrome-devtools（逼 Playwright，P0a）·
+       DENY TaskStop 杀"输出 120s 内还在长"的活 agent（P0b；override=`touch /tmp/cto-allow-kill-<id>`）· browser 派发注入黑洞提醒。
 5. **steering / 放行（理解门后 + 回修 + 新指令）**：**一律用 `references/agent-watch/dispatch send <session> -m "…"`（或 `-f <file>`）交付，别裸 send-keys 长中文**。
    它强制安全路径 + 补上缺的验证环：先 `Escape`+`C-u` 清掉可能卡住的弹窗 → 只 send-keys **短 ASCII "read <file>"**（长中文/①②③/全角冒号会触发 omp 弹窗吃掉 Enter）→ 提交 → **轮询 events 确认真转 `WORKING`**，没转就重试+告警。
    **为什么必须**（2026-07-04 实证）：裸 send-keys 一长段中文放行 → 弹窗吃 Enter → 消息卡输入框没发出 → 会话干坐 → watcher 分不清"在等放行"和"放行没落地" → 卡 24min 才被 wakeup 撞见。放行后**必须验证会话真 WORKING**，别假设 send-keys 成功=已放行（结构不靠自律）。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
-   ①核证四件套过 + ②异构 codex 独立确认（执行者再严的自审仍是同 lineage = self-preference bias，不可信）；
-   **roadmap / ACTIVE_CONTEXT / 关单只认 Verified**。核证四件套（git status / git log / 复跑 test+lint /
-   grep 计数 + 实证）见 `references/dispatch-baseline.md`。
+   ①核证四件套过 + ②异构 codex 独立确认（执行者再严的自审仍是同 lineage = self-preference bias，不可信）
+   + ③**本机真实路径 E2E 过**（下面的顺序门）；**roadmap / ACTIVE_CONTEXT / 关单只认 Verified**。核证四件套
+   （git status / git log / 复跑 test+lint / grep 计数 + 实证）见 `references/dispatch-baseline.md`。
+   - **验证顺序门（不可跳级）**：**本机真实路径 E2E 先** → ops 部署 → **部署环境 E2E** → **最后才改任务状态**。
+     - 前端 = **浏览器本机 E2E**（localhost 前端 → 已部署后端，真点真输真渲染，§7）。
+     - 后端 = **curl 模拟本机 E2E**（尤其 SSE；起本机栈跑真路径，不是 mock）。
+     - **单测 + codex ≠ 本机 E2E**：结构测试是「结构防火墙」、不证真路径成立（实证 claimlock：73 passed +
+       codex approve，但 codex 自己两轮标"未跑 live PG 锁复现"——我拿结构证据顶了 Verified = 超前）。
+   - **顺序是编排纪律，push 硬 gate 不在 cto-guard**：本机 E2E→部署→部署环境 E2E→改任务状态 的**验证顺序**
+     由编排者守（Verified 定义 + §6 关单）。**`git push`/PR 的 push 时硬 gate 归 Git Workflow skill
+     `im-git-workflow` + 服务端分支保护（IaC ADR-0012）**——git 策略不塞进 cto-guard（职责分清）。
 
 ## 2. 对抗式评审循环
 
