@@ -1,12 +1,13 @@
 ---
 name: source-coding-discipline
-version: 0.1.0
+version: 0.1.1
 description: Use when a task involves reading, editing, reviewing, testing, debugging, refactoring, or otherwise working with source code files. Source paths include **/*.{py,ts,tsx,js,jsx,mjs,go,rs,java,kt,swift,rb,c,cc,cpp,h,hpp,sh,bash,zsh,sql,vue,svelte}. Do not use for docs-only, planning-only, or non-code file tasks unless the task also touches source code.
 ---
 
 # 写码纪律（碰源码文件时加载）
 
-> 镜像注：四段纪律正文与 [`templates/rules/coding.md`](../../templates/rules/coding.md) 同源——
+> 镜像注：四段纪律正文与本仓库 `templates/rules/coding.md` 同源（路径相对 evolab 仓库根；本 skill
+> 单独 cp 安装后该文件不随行，同步义务只落在仓库维护侧）——
 > rules 形态给支持 `paths:` 条件加载的 agent（Claude Code / omp），skill 形态给不支持的（codex 等）。
 > **改任一边必须同步另一边**（硬门：`test/mirror-sync.test.sh` 四段逐字 diff，漂移即红）；
 > 同一 agent 勿两种形态同装（双重注入）。
