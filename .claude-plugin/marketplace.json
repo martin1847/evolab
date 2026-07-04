@@ -8,14 +8,26 @@
     {
       "name": "cto-orchestration",
       "source": "./skills/cto-orchestration",
-      "skills": ["."],
+      "skills": [
+        "."
+      ],
       "description": "CTO/编排者模式管理多 agent 开发：tmux 派发 omp 执行 + codex 异构评审，goal 驱动、watcher 存活监控、对抗式评审循环、旗标门控、运维 agent 间接取证。"
     },
     {
       "name": "repo-governance-bootstrap",
       "source": "./skills/repo-governance-bootstrap",
-      "skills": ["."],
+      "skills": [
+        "."
+      ],
       "description": "一次性初始化适合 AI 协作开发的轻量工程治理骨架（docs/INDEX、ADR、module、roadmap、ACTIVE_CONTEXT、AGENTS.md/CLAUDE.md）。"
+    },
+    {
+      "name": "agent-mail",
+      "source": "./skills/agent-mail",
+      "skills": [
+        "."
+      ],
+      "description": "多编排者/长期 agent 身份之间的异步信箱总线——单一去处 inbox、名册注册、纯 bash helper；信箱数据活在 ~/.agents/mail（skill 之外）。cto-orchestration 的可选伴随。"
     }
   ]
 }

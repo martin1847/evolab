@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# agent-mail bus helper — inter-orchestrator mailbox ops. Pure bash, no deps.
+# Bus root = $AGENT_MAIL_DIR (default ~/.agents/mail) — USER DATA, deliberately outside
+# this skill's directory so publishing/upgrading the skill never touches mail.
+set -euo pipefail
+BUS="${AGENT_MAIL_DIR:-$HOME/.agents/mail}"
+REG="$BUS/registry.md"
+
+usage() {
+  cat <<'EOF'
+agent-mail bus — inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, default ~/.agents/mail)
+  bus register <agent-id> <workdir> <focus...>  add to roster + create mailbox
+  bus check <agent-id>                          list pending (inbox, oldest first)
+  bus send <from> <to> <slug> [subject...]      scaffold a letter into recipient inbox
+  bus archive <agent-id> <id>                   move a handled letter to archive
+  bus roster                                    print roster
+EOF
+}
+
+ensure_reg() {
+  mkdir -p "$BUS"
+  [ -f "$REG" ] || printf '# agent-mail 名册（registry）\n\n| agent-id | 工作目录 | 职责（一句话） |\n|---|---|---|\n' > "$REG"
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  register)
+    id="${1:?agent-id}"; dir="${2:?workdir}"; shift 2; focus="$*"
+    ensure_reg
+    mkdir -p "$BUS/$id/inbox" "$BUS/$id/archive"
+    if ! grep -q "| \`$id\` |" "$REG" 2>/dev/null; then
+      # insert AFTER the last table row (not file end — a trailing footer note would break the table)
+      row="$(printf '| `%s` | `%s` | %s |' "$id" "$dir" "$focus")"
+      awk -v row="$row" '{ lines[NR]=$0; if ($0 ~ /^\|/) last=NR }
+        END { for(i=1;i<=NR;i++){ print lines[i]; if(i==last) print row } }' "$REG" > "$REG.tmp" && mv "$REG.tmp" "$REG"
+      echo "registered $id -> $dir  (mailbox: $BUS/$id)"
+    else
+      echo "$id already in roster (edit $REG to change)"
+    fi
+    ;;
+  check)
+    id="${1:?agent-id}"; ib="$BUS/$id/inbox"
+    [ -d "$ib" ] || { echo "no such agent: $id (register first)"; exit 1; }
+    n=0
+    for f in $(ls "$ib"/*.md 2>/dev/null | sort); do   # id 前缀含时间戳 → 文件名序 = 最旧优先
+      n=$((n+1))
+      subj="$(grep -m1 '^subject:' "$f" | sed 's/^subject:[[:space:]]*//')"
+      frm="$(grep -m1 '^from:' "$f" | sed 's/^from:[[:space:]]*//')"
+      printf '  from=%-12s %s  (%s)\n' "$frm" "$subj" "$(basename "$f")"
+    done
+    [ "$n" -eq 0 ] && echo "  (inbox empty)" || echo "$n pending in $id inbox — oldest first, handle ALL (先到的信不许被遮蔽)"
+    ;;
+  send)
+    from="${1:?from}"; to="${2:?to}"; slug="${3:?slug}"; shift 3; subject="${*:-<subject>}"
+    ib="$BUS/$to/inbox"
+    [ -d "$ib" ] || { mkdir -p "$ib" "$BUS/$to/archive"; echo "note: $to not registered — mailbox created anyway (mail must not bounce); consider: bus register $to <workdir> <focus>"; }
+    id="$(date +%Y%m%d-%H%M)-$from-$slug"; f="$ib/$id.md"
+    [ -e "$f" ] && { echo "exists: $f"; exit 1; }
+    cat > "$f" <<EOF
+---
+id: $id
+from: $from
+to: $to
+thread: $slug
+re:
+subject: $subject
+priority: normal
+---
+
+EOF
+    echo "scaffolded $f  (edit it, then it's delivered)"
+    ;;
+  archive)
+    id="${1:?agent-id}"; mid="${2:?letter-id}"
+    src="$BUS/$id/inbox/$mid.md"; [ -e "$src" ] || src="$BUS/$id/inbox/$mid"
+    [ -e "$src" ] || { echo "not found in $id inbox: $mid"; exit 1; }
+    mkdir -p "$BUS/$id/archive"; mv "$src" "$BUS/$id/archive/"
+    echo "archived $(basename "$src")"
+    ;;
+  roster)
+    [ -f "$REG" ] && cat "$REG" || echo "(no registry yet — bus register <agent-id> <workdir> <focus>)"
+    ;;
+  *) usage; [ -z "$cmd" ] || exit 1;;
+esac

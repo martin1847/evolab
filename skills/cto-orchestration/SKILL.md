@@ -36,6 +36,7 @@ metadata:
 
 **默认 omp 执行、codex 评审，不倒置**——omp(oh-my-pi+Opus)强在自主执行、codex(gpt)强在严苛评审，交叉评审屡抓双方都漏的真问题。
 **编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位）；§1.4 的 watcher 起法/忙碌·存活信号按你的工具校准，`requires.bins` 的 tmux/omp/codex 是参考栈、非硬依赖。
+**多个编排者并行**（各管一摊）时，跨席位异步通信用可选伴随 skill `agent-mail`（信箱总线、各自 inbox 单一去处）。
 
 ## 1. 派工协议（每次走全流程）
 
@@ -71,7 +72,9 @@ metadata:
      `cto-guard-agent.py`（PostToolUse·Agent|Task：browser 派发注入 deadline-watch 提醒）。wiring 并进
      `repo-governance-bootstrap` §11 的 settings.json（CC frontmatter `hooks:` 实测 mid-session 不注册、不靠它）；
      全表 + entry 见 `references/agent-watch/README.md` §Wiring。
-5. **steering**：新事实/新指令出现，写成补充文档或直接 send-keys 进会话，明确"与你假设矛盾时，事实赢"。
+5. **steering / 放行（理解门后 + 回修 + 新指令）**：**一律用 `references/agent-watch/dispatch send <session> -m "…"`（或 `-f <file>`）交付，别裸 send-keys 长中文**。
+   它强制安全路径 + 补上缺的验证环：先 `Escape`+`C-u` 清掉可能卡住的弹窗 → 只 send-keys **短 ASCII "read <file>"**（长中文/①②③/全角冒号会触发 omp 弹窗吃掉 Enter）→ 提交 → **轮询 events 确认真转 `WORKING`**，没转就重试+告警。
+   **为什么必须**（2026-07-04 实证）：裸 send-keys 一长段中文放行 → 弹窗吃 Enter → 消息卡输入框没发出 → 会话干坐 → watcher 分不清"在等放行"和"放行没落地" → 卡 24min 才被 wakeup 撞见。放行后**必须验证会话真 WORKING**，别假设 send-keys 成功=已放行（结构不靠自律）。
 6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
    Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
    ①核证四件套过 + ②异构 codex 独立确认（执行者再严的自审仍是同 lineage = self-preference bias，不可信）；
