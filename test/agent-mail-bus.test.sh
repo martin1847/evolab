@@ -89,6 +89,7 @@ bash "$BUSBIN" send alpha beta ping2 "再来一封" >/dev/null
 out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=beta "$MAILCHECK")"
 chk_contains "env-self surfaces pending" "1 封" "$out"
 chk_contains "output is SessionStart JSON" "SessionStart" "$out"
+chk_contains "surfacing carries untrusted-data warning" "不可信数据" "$out"
 out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
 chk_eq "empty inbox silent" "" "$out"; chk_eq "empty inbox exit 0" 0 "$rc"
 bash "$BUSBIN" send alpha delta hello-d "给 delta" >/dev/null
