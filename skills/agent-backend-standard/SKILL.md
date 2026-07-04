@@ -32,7 +32,7 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 
 ## 附(本仓并入,非 agent 专属但同一触发)
 - **A 代码 / 依赖生命周期 + 反死代码** → `references/code-dependency-lifecycle.md` —— 引入即退役(ADR-with-sunset)、stale-but-live(`EXPIRES`/`REVISIT-WHEN`)、**功能旗标生命周期(分类 + 毕业/退休 + 登记册)**、死代码检测 + 盲区、反 bloat、清扫。
-- **B 数据访问与写纪律** → `references/data-write-discipline.md` —— 记账写:移出主链路 / 不跨 LLM 持锁 / per-statement / 批量服务端增量;**关键写保留原子性但同样不持锁跨 LLM/执行**(短原子写 + 锁外执行)。
+- **B 数据访问纪律(连接·读·写)** → `references/data-write-discipline.md` —— **读也占连接**(弱事务/autocommit 用完即释放;MANAGED+closeConnection=false 无事务读 = 泄漏);记账写移出主链路 / 不跨 LLM 持锁 / 服务端增量;**关键写保留原子性但同样不持锁跨 LLM/执行**(短原子写 + 锁外执行)。
 
 ## 关联(独立 skill,不在本 hub 重复)
 - 埋点 / telemetry → `observability-standard`;Git SOP → `git-workflow-standard`;A2A 对外契约 → A2A 对外契约规范。

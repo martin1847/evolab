@@ -23,7 +23,7 @@
 ## 5. 规则如何到达 executor（交付 / triggering）—— 软层的命门
 **规则写进手册 ≠ 被执行。** 两条常见断链(实证:某读/连接纪律正因这两条从没落地 → 某栈读服务连接全漏,规则事后才补):
 - **触发域要够宽**:hub 名带 "agent" 不代表规则只适用 agent 后端。**通用后端规则**(连接/事务/数据访问)的 SKILL.md 描述 MUST 让写**任何**相关代码时都命中——把通用规则圈进窄触发词("agent/LLM 后端"),普通业务微服务就不加载、永远漏。
-- **接上 executor**:若编排是"编排者派 subagent 吃 goal 文档写代码",**subagent 读不到编排者 session 的 skill**——规则再对也到不了写代码的手。落地二选一:① 派工 goal 文档 MUST 显式引用相关 skill 章节(canonical-home 指针、别复制正文);② 编排层加 hook,dispatch 相关后端 agent 时自动注入本 hub。**只把规则写进 skill、不接触达路径 = 软层空转。**
+- **接上 executor**:若编排是"编排者派 subagent 吃 goal 文档写代码",**subagent 读不到编排者 session 的 skill**——规则再对也到不了写代码的手。落地二选一:① 派工 goal MUST 显式引用相关 skill 章节(canonical-home 指针、别复制正文);② 编排层 dispatch 相关后端 agent 时加 hook 自动注入本 hub(机制见 `cto-orchestration`)。**只把规则写进 skill、不接触达路径 = 软层空转。**
 
 ## 一句话
 > 按需读、偏离要显式记、规则有 canonical-home、空章不空写;新 concern 按粒度规则判"独立 skill vs hub 加章";**规则要真到达 executor(触发域够宽 + goal 引用/hook 注入),否则软层空转**。

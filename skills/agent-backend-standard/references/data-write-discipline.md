@@ -21,7 +21,7 @@
 
 **机械判据(可 lint,进硬层)**:`transactionManager=MANAGED` + `closeConnection=false`(或等价"连接交容器管") 且**存在无事务注解的读方法** = 连接泄漏反模式。
 
-**实证(某 MyBatis(MANAGED)+JTA/Quarkus 微服务栈,2026-07)**:多个只读 *-server 的 `mybatis-config` 用 `MANAGED` + `closeConnection=false`(为 JTA 写路径设计——连接交容器管)。但读方法**无 `@Transactional`** → 无容器事务 → MyBatis 不关、容器也不管 → **连接不还池**。低流量(单人测)下几次读就 `SQLException: acquisition timeout`。同环境 A/B(仅翻这一行、池调小放大信号)坐实:`closeConnection=true` 连打 12 次 0 泄漏、`false` 第 2 次即 `acquisition timeout`。修:纯读服务 `closeConnection=true`(MyBatis SqlSession 关时释放连接),有写服务的读方法加只读弱事务让容器释放。
+**实证(某 MyBatis(MANAGED)+JTA/Quarkus 微服务栈)**:多个只读服务的 `mybatis-config` 用 `MANAGED` + `closeConnection=false`(为 JTA 写路径设计——连接交容器管)。但读方法**无 `@Transactional`** → 无容器事务 → MyBatis 不关、容器也不管 → **连接不还池**。低流量(单人测)下几次读就 `SQLException: acquisition timeout`。同环境 A/B(仅翻这一行、池调小放大信号)坐实:`closeConnection=true` 连打 12 次 0 泄漏、`false` 第 2 次即 `acquisition timeout`。修:纯读服务 `closeConnection=true`(MyBatis SqlSession 关时释放连接),有写服务的读方法加只读弱事务让容器释放。
 
 **诊断技巧(通用,接口疑挂死/空 → 先绕前端直打)**:`curl` 类客户端 + `timeout` 直打 RPC/HTTP —— **exit=timeout** 是真 hang;**返 error** 看 message(此例 `acquisition timeout`)+ 上游耗时;**多服务抽测**判全局(PG 满)vs 单服务(该服务连接/查询)。**acquisition timeout + 低流量 = 连接泄漏,非并发打满。**
 
