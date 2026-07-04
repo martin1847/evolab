@@ -10,6 +10,7 @@
 3. **wire 强制层 hooks**：`cto-guard-bash.py` + `cto-guard-agent.py` 两条 entry 并进 bootstrap §11 已建的
    settings.json（路径用**绝对路径**——hooks 不展开 `~`；entry 全文见 `references/agent-watch/README.md`
    §Wiring）；接完各喂一条合成 payload **验真触发**（尾随 `&` 应 deny、browser 派发应出提醒），别只信"配了"。
+   （多编排者场景装了 `agent-mail` 的，其席位注册 + 收信 hook 由该 skill 自己的「接入」节自包含，不在本清单。）
 4. 建 `docs/orchestration/` + `docs/orchestration/archive/` 目录（生命周期见 SKILL §5）。
 5. 第一个任务走一遍 SKILL §1 全流程，校准该项目的忙碌标记/工具链差异。
 6. 在项目 memory 里建 working-style 条目（含本 skill 引用 + 项目特有的差异）。

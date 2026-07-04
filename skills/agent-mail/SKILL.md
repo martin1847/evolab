@@ -64,6 +64,15 @@ bus roster                                    # 打印名册
 
 不用 helper 也行：发信 = 手写 md 到对方 inbox；收信 = `ls $AGENT_MAIL_DIR/<我>/inbox/`。
 
+## 接入（新席位，两步，本 skill 自包含——不依赖任何编排 skill 的清单）
+
+1. **注册**：`bus register <席位id> <项目根绝对路径> <职责一句话>`（名册加行 + 信箱建好）。
+2. **wire 收信提醒 hook**：项目 settings.json（如 `.claude/settings.json`）加
+   `SessionStart → <skill绝对路径>/mail-check.py`（零参数——身份靠名册 workdir 反查、子目录也认；
+   hooks 不展开 `~`，用绝对路径）。开 session 即冒泡"你有 N 封未处理信"——「记得查信箱」不再靠记忆
+   （软规则必衰减，这是 forcing function）。接完设 `AGENT_MAIL_SELF=<席位id>` 跑一次脚本**验真触发**
+   （有信应出 JSON、空箱应静默），别只信"配了"。
+
 ## 远程信箱（跨网络边界的收件人）
 
 收件人够不着本机目录时（如网络隔离的线上运维 agent），**协议不变、只换传输**：信箱挂在双方都够得着的

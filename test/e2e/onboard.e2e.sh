@@ -16,8 +16,11 @@ echo "== onboard.e2e (live claude session; several minutes, uses API tokens) =="
 
 WT="$(mktemp -d "${TMPDIR:-/tmp}/e2e-onboard.XXXXXX")"
 WTBASE="$(basename "$WT")"
+# agent-mail onboarding writes a roster row — point the SESSION at a temp bus so the user's
+# real ~/.agents/mail is never touched by the test
+TMPMAIL="$(mktemp -d "${TMPDIR:-/tmp}/e2e-mailbus.XXXXXX")"
 cleanup() {
-  rm -rf "$WT"
+  rm -rf "$WT" "$TMPMAIL"
   # the onboarding writes orchestrator memory OUTSIDE the repo (~/.claude/projects/<flattened-cwd>).
   # Flattening turns '.' into '-' (e2e-onboard.Xxx -> ...e2e-onboard-Xxx), so match the translated name.
   find "$HOME/.claude/projects" -maxdepth 1 -type d -name "*$(printf '%s' "$WTBASE" | tr '.' '-')*" -exec rm -rf {} + 2>/dev/null || true
@@ -26,10 +29,11 @@ trap cleanup EXIT
 
 cd "$WT" && git init -q . && printf '# demo-proj\nA tiny demo service.\n' > README.md && git add -A && git commit -qm init
 
-timeout 570 claude -p "本项目要接入多 agent 编排开发。请依次完成：
+AGENT_MAIL_DIR="$TMPMAIL" timeout 570 claude -p "本项目要接入多 agent 编排开发。请依次完成：
 1) 用 repo-governance-bootstrap skill 初始化文档治理（项目名 demo-proj，定位：演示用微服务；capability: demo-api；module: api；需要 AGENTS.md）。所有该问用户的问题都按此给定信息处理，不要等待输入。
 2) 然后按 cto-orchestration 的新项目接入清单（references/onboarding-checklist.md）逐步完成接入，包含 AGENTS.md 编排增量增补 和 hook wiring。
-3) 只创建文件，不要 push。" --dangerously-skip-permissions < /dev/null >/dev/null 2>&1
+3) 本项目也要加入多编排者通信：按 agent-mail skill 的「接入」节完成本席位接入（席位 id: demo-proj）。
+4) 只创建文件，不要 push。" --dangerously-skip-permissions < /dev/null >/dev/null 2>&1
 
 # ① docs governance tree
 for f in docs/INDEX.md docs/ACTIVE_CONTEXT.md docs/roadmap/active-roadmap.md AGENTS.md CLAUDE.md ACCESS.local.md; do
@@ -71,5 +75,15 @@ fi
 # ④ orchestration dirs + decision queue
 chk_eq "docs/orchestration/ exists" 1 "$([ -d "$WT/docs/orchestration" ] && echo 1 || echo 0)"
 chk_eq "DECISION_QUEUE.md exists" 1 "$([ -f "$WT/docs/DECISION_QUEUE.md" ] && echo 1 || echo 0)"
+
+# ⑤ agent-mail onboarding (only asserted when the optional skill is installed):
+#    checklist step 3 must register a seat (roster row w/ this project's workdir) + wire mail-check
+if [ -e "$HOME/.claude/skills/agent-mail" ]; then
+  # needle = the unique tmpdir basename: survives path normalization (/var vs /private/var, //)
+  chk_contains "mail: seat registered (roster row has project workdir)" "$WTBASE" "$(cat "$TMPMAIL/registry.md" 2>/dev/null)"
+  chk_contains "mail: mail-check wired in settings.json" "mail-check.py" "${cmds:-}"
+else
+  echo "  [skip] agent-mail not installed — ⑤ skipped"
+fi
 
 summary

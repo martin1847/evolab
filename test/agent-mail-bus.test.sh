@@ -82,4 +82,21 @@ chk_eq "registry still structurally valid after footer+insert" "valid" "$(reg_va
 out="$(bash "$BUSBIN" check nosuch 2>&1)"; rc=$?
 chk_eq "check unknown agent exits nonzero" 1 "$rc"
 
+# ── mail-check.py (SessionStart pending-mail surfacing; identity: env > arg > registry-workdir) ──
+MAILCHECK="../skills/agent-mail/mail-check.py"
+chk_eq "mail-check is executable" 1 "$([ -x "$MAILCHECK" ] && echo 1 || echo 0)"
+bash "$BUSBIN" send alpha beta ping2 "再来一封" >/dev/null
+out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=beta "$MAILCHECK")"
+chk_contains "env-self surfaces pending" "1 封" "$out"
+chk_contains "output is SessionStart JSON" "SessionStart" "$out"
+out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
+chk_eq "empty inbox silent" "" "$out"; chk_eq "empty inbox exit 0" 0 "$rc"
+bash "$BUSBIN" send alpha delta hello-d "给 delta" >/dev/null
+out="$(env -u AGENT_MAIL_SELF CLAUDE_PROJECT_DIR=/tmp/delta "$MAILCHECK")"
+chk_contains "registry workdir lookup resolves self" "delta" "$out"
+out="$(env -u AGENT_MAIL_SELF CLAUDE_PROJECT_DIR=/tmp/delta/deep/sub "$MAILCHECK")"
+chk_contains "subdir of workdir also resolves" "delta" "$out"
+out="$(env -u AGENT_MAIL_SELF CLAUDE_PROJECT_DIR=/nowhere/else "$MAILCHECK")"; rc=$?
+chk_eq "no identity match silent" "" "$out"; chk_eq "no identity exit 0" 0 "$rc"
+
 summary
