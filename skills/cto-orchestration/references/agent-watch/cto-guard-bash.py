@@ -96,7 +96,7 @@ def main():
             return 2
 
     # NOTE: git-push governance (local-E2E-before-push, base-branch protection) intentionally lives in
-    # the Git Workflow skill (im-git-workflow) + server-side branch-protection ruleset (IaC ADR-0012),
+    # the Git-workflow standard skill + a server-side branch-protection ruleset,
     # NOT here — cto-guard owns orchestration slips (backgrounding, idle-polling, dispatch, send-keys),
     # not git policy. Don't re-add push checks here.
 

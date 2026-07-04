@@ -13,6 +13,8 @@
 3. **教训进 memory**：每条带 **Why + How-to-apply**；事实细节（路径/凭据/执行路径）进 ACCESS/docs，memory 只留指针。
    **升默认过样本门**（measure-before-more 的复盘版）：n=1 只标 `OBSERVATION`、不改 spec/默认；**≥2 例同向**才升为改默认的教训。
    retro 只**提议**，改 spec 由主理人**裁定**（提议/批准分离，防按一次性事件堆规则）。
+   **软规则去向二选一**：会在动手那一刻 fire 的才留正文；hook 已强制的收成一行指针；从不 fire 的删或降
+   README 背景——顺手删「读着完整但从不 fire」的段落（不 fire 的散文是净负债，实证：三条早已写清的规则同日全部没在决策点应用）。
 4. **上下文治理**：关交付完的会话 + **扫孤儿**（见 SKILL §5「孤儿扫」纪律：`docker ps`/`ps`/后台 job + compose
    trap/finally + repro 禁裸 `while True`）+ **worktree 核对**（已合分支的 worktree 必清 `git worktree remove`）+
    **敞口清单**（=下会话入口）。
