@@ -96,7 +96,12 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   `--dangerously-bypass-hook-trust`); until then no events fire → **watch falls back to screen-scrape**
   (graceful, by design). To get the real codex signal, persist hook trust once or launch codex with the bypass
   flag. Until then codex monitoring = screen-scrape fallback (works, just not hook-deterministic).
-- ⏳ Claude (`Stop`/`Notification`/`PostToolUse`) wiring built per docs — validate on first real Claude dispatch.
+- ❌ **codex 0.142.3 regression（e2e 矩阵门实测 2026-07-05）**：即便带 bypass flag、且 A/B 排除了空全局
+  `~/.codex/hooks.json` 遮蔽，project `.codex/hooks.json` 也**零 emit**（agent 正常干活、goal 正常产出）——
+  codex 派发目前**恒走抓屏路径**，dispatch --goal 的验证环靠 pane 忙碌档兜住、不假警。e2e 门留了金丝雀
+  （sentinel 一旦重现即变红提醒恢复严格断言）。根因待上游/深挖。
+- ✅ Claude (`Stop`/`Notification`/`PostToolUse`) wiring：e2e dispatch-goal 门实测（真 claude 会话，
+  PostToolUse→WORKING + Stop→DONE 全出现在 sentinel）。
 - ◑ STALLED-EXTERNAL (exit 5): detection PREDICATE validated offline against provider-error-chrome fixtures —
   true positives (529/overloaded, 429 rate-limit, 503 unavailable, insufficient_quota, stream error) and true
   negatives (normal edits, an agent merely reasoning about "error") classify correctly; watch↔scrape regex parity
