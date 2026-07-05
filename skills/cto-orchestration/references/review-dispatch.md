@@ -1,8 +1,9 @@
 # codex 评审派发模板（brief 文本）
 
-> 起会话走 `agent-watch/dispatch codex <proj>-<task>-codex <同一worktree>`（裸 `tmux new-session`
-> 缺 hook env → watcher 退化抓屏），brief 用 `dispatch send -f` 交付；两步流全串见 agent-watch README。
-> 评审期间 omp 不得改同一 worktree。
+> 首轮：brief 写成文件（`docs/orchestration/*_REVIEW_BRIEF.md`），
+> `agent-watch/dispatch codex <proj>-<task>-codex <同一worktree> --goal <brief.md>` 一条命令——与 omp
+> 派发同构（launch+送 brief+验证+自动 watch）。复审轮：`dispatch send -f` + 单独 watch。
+> 裸 `tmux new-session` 缺 hook env → watcher 退抓屏，别用。评审期间 omp 不得改同一 worktree。
 
 ## 首轮评审
 

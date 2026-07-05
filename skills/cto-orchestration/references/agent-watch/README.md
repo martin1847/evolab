@@ -113,18 +113,18 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 SKILL 主干只留三条 watch 判据（typed 状态 + DEAD≠DONE / 判完成要正向证据 / 后台启动不加 shell `&`）
 和派发的 hook-gate 判据。这里是派发命令、坑枚举、typed 状态全枚举、各失败态的实证。
 
-### 派发（首选融合 `--goal` 一条命令；codex 多轮 brief 用两步）
+### 派发（首轮一律融合 `--goal` 一条命令，omp/codex 同构；复审轮/steering 用 `dispatch send`）
 
 ```bash
-# 首选（v1.2.9+）：launch → 送 goal → 验 hook → 自动 watch，一次 Bash run_in_background 调用。
-# dispatch 把 hook env 注进 tmux 命令串——watcher 走 hook 主信号的前提，缺则退化抓屏（机制见上文）。
-references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-omp <worktree> --goal <abs-goal-path>
-# 派发后 Read 一次输出确认：[send] OK…WORKING + hook: WORKING ✓
+# 首选（首轮派发，omp/codex/claude 同构）：launch → 送 goal/brief → 验 hook → 自动 watch，一次 Bash
+# run_in_background 调用。dispatch 把 hook env 注进 tmux 命令串——watcher 走 hook 主信号的前提，缺则退化抓屏。
+references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-<agent> <worktree> --goal <abs-goal-or-brief-path>
+# 派发后 Read 一次输出确认：[send] OK…WORKING + hook 三档之一——
+#   hook: WORKING ✓（sentinel 在）/ pane is BUSY（codex 首个 tool 前无 sentinel，正常）/ NO sentinel…（真异常，停下重起）
 # 无独立 --watch flag（goal 即 watch）；设计论证见 dispatch 头注。
 
-# 两步流（codex 评审先送 brief 再多轮 / 首启目录信任提示）：
-references/agent-watch/dispatch codex <session> <worktree>
-references/agent-watch/dispatch send <session> -f <brief.md>   # 确认环收尾：真转 WORKING 才算送达
+# 两步流（复审轮 / 后续 steering；codex 首启目录信任提示由 --goal 自动应答，不再是两步流的理由）：
+references/agent-watch/dispatch send <session> -f <fixround.md>   # 确认环收尾：真转 WORKING 才算送达
 # 然后单独 watch —— 必 Bash run_in_background，禁 shell `&`
 ```
 
@@ -137,8 +137,9 @@ references/agent-watch/dispatch send <session> -f <brief.md>   # 确认环收尾
 （状态都在 commit/goal 文件里，无损）；codex 启动更新提示——一次性在
 `~/.codex/config.toml` 设 `check_for_update_on_startup = false` 免掉（否则每次得先发 `2`+Enter）。
 
-**起后立刻验 hook（硬 gate，别跳）**：`watch` 一挂就 Read 输出——必须见 sentinel `WORKING` 行；见
-`no sentinel (hook not wired) → fallback` = 没走 dispatch（或 codex 未 trust hook）→ **停下重起、别带病跑**
+**起后立刻验 hook（硬 gate，别跳）**：Read dispatch 输出按三档判定——`WORKING ✓`（sentinel）或
+`pane is BUSY`（codex 首个 tool 前正常）均可继续；`NO sentinel…pane not busy` = 没走 dispatch / goal
+没送达 → **停下重起、别带病跑**
 （实证：裸起整 session 退抓屏，误报 DONE + 漏 WAITING——澄清菜单挂 busy 标记 ⟦esc⟧、抓屏永判"忙"、卡 21min 零 ping）。
 
 **派发后、动手前先过理解门**：第一轮要 agent 复述"这改动碰哪些文件/契约、有哪些风险"，核对无误再放行；

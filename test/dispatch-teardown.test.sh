@@ -56,6 +56,46 @@ chk_not_contains "dispatch codex ABS substituted" "ABS/emit" "$body"
 chk_contains "dispatch codex points at emit-from-stdin" "$AW_DIR/hooks/emit-from-stdin.sh" "$body"
 sandbox_clean
 
+# --goal with missing file -> exit 1 BEFORE any session is launched (no orphan session).
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+out="$(bash "$DISPATCH" omp gS "$SANDBOX/wt" --goal "$SANDBOX/nope.md" 2>&1)"; rc=$?
+chk_eq "goal missing rc1" 1 "$rc"
+chk_contains "goal missing msg" "goal file not found" "$out"
+chk_not_contains "goal missing launches nothing" "dispatched" "$out"
+sandbox_clean
+
+# codex --goal fused round-1: no sentinel (codex hook fires on first tool call) but pane busy
+# -> tier-2 message, NOT the false "STOP and re-dispatch" alarm; goal delivery lands via pane.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'brief\n' > "$SANDBOX/brief.md"
+pane_fixture "▌ Working (3s · esc to interrupt)"
+out="$(bash "$DISPATCH" codex cgS "$SANDBOX/wt" --goal "$SANDBOX/brief.md" 2>&1)"; rc=$?
+chk_contains "codex goal send lands via pane" "[send] OK" "$out"
+chk_contains "codex goal pane tier" "pane is BUSY" "$out"
+chk_not_contains "codex goal no false alarm" "STOP and re-dispatch" "$out"
+chk_contains "codex goal hands to watch" "handing off to watch" "$out"
+sandbox_clean
+
+# codex --goal on first-ever launch: trust prompt auto-answered (branch coverage via output).
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'brief\n' > "$SANDBOX/brief.md"
+pane_fixture "Do you trust this directory?  1) yes  2) no"
+out="$(bash "$DISPATCH" codex ctrS "$SANDBOX/wt" --goal "$SANDBOX/brief.md" 2>&1)"; rc=$?
+chk_contains "codex trust prompt auto-answered" "trust prompt detected" "$out"
+sandbox_clean
+
+# --goal with neither sentinel nor busy pane -> alarm tier preserved.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'brief\n' > "$SANDBOX/brief.md"
+pane_fixture '$'
+out="$(bash "$DISPATCH" omp gS2 "$SANDBOX/wt" --goal "$SANDBOX/brief.md" 2>&1)"; rc=$?
+chk_contains "goal dead-signal alarm" "NO sentinel after 12s and pane not busy" "$out"
+sandbox_clean
+
 # codex dispatch with existing config -> WARN, NOT clobbered.
 sandbox_new
 mkdir -p "$SANDBOX/wt/.codex"
