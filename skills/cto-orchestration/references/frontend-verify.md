@@ -19,7 +19,7 @@ MCP 驱动登录+渲染验证+网络诊断，CLI 抓 SSE/API ground-truth。
 > **Playwright 优先已是 hook 硬规则**（P0a：浏览器派发载 `mcp__chrome-devtools` token 即被 `cto-guard-agent.py` DENY）。
 > why：chrome-devtools 与用户浏览器 + 多 agent 争 CDP、断连坑两次；仅当必须 attach 用户已登录会话才值得用它。
 
-## 状态形状矩阵（E2E 只测新鲜快乐态 = 结构性漏测）
+## 状态形状矩阵（E2E 只测新鲜快乐态 = 结构性漏测）<!-- trunk:状态形状矩阵 -->
 
 实证（2026-07-05，同日两个 P1 同根）：全部 E2E 用"刚登录的黄金账号"→ ① access token 过期后
 前端零恢复代码（UI 提示 cookie 比 access 长命，过期态用户全灭）② 贫数据账号（微信 oauth 用户
