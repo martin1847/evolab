@@ -27,7 +27,7 @@ if [ "${1:-}" = "send" ]; then
   sess="${2:?dispatch send <session> -m <text> | -f <file>}"; mode="${3:?-m|-f}"; arg="${4:?text-or-file}"
   case "$mode" in
     -f) file="$arg";;
-    -m) file="$(mktemp /tmp/dispatch-send-${sess}-XXXX.md)"; printf '%s\n' "$arg" > "$file";;
+    -m) file="$(mktemp /tmp/dispatch-send-${sess}-XXXXXXXX.md)"; printf '%s\n' "$arg" > "$file";;
     *) echo "usage: dispatch send <session> -m <text> | -f <file>" >&2; exit 1;;
   esac
   [ -e "$file" ] || { echo "instruction file not found: $file" >&2; exit 1; }
