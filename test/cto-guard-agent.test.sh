@@ -49,7 +49,7 @@ chk_eq "token alone still denies (token implies browser-ish)" 2 "$RC"
 
 # ── P0b: TaskStop on an ALIVE agent (fresh transcript) -> DENY; stale or overridden -> allow ──
 TID="zzguardtest$$"
-FAKE="/private/tmp/claude-zztest/a/b/tasks"; mkdir -p "$FAKE"
+FAKE="/tmp/claude-zztest/a/b/tasks"; mkdir -p "$FAKE"
 touch "$FAKE/$TID.output"                                   # fresh = alive
 run PreToolUse TaskStop "{\"task_id\":\"$TID\"}"
 chk_eq "kill fresh agent denied (exit 2)" 2 "$RC"; chk_contains "deny says ALIVE" "ALIVE" "$ERR"
@@ -62,7 +62,7 @@ run PreToolUse TaskStop "{\"task_id\":\"$TID\"}"
 chk_eq "stale transcript allows kill" 0 "$RC"
 run PreToolUse TaskStop '{"task_id":"zz-ghost-task-000"}'
 chk_eq "unknown task allows (no transcript found)" 0 "$RC"
-rm -rf /private/tmp/claude-zztest
+rm -rf /tmp/claude-zztest
 
 # ── degenerate ──
 out="$(printf '' | python3 "$GUARD")"; rc=$?

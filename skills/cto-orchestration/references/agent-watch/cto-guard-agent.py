@@ -39,8 +39,13 @@ def main():
         if tid:
             if os.path.exists(f"/tmp/cto-allow-kill-{tid}"):
                 return 0  # explicit override
-            hits = glob.glob(f"/private/tmp/claude-*/*/*/tasks/{tid}.output") or \
-                glob.glob(f"/private/tmp/claude-*/**/tasks/{tid}.output", recursive=True)
+            # /tmp works on BOTH platforms (macOS /tmp is a symlink into /private/tmp and
+            # glob follows it); the /private prefix alone made this guard silently fail-open
+            # on Linux — no transcript ever found => every kill allowed (caught by CI run #1).
+            hits = (glob.glob(f"/tmp/claude-*/*/*/tasks/{tid}.output")
+                    or glob.glob(f"/tmp/claude-*/**/tasks/{tid}.output", recursive=True)
+                    or glob.glob(f"/private/tmp/claude-*/*/*/tasks/{tid}.output")
+                    or glob.glob(f"/private/tmp/claude-*/**/tasks/{tid}.output", recursive=True))
             try:
                 age = min(time.time() - os.path.getmtime(h) for h in hits) if hits else 1e9
             except Exception:
