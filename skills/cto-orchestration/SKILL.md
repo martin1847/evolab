@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.2.10
+version: 1.2.11
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -17,9 +17,8 @@ metadata:
 > 就**先问清再做**；**一次批准不自动延伸到另一个动作**。可逆只读动作直接做、不请示。
 > 实证：把用户的 "push" 当成含 "merge" 去合共享分支被拦。
 >
-> 第三铁律（第二铁律的操作化）：**把"降低主理人认知负载"当设计目标**——单一决策队列（编排者维护、
-> 主理人只读、完整性保证）+ 三层委派（T0 直接做 / T1 做了记一行 / T2 动手前问）+ 静默默认（可逆前进、
-> 不可逆 HOLD）+ 批处理升级包 + 心跳。不是每事问，是把"该谁决"事先设计掉，让主理人只决承重的、永不必记。**见 §9 + `references/decision-queue.md`。**
+> 第三铁律（第二铁律的操作化）：**把"降低主理人认知负载"当设计目标**——不是每事问，是把"该谁决"
+> 事先设计掉，让主理人只决承重的、永不必记。机制（决策队列/三层委派/静默默认…）**见 §9**。
 
 ## 0. 角色分工（按能力定义，工具可换）
 
@@ -57,11 +56,11 @@ metadata:
    别带病跑**。**派发后、动手前先过理解门**：第一轮要 agent 复述"碰哪些文件/契约、有哪些风险"，核对无误
    再放行；弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
 4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：**首选融合 `dispatch <agent> <session> <cwd> --goal <goal文件>`
-   一条命令用 Bash 工具 `run_in_background:true` 调一次**——内建 launch→送 goal(agent 转 WORKING)→验 hook→**自动 watch**，
-   把"dispatch 后单独 send + 单独 `watch &`"三步收成一次调用，最高频的 `watch &` slip 从设计上无处发生（design > guard；
-   无独立 `--watch` flag——goal 不 watch 无正当场景、watch 无 goal 是看一个空转 agent 立即退出，"必须与另一 flag 同用的 flag"
-   本身就是 API 脚枪，源头删除）。派发后 Read 一次输出确认 `[send] OK…WORKING` + `hook: WORKING ✓`。
-   codex 评审(需先送 brief 再多轮)或首启 codex 目录信任提示的场景，仍用两步(`dispatch` 起 → `dispatch send` brief → 单独 `watch`，**必 run_in_background 禁 `&`**)。收工 `teardown`。四条判据；机制全文 + typed 状态全枚举 +
+   一条命令用 Bash 工具 `run_in_background:true` 调一次**——内建 launch→送 goal→验 hook→**自动 watch**，
+   最高频的 `watch &` slip 从设计上无处发生（design > guard；无独立 `--watch`，论证见 `dispatch` 头注）。
+   派发后 Read 一次输出确认 `[send] OK…WORKING` + `hook: WORKING ✓`。
+   codex 评审（先送 brief 再多轮）或首启目录信任提示的场景，仍用两步（`dispatch` 起 → `dispatch send` brief →
+   单独 `watch`，**必 run_in_background 禁 `&`**）。收工 `teardown`。四条判据；机制全文 + typed 状态全枚举 +
    STALLED-EXTERNAL / 异步完成通知黑洞 / 正向证据两坑 / fallback 自检 / cto-guard 实证见该目录 README：
    - **typed 状态存在、DEAD≠DONE、WAITING 要回输入**（别把 idle / watcher 裁决当终态）。
    - **判完成要正向证据、不凭 idle / watcher 裁决**——tmux 链路无失败信号、watcher 裁决只是线索；把完成绑
@@ -72,12 +71,9 @@ metadata:
      **浏览器/E2E subagent 完成通知会黑洞** → 派发即配 deadline 正向证据 watch（guard 在派发那刻注入全文提醒；
      活性判据=输出文件新鲜度、不是截图数，误杀防护=P0b，实证见 README）。
    - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿）；唯一后台正路 = Bash 工具 `run_in_background`。
-   - **强制层（结构不靠自律——不 fire 的散文=净负债，见 memory `ineffective-prose-net-negative`）**：坑已代码化，
-     wiring 见项目 `.claude/settings.json` + README §Wiring：
-     - `cto-guard-bash.py`（PreToolUse·Bash）：DENY 背景 `&`（剥引号后任意单 `&`）· DENY 无正向 grep 的裸 idle 轮询 ·
-       DENY 长/CJK 裸 send-keys（逼 dispatch send）· dispatch 未挂 watch 提醒。（push 时硬 gate 不在此，见 §1.6。）
-     - `cto-guard-agent.py`（Pre+Post·Agent|Task|TaskStop）：DENY 浏览器派发用 chrome-devtools（逼 Playwright，P0a）·
-       DENY TaskStop 杀"输出 120s 内还在长"的活 agent（P0b；override=`touch /tmp/cto-allow-kill-<id>`）· browser 派发注入黑洞提醒。
+   - **强制层（结构不靠自律）**：高频坑已由两 guard 脚本代码化 DENY（背景 `&` / 裸 idle 轮询 / CJK 裸
+     send-keys / chrome-devtools 浏览器派发 / 误杀活 agent）——被拦时读 deny 文案照做即可；DENY 全枚举 +
+     override + wiring 见 `guard-hooks.json`（entry 真源）+ 该目录 README §Wiring。
 5. **steering / 放行（理解门后 + 回修 + 新指令）**：一律 `references/agent-watch/dispatch send <session> -m "…"`（或 `-f <file>`）
    交付，并以它的**确认环收尾——会话真转 `WORKING` 才算放行落地**，别假设 send-keys 成功=已送达。
    裸 send-keys 长中文/全角已由 guard DENY（弹窗吃 Enter 卡 24min 的机制与实证见 dispatch 头注 + guard 提示文本）。
@@ -91,9 +87,8 @@ metadata:
      - 后端 = **curl 模拟本机 E2E**（尤其 SSE；起本机栈跑真路径，不是 mock）。
      - **单测 + codex ≠ 本机 E2E**：结构测试是「结构防火墙」、不证真路径成立（实证：某并发锁功能 73 测试全过 +
        codex approve，但 codex 自己两轮标"未跑 live DB 锁复现"——拿结构证据顶 Verified = 超前）。
-   - **顺序是编排纪律，push 硬 gate 不在 cto-guard**：本机 E2E→部署→部署环境 E2E→改任务状态 的**验证顺序**
-     由编排者守（Verified 定义 + §6 关单）。**`git push`/PR 的 push 时硬 gate 归你的 Git 协作规范
-     （evolab 公开镜像 `git-workflow-standard`）+ 服务端分支保护 ruleset**——git 策略不塞进 cto-guard（职责分清）。
+   - **验证顺序由编排者守，push 时硬 gate 不塞进 cto-guard**——归你的 Git 协作规范（evolab 公开镜像
+     `git-workflow-standard`）+ 服务端分支保护（职责分清）。
 
 ## 2. 对抗式评审循环
 
@@ -120,7 +115,10 @@ metadata:
   不是约束）、③ 执行**真到了**你怀疑的代码（读代码只找候选，"执行到这"要日志/trace 证）。**绑定约束未证时，
   先派埋点 + 复测、不发投机修复**（实证：读代码三轮推断一个根本不存在的"挂死"、每轮被真数据打回）。常见
   伪 bug：查错了数据源（空表当真表 / 错日志串 / 错 session）、**"没收到"(客户端) ≠ "没发出"(服务端)**。
-- **commit 留本地，push/PR 必须用户明示批准**；批准一次只覆盖那次。
+- **病类确认 → 立即系统性枚举全部同模式点**（measure-before-more 的收网侧）：资源泄漏/同模式反模式一旦
+  root-cause 确认为"类"（如"持事务跨 async"），下一步不是修眼前那一处、等下轮监测再显形一处——**当场枚举
+  代码里所有同模式点、逐一分类（安全/持有嫌疑）成表，一轮修完**。实证：idle-txn 5 轮逐个显形逐个修
+  （claim→完成→执行读→SSE→retry-sleep），第 4 轮才做的系统性枚举若第 1 轮就做，5 轮收敛成 ~2 轮。
 - **验证诚实**：交付三段式——验证了什么（真跑过）/ 没验证什么 / 剩余风险。本地打桩绕过的环节（真
   LLM、真队列）显式标注，部署后运维补验。实证：本地 LLM 打桩致 un-awaited coroutine 逃逸生产。
 - **代验路径 ≠ 真路径**（后端/agent/前端通用）：mock / 打桩 / stream smoke 全绿 **≠ 真实路径成立**——按

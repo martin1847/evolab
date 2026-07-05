@@ -1,7 +1,8 @@
-# codex 评审派发模板（send-keys 文本）
+# codex 评审派发模板（brief 文本）
 
-> 起会话：`tmux new-session -d -s <proj>-<task>-codex -c <同一worktree> 'codex'`
-> 启动弹更新提示先 `send-keys '2'` + Enter 跳过。评审期间 omp 不得改同一 worktree。
+> 起会话走 `agent-watch/dispatch codex <proj>-<task>-codex <同一worktree>`（裸 `tmux new-session`
+> 缺 hook env → watcher 退化抓屏），brief 用 `dispatch send -f` 交付；两步流全串见 agent-watch README。
+> 评审期间 omp 不得改同一 worktree。
 
 ## 首轮评审
 

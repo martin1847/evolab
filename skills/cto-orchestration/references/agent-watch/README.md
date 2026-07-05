@@ -113,16 +113,23 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 SKILL 主干只留三条 watch 判据（typed 状态 + DEAD≠DONE / 判完成要正向证据 / 后台启动不加 shell `&`）
 和派发的 hook-gate 判据。这里是派发命令、坑枚举、typed 状态全枚举、各失败态的实证。
 
-### 派发（用 `dispatch` 起 + 验 hook + 理解门）
+### 派发（首选融合 `--goal` 一条命令；codex 多轮 brief 用两步）
 
 ```bash
+# 首选（v1.2.9+）：launch → 送 goal → 验 hook → 自动 watch，一次 Bash run_in_background 调用。
 # dispatch 把 hook env 注进 tmux 命令串——watcher 走 hook 主信号的前提，缺则退化抓屏（机制见上文）。
-references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-omp <worktree>
-sleep 12
-tmux send-keys -t <session> 'goal：<abs-path>'; sleep 1; tmux send-keys -t <session> Enter
+references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-omp <worktree> --goal <abs-goal-path>
+# 派发后 Read 一次输出确认：[send] OK…WORKING + hook: WORKING ✓
+# 无独立 --watch flag（goal 即 watch）；设计论证见 dispatch 头注。
+
+# 两步流（codex 评审先送 brief 再多轮 / 首启目录信任提示）：
+references/agent-watch/dispatch codex <session> <worktree>
+references/agent-watch/dispatch send <session> -f <brief.md>   # 确认环收尾：真转 WORKING 才算送达
+# 然后单独 watch —— 必 Bash run_in_background，禁 shell `&`
 ```
 
-坑：文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；**长中文/特殊符号
+裸 send-keys 是**逃生舱不是正路**（长/CJK 已被 guard DENY，逼 `dispatch send`），其坑照录在案：
+文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；**长中文/特殊符号
 （①②③、全角冒号）指令会触发 omp 的 skill 模糊搜索弹窗吃掉 Enter，且 Escape/Ctrl-C 关不掉**（实证
 2026-07-02）→ `C-u` 清输入框 + 改发一行短 ASCII 引用指令文件（评审回修/多段指令一律写成
 `docs/orchestration/*_TASK|FIXROUND*.md` 再让 agent 读）；**弹窗事故后 TUI 输入层可能整体楔死**
