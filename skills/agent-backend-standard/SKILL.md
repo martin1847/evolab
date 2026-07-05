@@ -1,6 +1,6 @@
 ---
 name: agent-backend-standard
-version: 1.0.3
+version: 1.0.4
 description: 生产级 agent 时代后端工程手册(hub)——建 / 评审 agent·LLM 后端、**及任何碰 DB 的持久层后端**代码时加载(数据访问/连接/事务纪律是通用后端规则,非 agent 专属)。覆盖:架构与控制流、上下文与 prompt 工程、工具设计(ACI)、记忆与状态、检索/RAG、韧性与幂等、人在环、安全护栏与生成操作的有界执行、评估、可观测与成本、代码/依赖生命周期与反死代码、**数据访问纪律(连接·读·写事务)**、规范治理。本文件是目录,深度按需读 references/。可观测性/Git/A2A 对外契约是独立 skill,本 hub 交叉引用不重复。Use when building or reviewing agent/LLM backend code — or ANY backend touching a database (connection/transaction/read-write discipline is universal persistence-layer guidance, not agent-only): architecture, prompts, tools, memory, RAG, resilience, HITL, safety & bounded execution of generated ops, eval, cost, code/dependency lifecycle, data-access & connection/transaction discipline.
 ---
 
@@ -21,7 +21,7 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 - **II-4 工具 / 函数设计(ACI)** —— 整合/命名空间/返回上下文/token 效率。*TBD*(交叉引 A2A 对外契约规范)
 - **II-5 记忆 / 状态 / 持久** —— session/state、stateless-reducer、pause/resume。*TBD*
 - **II-6 检索 / RAG / grounding** —— chunking、faithfulness、向量弱点。*TBD*
-- **II-7 韧性 / 错误 / 幂等** → `references/resilience.md` —— 每个外部/LLM/工具调用:超时 + 有界重试 + 幂等 + 熔断 + 池/并发。
+- **II-7 韧性 / 错误 / 幂等** → `references/resilience.md` —— 每个外部/LLM/工具调用:超时 + 有界重试 + 幂等 + 熔断 + 池/并发;**事件循环不阻塞**(async 运行时承重条,五层门禁:lint→测试期检测→staging 阈值→生产 lag 遥测→部署断言)。
 - **II-8 人在环(HITL)+ resume 安全** → `references/hitl-resume-safety.md` —— 可恢复 flow 的 resume 安全:**六道闸**防御(持久 checkpoint 校验请求 ctx、fail-closed、runtime 层)。clarify/approve 协议交叉引 A2A 对外契约规范。
 - **II-9 安全 · 护栏 · 生成操作的有界执行** → `references/safety-bounded-execution.md` —— 执行不可信生成操作(尤 SQL)的硬边界、安全分层、workflow 迭代上限。
 
