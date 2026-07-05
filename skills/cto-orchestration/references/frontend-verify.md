@@ -32,6 +32,7 @@ MCP 驱动登录+渲染验证+网络诊断，CLI 抓 SSE/API ground-truth。
 | **过期/老化会话** | 登录后删 access cookie（保留 refresh/UI 提示 cookie）再导航——断言自动恢复而非报错 |
 | **贫数据账号** | mock 最小响应形状（仅必填字段）——断言空态占位而非崩溃/永久加载 |
 | 未登录 | 断言引导登录而非通用错误 |
+| **引擎×输入方式** | 桌面 chromium 鼠标 click 通过 ≠ 真机触摸可用——至少补一组 **webkit 引擎 + iPhone 设备描述符(hasTouch) + `page.tap`**（近似 WKWebView/微信）；交互命中类改动（可点标签/弹层/浮层）此组必跑（实证 2026-07-05：位置标签 chromium 21 断言全绿、真机 iOS 微信点不动） |
 
 staging 应养**常备测试账号矩阵**（手机号全字段户 / oauth 贫字段户），不是一个黄金账号打天下。
 
