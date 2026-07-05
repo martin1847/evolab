@@ -10,9 +10,9 @@ agent 与人共用的 Git 工作流规范。**完整版 + rationale 见 `referen
 
 > 双层落地(见治理):本 skill 是**软层**(write-time 预防)。不可逆动作(直推受保护分支、force push)的最终防线是**硬层**——GitHub Ruleset(归 你的 IaC 仓 / IaC CTO)。**两者都在,不互替。**
 
-## 假设的硬门禁契约（与硬层对接缝，两层 ruleset）
+## 硬门禁契约（服务端已生效；与硬层对接缝，两层 ruleset）
 
-canonical = 你的 IaC ruleset（两层 ruleset）,本 skill 镜像:
+canonical = 你的 IaC ruleset（两层 ruleset）,本 skill 镜像。**服务端已生效(硬层回报)**:Tier 1 baseline 自 2026-06-30、Tier 2 ci ruleset 自 2026-07-04 均 active;Tier 2 的 CODEOWNERS review 待各仓 CODEOWNERS 铺齐后开启(现变量化关闭)。两层:
 - **Tier 1 `branch-protection-baseline`(所有仓,含未来仓)**:地板 = **禁 force-push + 禁删分支**;**不要求 PR、不禁 merge-commit** → 小仓 / 文档仓可直推、直接合。
 - **Tier 2 `branch-protection-ci`(白名单 `var.ci_protected_repositories`,默认 = 受保护分支白名单)**:完整流程 = **require PR + CODEOWNERS + linear history + status checks**。**原则:能发布 artifact 的仓必须被保护**;受保护分支集 = 受保护分支白名单 `main` / `master` / `develop` / `dev` / `release/**` / `project/*`。
 

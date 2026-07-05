@@ -12,9 +12,9 @@
 
 **为什么两层**:skill 文本随长对话 salience 衰减;纯声明机制无 forcing function 会腐烂(见治理调研依据)。**不可逆动作(直推受保护分支、force push 改写历史)的最终防线必须是硬层**;skill 让 agent 不去撞墙,Ruleset 是墙。
 
-## 1. 假设的硬门禁契约（对接缝）
+## 1. 硬门禁契约（服务端已生效；对接缝）
 
-canonical 定义在 你的 IaC ruleset（两层 ruleset）,本 skill 镜像。两层:
+canonical 定义在 你的 IaC ruleset（两层 ruleset）,本 skill 镜像。**服务端已生效(硬层回报)**:Tier 1 baseline 自 2026-06-30、Tier 2 ci ruleset 自 2026-07-04 均 active;Tier 2 的 CODEOWNERS review 待各仓 CODEOWNERS 铺齐后开启(现变量化关闭)。两层:
 
 **Tier 1 `branch-protection-baseline`(所有仓,含未来仓)** —— 地板,装即生效:
 - Block force pushes、Restrict deletions(仅此两条)。
