@@ -112,7 +112,8 @@ chk_eq "no identity match silent" "" "$out"; chk_eq "no identity exit 0" 0 "$rc"
 # fresh identity 'zeta' in its own subtree so .notify-state starts clean
 bash "$BUSBIN" register zeta /tmp/zeta "seat z" >/dev/null
 bash "$BUSBIN" send alpha zeta first "一封" >/dev/null
-ups() { printf '{"hook_event_name":"UserPromptSubmit"}' | env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=zeta "$MAILCHECK"; }
+# INTERVAL=0 disables the throttle so back-to-back calls test the check logic deterministically.
+ups() { printf '{"hook_event_name":"UserPromptSubmit"}' | env -u CLAUDE_PROJECT_DIR AGENT_MAIL_CHECK_INTERVAL=0 AGENT_MAIL_SELF=zeta "$MAILCHECK"; }
 out="$(ups)"
 chk_contains "UPS first surfaces new mail" "1 封新信" "$out"
 chk_contains "UPS output is UserPromptSubmit JSON" "UserPromptSubmit" "$out"
@@ -130,7 +131,19 @@ chk_contains "malicious filename redacted" "⟨redacted⟩" "$out"
 chk_not_contains "injection payload absent from context" "IGNORE PREVIOUS" "$out"
 
 # empty inbox on UserPromptSubmit -> silent (no restart-only assumption)
-out="$(printf '{"hook_event_name":"UserPromptSubmit"}' | env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
+out="$(printf '{"hook_event_name":"UserPromptSubmit"}' | env -u CLAUDE_PROJECT_DIR AGENT_MAIL_CHECK_INTERVAL=0 AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
 chk_eq "UPS empty inbox silent" "" "$out"; chk_eq "UPS empty exit 0" 0 "$rc"
+
+# THROTTLE: mail is rare/async — a large interval bounds real scans to ≤1 per interval. First check
+# seeds state; NEW mail arriving within the interval is suppressed until it elapses (cost control).
+bash "$BUSBIN" register kappa /tmp/kappa "seat k" >/dev/null
+tups() { printf '{"hook_event_name":"UserPromptSubmit"}' | env -u CLAUDE_PROJECT_DIR AGENT_MAIL_CHECK_INTERVAL=9999 AGENT_MAIL_SELF=kappa "$MAILCHECK"; }
+out="$(tups)"; chk_eq "throttle: first check on empty inbox silent + seeds clock" "" "$out"
+bash "$BUSBIN" send alpha kappa urgent "急件" >/dev/null   # arrives right after the check
+out="$(tups)"
+chk_eq "throttle: new mail within interval suppressed (≤1 scan/interval)" "" "$out"
+# throttle OFF → the same pending mail surfaces immediately (proves suppression, not loss)
+out="$(printf '{"hook_event_name":"UserPromptSubmit"}' | env -u CLAUDE_PROJECT_DIR AGENT_MAIL_CHECK_INTERVAL=0 AGENT_MAIL_SELF=kappa "$MAILCHECK")"
+chk_contains "throttle off: suppressed mail surfaces (not lost)" "1 封新信" "$out"
 
 summary
