@@ -85,7 +85,7 @@
 
 ## §3 日志铁律(语言无关)
 
-1. **结构化优先,永不字符串拼接**。`message` = 短事件名(snake_case),变量全进字段。
+1. **结构化优先,永不字符串拼接**。`message` = 短事件名(snake_case),变量全进字段。**宽事件 ≠ JSON**:要求的是"事件名稳定 + 变量进字段 + 行式可解析",不是 JSON 序列化——JSON 有实打实的每行计算开销,默认行式字段格式即可;日志管道需要机器解析时再升 JSON,且升级只应动导出层配置、不动打点代码。**宽事件 ≠ JSON**:要求的是"事件名稳定 + 变量进字段 + 行式可解析",不是 JSON 序列化——JSON 有实打实的每行计算开销,默认行式字段格式即可;日志管道需要机器解析时再升 JSON,且升级只应动导出层配置、不动打点代码。
    - ✅ `info("tool_call_failed", tool="search", code="timeout", attempt=2)`
    - ❌ `info("Failed to call search because timeout on attempt 2")`
 2. **日志即数据,不即叙事**。事件名是可查询/聚合的标识符,不是给人读的句子。
@@ -112,6 +112,32 @@
 | `DEBUG` | 深挖细节:完整 prompt、模型中间推理、原始工具响应、检索命中的 chunk、跨进程报文全文。体积大、含敏感数据、仅 deep-dive 看。 | 关(可按 trace 动态开) | 否 |
 
 补充:OTel 无标准 TRACE 级,最细用 `DEBUG`;生产默认 INFO,DEBUG 按环境变量或按特定 `trace_id` 动态开(采样式重放);**排障时若"光看 INFO 不知走到哪步",是 INFO 漏了状态转移点——补 INFO,而不是常开 DEBUG**。
+
+**span 导出日志与环境分级(多语言通用)**:
+- **span 复述进日志流 = 噪音**:console/logging 型 span exporter 把每个 span 复述成一条日志——每请求一条、exporter 线程在请求上下文之外 → `trace_id` 关联字段为空,连"日志必带 trace_id"都不过。此类 exporter 各语言 OTel SDK 都有(Java `LoggingSpanExporter` / Python `ConsoleSpanExporter` / Go `stdouttrace` / Rust stdout exporter),**定位都是 dev 期验证埋点,不是部署环境的 trace sink**。trace 信号的正解是 OTLP 后端;部署环境把该 exporter 的 logger 类别阈值默认压到 `WARN`(保留 SDK 自身告警),dev 覆盖回可见。
+- **环境三档矩阵(默认形状)**:
+
+  | 环境 | 全局级别 | span 导出行 | 来源 |
+  |---|---|---|---|
+  | dev | DEBUG | 可见 | 代码内 dev 默认(开发就近调试) |
+  | staging | DEBUG | 可见 | 部署层运行时配置开 |
+  | prod | INFO(骨架) | 隐藏 | 默认即安静侧,零配置 |
+
+- **配置分工(所有权切分)**:语义级别(哪条日志算 INFO/DEBUG)归**代码**,且默认取安静侧;级别阈值按环境开归**部署层运行时配置**。rationale:"一份构建物服务多环境"时 stage/prod 跑同一构建物/同一 profile,构建期配置分不开环境,环境详细度必须是运行时可覆盖项——由此得所有权切分:代码管语义,部署层(manifests/env)管环境。**注意 logger 类别阈值通常优先于全局级别**:全局开 DEBUG 不会带出被类别阈值压住的行,要看见须显式开该类别。各语言的运行时级别覆盖机制:Java(JUL/JBoss LogManager/Logback)类别级别属运行时配置(Quarkus 形如 `QUARKUS_LOG_CATEGORY__<CAT>__LEVEL`,注意 native 受构建期 min-level 下限约束);Python `logging` 按 logger 名 setLevel,入口从 env/配置读;Go `slog.LevelVar` / zap `AtomicLevel` 运行时可调;Rust `tracing` `EnvFilter`(`RUST_LOG=target=level`)。
+- **静音前查 sink**:若部署环境此前以日志流当 trace 落地(无 collector),静音 span 导出 = trace 信号整体消失;先补 OTLP collector(exporter 选择在部分栈是构建期属性——如 Quarkus native——切换须重构建,排期考虑)或有意识接受盲区再静音。
+
+**span 导出日志与环境分级(多语言通用)**:
+- **span 复述进日志流 = 噪音**:console/logging 型 span exporter 把每个 span 复述成一条日志——每请求一条、exporter 线程在请求上下文之外 → `trace_id` 关联字段为空,连"日志必带 trace_id"都不过。此类 exporter 各语言 OTel SDK 都有(Java `LoggingSpanExporter` / Python `ConsoleSpanExporter` / Go `stdouttrace` / Rust stdout exporter),**定位都是 dev 期验证埋点,不是部署环境的 trace sink**。trace 信号的正解是 OTLP 后端;部署环境把该 exporter 的 logger 类别阈值默认压到 `WARN`(保留 SDK 自身告警),dev 覆盖回可见。
+- **环境三档矩阵(默认形状)**:
+
+  | 环境 | 全局级别 | span 导出行 | 来源 |
+  |---|---|---|---|
+  | dev | DEBUG | 可见 | 代码内 dev 默认(开发就近调试) |
+  | staging | DEBUG | 可见 | 部署层运行时配置开 |
+  | prod | INFO(骨架) | 隐藏 | 默认即安静侧,零配置 |
+
+- **配置分工(所有权切分)**:语义级别(哪条日志算 INFO/DEBUG)归**代码**,且默认取安静侧;级别阈值按环境开归**部署层运行时配置**。rationale:"一份构建物服务多环境"时 stage/prod 跑同一构建物/同一 profile,构建期配置分不开环境,环境详细度必须是运行时可覆盖项——由此得所有权切分:代码管语义,部署层(manifests/env)管环境。**注意 logger 类别阈值通常优先于全局级别**:全局开 DEBUG 不会带出被类别阈值压住的行,要看见须显式开该类别。各语言的运行时级别覆盖机制:Java(JUL/JBoss LogManager/Logback)类别级别属运行时配置(Quarkus 形如 `QUARKUS_LOG_CATEGORY__<CAT>__LEVEL`,注意 native 受构建期 min-level 下限约束);Python `logging` 按 logger 名 setLevel,入口从 env/配置读;Go `slog.LevelVar` / zap `AtomicLevel` 运行时可调;Rust `tracing` `EnvFilter`(`RUST_LOG=target=level`)。
+- **静音前查 sink**:若部署环境此前以日志流当 trace 落地(无 collector),静音 span 导出 = trace 信号整体消失;先补 OTLP collector(exporter 选择在部分栈是构建期属性——如 Quarkus native——切换须重构建,排期考虑)或有意识接受盲区再静音。
 
 ---
 
@@ -247,6 +273,48 @@
 **达标线:规范里每一条会被违反且能自动检测的铁律,都要有一个会让 CI 变红的 gate。检测不了的(纯人工判断项)才进人工清单。** 立规范时若只产出文档不产出 gate,等于没立。
 
 ---
+
+## §10 接入初始化 checklist(一次性仪式)
+
+> §9 讲"为什么必须有 gate 与 gate 长什么样";本节回答"**什么时候建**":**采纳规范的当天,作为接入仪式的一部分**。实证模式:规范散文被完整搬进项目、gate 排期"以后补"→ 数月后漏埋点/配置漂移才暴露(§9 案例 + 某项目 span 复述噪音在 staging 灌 INFO 数日无人察觉,肉眼看日志才抓到——一条 gate 断言第一次 CI 就会红)。**本 checklist 自包含,不依赖任何编排/流程工具**;若项目另有任务编排体系,由那边引用本节,不反向耦合。
+
+按序走完,每步有完成判据:
+
+| # | 步骤 | 完成判据 |
+|---|---|---|
+| 1 | **宪法条款**:仓库 AGENTS.md / CONTRIBUTING 写明"新 LLM/工具/检索/领域路径必须有 parent 正确的领域 span",指向本规范 | 条款在 committed tree 里 |
+| 2 | **最小 conformance gate**(按语言起手式,见下) | 测试进 CI 且绿 |
+| 3 | **负例探针**:故意删 span / 断 parent | gate 变红的运行记录(双跑证据) |
+| 4 | **CI wiring 验真** | 一个真 PR 上 gate 真 fail 过一次 |
+| 5 | **环境三档矩阵**(§4):dev/staging=DEBUG 可见,prod=INFO 骨架;span 复述导出默认静音 | 部署配置/manifests 里可指认 |
+| 6 | **import 守卫**(§9.3/附录 C):禁厂商 SDK 直依赖 | 守卫进 lint/CI |
+
+**最小 conformance gate 起手式(三条断言,语言无关;捕获器按附录 C 选)**:
+- ① 一次入站请求产生 server span(root),且业务 id 在 span 属性上;
+- ② 该请求路径的日志行携带 trace_id(空 trace_id 的 ERROR = 失败);
+- ③ 部署档配置下无 span 复述日志输出(console/logging exporter 静音,§4)。
+Java:@QuarkusTest/SpringBootTest + 进程内 exporter;Python:pytest + InMemorySpanExporter;Go:tracetest.SpanRecorder;Rust:tracing 测试订阅器。每条断言配一个负例探针。
+
+## §10 接入初始化 checklist(一次性仪式)
+
+> §9 讲"为什么必须有 gate 与 gate 长什么样";本节回答"**什么时候建**":**采纳规范的当天,作为接入仪式的一部分**。实证模式:规范散文被完整搬进项目、gate 排期"以后补"→ 数月后漏埋点/配置漂移才暴露(§9 案例 + 某项目 span 复述噪音在 staging 灌 INFO 数日无人察觉,肉眼看日志才抓到——一条 gate 断言第一次 CI 就会红)。**本 checklist 自包含,不依赖任何编排/流程工具**;若项目另有任务编排体系,由那边引用本节,不反向耦合。
+
+按序走完,每步有完成判据:
+
+| # | 步骤 | 完成判据 |
+|---|---|---|
+| 1 | **宪法条款**:仓库 AGENTS.md / CONTRIBUTING 写明"新 LLM/工具/检索/领域路径必须有 parent 正确的领域 span",指向本规范 | 条款在 committed tree 里 |
+| 2 | **最小 conformance gate**(按语言起手式,见下) | 测试进 CI 且绿 |
+| 3 | **负例探针**:故意删 span / 断 parent | gate 变红的运行记录(双跑证据) |
+| 4 | **CI wiring 验真** | 一个真 PR 上 gate 真 fail 过一次 |
+| 5 | **环境三档矩阵**(§4):dev/staging=DEBUG 可见,prod=INFO 骨架;span 复述导出默认静音 | 部署配置/manifests 里可指认 |
+| 6 | **import 守卫**(§9.3/附录 C):禁厂商 SDK 直依赖 | 守卫进 lint/CI |
+
+**最小 conformance gate 起手式(三条断言,语言无关;捕获器按附录 C 选)**:
+- ① 一次入站请求产生 server span(root),且业务 id 在 span 属性上;
+- ② 该请求路径的日志行携带 trace_id(空 trace_id 的 ERROR = 失败);
+- ③ 部署档配置下无 span 复述日志输出(console/logging exporter 静音,§4)。
+Java:@QuarkusTest/SpringBootTest + 进程内 exporter;Python:pytest + InMemorySpanExporter;Go:tracetest.SpanRecorder;Rust:tracing 测试订阅器。每条断言配一个负例探针。
 
 ## 附录 C·埋点与 gate 工具链(选你的语言)
 

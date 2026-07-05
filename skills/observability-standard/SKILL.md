@@ -21,7 +21,7 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 5. **标准在边界 + 后端无关**:跨进程 / 对外响应遵守 OTel 语义约定 + 类型校验(LLM 边界额外遵守 GenAI 约定);内部自由。**只依赖 OTel API/SDK + OTLP,应用代码不 import 厂商 SDK(Langfuse / Datadog 等);标准组件优先用官方 auto-instrumentation 自动埋点,手写 span 只补领域环节;厂商差异只在 Collector / exporter 配置层 → 换后端不重埋(见 references §1 铁律5 / §5.0 / 附录 C)。**
 
 ## 日志铁律
-- 结构化优先:`event_name + fields`,**绝不字符串拼接**。日志即数据,不即叙事。
+- 结构化优先:`event_name + fields`,**绝不字符串拼接**。日志即数据,不即叙事。**宽事件 ≠ JSON**:稳定可解析的行式字段格式即可,不强制 JSON 序列化(有实打实的计算开销;日志管道需要机器解析时再升,升级只动导出层配置)。**宽事件 ≠ JSON**:稳定可解析的行式字段格式即可,不强制 JSON 序列化(有实打实的计算开销;日志管道需要机器解析时再升,升级只动导出层配置)。
 - 日志在活跃 span 内打出,`trace_id`/`span_id` 自动注入;**没有 `trace_id` 的 ERROR 视为 bug**。
 - 上下文绑一次贯穿全程(语言原生 ambient context 机制,见 references 附录 B),不手传。
 - 不要 log-and-throw;密钥/PII/客户机密在边界脱敏;**明文 prompt/completion = 数据披露闸**(显式 flag + 非 prod + 脱敏;audit 仅哈希),非日志级别。
@@ -34,6 +34,12 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 - `DEBUG` 重建"为什么"的细节(完整 prompt、推理、原始响应、命中 chunk、跨进程报文全文),**生产默认关、可按 trace 动态开**。
 - `ERROR` = 失败且影响本次结果,必带 trace + 操作 + 输入标识符 + 栈;`WARNING` = 降级但请求继续。
 - 排障时"光看 INFO 不知走到哪步" → **补 INFO,别常开 DEBUG**。
+- **span 导出日志不是应用日志**:trace 信号走 OTLP;console/logging 型 span exporter(各语言 OTel SDK 均有)仅 dev 验证用,部署环境把其 logger 类别阈值默认压到 `WARN`(此类行每请求复述一条且无请求上下文,是双写噪音)。
+- **环境三档矩阵(默认形状)**:**dev = DEBUG(代码内默认,开发就近调试)· staging = DEBUG(部署层配置开)· prod = INFO 骨架(默认安静侧)**;span 导出行随档位:dev/staging 可见、prod 隐藏。
+- **配置分工**:语义级别(哪条算 INFO/DEBUG)归**代码**且默认取安静侧;级别阈值按环境开归**部署层运行时配置**——"一份构建物服务多环境"下构建期/profile 分不开环境,只能运行时覆盖(各语言机制见 references 附录);prod 静音 span 导出前确认已有真 OTLP sink,否则 trace 信号整体丢失。
+- **span 导出日志不是应用日志**:trace 信号走 OTLP;console/logging 型 span exporter(各语言 OTel SDK 均有)仅 dev 验证用,部署环境把其 logger 类别阈值默认压到 `WARN`(此类行每请求复述一条且无请求上下文,是双写噪音)。
+- **环境三档矩阵(默认形状)**:**dev = DEBUG(代码内默认,开发就近调试)· staging = DEBUG(部署层配置开)· prod = INFO 骨架(默认安静侧)**;span 导出行随档位:dev/staging 可见、prod 隐藏。
+- **配置分工**:语义级别(哪条算 INFO/DEBUG)归**代码**且默认取安静侧;级别阈值按环境开归**部署层运行时配置**——"一份构建物服务多环境"下构建期/profile 分不开环境,只能运行时覆盖(各语言机制见 references 附录);prod 静音 span 导出前确认已有真 OTLP sink,否则 trace 信号整体丢失。
 
 ## 要开的 span
 ### 核心(所有服务)
@@ -64,9 +70,29 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 达标线:**每条会被违反且能自动检测的铁律,都要有一个会让 CI 变红的 gate;检测不了的才进人工清单。立规范只产文档不产 gate = 没立。** 完整机制 + 实证见 §9。
 
+## 接入初始化 checklist(一次性仪式,自包含——不依赖任何编排工具)
+
+新项目/新仓库采纳本规范时,**当天**走完(排期到以后 = 稀释的开始;完整版见 references §10):
+1. **宪法条款**进仓库 AGENTS.md / CONTRIBUTING(新领域路径必须有 parent 正确的 span,指向本 skill)。
+2. **按语言立最小 conformance gate**(进程内 span 捕获断言:server span 存在 + 日志带 trace_id + 部署配置无 span 复述输出;语言起手式见 references §10)。
+3. **负例探针**:删 span / 断 parent → gate 必须变红,贴双跑证据。
+4. **CI wiring 验真**:在真 PR 上让 gate 真 fail 一次,别假设配置生效。
+5. **环境三档矩阵**配置就位(dev/staging=DEBUG 可见、prod=INFO 骨架,见日志级别判据)。
+6. **import 守卫**(禁厂商 SDK 直依赖,机制见 references 附录 C)。
+
+## 接入初始化 checklist(一次性仪式,自包含——不依赖任何编排工具)
+
+新项目/新仓库采纳本规范时,**当天**走完(排期到以后 = 稀释的开始;完整版见 references §10):
+1. **宪法条款**进仓库 AGENTS.md / CONTRIBUTING(新领域路径必须有 parent 正确的 span,指向本 skill)。
+2. **按语言立最小 conformance gate**(进程内 span 捕获断言:server span 存在 + 日志带 trace_id + 部署配置无 span 复述输出;语言起手式见 references §10)。
+3. **负例探针**:删 span / 断 parent → gate 必须变红,贴双跑证据。
+4. **CI wiring 验真**:在真 PR 上让 gate 真 fail 一次,别假设配置生效。
+5. **环境三档矩阵**配置就位(dev/staging=DEBUG 可见、prod=INFO 骨架,见日志级别判据)。
+6. **import 守卫**(禁厂商 SDK 直依赖,机制见 references 附录 C)。
+
 ## 何时读 references/standard.md
 
-> **本 SKILL 是 `references/standard.md` §1–§9 的压缩镜像**(总纲 / 铁律 → §1、类型纪律 → §2 + §2.1、日志铁律 → §3、级别 → §4、span → §5、三查 → §7、强制生效 → §9;standard 另含 §6 日志接入、§8 检查清单、附录 A/B/C 各语言写法与工具链)。**改任一条规则必须同步两处。**
+> **本 SKILL 是 `references/standard.md` §1–§10 的压缩镜像**(总纲 / 铁律 → §1、类型纪律 → §2 + §2.1、日志铁律 → §3、级别 → §4、span → §5、三查 → §7、强制生效 → §9;standard 另含 §6 日志接入、§8 检查清单、附录 A/B/C 各语言写法与工具链)。**改任一条规则必须同步两处。**
 
 出现以下任一情况,读 `references/standard.md`:
 - 需要**具体语言**(Python / Go / Java / Rust)的日志接入与类型纪律地道写法
