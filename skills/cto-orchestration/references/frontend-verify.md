@@ -19,6 +19,22 @@ MCP 驱动登录+渲染验证+网络诊断，CLI 抓 SSE/API ground-truth。
 > **Playwright 优先已是 hook 硬规则**（P0a：浏览器派发载 `mcp__chrome-devtools` token 即被 `cto-guard-agent.py` DENY）。
 > why：chrome-devtools 与用户浏览器 + 多 agent 争 CDP、断连坑两次；仅当必须 attach 用户已登录会话才值得用它。
 
+## 状态形状矩阵（E2E 只测新鲜快乐态 = 结构性漏测）
+
+实证（2026-07-05，同日两个 P1 同根）：全部 E2E 用"刚登录的黄金账号"→ ① access token 过期后
+前端零恢复代码（UI 提示 cookie 比 access 长命，过期态用户全灭）② 贫数据账号（微信 oauth 用户
+缺 nickname/phone）触发崩溃——两者都只在真机上被主理人踩到。**新鲜登录的测试永远走不到时间态
+与数据形状分支。** 铁律：鉴权/用户数据相关的前端验证，至少覆盖：
+
+| 态 | 制造方法（Playwright 可脚本化） |
+|---|---|
+| 新鲜登录 | 常规流程 |
+| **过期/老化会话** | 登录后删 access cookie（保留 refresh/UI 提示 cookie）再导航——断言自动恢复而非报错 |
+| **贫数据账号** | mock 最小响应形状（仅必填字段）——断言空态占位而非崩溃/永久加载 |
+| 未登录 | 断言引导登录而非通用错误 |
+
+staging 应养**常备测试账号矩阵**（手机号全字段户 / oauth 贫字段户），不是一个黄金账号打天下。
+
 ## 联调铁律
 
 1. **a11y/DOM 快照优先定位元素**，坐标/截图 fallback。

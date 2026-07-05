@@ -29,6 +29,9 @@
 - [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立，E2E 范围匹配声明范围。
 - 不确定 = 未完成；预算/时间耗尽 ≠ 完成。未达成就保持任务 active + STOP and report，别把易达成的子集当目标。
 
+- 鉴权/会话/用户数据相关改动：验证须覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 / 未登录），
+  不得只测新鲜快乐态（见 frontend-verify「状态形状矩阵」）。
+
 ## Guardrails
 
 - Scope = <精确边界>。No refactors of neighboring code, no format changes.
