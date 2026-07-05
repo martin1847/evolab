@@ -71,6 +71,8 @@ metadata:
      主动 capture-pane——治 "WORKING 卡死/热重试" 的**永不 DONE**（与上条**假 DONE** 是两个失败态）。
      **浏览器/E2E subagent 完成通知会黑洞** → 派发即配 deadline 正向证据 watch（guard 在派发那刻注入全文提醒；
      活性判据=输出文件新鲜度、不是截图数，误杀防护=P0b，实证见 README）。
+     **watcher 被宿主批量收割（"was stopped" 通知）→ 跑 `rearm` 照单重挂**（watchspec 自愈见 README；
+     rearm 只开单不执行，重挂仍走 run_in_background）。
    - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿）；唯一后台正路 = Bash 工具 `run_in_background`。
    - **强制层（结构不靠自律）**：高频坑已由两 guard 脚本代码化 DENY（背景 `&` / 裸 idle 轮询 / CJK 裸
      send-keys / chrome-devtools 浏览器派发 / 误杀活 agent）——被拦时读 deny 文案照做即可；DENY 全枚举 +
