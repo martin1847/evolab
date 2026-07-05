@@ -1,6 +1,6 @@
 ---
 name: observability-standard
-version: 1.1.2
+version: 1.1.3
 description: 生产级可观测性与工程规范,适用于**所有后端服务** —— 普通微服务(auth / 网关 / 业务服务)与 agent / 多 agent / RAG 知识库项目通用。核心:用 trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点、跨进程 W3C traceparent 传播、日志级别纪律、边界类型纪律(含 id 持久化:不往业务行塞 trace_id);agent / RAG 场景在此基线上加 LLM / 工具 / 检索埋点与 GenAI 语义约定。Use this skill whenever writing or reviewing backend code that involves logging setup, OpenTelemetry tracing, structured logs, cross-process context propagation, choosing log levels (INFO vs DEBUG), correlating logs / traces / db to debug, defining types for boundary or inter-service data — and additionally agent orchestration / sub-agents, LLM / tool / retrieval calls, or GenAI semantic conventions. 适用 Python / Go / Java / Rust。Apply it even when the user only says things like "加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪",不限于显式提到规范时。目标:trace_id 串 trace/log、业务 id 反查 db,让线上问题最快定位。
 ---
 
@@ -34,9 +34,6 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 - `DEBUG` 重建"为什么"的细节(完整 prompt、推理、原始响应、命中 chunk、跨进程报文全文),**生产默认关、可按 trace 动态开**。
 - `ERROR` = 失败且影响本次结果,必带 trace + 操作 + 输入标识符 + 栈;`WARNING` = 降级但请求继续。
 - 排障时"光看 INFO 不知走到哪步" → **补 INFO,别常开 DEBUG**。
-- **span 导出日志不是应用日志**:trace 信号走 OTLP;console/logging 型 span exporter(各语言 OTel SDK 均有)仅 dev 验证用,部署环境把其 logger 类别阈值默认压到 `WARN`(此类行每请求复述一条且无请求上下文,是双写噪音)。
-- **环境三档矩阵(默认形状)**:**dev = DEBUG(代码内默认,开发就近调试)· staging = DEBUG(部署层配置开)· prod = INFO 骨架(默认安静侧)**;span 导出行随档位:dev/staging 可见、prod 隐藏。
-- **配置分工**:语义级别(哪条算 INFO/DEBUG)归**代码**且默认取安静侧;级别阈值按环境开归**部署层运行时配置**——"一份构建物服务多环境"下构建期/profile 分不开环境,只能运行时覆盖(各语言机制见 references 附录);prod 静音 span 导出前确认已有真 OTLP sink,否则 trace 信号整体丢失。
 - **span 导出日志不是应用日志**:trace 信号走 OTLP;console/logging 型 span exporter(各语言 OTel SDK 均有)仅 dev 验证用,部署环境把其 logger 类别阈值默认压到 `WARN`(此类行每请求复述一条且无请求上下文,是双写噪音)。
 - **环境三档矩阵(默认形状)**:**dev = DEBUG(代码内默认,开发就近调试)· staging = DEBUG(部署层配置开)· prod = INFO 骨架(默认安静侧)**;span 导出行随档位:dev/staging 可见、prod 隐藏。
 - **配置分工**:语义级别(哪条算 INFO/DEBUG)归**代码**且默认取安静侧;级别阈值按环境开归**部署层运行时配置**——"一份构建物服务多环境"下构建期/profile 分不开环境,只能运行时覆盖(各语言机制见 references 附录);prod 静音 span 导出前确认已有真 OTLP sink,否则 trace 信号整体丢失。

@@ -293,7 +293,7 @@
 - ① 一次入站请求产生 server span(root),且业务 id 在 span 属性上;
 - ② 该请求路径的日志行携带 trace_id(空 trace_id 的 ERROR = 失败);
 - ③ 部署档配置下无 span 复述日志输出(console/logging exporter 静音,§4)。
-Java:@QuarkusTest/SpringBootTest + 进程内 exporter;Python:pytest + InMemorySpanExporter;Go:tracetest.SpanRecorder;Rust:tracing 测试订阅器。每条断言配一个负例探针。
+捕获器按附录 C 选你的语言（进程内 span 捕获器一栏），跑在该语言常规测试载体里；每条断言配一个负例探针。
 
 ## 附录 C·埋点与 gate 工具链(选你的语言)
 
