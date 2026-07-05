@@ -24,8 +24,12 @@ sandbox_clean
 sandbox_new
 seed_events kill-sess '2026-01-01T00:00:00Z WORKING t0\n'
 export FAKE_PANE_CMD="omp"; pane_fixture "busy busy\n"
+# Pin the watcher with a REAL sleep for this case only: with the fake no-op sleep the whole
+# 260-poll loop can finish (natural exit → trap removes the spec) before kill -9 lands —
+# raced green on macOS, red on faster Linux. The spec must be read while watch is mid-flight.
+ln -sf /bin/sleep "$BIN/sleep"
 AGENT_WATCH_DELIVERABLE="/tmp/out/*.md" bash "$WATCH" kill-sess >/dev/null 2>&1 & wpid=$!
-/bin/sleep 1                      # real sleep: let it arm (PATH sleep is the fake)
+/bin/sleep 1                      # let it arm; watch itself is parked in its first real sleep
 kill -9 "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
 chk_eq "SIGKILL leaves watchspec behind" 1 "$(ls "$WATCH_RUN_DIR"/*.watchspec 2>/dev/null | wc -l | tr -d ' ')"
 export FAKE_TMUX_HASSESSION=0     # tmux session still exists

@@ -25,7 +25,9 @@ chk_contains "re-register is idempotent" "already in roster" "$out"
 
 # owner-only perms (umask 077): mail is untrusted data on the fs trust boundary — bus-created
 # dirs must be 700, files 600, so other local users can't read another seat's inbox.
-perm() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+# GNU-first: BSD stat errors on -c (falls through); GNU stat treats -f as "filesystem info"
+# WITHOUT erroring (never falls through) — the reverse order silently breaks on Linux.
+perm() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
 chk_eq "mailbox dir is 700" 700 "$(perm "$AGENT_MAIL_DIR/alpha/inbox")"
 chk_eq "registry file is 600" 600 "$(perm "$AGENT_MAIL_DIR/registry.md")"
 out="$(bash "$BUSBIN" roster)"

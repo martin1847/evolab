@@ -1,0 +1,19 @@
+# Hermetic test suite on every push/PR — zero secrets, zero API tokens, zero real agents
+# (fake tmux/sleep on PATH by the testkit). The e2e LIVE tier (test/e2e/) is deliberately
+# NOT here: it spawns real claude sessions (API key + tokens + minutes) and stays a local
+# pre-release gate. Linux compatibility was validated in a local ubuntu:24.04 dry-run first
+# (which caught 2 real portability bugs in the tests themselves — GNU/BSD stat, fake-sleep race).
+name: hermetic
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2   # two *.bun.ts suites; run.sh SKIPs them if bun is absent
+      - name: run hermetic suite
+        run: bash test/run.sh
