@@ -67,7 +67,7 @@ EXTRA="$*"
 # the source, design > guard). Works for codex review round 1 too (--goal <review-brief.md>): the
 # verify loop falls back to the pane busy marker where codex has no sentinel yet (hook fires on first
 # tool call, and only when trusted). Later rounds / steering = `dispatch send`. A first-ever codex
-# launch in a cwd is ALSO one call: --goal auto-answers the directory-trust prompt (bounded probe below).
+# OR claude launch in a cwd is ALSO one call: --goal auto-answers the directory-trust prompt (probe below).
 WATCH_MODE=0; GOAL=""
 set -- $EXTRA; REST=""
 while [ "$#" -gt 0 ]; do
@@ -124,19 +124,21 @@ echo "dispatched $AGENT → tmux session '$SESSION' (cwd $CWD)"
 echo "events : $DIR/$SESSION.events"
 if [ -n "$GOAL" ]; then
   sleep 2  # let the agent TUI come up before delivering
-  # codex first-ever launch in a cwd pauses on a directory-trust prompt that would EAT the goal
-  # text — auto-answer "1" (trust) so `dispatch codex <s> <cwd> --goal <brief.md>` is truly ONE
-  # call even on first launch (review dispatch = same fused shape as omp; Martin 2026-07-05).
-  if [ "$AGENT" = "codex" ]; then
+  # codex AND claude first-ever launch in a cwd pause on a directory-trust prompt that would EAT
+  # the goal text — auto-answer "1" (trust) so `dispatch <codex|claude> <s> <cwd> --goal <f>` is
+  # truly ONE call even on first launch (omp has no such gate). claude's prompt is "…I trust this
+  # folder", codex's is "do you trust…"; both matched below. (e2e dispatch-goal caught claude's
+  # gate silently eating the goal — Martin 2026-07-05.)
+  if [ "$AGENT" = "codex" ] || [ "$AGENT" = "claude" ]; then
     for _ in 1 2 3 4; do
       pane="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null)"
-      if printf '%s' "$pane" | grep -qiE "trust this|do you trust|allow codex"; then
-        echo "── codex trust prompt detected → answering '1' (trust) ──"
+      if printf '%s' "$pane" | grep -qiE "trust this|do you trust|allow codex|created or one you trust"; then
+        echo "── $AGENT trust prompt detected → answering '1' (trust) ──"
         tmux send-keys -t "$SESSION" "1" 2>/dev/null; sleep 0.4
         tmux send-keys -t "$SESSION" Enter 2>/dev/null; sleep 2
         break
       fi
-      printf '%s' "$pane" | grep -qE "^›|gpt-" && break  # prompt ready, no trust gate
+      printf '%s' "$pane" | grep -qE "^›|gpt-|>[[:space:]]*$" && break  # prompt ready, no trust gate
       sleep 2
     done
   fi

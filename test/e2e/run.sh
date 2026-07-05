@@ -20,7 +20,7 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 total_pass=0; total_fail=0
-for t in guard-wire.e2e.sh onboard.e2e.sh; do
+for t in guard-wire.e2e.sh onboard.e2e.sh dispatch-goal.e2e.sh; do
   echo; echo "==== $t ===="
   if bash "$HERE/$t"; then
     printf '[PASS] %s\n' "$t"; total_pass=$((total_pass+1))

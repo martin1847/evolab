@@ -84,7 +84,17 @@ mkdir -p "$SANDBOX/wt"
 printf 'brief\n' > "$SANDBOX/brief.md"
 pane_fixture "Do you trust this directory?  1) yes  2) no"
 out="$(bash "$DISPATCH" codex ctrS "$SANDBOX/wt" --goal "$SANDBOX/brief.md" 2>&1)"; rc=$?
-chk_contains "codex trust prompt auto-answered" "trust prompt detected" "$out"
+chk_contains "codex trust prompt auto-answered" "codex trust prompt detected" "$out"
+sandbox_clean
+
+# claude --goal first-ever launch: SAME trust auto-answer (claude's "I trust this folder" wording).
+# Regression guard for the e2e-caught gap where the claude branch had no trust handling.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'goal\n' > "$SANDBOX/goal.md"
+pane_fixture "Is this a project you created or one you trust?  1. Yes, I trust this folder  2. No"
+out="$(bash "$DISPATCH" claude cltrS "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_contains "claude trust prompt auto-answered" "claude trust prompt detected" "$out"
 sandbox_clean
 
 # --goal with neither sentinel nor busy pane -> alarm tier preserved.
