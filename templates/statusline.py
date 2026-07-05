@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-# Minimal statusline: model | dir | context-used % | cache-hit %.
+# Minimal statusline: model | dir | context-used % | cache-hit % | session time.
 # The % comes ONLY from the context_window payload Claude Code pipes in
 # (the same source as /context). No transcript parsing, no guessed window
 # size — if the field is absent we print "ctx n/a" instead of a wrong number.
+# Session time comes from cost.total_duration_ms (wall clock); absent → omitted.
 import json
 import os
 import sys
@@ -45,6 +46,15 @@ def context_usage(cw):
     return pct, used, size
 
 
+def fmt_duration(ms):
+    s = int(ms / 1000)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    return f"{s // 3600}h{s % 3600 // 60:02d}m"
+
+
 def main():
     try:
         d = json.load(sys.stdin)
@@ -63,7 +73,9 @@ def main():
         ctx = f"{color}ctx {pct:.0f}%{abs_part}\033[0m"
     hit = cache_hit_pct(cw)
     cache = f"\033[36mcache {hit:.0f}%\033[0m" if hit is not None else ""
-    parts = [x for x in (model, cwd, ctx, cache) if x]
+    dur_ms = (d.get("cost") or {}).get("total_duration_ms")
+    sess = f"\033[35m{fmt_duration(dur_ms)}\033[0m" if isinstance(dur_ms, (int, float)) and dur_ms >= 0 else ""
+    parts = [x for x in (model, cwd, ctx, cache, sess) if x]
     print("  \033[90m|\033[0m  ".join(parts))
 
 
