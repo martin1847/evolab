@@ -96,10 +96,16 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   `--dangerously-bypass-hook-trust`); until then no events fire → **watch falls back to screen-scrape**
   (graceful, by design). To get the real codex signal, persist hook trust once or launch codex with the bypass
   flag. Until then codex monitoring = screen-scrape fallback (works, just not hook-deterministic).
-- ❌ **codex 0.142.3 regression（e2e 矩阵门实测 2026-07-05）**：即便带 bypass flag、且 A/B 排除了空全局
-  `~/.codex/hooks.json` 遮蔽，project `.codex/hooks.json` 也**零 emit**（agent 正常干活、goal 正常产出）——
-  codex 派发目前**恒走抓屏路径**，dispatch --goal 的验证环靠 pane 忙碌档兜住、不假警。e2e 门留了金丝雀
-  （sentinel 一旦重现即变红提醒恢复严格断言）。根因待上游/深挖。
+- ✅（曾 ❌）**codex hook 静默——根因是我们自己 ship 的毒药（2026-07-05 定案并修复）**：模板
+  `hooks/codex-hooks.json` 顶层带 `"_comment"` 字段，codex 严格解析 hooks.json、**未知字段让整个文件
+  静默不加载**（bypass flag / 事件名 / env 继承全部无辜——去掉该字段后 PreToolUse/PostToolUse/Stop 全
+  fire 且 env 完整继承，watch 靠 DONE 事件正常 exit 0）。生产历史 `*-codex.events` 全 0 字节由此解释：
+  **从出生就没工作过**，"实测过 hook wiring" 当时只验了 omp。教训双层化：模板文档移进本 README、
+  polish 机械门新增「hooks 模板顶层只许 `hooks`」；**存量项目的 `.codex/hooks.json` 是 dispatch 落盘的
+  旧毒版**（install_cfg 不覆写）——删掉让下次 dispatch 重生成，或手动去 `_comment`。
+  模板使用要点（原 `_comment` 内容）：drop 为 `<cwd>/.codex/hooks.json`；agent 须带 env
+  `AGENT_WATCH_SESSION=<tmux session>` 启动（dispatch 已注入）；`PermissionRequest→WAITING` 只盖
+  tool-approval，自由文本提问靠抓屏兜；claude 模板同理 merge 进 settings.json、`Notification` 仅交互态 fire。
 - ✅ Claude (`Stop`/`Notification`/`PostToolUse`) wiring：e2e dispatch-goal 门实测（真 claude 会话，
   PostToolUse→WORKING + Stop→DONE 全出现在 sentinel）。
 - ◑ STALLED-EXTERNAL (exit 5): detection PREDICATE validated offline against provider-error-chrome fixtures —

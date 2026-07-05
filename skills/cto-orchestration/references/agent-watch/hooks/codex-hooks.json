@@ -1,14 +1,40 @@
 {
-  "_comment": "Codex CLI hooks for the unified agent-state watch. Drop as <cwd>/.codex/hooks.json (project) or merge into ~/.codex/hooks.json. Replace ABS with the absolute path to agent-watch/hooks/emit-from-stdin.sh. The agent must be launched with env AGENT_WATCH_SESSION=<tmux session>. STATE is the command arg (no JSON parsing). PermissionRequest=WAITING covers tool-approval; free-form asks are not covered (screen-scrape fallback handles that gap).",
   "hooks": {
     "Stop": [
-      { "matcher": "", "hooks": [ { "type": "command", "command": "bash ABS/emit-from-stdin.sh DONE stop", "timeout": 10 } ] }
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ABS/emit-from-stdin.sh DONE stop",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "PermissionRequest": [
-      { "matcher": "", "hooks": [ { "type": "command", "command": "bash ABS/emit-from-stdin.sh WAITING permission", "timeout": 10 } ] }
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ABS/emit-from-stdin.sh WAITING permission",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "PreToolUse": [
-      { "matcher": "", "hooks": [ { "type": "command", "command": "bash ABS/emit-from-stdin.sh WORKING tool", "timeout": 10 } ] }
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ABS/emit-from-stdin.sh WORKING tool",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

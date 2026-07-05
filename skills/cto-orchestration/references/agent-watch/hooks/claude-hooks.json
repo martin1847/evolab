@@ -1,15 +1,50 @@
 {
-  "_comment": "Claude Code hooks for the unified agent-state watch. MERGE the `hooks` block into <cwd>/.claude/settings.json (project) or ~/.claude/settings.json. Replace ABS with the absolute path to agent-watch/hooks/emit-from-stdin.sh. Launch interactive `claude` in tmux with env AGENT_WATCH_SESSION=<tmux session> (Notification fires in interactive mode only, not `claude -p`). idle_prompt = turn yielded to user (treat as DONE); permission_prompt = WAITING for approval.",
   "hooks": {
     "Stop": [
-      { "matcher": "", "hooks": [ { "type": "command", "command": "bash ABS/emit-from-stdin.sh DONE stop", "timeout": 10 } ] }
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ABS/emit-from-stdin.sh DONE stop",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "Notification": [
-      { "matcher": "permission_prompt", "hooks": [ { "type": "command", "command": "bash ABS/emit-from-stdin.sh WAITING permission", "timeout": 10 } ] },
-      { "matcher": "idle_prompt", "hooks": [ { "type": "command", "command": "bash ABS/emit-from-stdin.sh DONE idle", "timeout": 10 } ] }
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ABS/emit-from-stdin.sh WAITING permission",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ABS/emit-from-stdin.sh DONE idle",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "PostToolUse": [
-      { "matcher": "", "hooks": [ { "type": "command", "command": "bash ABS/emit-from-stdin.sh WORKING tool", "timeout": 10 } ] }
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ABS/emit-from-stdin.sh WORKING tool",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
