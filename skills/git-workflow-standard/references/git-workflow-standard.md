@@ -1,7 +1,7 @@
-# IM Git Workflow Standard — 完整版
+# Git Workflow Standard — 完整版
 
 > 本文件是 `git-workflow-standard/SKILL.md` 的全量镜像 + rationale。规则两层同源,改一处同步另一处(AGENTS.md 纪律)。
-> 落地结构与软/硬分工见治理;集成策略 per-repo 见治理。
+> 软/硬双层分工见下 §0;集成策略 per-repo 在各仓 AGENTS.md 声明。
 
 ## 0. 双层模型
 
@@ -10,7 +10,7 @@
 | 软层 | 本 SOP | agent-facing SOP | write-time 预防、教学、对接缝声明 |
 | 硬层 | 你的 IaC 仓 / IaC CTO | GitHub Ruleset / CODEOWNERS / required checks | 强制兜底,绕不过 |
 
-**为什么两层**:skill 文本随长对话 salience 衰减;纯声明机制无 forcing function 会腐烂(见治理调研依据)。**不可逆动作(直推受保护分支、force push 改写历史)的最终防线必须是硬层**;skill 让 agent 不去撞墙,Ruleset 是墙。
+**为什么两层**:skill 文本随长对话 salience 衰减;纯声明机制无 forcing function 会腐烂。**不可逆动作(直推受保护分支、force push 改写历史)的最终防线必须是硬层**;skill 让 agent 不去撞墙,Ruleset 是墙。
 
 ## 1. 硬门禁契约（服务端已生效；对接缝）
 
