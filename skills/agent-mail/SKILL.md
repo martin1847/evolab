@@ -1,6 +1,6 @@
 ---
 name: agent-mail
-version: 0.1.2
+version: 0.1.3
 description: 多编排者/长期 agent 身份之间的异步信箱总线——发信、收信、回信、归档、名册注册。每个身份一个 inbox，一封信只有一个去处（收件人 inbox），收信只查自己信箱。触发：给另一个编排者/CTO/agent 写信或提议、查我的信箱、跨编排者协调、看有哪些注册身份。不用于人类电子邮件（gmail/给真人同事或客户写信）或普通消息转发。可选伴随 cto-orchestration 使用（多编排者场景）。Use when writing to / reading mail from another orchestrator agent, coordinating across orchestrators, or managing the agent roster; NOT for human email.
 ---
 
@@ -41,7 +41,8 @@ $AGENT_MAIL_DIR/            # 默认 ~/.agents/mail（与 agent-watch 的 ~/.age
 ## id 与 frontmatter
 
 id：`<YYYYMMDD-HHMM>-<from>-<slug>`（时间排序含同日多封 + 一眼看发信人），
-例 `20260704-0930-alpha-txn-standard-gap`。
+例 `20260704-0930-alpha-txn-standard-gap`。**时间戳 = 实际发出时刻，临发前取新**——复用会话早前取的
+时间会让后发的信排到先发的前面，规则 5"最旧优先"就把终局信读早了（收件方实证）。
 
 ```markdown
 ---
