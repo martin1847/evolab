@@ -223,3 +223,17 @@ matcher 别手编——它与脚本实现同包维护、发布门校验一致（
   `{block:true,reason}`），**不吃 stdin-JSON 命令脚本** → python 脚本挂不上；把 bash 脚本判定写成 `.omp/hooks/pre/*.ts`
   （或 TS shell-out + 字段映射 `event.input.command`→stdin-JSON + `exit 2`→`{block:true}`）。浏览器提醒在 omp 最难：
   `tool_result` 只能改输出、不能给模型注入 context，要走单独 `context` 事件。
+
+## watchspec 自愈（宿主批量回收后台 watcher 的对策）
+
+实证（2026-07-05，LH 超长会话）：Claude Code 宿主在上下文压缩边界**批量 SIGKILL 后台 shell**——
+watcher 心跳正常→同刻消失，事后补发 "was stopped" 通知。这不是 watch 的 bug，但"记得重挂"
+不能靠编排者记忆。机制：
+
+- `watch` 起时写 `$DIR/<session>.watchspec`（含 pid + 完整重挂命令），**EXIT trap 删除**——
+  自然退出（DONE/WAITING/HANG…）不留痕；SIGKILL 跳过 trap → **spec 幸存 = 非正常死亡证据**。
+- **`rearm`**（本目录）：扫描 spec，pid 已死且 tmux 会话还在 → 打印重挂命令（一行一条）；
+  会话已没了 → 清 stale spec。**只打印不执行**——编排者用自己的受控后台机制（Bash 工具
+  run_in_background）逐条起，rearm 自己绝不 background（孤儿 shell 正是要避免的失败模式）。
+- 编排者纪律：收到 watcher "was stopped" 通知，跑一次 `rearm`，照单重挂。
+

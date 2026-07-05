@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# rearm — list re-arm commands for watchers that died UNNATURALLY (harness SIGKILL).
+# Mechanism: `watch` writes $DIR/<session>.watchspec on arm and removes it via EXIT
+# trap on every natural exit; SIGKILL skips traps, so a surviving spec whose pid is
+# dead = a watcher that was reaped mid-flight. This script only PRINTS the re-arm
+# commands (one per line) — the orchestrator launches each via its own tracked
+# background mechanism (run_in_background). It never backgrounds anything itself:
+# design, not laziness (orphaned shells are the exact failure mode this avoids).
+# Stale specs (tmux session gone) are cleaned up here.
+set -u
+DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
+found=0
+shopt -s nullglob
+for spec in "$DIR"/*.watchspec; do
+  pid="$(sed -n 's/^pid=//p' "$spec")"
+  sess="$(sed -n 's/^session=//p' "$spec")"
+  cmd="$(sed -n 's/^cmd=//p' "$spec")"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && continue     # watcher alive — leave it
+  if ! tmux has-session -t "$sess" 2>/dev/null; then
+    rm -f "$spec"; echo "# stale spec removed (tmux session gone): $sess"; continue
+  fi
+  found=1
+  echo "$cmd"
+done
+[ "$found" -eq 0 ] && echo "# nothing to re-arm"
+exit 0

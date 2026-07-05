@@ -35,6 +35,20 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ events=$EVENTS ==="
 
+# ── watchspec self-heal registry ──────────────────────────────────────────────
+# The harness can batch-SIGKILL background watchers (observed: context-compaction
+# boundaries reap background shells). SIGKILL skips the EXIT trap, so the spec file
+# SURVIVES an unnatural death; every natural exit removes it. `rearm` (sibling script)
+# lists dead-watcher specs so the orchestrator can re-arm mechanically instead of
+# remembering to.
+SPEC="$DIR/$SESSION.watchspec"
+{
+  printf 'session=%s\n' "$SESSION"
+  printf 'pid=%s\n' "$$"
+  printf 'cmd=bash %q %q %q %q\n' "$HERE/watch" "$SESSION" "$MARKER" "$SHELL_RE"
+} > "$SPEC"
+trap 'rm -f "$SPEC"' EXIT
+
 # Grace window for the hook to produce the first event; else fall back to scrape.
 if [ ! -f "$EVENTS" ]; then
   sleep 6
