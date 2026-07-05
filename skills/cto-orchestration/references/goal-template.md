@@ -36,4 +36,5 @@
 - 旗标门控：<flag 名，默认 ON/OFF + 理由>。
 - 遇到需要超出 scope 的改动：STOP and report，不要自行扩权。
 - 遵守仓库自身规则（AGENTS.md / GitNexus impact analysis 等）。
+- 点名本仓适用的工程规范 skill 并要求执行 agent 开工前加载（观测/后端/git 等）——**名单来自该仓 AGENTS.md 的声明，本模板不硬编码任何具体规范**（编排与规范各自独立可用，不耦合）。
 - Redact secrets/customer data in docs. No AI signature lines in commits.
