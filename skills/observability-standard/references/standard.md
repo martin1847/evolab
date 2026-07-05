@@ -113,6 +113,32 @@
 
 补充:OTel 无标准 TRACE 级,最细用 `DEBUG`;生产默认 INFO,DEBUG 按环境变量或按特定 `trace_id` 动态开(采样式重放);**排障时若"光看 INFO 不知走到哪步",是 INFO 漏了状态转移点——补 INFO,而不是常开 DEBUG**。
 
+**span 导出日志与环境分级(多语言通用)**:
+- **span 复述进日志流 = 噪音**:console/logging 型 span exporter 把每个 span 复述成一条日志——每请求一条、exporter 线程在请求上下文之外 → `trace_id` 关联字段为空,连"日志必带 trace_id"都不过。此类 exporter 各语言 OTel SDK 都有(Java `LoggingSpanExporter` / Python `ConsoleSpanExporter` / Go `stdouttrace` / Rust stdout exporter),**定位都是 dev 期验证埋点,不是部署环境的 trace sink**。trace 信号的正解是 OTLP 后端;部署环境把该 exporter 的 logger 类别阈值默认压到 `WARN`(保留 SDK 自身告警),dev 覆盖回可见。
+- **环境三档矩阵(默认形状)**:
+
+  | 环境 | 全局级别 | span 导出行 | 来源 |
+  |---|---|---|---|
+  | dev | DEBUG | 可见 | 代码内 dev 默认(开发就近调试) |
+  | staging | DEBUG | 可见 | 部署层运行时配置开 |
+  | prod | INFO(骨架) | 隐藏 | 默认即安静侧,零配置 |
+
+- **配置分工(所有权切分)**:语义级别(哪条日志算 INFO/DEBUG)归**代码**,且默认取安静侧;级别阈值按环境开归**部署层运行时配置**。rationale:"一份构建物服务多环境"时 stage/prod 跑同一构建物/同一 profile,构建期配置分不开环境,环境详细度必须是运行时可覆盖项——由此得所有权切分:代码管语义,部署层(manifests/env)管环境。**注意 logger 类别阈值通常优先于全局级别**:全局开 DEBUG 不会带出被类别阈值压住的行,要看见须显式开该类别。各语言的运行时级别覆盖机制:Java(JUL/JBoss LogManager/Logback)类别级别属运行时配置(Quarkus 形如 `QUARKUS_LOG_CATEGORY__<CAT>__LEVEL`,注意 native 受构建期 min-level 下限约束);Python `logging` 按 logger 名 setLevel,入口从 env/配置读;Go `slog.LevelVar` / zap `AtomicLevel` 运行时可调;Rust `tracing` `EnvFilter`(`RUST_LOG=target=level`)。
+- **静音前查 sink**:若部署环境此前以日志流当 trace 落地(无 collector),静音 span 导出 = trace 信号整体消失;先补 OTLP collector(exporter 选择在部分栈是构建期属性——如 Quarkus native——切换须重构建,排期考虑)或有意识接受盲区再静音。
+
+**span 导出日志与环境分级(多语言通用)**:
+- **span 复述进日志流 = 噪音**:console/logging 型 span exporter 把每个 span 复述成一条日志——每请求一条、exporter 线程在请求上下文之外 → `trace_id` 关联字段为空,连"日志必带 trace_id"都不过。此类 exporter 各语言 OTel SDK 都有(Java `LoggingSpanExporter` / Python `ConsoleSpanExporter` / Go `stdouttrace` / Rust stdout exporter),**定位都是 dev 期验证埋点,不是部署环境的 trace sink**。trace 信号的正解是 OTLP 后端;部署环境把该 exporter 的 logger 类别阈值默认压到 `WARN`(保留 SDK 自身告警),dev 覆盖回可见。
+- **环境三档矩阵(默认形状)**:
+
+  | 环境 | 全局级别 | span 导出行 | 来源 |
+  |---|---|---|---|
+  | dev | DEBUG | 可见 | 代码内 dev 默认(开发就近调试) |
+  | staging | DEBUG | 可见 | 部署层运行时配置开 |
+  | prod | INFO(骨架) | 隐藏 | 默认即安静侧,零配置 |
+
+- **配置分工(所有权切分)**:语义级别(哪条日志算 INFO/DEBUG)归**代码**,且默认取安静侧;级别阈值按环境开归**部署层运行时配置**。rationale:"一份构建物服务多环境"时 stage/prod 跑同一构建物/同一 profile,构建期配置分不开环境,环境详细度必须是运行时可覆盖项——由此得所有权切分:代码管语义,部署层(manifests/env)管环境。**注意 logger 类别阈值通常优先于全局级别**:全局开 DEBUG 不会带出被类别阈值压住的行,要看见须显式开该类别。各语言的运行时级别覆盖机制:Java(JUL/JBoss LogManager/Logback)类别级别属运行时配置(Quarkus 形如 `QUARKUS_LOG_CATEGORY__<CAT>__LEVEL`,注意 native 受构建期 min-level 下限约束);Python `logging` 按 logger 名 setLevel,入口从 env/配置读;Go `slog.LevelVar` / zap `AtomicLevel` 运行时可调;Rust `tracing` `EnvFilter`(`RUST_LOG=target=level`)。
+- **静音前查 sink**:若部署环境此前以日志流当 trace 落地(无 collector),静音 span 导出 = trace 信号整体消失;先补 OTLP collector(exporter 选择在部分栈是构建期属性——如 Quarkus native——切换须重构建,排期考虑)或有意识接受盲区再静音。
+
 ---
 
 ## §5 OTel Span 拓扑
