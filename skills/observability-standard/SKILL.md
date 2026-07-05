@@ -21,7 +21,7 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 5. **标准在边界 + 后端无关**:跨进程 / 对外响应遵守 OTel 语义约定 + 类型校验(LLM 边界额外遵守 GenAI 约定);内部自由。**只依赖 OTel API/SDK + OTLP,应用代码不 import 厂商 SDK(Langfuse / Datadog 等);标准组件优先用官方 auto-instrumentation 自动埋点,手写 span 只补领域环节;厂商差异只在 Collector / exporter 配置层 → 换后端不重埋(见 references §1 铁律5 / §5.0 / 附录 C)。**
 
 ## 日志铁律
-- 结构化优先:`event_name + fields`,**绝不字符串拼接**。日志即数据,不即叙事。**宽事件 ≠ JSON**:稳定可解析的行式字段格式即可,不强制 JSON 序列化(有实打实的计算开销;日志管道需要机器解析时再升,升级只动导出层配置)。**宽事件 ≠ JSON**:稳定可解析的行式字段格式即可,不强制 JSON 序列化(有实打实的计算开销;日志管道需要机器解析时再升,升级只动导出层配置)。
+- 结构化优先:`event_name + fields`,**绝不字符串拼接**。日志即数据,不即叙事。**宽事件 ≠ JSON**:稳定可解析的行式字段格式即可,不强制 JSON 序列化(有实打实的计算开销;日志管道需要机器解析时再升,升级只动导出层配置)。
 - 日志在活跃 span 内打出,`trace_id`/`span_id` 自动注入;**没有 `trace_id` 的 ERROR 视为 bug**。
 - 上下文绑一次贯穿全程(语言原生 ambient context 机制,见 references 附录 B),不手传。
 - 不要 log-and-throw;密钥/PII/客户机密在边界脱敏;**明文 prompt/completion = 数据披露闸**(显式 flag + 非 prod + 脱敏;audit 仅哈希),非日志级别。
@@ -69,16 +69,6 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 - **宪法条款**:仓库 `AGENTS.md`/`CONTRIBUTING` 写明"新 LLM/工具/检索/领域路径必须有 parent 正确的领域 span",指向本 skill。
 
 达标线:**每条会被违反且能自动检测的铁律,都要有一个会让 CI 变红的 gate;检测不了的才进人工清单。立规范只产文档不产 gate = 没立。** 完整机制 + 实证见 §9。
-
-## 接入初始化 checklist(一次性仪式,自包含——不依赖任何编排工具)
-
-新项目/新仓库采纳本规范时,**当天**走完(排期到以后 = 稀释的开始;完整版见 references §10):
-1. **宪法条款**进仓库 AGENTS.md / CONTRIBUTING(新领域路径必须有 parent 正确的 span,指向本 skill)。
-2. **按语言立最小 conformance gate**(进程内 span 捕获断言:server span 存在 + 日志带 trace_id + 部署配置无 span 复述输出;语言起手式见 references §10)。
-3. **负例探针**:删 span / 断 parent → gate 必须变红,贴双跑证据。
-4. **CI wiring 验真**:在真 PR 上让 gate 真 fail 一次,别假设配置生效。
-5. **环境三档矩阵**配置就位(dev/staging=DEBUG 可见、prod=INFO 骨架,见日志级别判据)。
-6. **import 守卫**(禁厂商 SDK 直依赖,机制见 references 附录 C)。
 
 ## 接入初始化 checklist(一次性仪式,自包含——不依赖任何编排工具)
 

@@ -85,7 +85,7 @@
 
 ## §3 日志铁律(语言无关)
 
-1. **结构化优先,永不字符串拼接**。`message` = 短事件名(snake_case),变量全进字段。**宽事件 ≠ JSON**:要求的是"事件名稳定 + 变量进字段 + 行式可解析",不是 JSON 序列化——JSON 有实打实的每行计算开销,默认行式字段格式即可;日志管道需要机器解析时再升 JSON,且升级只应动导出层配置、不动打点代码。**宽事件 ≠ JSON**:要求的是"事件名稳定 + 变量进字段 + 行式可解析",不是 JSON 序列化——JSON 有实打实的每行计算开销,默认行式字段格式即可;日志管道需要机器解析时再升 JSON,且升级只应动导出层配置、不动打点代码。
+1. **结构化优先,永不字符串拼接**。`message` = 短事件名(snake_case),变量全进字段。**宽事件 ≠ JSON**:要求的是"事件名稳定 + 变量进字段 + 行式可解析",不是 JSON 序列化——JSON 有实打实的每行计算开销,默认行式字段格式即可;日志管道需要机器解析时再升 JSON,且升级只应动导出层配置、不动打点代码。
    - ✅ `info("tool_call_failed", tool="search", code="timeout", attempt=2)`
    - ❌ `info("Failed to call search because timeout on attempt 2")`
 2. **日志即数据,不即叙事**。事件名是可查询/聚合的标识符,不是给人读的句子。
@@ -273,27 +273,6 @@
 **达标线:规范里每一条会被违反且能自动检测的铁律,都要有一个会让 CI 变红的 gate。检测不了的(纯人工判断项)才进人工清单。** 立规范时若只产出文档不产出 gate,等于没立。
 
 ---
-
-## §10 接入初始化 checklist(一次性仪式)
-
-> §9 讲"为什么必须有 gate 与 gate 长什么样";本节回答"**什么时候建**":**采纳规范的当天,作为接入仪式的一部分**。实证模式:规范散文被完整搬进项目、gate 排期"以后补"→ 数月后漏埋点/配置漂移才暴露(§9 案例 + 某项目 span 复述噪音在 staging 灌 INFO 数日无人察觉,肉眼看日志才抓到——一条 gate 断言第一次 CI 就会红)。**本 checklist 自包含,不依赖任何编排/流程工具**;若项目另有任务编排体系,由那边引用本节,不反向耦合。
-
-按序走完,每步有完成判据:
-
-| # | 步骤 | 完成判据 |
-|---|---|---|
-| 1 | **宪法条款**:仓库 AGENTS.md / CONTRIBUTING 写明"新 LLM/工具/检索/领域路径必须有 parent 正确的领域 span",指向本规范 | 条款在 committed tree 里 |
-| 2 | **最小 conformance gate**(按语言起手式,见下) | 测试进 CI 且绿 |
-| 3 | **负例探针**:故意删 span / 断 parent | gate 变红的运行记录(双跑证据) |
-| 4 | **CI wiring 验真** | 一个真 PR 上 gate 真 fail 过一次 |
-| 5 | **环境三档矩阵**(§4):dev/staging=DEBUG 可见,prod=INFO 骨架;span 复述导出默认静音 | 部署配置/manifests 里可指认 |
-| 6 | **import 守卫**(§9.3/附录 C):禁厂商 SDK 直依赖 | 守卫进 lint/CI |
-
-**最小 conformance gate 起手式(三条断言,语言无关;捕获器按附录 C 选)**:
-- ① 一次入站请求产生 server span(root),且业务 id 在 span 属性上;
-- ② 该请求路径的日志行携带 trace_id(空 trace_id 的 ERROR = 失败);
-- ③ 部署档配置下无 span 复述日志输出(console/logging exporter 静音,§4)。
-Java:@QuarkusTest/SpringBootTest + 进程内 exporter;Python:pytest + InMemorySpanExporter;Go:tracetest.SpanRecorder;Rust:tracing 测试订阅器。每条断言配一个负例探针。
 
 ## §10 接入初始化 checklist(一次性仪式)
 
