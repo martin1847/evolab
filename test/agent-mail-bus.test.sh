@@ -22,6 +22,12 @@ bash "$BUSBIN" register beta /tmp/beta "编排 B 摊" >/dev/null
 chk_eq "mailbox dirs created" 1 "$([ -d "$AGENT_MAIL_DIR/alpha/inbox" ] && [ -d "$AGENT_MAIL_DIR/beta/archive" ] && echo 1 || echo 0)"
 out="$(bash "$BUSBIN" register alpha /tmp/alpha2 dup)"
 chk_contains "re-register is idempotent" "already in roster" "$out"
+
+# owner-only perms (umask 077): mail is untrusted data on the fs trust boundary — bus-created
+# dirs must be 700, files 600, so other local users can't read another seat's inbox.
+perm() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+chk_eq "mailbox dir is 700" 700 "$(perm "$AGENT_MAIL_DIR/alpha/inbox")"
+chk_eq "registry file is 600" 600 "$(perm "$AGENT_MAIL_DIR/registry.md")"
 out="$(bash "$BUSBIN" roster)"
 chk_contains "roster has alpha" '`alpha`' "$out"; chk_contains "roster has beta" '`beta`' "$out"
 

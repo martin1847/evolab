@@ -3,6 +3,11 @@
 # Bus root = $AGENT_MAIL_DIR (default ~/.agents/mail) — USER DATA, deliberately outside
 # this skill's directory so publishing/upgrading the skill never touches mail.
 set -euo pipefail
+# Owner-only by default: mail is untrusted data on a shared trust boundary (the fs user),
+# so every dir/file this helper creates must be unreadable to other users. umask 077 makes
+# mkdir→700 and file-create→600 without a chmod after each op (structural, not discipline —
+# a forgotten chmod is the exact leak this prevents). Pre-existing loose perms: see SKILL 硬化节.
+umask 077
 BUS="${AGENT_MAIL_DIR:-$HOME/.agents/mail}"
 REG="$BUS/registry.md"
 
