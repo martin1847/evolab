@@ -55,12 +55,21 @@ INPUT_RE='(\(y/n\)|\[y/N\]|Do you want to proceed|Allow this|press enter|❯ [0-
 # Override via AGENT_WATCH_EXT_ERR_RE.
 EXT_ERR_RE="${AGENT_WATCH_EXT_ERR_RE:-(overloaded_error|rate_limit_error|stream error|429 Too Many|529 |Too Many Requests|insufficient_quota|service unavailable|Overloaded)}"
 
-idle=0; samehash=0; lasthash=""; exterr=0
+# (E) Deliverable gate (same semantics as watch exit 6, see watch header): idle/DONE is a
+# turn/phase boundary, not task completion — codex pauses between phases with no busy marker
+# (4 false IDLE/DONEs on 2026-07-05, all via this scrape path). AGENT_WATCH_DELIVERABLE=glob
+# gates exit 0; AGENT_WATCH_NODELIV_POLLS (default 7 here, ~5min at 45s) then exit 6 = poke me.
+DELIVERABLE="${AGENT_WATCH_DELIVERABLE:-}"
+NODELIV_MAX="${AGENT_WATCH_NODELIV_POLLS:-7}"
+POLL="${AGENT_WATCH_POLL_SECS:-45}"
+deliverable_ok() { [ -z "$DELIVERABLE" ] && return 0; compgen -G "$DELIVERABLE" > /dev/null 2>&1; }
+
+idle=0; samehash=0; lasthash=""; exterr=0; nodeliv=0
 # Immediate ARMED heartbeat so the orchestrator can confirm liveness by READING the
 # output file at t=0 (ps may not show the process under the harness's backgrounding).
-echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ marker=[$MARKER] — polling every 45s ==="
+echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ marker=[$MARKER] — polling every ${POLL}s ==="
 for i in {1..130}; do
-  sleep 45
+  sleep "$POLL"
   pane=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null) || { echo "[$SESSION] SESSION GONE"; exit 1; }
   cmd=$(tmux display-message -p -t "$SESSION" '#{pane_current_command}' 2>/dev/null)
 
@@ -75,7 +84,7 @@ for i in {1..130}; do
   if echo "$pane" | grep -qF "$MARKER"; then
     # (B) Busy. A frozen screen while "busy" => suspected hang — a live spinner /
     #     token stream / timer would keep the screen changing; total stillness won't.
-    idle=0
+    idle=0; nodeliv=0
     # Provider-error retry-loop: busy + error chrome on screen for ~2 consecutive polls
     # (~90s). Surface it (exit 5) — a retry loop keeps repainting so the frozen-screen hang
     # check below won't catch it.
@@ -108,12 +117,22 @@ for i in {1..130}; do
       echo "$pane" | tail -20
       exit 4
     fi
-    # (D) Idle AND a live agent foreground (passed guard A) = really done.
+    # (D) Idle AND a live agent foreground (passed guard A) = really done...
     idle=$((idle+1))
     if [ $idle -ge 2 ]; then
-      echo "=== [$SESSION] IDLE/DONE at $(date '+%H:%M:%S') — foreground '$cmd', last pane ==="
-      tmux capture-pane -t "$SESSION" -p | tail -40
-      exit 0
+      # (E) ...unless a declared deliverable is still missing (phase boundary, not done).
+      if deliverable_ok; then
+        echo "=== [$SESSION] IDLE/DONE at $(date '+%H:%M:%S') — foreground '$cmd', last pane ==="
+        tmux capture-pane -t "$SESSION" -p | tail -40
+        exit 0
+      fi
+      nodeliv=$((nodeliv+1))
+      [ "$nodeliv" -eq 1 ] && echo "[$SESSION] idle but deliverable '$DELIVERABLE' missing → continuing watch"
+      if [ "$nodeliv" -ge "$NODELIV_MAX" ]; then
+        echo "=== [$SESSION] IDLE-NO-DELIVERABLE at $(date '+%H:%M:%S') — idle, '$DELIVERABLE' never appeared; poke the agent ==="
+        tmux capture-pane -t "$SESSION" -p | tail -40
+        exit 6
+      fi
     fi
   fi
   # Periodic heartbeat (~every 3min) → orchestrator can Read the output file to

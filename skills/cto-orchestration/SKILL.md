@@ -66,7 +66,9 @@ metadata:
    - **typed 状态存在、DEAD≠DONE、WAITING 要回输入**（别把 idle / watcher 裁决当终态）。
    - **判完成要正向证据、不凭 idle / watcher 裁决**——tmux 链路无失败信号、watcher 裁决只是线索；把完成绑
      正向交付物（本地 commit／产物计数／review 标记），自己 capture-pane 核证（分阶段任务每个 part 边界都
-     idle 一瞬——裸 idle 轮询已由 guard DENY，坑的全案见 README）。
+     idle 一瞬——裸 idle 轮询已由 guard DENY，坑的全案见 README）。**产出=文件的任务派发时直接
+     `--deliverable <glob>`**：watch 自己把这道门——glob 没命中不认 DONE、超时 exit 6 = 幻影 DONE 去 poke
+     （turn_end ≠ 任务终态，实证单日 4 次假 DONE；机制见 README typed 状态 6）。
    - **纯事件驱动会盲等 → 设超时上限兜底**：按预期时长 ×2 设 fallback 自检（`ScheduleWakeup`/cron），到点无终态
      主动 capture-pane——治 "WORKING 卡死/热重试" 的**永不 DONE**（与上条**假 DONE** 是两个失败态）。
      **浏览器/E2E subagent 完成通知会黑洞** → 派发即配 deadline 正向证据 watch（guard 在派发那刻注入全文提醒；

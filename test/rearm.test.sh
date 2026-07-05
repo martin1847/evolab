@@ -19,17 +19,19 @@ bash "$WATCH" nat-sess >/dev/null 2>&1
 chk_eq "natural exit removes watchspec" 0 "$(ls "$WATCH_RUN_DIR"/*.watchspec 2>/dev/null | wc -l | tr -d ' ')"
 sandbox_clean
 
-# SIGKILL mid-flight: spec survives; rearm (session still alive) prints the re-arm cmd.
+# SIGKILL mid-flight: spec survives; rearm (session still alive) prints the re-arm cmd —
+# INCLUDING per-session env (deliverable gate must survive SIGKILL+rearm, not degrade).
 sandbox_new
 seed_events kill-sess '2026-01-01T00:00:00Z WORKING t0\n'
 export FAKE_PANE_CMD="omp"; pane_fixture "busy busy\n"
-bash "$WATCH" kill-sess >/dev/null 2>&1 & wpid=$!
+AGENT_WATCH_DELIVERABLE="/tmp/out/*.md" bash "$WATCH" kill-sess >/dev/null 2>&1 & wpid=$!
 /bin/sleep 1                      # real sleep: let it arm (PATH sleep is the fake)
 kill -9 "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
 chk_eq "SIGKILL leaves watchspec behind" 1 "$(ls "$WATCH_RUN_DIR"/*.watchspec 2>/dev/null | wc -l | tr -d ' ')"
 export FAKE_TMUX_HASSESSION=0     # tmux session still exists
 out="$(bash "$REARM" 2>&1)"
 chk_contains "rearm prints the re-arm command" "watch kill-sess" "$out"
+chk_contains "re-arm cmd carries deliverable env (gate survives rearm)" "AGENT_WATCH_DELIVERABLE" "$out"
 chk_not_contains "rearm does not claim empty" "nothing to re-arm" "$out"
 chk_eq "rearm keeps the spec until re-armed" 1 "$(ls "$WATCH_RUN_DIR"/*.watchspec 2>/dev/null | wc -l | tr -d ' ')"
 unset FAKE_TMUX_HASSESSION

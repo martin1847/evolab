@@ -80,7 +80,7 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 - `dispatch <omp|codex|claude> <session> <cwd>` — launches the agent wired to the hook (bakes in the
   env-in-command rule + ABS sub; truncates the session sentinel; age-purges old ones).
 - `watch <session> [busy-marker]` — monitor (hook-primary, scrape-fallback). It BLOCKS until a terminal state,
-  then exits a typed code (0–5). **Default (any shell orchestrator — codex etc.): run it synchronously and read
+  then exits a typed code (0–6). **Default (any shell orchestrator — codex etc.): run it synchronously and read
   the code** — `bash <dir>/watch <session>; rc=$?` then branch on `$rc`. A **background orchestrator (Claude Code)**
   instead launches it via its background mechanism (NOT shell `&`, which orphans it) + reads the `WATCH ARMED`
   line + completion notification. Either way, confirm with capture-pane — the code is a lead, not gospel.
@@ -159,6 +159,10 @@ references/agent-watch/dispatch send <session> -f <fixround.md>   # 确认环收
 ### typed 状态（编排者纪律）
 
 - **typed 状态**：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL
+  / **6 IDLE-NO-DELIVERABLE**（终态样但声明的交付物 glob 始终没出现——**turn_end ≠ 任务终态**，多步 agent 每个
+  turn/阶段边界都发 DONE/呈 idle〔实证 2026-07-05 单日 4 次假 DONE〕。派"产出=文件"的任务设
+  `--deliverable <glob>`（dispatch 直传）或 env `AGENT_WATCH_DELIVERABLE`：DONE/idle 仅在 glob 命中后 exit 0，
+  超 `AGENT_WATCH_NODELIV_POLLS` 仍缺 → exit 6 = 去 poke agent、别信幻影 DONE。spec 带 env、rearm 重挂不丢门）
   （DEAD≠DONE、WAITING 要回输入）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
 - **5 STALLED-EXTERNAL = 外部 provider 错误热重试盲区**（overload/rate-limit/5xx；agent 活着 WORKING 却永不
   DONE，机制见上文 `watch` backstop + Honest limits）。收到 5：**先核证再动手**——扫 exit 5 附带的屏尾，确是

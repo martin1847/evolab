@@ -98,4 +98,29 @@ chk_contains "fallback-empty reached scrape" "polling every 45s" "$WATCH_OUT"
 chk_eq "fallback-empty scrape exit0" 0 "$WATCH_RC"
 sandbox_clean
 
+
+# exit 6 IDLE-NO-DELIVERABLE: stable DONE but declared deliverable glob never matches.
+sandbox_new
+seed_events nodeliv-sess '2026-01-01T00:00:00Z WORKING t0\n2026-01-01T00:00:01Z DONE t1\n'
+export FAKE_PANE_CMD="omp"; pane_fixture "phase done\n"
+export AGENT_WATCH_DELIVERABLE="$SANDBOX/out/*.md" AGENT_WATCH_NODELIV_POLLS=1
+run_watch nodeliv-sess
+chk_eq "exit6 NO-DELIVERABLE rc" 6 "$WATCH_RC"
+chk_contains "exit6 marker" "IDLE-NO-DELIVERABLE" "$WATCH_OUT"
+chk_contains "exit6 poke hint" "poke" "$WATCH_OUT"
+unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
+sandbox_clean
+
+# deliverable gate OPEN: glob matches -> plain DONE exit 0.
+sandbox_new
+seed_events deliv-ok '2026-01-01T00:00:00Z WORKING t0\n2026-01-01T00:00:01Z DONE t1\n'
+export FAKE_PANE_CMD="omp"; pane_fixture "done\n"
+mkdir -p "$SANDBOX/out"; touch "$SANDBOX/out/report.md"
+export AGENT_WATCH_DELIVERABLE="$SANDBOX/out/*.md" AGENT_WATCH_NODELIV_POLLS=1
+run_watch deliv-ok
+chk_eq "gate-open DONE rc" 0 "$WATCH_RC"
+chk_contains "gate-open DONE marker" "DONE at" "$WATCH_OUT"
+unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
+sandbox_clean
+
 summary

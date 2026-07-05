@@ -67,4 +67,16 @@ chk_eq "exit5 STALLED-EXTERNAL rc" 5 "$SC_RC"
 chk_contains "exit5 STALLED-EXTERNAL marker" "STALLED-EXTERNAL" "$SC_OUT"
 sandbox_clean
 
+
+# exit 6 IDLE-NO-DELIVERABLE (scrape path): idle agent, declared deliverable never appears.
+sandbox_new
+export FAKE_PANE_CMD="omp"
+pane_fixture "looks finished\n"
+export AGENT_WATCH_DELIVERABLE="$SANDBOX/out/*.md" AGENT_WATCH_NODELIV_POLLS=1
+run_scrape nodeliv-sc
+chk_eq "scrape exit6 rc" 6 "$SC_RC"
+chk_contains "scrape exit6 marker" "IDLE-NO-DELIVERABLE" "$SC_OUT"
+unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
+sandbox_clean
+
 summary

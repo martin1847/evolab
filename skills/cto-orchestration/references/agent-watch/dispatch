@@ -68,16 +68,20 @@ EXTRA="$*"
 # verify loop falls back to the pane busy marker where codex has no sentinel yet (hook fires on first
 # tool call, and only when trusted). Later rounds / steering = `dispatch send`. A first-ever codex
 # OR claude launch in a cwd is ALSO one call: --goal auto-answers the directory-trust prompt (probe below).
-WATCH_MODE=0; GOAL=""
+WATCH_MODE=0; GOAL=""; DELIV=""
 set -- $EXTRA; REST=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --goal)  shift; GOAL="${1:-}"; WATCH_MODE=1 ;;
-    *)       REST="$REST $1" ;;
+    --goal)        shift; GOAL="${1:-}"; WATCH_MODE=1 ;;
+    # --deliverable <glob>: arm the watch deliverable gate (see watch header, exit 6) —
+    # DONE/idle only counts once the glob matches; use it whenever the goal's产出 is files.
+    --deliverable) shift; DELIV="${1:-}" ;;
+    *)             REST="$REST $1" ;;
   esac
   shift 2>/dev/null || break
 done
 EXTRA="$REST"
+[ -n "$DELIV" ] && export AGENT_WATCH_DELIVERABLE="$DELIV"
 # validate BEFORE launching — failing after new-session would leak an orphan session
 if [ -n "$GOAL" ] && [ ! -e "$GOAL" ]; then echo "ERR: --goal file not found: $GOAL" >&2; exit 1; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"

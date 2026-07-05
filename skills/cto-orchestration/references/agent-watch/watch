@@ -6,7 +6,15 @@
 # nothing regresses when a session was launched without the hook.
 # Usage: watch <tmux-session> [busy-marker] [shell-regex]
 # Exit codes (same vocabulary as scrape-fallback): 0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD
-#   / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL (provider-error retry-loop).
+#   / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL (provider-error retry-loop)
+#   / 6 IDLE-NO-DELIVERABLE (terminal-looking but declared deliverable never appeared).
+# (D) Deliverable gate — fixes "turn_end != task done" (4 false DONEs on 2026-07-05:
+# multi-step agents emit DONE/idle at every turn/phase boundary; auto-continued next
+# turns and codex inter-phase pauses read as terminal). Set AGENT_WATCH_DELIVERABLE
+# to a path/glob: DONE/idle only exits 0 once >=1 matching file exists; still
+# terminal-looking after AGENT_WATCH_NODELIV_POLLS (default 15) polls without it
+# => exit 6 so the orchestrator POKES instead of trusting a phantom DONE.
+# AGENT_WATCH_POLL_SECS (default 20) overrides poll interval (adversarial-testable).
 set -u
 SESSION="${1:?usage: watch <session> [marker] [shell-regex]}"
 MARKER="${2:-⟦esc⟧}"
@@ -42,10 +50,15 @@ echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ events=$EVENTS ==
 # lists dead-watcher specs so the orchestrator can re-arm mechanically instead of
 # remembering to.
 SPEC="$DIR/$SESSION.watchspec"
+# Per-session env must ride in the spec cmd, or a rearm'd watcher silently degrades to the
+# ungated behavior (deliverable gate lost across SIGKILL+rearm — flagged by the gate's author).
+SPEC_ENV=""
+[ -n "${AGENT_WATCH_DELIVERABLE:-}" ] && SPEC_ENV="AGENT_WATCH_DELIVERABLE=$(printf %q "$AGENT_WATCH_DELIVERABLE") "
+[ -n "${AGENT_WATCH_NODELIV_POLLS:-}" ] && SPEC_ENV="${SPEC_ENV}AGENT_WATCH_NODELIV_POLLS=$(printf %q "$AGENT_WATCH_NODELIV_POLLS") "
 {
   printf 'session=%s\n' "$SESSION"
   printf 'pid=%s\n' "$$"
-  printf 'cmd=bash %q %q %q %q\n' "$HERE/watch" "$SESSION" "$MARKER" "$SHELL_RE"
+  printf 'cmd=%sbash %q %q %q %q\n' "$SPEC_ENV" "$HERE/watch" "$SESSION" "$MARKER" "$SHELL_RE"
 } > "$SPEC"
 trap 'rm -f "$SPEC"' EXIT
 
@@ -58,9 +71,15 @@ if [ ! -f "$EVENTS" ]; then
   fi
 fi
 
-idle=0; lastline=""; stalls=0; exterr=0; empties=0
+DELIVERABLE="${AGENT_WATCH_DELIVERABLE:-}"
+NODELIV_MAX="${AGENT_WATCH_NODELIV_POLLS:-15}"
+POLL="${AGENT_WATCH_POLL_SECS:-20}"
+# No gate configured => always ok; else require >=1 existing glob match.
+deliverable_ok() { [ -z "$DELIVERABLE" ] && return 0; compgen -G "$DELIVERABLE" > /dev/null 2>&1; }
+
+idle=0; lastline=""; stalls=0; exterr=0; empties=0; nodeliv=0
 for i in {1..260}; do
-  sleep 20
+  sleep "$POLL"
   # (A) liveness backstop FIRST — a hard crash fires no hook; foreground back to a
   #     shell => agent gone, not done.
   cmd=$(tmux display-message -p -t "$SESSION" '#{pane_current_command}' 2>/dev/null) \
@@ -99,10 +118,20 @@ for i in {1..260}; do
       # boundary right before an auto-continued next turn.
       idle=$((idle+1))
       if [ "$idle" -ge 2 ]; then
-        echo "=== [$SESSION] DONE at $(date '+%H:%M:%S') — $line ==="
-        tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 0
+        if deliverable_ok; then
+          echo "=== [$SESSION] DONE at $(date '+%H:%M:%S') — $line ==="
+          tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 0
+        fi
+        # (D) DONE-looking but declared deliverable missing: this is a turn boundary,
+        # not task completion — keep watching instead of reporting a phantom DONE.
+        nodeliv=$((nodeliv+1))
+        [ "$nodeliv" -eq 1 ] && echo "[$SESSION] DONE event but deliverable '$DELIVERABLE' missing → continuing watch"
+        if [ "$nodeliv" -ge "$NODELIV_MAX" ]; then
+          echo "=== [$SESSION] IDLE-NO-DELIVERABLE at $(date '+%H:%M:%S') — stable DONE but '$DELIVERABLE' never appeared; poke the agent ==="
+          tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -30; exit 6
+        fi
       fi ;;
-    *) idle=0 ;;  # WORKING / unknown
+    *) idle=0; nodeliv=0 ;;  # WORKING / unknown
   esac
 
   # (B) hang heuristic: WORKING but the events file hasn't advanced for ~6min AND the
