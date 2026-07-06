@@ -7,8 +7,8 @@
 
 | 角色 | 工具 | 何时用 |
 |---|---|---|
-| **前端行为验证（主）** | **Playwright MCP（默认首选）**；chrome-devtools MCP 仅当必须复用用户已登录的真实 Chrome（CDP attach） | 唯一能看"UI 真实渲染对不对"——有没有提前显示完成/重复/卡死/计时错乱。**前端 fix 必须靠它**。 |
-| **前端联网诊断（主）** | Playwright MCP 网络（`browser_network_requests`）；或 chrome-devtools 网络面板 | 看请求 pending/失败/去向——能抓到**前端自己的联网 bug**（如代理目标没配，请求 pending）。CLI 直连会"恰好成功"从而**掩盖**这类 bug。 |
+| **前端行为验证（主）** | **Playwright MCP 隔离上下文（默认首选）**；登录态阻塞时先报 BLOCKED 或请求单独授权，不自动接管用户日常浏览器 | 唯一能看"UI 真实渲染对不对"——有没有提前显示完成/重复/卡死/计时错乱。**前端 fix 必须靠它**。 |
+| **前端联网诊断（主）** | Playwright MCP 网络（`browser_network_requests`） | 看请求 pending/失败/去向——能抓到**前端自己的联网 bug**（如代理目标没配，请求 pending）。CLI 直连会"恰好成功"从而**掩盖**这类 bug。 |
 | **元素定位** | a11y/DOM 快照的 uid/ref | 比坐标/截图稳、可复现、token 省；坐标/vision 仅作 fallback（拿不到 ref 或纯视觉布局问题）。 |
 | **后端 ground-truth（补充）** | CLI `curl` + bearer token | 抓 SSE 逐事件时序（`curl -N` 比网络面板强）、探 API、提 token、脚本化/循环、token 省。**绕过前端网络层 → 验不了前端行为**。 |
 
@@ -16,8 +16,8 @@
 **判据**：纯 CLI 验不了前端渲染；纯 MCP 抓 SSE 时序笨。一个前端 fix 的最优是**混合**——
 MCP 驱动登录+渲染验证+网络诊断，CLI 抓 SSE/API ground-truth。
 
-> **Playwright 优先已是 hook 硬规则**（P0a：浏览器派发载 `mcp__chrome-devtools` token 即被 `cto-guard-agent.py` DENY）。
-> why：chrome-devtools 与用户浏览器 + 多 agent 争 CDP、断连坑两次；仅当必须 attach 用户已登录会话才值得用它。
+> **Playwright 优先已是 hook 硬规则**（P0a：浏览器派发载用户日常浏览器控制 token 即被 `cto-guard-agent.py` DENY）。
+> why：用户日常浏览器与多 agent 争控制面、断连坑两次；仅当 Playwright 登录态不可解决且用户单独授权时才考虑。
 
 ## 状态形状矩阵（E2E 只测新鲜快乐态 = 结构性漏测）<!-- trunk:状态形状矩阵 -->
 
