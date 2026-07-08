@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-mail bus helper — inter-orchestrator mailbox ops. Pure bash, no deps.
+# agent-mail agent-bus helper — inter-orchestrator mailbox ops. Pure bash, no deps.
 # Bus root = $AGENT_MAIL_DIR (default ~/.agents/mail) — USER DATA, deliberately outside
 # this skill's directory so publishing/upgrading the skill never touches mail.
 set -euo pipefail
@@ -13,12 +13,12 @@ REG="$BUS/registry.md"
 
 usage() {
   cat <<'EOF'
-agent-mail bus — inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, default ~/.agents/mail)
-  bus register <agent-id> <workdir> <focus...>  add to roster + create mailbox
-  bus check <agent-id>                          list pending (inbox, oldest first)
-  bus send <from> <to> <slug> [subject...]      scaffold a letter into recipient inbox
-  bus archive <agent-id> <id>                   move a handled letter to archive
-  bus roster                                    print roster
+agent-bus — agent-mail inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, default ~/.agents/mail)
+  agent-bus register <agent-id> <workdir> <focus...>  add to roster + create mailbox
+  agent-bus check <agent-id>                          list pending (inbox, oldest first)
+  agent-bus send <from> <to> <slug> [subject...]      scaffold a letter into recipient inbox
+  agent-bus archive <agent-id> <id>                   move a handled letter to archive
+  agent-bus roster                                    print roster
 EOF
 }
 
@@ -58,7 +58,7 @@ case "$cmd" in
   send)
     from="${1:?from}"; to="${2:?to}"; slug="${3:?slug}"; shift 3; subject="${*:-<subject>}"
     ib="$BUS/$to/inbox"
-    [ -d "$ib" ] || { mkdir -p "$ib" "$BUS/$to/archive"; echo "note: $to not registered — mailbox created anyway (mail must not bounce); consider: bus register $to <workdir> <focus>"; }
+    [ -d "$ib" ] || { mkdir -p "$ib" "$BUS/$to/archive"; echo "note: $to not registered — mailbox created anyway (mail must not bounce); consider: agent-bus register $to <workdir> <focus>"; }
     id="$(date +%Y%m%d-%H%M)-$from-$slug"; f="$ib/$id.md"
     [ -e "$f" ] && { echo "exists: $f"; exit 1; }
     cat > "$f" <<EOF
@@ -83,7 +83,7 @@ EOF
     echo "archived $(basename "$src")"
     ;;
   roster)
-    [ -f "$REG" ] && cat "$REG" || echo "(no registry yet — bus register <agent-id> <workdir> <focus>)"
+    [ -f "$REG" ] && cat "$REG" || echo "(no registry yet — agent-bus register <agent-id> <workdir> <focus>)"
     ;;
   *) usage; [ -z "$cmd" ] || exit 1;;
 esac
