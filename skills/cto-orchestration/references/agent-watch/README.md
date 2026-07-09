@@ -65,6 +65,8 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   warn at every launch (`failed to parse hooks config … unknown field`) but does NOT block — the skill installs a
   project-local `.codex/hooks.json`, unaffected. And codex prompts for directory-trust on first launch in a new cwd
   (send `1`+Enter) — separate from any bypass flags. Both observed while driving codex as the orchestrator.
+- **omp `--model` fuzzy match opens an interactive picker** that eats a dispatched goal (session sits at the
+  launcher, no hooks fire). Pass an EXACT id (`--model=anthropic/claude-opus-4-8`) — goes straight to the TUI.
 
 ## Launch
 > **CRITICAL (verified the hard way):** the `AGENT_WATCH_*` env MUST be set **INSIDE the command string**

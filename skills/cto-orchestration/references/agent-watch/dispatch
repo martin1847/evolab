@@ -134,13 +134,32 @@ if [ -n "$GOAL" ]; then
   # folder", codex's is "do you trust…"; both matched below. (e2e dispatch-goal caught claude's
   # gate silently eating the goal — Martin 2026-07-05.)
   if [ "$AGENT" = "codex" ] || [ "$AGENT" = "claude" ]; then
-    for _ in 1 2 3 4; do
+    last_aff=""
+    for _ in 1 2 3 4 5; do
       pane="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null)"
-      if printf '%s' "$pane" | grep -qiE "trust this|do you trust|allow codex|created or one you trust"; then
-        echo "── $AGENT trust prompt detected → answering '1' (trust) ──"
-        tmux send-keys -t "$SESSION" "1" 2>/dev/null; sleep 0.4
-        tmux send-keys -t "$SESSION" Enter 2>/dev/null; sleep 2
-        break
+      if printf '%s' "$pane" | grep -qiE "trust this|do you trust|allow codex|created or one you trust|bypass permissions|yes, i accept"; then
+        # Answer by OPTION TEXT, never by position, and send the DIGIT ONLY — in these selectors
+        # a number key confirms immediately; a trailing Enter lands on the NEXT dialog and confirms
+        # its default. Bit us 2026-07-10 (claude ≥2.1.205): folder-trust (1=Yes) is followed by a
+        # bypass-permissions acceptance whose default is 1=No,exit — the old "1"+Enter answered
+        # dialog 1 with the digit, then Enter EXITED the agent on dialog 2. e2e claude leg all-red,
+        # v1.3.3 baseline equally red — harness update, not a skill regression.
+        aff_line="$(printf '%s' "$pane" | grep -oiE '[0-9][.)][^0-9]{0,40}(yes|accept|proceed|trust)' | head -1)"
+        # Same dialog already answered (digit + Enter fallback exhausted) → it's a transition
+        # residue in the pane, not a new gate; stray re-answers land in the CHAT INPUT as noise.
+        if [ -n "$aff_line" ] && [ "$aff_line" = "$last_aff" ]; then sleep 2; continue; fi
+        last_aff="$aff_line"
+        ans="$(printf '%s' "$aff_line" | grep -oE '^[0-9]')"
+        [ -n "$ans" ] || ans=1
+        echo "── $AGENT trust/acceptance prompt detected → answering '$ans' (affirmative by text, digit first) ──"
+        tmux send-keys -t "$SESSION" "$ans" 2>/dev/null; sleep 2
+        # Enter ONLY if the very same dialog is still up (some TUIs need it, e.g. codex; claude's
+        # confirms on the digit). Blind Enter would confirm the NEXT dialog's default instead.
+        pane2="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null)"
+        if [ -n "$aff_line" ] && printf '%s' "$pane2" | grep -qiF "$aff_line"; then
+          tmux send-keys -t "$SESSION" Enter 2>/dev/null; sleep 2
+        fi
+        continue  # a further gate may follow (folder trust → bypass acceptance); loop re-checks
       fi
       printf '%s' "$pane" | grep -qE "^›|gpt-|>[[:space:]]*$" && break  # prompt ready, no trust gate
       sleep 2

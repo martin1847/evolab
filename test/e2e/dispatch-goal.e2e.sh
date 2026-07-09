@@ -66,7 +66,11 @@ EOF
 }
 
 run_leg claude --dangerously-skip-permissions
-run_leg omp --auto-approve
+# omp leg pins an EXACT model id: this gate proves dispatch/hook machinery per agent, and must
+# not depend on the operator's mutable default model or a third-party quota (2026-07-10: default
+# had drifted to a quota-exhausted provider → instant error turn = hooks fine, no marker, leg
+# red). Exact id, not fuzzy "opus" — fuzzy match opens an interactive picker that eats the goal.
+run_leg omp --auto-approve --model=anthropic/claude-opus-4-8
 run_leg codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust
 
 summary
