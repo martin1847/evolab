@@ -66,17 +66,13 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   project-local `.codex/hooks.json`, unaffected. And codex prompts for directory-trust on first launch in a new cwd
   (send `1`+Enter) — separate from any bypass flags. Both observed while driving codex as the orchestrator.
 
-## Launch (per agent, sets env + hook)
+## Launch
 > **CRITICAL (verified the hard way):** the `AGENT_WATCH_*` env MUST be set **INSIDE the command string**
-> tmux runs — NOT as a prefix before `tmux new-session`. A running tmux server has a frozen environment, so a
-> client-side prefix does NOT reach the pane process → the hook sees empty `process.env` → silent no-op (events
-> file stays empty). Put the assignments in the `sh -c` command:
-- omp:    `tmux new-session -d -s <s> -c <cwd> 'AGENT_WATCH_SESSION=<s> AGENT_WATCH_DIR=<dir> omp --hook <abs>/hooks/omp-watch.ts'`
-- codex:  copy `hooks/codex-hooks.json`→`<cwd>/.codex/hooks.json` with `ABS` replaced by the abs path to
-  `hooks/emit-from-stdin.sh`; then `tmux new-session -d -s <s> -c <cwd> 'AGENT_WATCH_SESSION=<s> AGENT_WATCH_DIR=<dir> codex'`
-- claude: merge `hooks/claude-hooks.json` (`ABS` replaced) into `<cwd>/.claude/settings.json`; then
-  `tmux new-session -d -s <s> -c <cwd> 'AGENT_WATCH_SESSION=<s> AGENT_WATCH_DIR=<dir> claude'`
-**Canonical commands (use these, not the raw recipes above):**
+> tmux runs — NOT as a prefix before `tmux new-session` (a running tmux server has a frozen environment;
+> a client-side prefix never reaches the pane process → hook sees empty env → silent no-op). This rule —
+> plus per-agent hook file placement (omp `--hook`, codex `.codex/hooks.json`, claude settings merge) —
+> is baked into `dispatch`; read its source if you ever need to replicate a launch by hand.
+**Canonical commands:**
 - `dispatch <omp|codex|claude> <session> <cwd>` — launches the agent wired to the hook (bakes in the
   env-in-command rule + ABS sub; truncates the session sentinel; age-purges old ones).
 - `watch <session> [busy-marker]` — monitor (hook-primary, scrape-fallback). It BLOCKS until a terminal state,
@@ -87,35 +83,18 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
   (Validated: a codex shell-orchestrator independently built `…/watch <s>; rc=$?`, read `0=DONE`, then verified.)
 - `teardown <session> [cwd]` — kill the session + remove its sentinel + remove the worktree's `.codex` hook config.
 
-## Validation status (2026-06-16)
-- ✅ omp adapter e2e: hook loads (omp 15.12.4), `turn_start`→WORKING / `turn_end`→DONE fire + write the sentinel.
-- ✅ emit.sh / emit-from-stdin.sh (drains stdin, state-from-arg) / watch tail-parse / fallback-to-scrape.
-- ✅ omp via `dispatch` (real dispatch): hook fires the full lifecycle (turn_start/tool_call→WORKING,
-  turn_end→DONE); watch reads the sentinel (NOT fallback) and detects DONE correctly. Full dogfood passed.
-- ⚠️ **codex hooks need TRUST**: a freshly-dropped `.codex/hooks.json` does NOT run until trusted (codex has
-  `--dangerously-bypass-hook-trust`); until then no events fire → **watch falls back to screen-scrape**
-  (graceful, by design). To get the real codex signal, persist hook trust once or launch codex with the bypass
-  flag. Until then codex monitoring = screen-scrape fallback (works, just not hook-deterministic).
-- ✅（曾 ❌）**codex hook 静默——根因是我们自己 ship 的毒药（2026-07-05 定案并修复）**：模板
-  `hooks/codex-hooks.json` 顶层带 `"_comment"` 字段，codex 严格解析 hooks.json、**未知字段让整个文件
-  静默不加载**（bypass flag / 事件名 / env 继承全部无辜——去掉该字段后 PreToolUse/PostToolUse/Stop 全
-  fire 且 env 完整继承，watch 靠 DONE 事件正常 exit 0）。生产历史 `*-codex.events` 全 0 字节由此解释：
-  **从出生就没工作过**，"实测过 hook wiring" 当时只验了 omp。教训双层化：模板文档移进本 README、
-  polish 机械门新增「hooks 模板顶层只许 `hooks`」；**存量项目的 `.codex/hooks.json` 是 dispatch 落盘的
-  旧毒版**（install_cfg 不覆写）——删掉让下次 dispatch 重生成，或手动去 `_comment`。
-  模板使用要点（原 `_comment` 内容）：drop 为 `<cwd>/.codex/hooks.json`；agent 须带 env
-  `AGENT_WATCH_SESSION=<tmux session>` 启动（dispatch 已注入）；`PermissionRequest→WAITING` 只盖
-  tool-approval，自由文本提问靠抓屏兜；claude 模板同理 merge 进 settings.json、`Notification` 仅交互态 fire。
-- ✅ Claude (`Stop`/`Notification`/`PostToolUse`) wiring：e2e dispatch-goal 门实测（真 claude 会话，
-  PostToolUse→WORKING + Stop→DONE 全出现在 sentinel）。
-- ◑ STALLED-EXTERNAL (exit 5): detection PREDICATE validated offline against provider-error-chrome fixtures —
-  true positives (529/overloaded, 429 rate-limit, 503 unavailable, insufficient_quota, stream error) and true
-  negatives (normal edits, an agent merely reasoning about "error") classify correctly; watch↔scrape regex parity
-  asserted. **KNOWN false positives**: the same tokens appear when an agent edits rate-limit/error-handling code
-  or reads provider logs (predicate matches) — so exit 5 is advisory: eyeball the dumped tail (provider chrome vs
-  file content) before killing. NOT yet validated: the WORKING/BUSY + N-poll gates and a live provider stall e2e.
-- Note: `dispatch` writes `.codex/hooks.json` into the worktree and auto-adds `.codex/` to that repo's
-  `.git/info/exclude` (so it can't be `git add -A`'d). `teardown` removes the file itself.
+## Validation status（当前态快照；过程史在 git log）
+
+| 面 | 状态 | 方式与要点 |
+|---|---|---|
+| omp adapter 全生命周期 | ✅ | 真 dispatch + hermetic：turn_start/tool_call→WORKING、turn_end→DONE，watch 走 sentinel 非 fallback |
+| claude adapter | ✅ | e2e dispatch-goal 门实测（PostToolUse→WORKING + Stop→DONE 落 sentinel；`Notification` 仅交互态 fire） |
+| codex adapter | ✅ | e2e 严格档。历史坑双记：① hooks 需 trust——dispatch 已带 `--dangerously-bypass-hook-trust`；② 曾因模板顶层 `_comment` 被 codex 严格解析**静默禁用整文件**、hook 自诞生零 emit——修复 = 模板顶层只许 `hooks` + polish 门焊死；存量项目旧毒版 `.codex/hooks.json` 删掉重派即再生。`PermissionRequest→WAITING` 只盖 tool-approval，自由文本提问靠抓屏兜 |
+| emit / watch / scrape fallback | ✅ | hermetic 套件 |
+| deliverable 门（exit 6） | ✅ | hermetic 对抗测试 |
+| STALLED-EXTERNAL（exit 5）谓词 | ◑ | 离线 fixture 真/假例全过、watch↔scrape regex parity 已断言；**已知假阳**：agent 编辑错误处理代码/读 provider 日志时同 token 会命中——exit 5 是 advisory，先看屏尾再 kill。未 live 验：WORKING+N-poll 门与真 provider stall |
+
+- `dispatch` 会把 `.codex/hooks.json` 写进 worktree 并自动加 `.git/info/exclude`（防 `git add -A` 夹带）；`teardown` 负责清。
 
 ---
 
