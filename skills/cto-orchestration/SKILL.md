@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.3.3
+version: 1.4.0
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -9,16 +9,20 @@ metadata:
 
 # CTO Orchestration — 多 agent 混合开发编排
 
+> **定位**：本 skill 是编排内核（领域无关九条铁律，见同仓 `orchestrator-core`）的**写码领域皮**——
+> 切分轴/契约/合并/分形等判据的论证在内核，本文只写写码域的角色表、操作协议与实证；
+> 单独安装本 skill 亦自包含可用（下面三铁律即内核判据的写码浓缩）。
+>
 > 核心铁律：**编排者本人绝不写产品代码**——再小的改动也派给执行 agent。编排者的产出是
 > goal 文档、监控、评审调度、决策、状态落盘。来源：多 agent CTO 实战沉淀（2026-06 起）。
 >
 > 第二铁律：**执行前先验证、不明先问。** 做不可逆/对外动作（push / merge / 部署 / 删除 / 对外消息）前，
-> 先**核实真实事实与当前状态**（实读 state，别凭假设/凭工具的一次输出——本地 ref 会骗你），范围或授权不清
-> 就**先问清再做**；**一次批准不自动延伸到另一个动作**。可逆只读动作直接做、不请示。
+> 先**核实真实事实与当前状态**（实读 state，别凭假设——本地 ref 会骗你），范围或授权不清就**先问清再做**；
+> **一次批准不自动延伸到另一个动作**。可逆只读动作直接做、不请示。
 > 实证：把用户的 "push" 当成含 "merge" 去合共享分支被拦。
 >
 > 第三铁律（第二铁律的操作化）：**把"降低主理人认知负载"当设计目标**——不是每事问，是把"该谁决"
-> 事先设计掉，让主理人只决承重的、永不必记。机制（决策队列/三层委派/静默默认…）**见 §9**。
+> 事先设计掉，让主理人只决承重的、永不必记。机制见 §9。
 
 ## 0. 角色分工（按能力定义，工具可换）
 
@@ -33,107 +37,98 @@ metadata:
 | 派发载体 | 发指令进、抓屏出的交互会话 | tmux / 其他复用器 |
 | watcher | 轮询"存活+忙碌+等输入"返 typed 状态 | `references/agent-watch/`（dispatch/watch/teardown + hook；hook 主信号、抓屏降级）|
 
-**默认 omp 执行、codex 评审，不倒置**——omp(oh-my-pi+Opus)强在自主执行、codex(gpt)强在严苛评审，交叉评审屡抓双方都漏的真问题。
-**两条派工载体，按任务选**：① **tmux omp/codex** = 实现 + 对抗评审 + 需 steering/多轮回修（可 `dispatch send` 引导、watcher 取终态、会话持久）——核心开发循环走这条；② **Agent-工具 subagent** = 浏览器 E2E / 研究 / 读密集一次性（能载我的 MCP 如 Playwright、大 a11y 快照隔离在子上下文外、直接返结论、无 tmux 开销）。别用 subagent 干需反复 steering 的实现活、也别用 tmux omp 干要 MCP 的浏览器验。**派 Agent-工具 subagent 必显式指定 model**（重推理 opus / 轻量 sonnet）——不设=继承主会话模型（不一定合适）；fork 例外（永远继承父模型）。
-**编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位）；§1.4 的 watcher 起法/忙碌·存活信号按你的工具校准，`requires.bins` 的 tmux/omp/codex 是参考栈、非硬依赖。
-**多个编排者并行**（各管一摊）时，跨席位异步通信用可选伴随 skill `agent-mail`（信箱总线、各自 inbox 单一去处）。
+- **默认 omp 执行、codex 评审，不倒置**——omp(oh-my-pi+Opus)强在自主执行、codex(gpt)强在严苛评审，交叉评审屡抓双方都漏的真问题。
+- **两条派工载体，按任务选**：① **tmux omp/codex** = 实现 + 对抗评审 + 需 steering/多轮回修（`dispatch send` 引导、watcher 取终态、会话持久）——核心开发循环走这条；② **Agent-工具 subagent** = 浏览器 E2E / 研究 / 读密集一次性（能载我的 MCP、大快照隔离在子上下文外、直接返结论）。别用 subagent 干需反复 steering 的实现活、别用 tmux omp 干要 MCP 的浏览器验。**派 subagent 显式指定 model 按活分档**（重推理强模型 / 机械·轻量弱模型）——默认继承主会话模型常让机械活烧强模型；fork 例外（永远继承）。
+- **编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位）；watcher 起法/忙碌·存活信号按你的工具校准，`requires.bins` 是参考栈、非硬依赖。
+- **多个编排者并行**（各管一摊）时，跨席位异步通信用可选伴随 skill `agent-mail`。
 
 ## 1. 派工协议（每次走全流程）
 
-1. **基线纪律（fetch+检查，按需 rebase，集成用 squash）**：派工前 `git fetch` + 基于最新远端目标分支
-   开 worktree，**不让 agent 在过期基线开工**。三条判据：① **rebase 是条件动作非仪式**——base 没动 →
-   什么都不做、别空转；② **集成默认 squash、merge-commit 已弃用**；③ **只读 scout/audit/Explore 经 Agent
-   工具派出会静默继承编排者 cwd**（落后的主 checkout）→ 幻影发现，须显式指 worktree + 对 base ref 复核。
-   命令全串 / rebase 三分支判定 / squash 论证 / scout 70-commit 实证见 `references/dispatch-baseline.md`；
-   权威 git 细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard`）。
+1. **基线纪律**：派工前 `git fetch` + 基于最新远端目标分支开 worktree，**不让 agent 在过期基线开工**。
+   三条判据：① rebase 是条件动作非仪式——base 没动 → 什么都不做；② 集成默认 squash、merge-commit
+   弃用；③ **只读 scout/audit/Explore 经 Agent 工具派出会静默继承编排者 cwd**（落后的主 checkout）→
+   幻影发现，须显式指 worktree + 对 base ref 复核。命令全串 / 三分支判定 / scout 70-commit 实证见
+   `references/dispatch-baseline.md`；权威 git 细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard`）。
 2. **写 goal**（模板 `references/goal-template.md`，放 `docs/orchestration/<NAME>_GOAL.md`）：含
-   上下文+前置研究、带 file:line 的预判（标"verify, don't trust"）、交付物、验证要求、guardrails
-   （scope / stop-and-report / redaction / commit-local-no-push）。
-3. **派发 + 验 hook（硬 gate）+ 理解门**：派发与验 hook 由 §1.4 的融合 `--goal` 命令一体完成——
-   **起后立刻 Read dispatch 输出**，按三档判定：`hook: WORKING ✓` / `pane is BUSY`（codex 首个 tool 前正常）
-   均可继续；`NO sentinel…pane not busy` = 没走 dispatch / goal 没送达 → **停下重起、别带病跑**
-   （手动 send-keys 的坑枚举见 `references/agent-watch/README.md`，仅逃生舱用）。
-   **派发后、动手前先过理解门**：第一轮要 agent 复述"碰哪些文件/契约、有哪些风险"，核对无误
-   再放行；弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
-4. **挂 watcher**（`references/agent-watch/`，**hook 主信号、抓屏降级**）：**首选融合 `dispatch <agent> <session> <cwd> --goal <goal文件>`
-   一条命令用 Bash 工具 `run_in_background:true` 调一次**——内建 launch→送 goal→验 hook→**自动 watch**，
-   最高频的 `watch &` slip 从设计上无处发生（design > guard；无独立 `--watch`，论证见 `dispatch` 头注）。
-   派发后 Read 一次输出确认 `[send] OK…WORKING` + `hook: WORKING ✓`。
-   **codex 评审首轮同构**：brief 写成文件、同样 `--goal <brief.md>` 一条命令（首启目录信任提示自动应答；
-   codex sentinel 在首个 tool 后才出现，验证环自动降 pane 忙碌判定、不假警）；**复审轮 / steering 用
-   `dispatch send`**（§1.5）+ 单独 `watch`（**必 run_in_background 禁 `&`**）。收工 `teardown`。四条判据；机制全文 + typed 状态全枚举 +
-   STALLED-EXTERNAL / 异步完成通知黑洞 / 正向证据两坑 / fallback 自检 / cto-guard 实证见该目录 README：
-   - **typed 状态存在、DEAD≠DONE、WAITING 要回输入**（别把 idle / watcher 裁决当终态）。
-   - **判完成要正向证据、不凭 idle / watcher 裁决**——tmux 链路无失败信号、watcher 裁决只是线索；把完成绑
-     正向交付物（本地 commit／产物计数／review 标记），自己 capture-pane 核证（分阶段任务每个 part 边界都
-     idle 一瞬——裸 idle 轮询已由 guard DENY，坑的全案见 README）。**产出=文件的任务派发时直接
-     `--deliverable <glob>`**：watch 自己把这道门——glob 没命中不认 DONE、超时 exit 6 = 幻影 DONE 去 poke
-     （turn_end ≠ 任务终态，实证单日 4 次假 DONE；机制见 README typed 状态 6）。
-   - **纯事件驱动会盲等 → 设超时上限兜底**：按预期时长 ×2 设 fallback 自检（`ScheduleWakeup`/cron），到点无终态
-     主动 capture-pane——治 "WORKING 卡死/热重试" 的**永不 DONE**（与上条**假 DONE** 是两个失败态）。
-     **浏览器/E2E subagent 完成通知会黑洞** → 派发即配 deadline 正向证据 watch（guard 在派发那刻注入全文提醒；
-     活性判据=输出文件新鲜度、不是截图数，误杀防护=P0b，实证见 README）。
-     **watcher 被宿主批量收割（"was stopped" 通知）→ 跑 `rearm` 照单重挂**（watchspec 自愈见 README；
-     rearm 只开单不执行，重挂仍走 run_in_background）。
-   - **后台启动一律不加 shell `&`**（已 detached，再加 = 双重后台 → 孤儿）；唯一后台正路 = Bash 工具 `run_in_background`。
+   上下文+前置研究、带 file:line 的预判（标"verify, don't trust"）、交付物、验证要求（每条 Done-when
+   绑定证明命令）、guardrails（scope + out-of-scope 枚举 / 存疑协议 / stop-and-report / redaction /
+   commit-local-no-push）。**粒度判据**：一个 goal = 自包含单元 + 一个清晰交付物——太小则协调开销
+   吃掉收益，太大则长跑无 check-in、漂移风险随时长涨。
+3. **派发 = 融合一条命令 + 验 hook（硬 gate）+ 理解门**：首选
+   `references/agent-watch/dispatch <agent> <session> <cwd> --goal <goal文件>`（Bash 工具
+   `run_in_background:true` 调一次）——内建 launch→送 goal→验 hook→**自动 watch**，最高频的漏挂
+   watch 从设计上无处发生（无独立 `--watch`，论证见 `dispatch` 头注）。**起后立刻 Read 输出按三档判定**：
+   `hook: WORKING ✓` / `pane is BUSY`（codex 首个 tool 前正常）可继续；`NO sentinel…pane not busy` =
+   goal 没送达 → **停下重起、别带病跑**（手动 send-keys 仅逃生舱，坑枚举见 agent-watch README）。
+   **codex 评审首轮同构**：brief 写成文件、同样 `--goal <brief.md>` 一条命令。**动手前过理解门**
+   （goal 模板已自携复述要求）：核对 agent 复述的"碰哪些文件/契约、风险、scope"再放行——弱答当场
+   纠正，别把沉默当默许。
+4. **watcher 纪律**（typed 状态全枚举 + 各失败态机制/实证全文见 `references/agent-watch/README.md`）：
+   - **typed 状态 0-6 存在：DEAD≠DONE、WAITING 要回输入**——别把 idle / watcher 裁决当终态。
+   - **判完成要正向证据**（本地 commit / 产物计数 / review 标记），自己 capture-pane 核证；产出=文件的
+     任务派发时直接 `--deliverable <glob>`——glob 未命中不认 DONE、超时 exit 6 = 幻影 DONE 去 poke
+     （turn_end ≠ 任务终态，实证单日 4 次假 DONE）。
+   - **纯事件驱动会盲等**：按预期时长 ×2 设 fallback 自检（`ScheduleWakeup`/cron），到点无终态主动
+     capture-pane——治 WORKING 卡死/热重试的**永不 DONE**（与**假 DONE** 是两个失败态）。浏览器/E2E
+     subagent 完成通知会黑洞 → 派发即配 deadline 正向证据 watch；watcher 被宿主批量收割（"was stopped"
+     通知）→ 跑 `rearm` 照单重挂。
+   - **后台启动一律不加 shell `&`**（已 detached 再加 = 孤儿）；唯一后台正路 = Bash 工具 `run_in_background`。
    - **强制层（结构不靠自律）**：高频坑已由两 guard 脚本代码化 DENY（背景 `&` / 裸 idle 轮询 / CJK 裸
-     send-keys / chrome-devtools 浏览器派发 / 误杀活 agent）——被拦时读 deny 文案照做即可；DENY 全枚举 +
+     send-keys / chrome-devtools 浏览器派发 / 误杀活 agent）——被拦读 deny 文案照做；DENY 全枚举 +
      override + wiring 见 `guard-hooks.json`（entry 真源）+ 该目录 README §Wiring。
-5. **steering / 放行（理解门后 + 回修 + 新指令）**：一律 `references/agent-watch/dispatch send <session> -m "…"`（或 `-f <file>`）
-   交付，并以它的**确认环收尾——会话真转 `WORKING` 才算放行落地**，别假设 send-keys 成功=已送达。
-   裸 send-keys 长中文/全角已由 guard DENY（弹窗吃 Enter 卡 24min 的机制与实证见 dispatch 头注 + guard 提示文本）。
-6. **收工核证 + Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
-   Implemented，不是交付**（别让交付状态由执行者自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当
-   ①核证四件套过 + ②异构 codex 独立确认（执行者再严的自审仍是同 lineage = self-preference bias，不可信）
-   + ③**本机真实路径 E2E 过**（下面的顺序门）；**roadmap / ACTIVE_CONTEXT / 关单只认 Verified**。核证四件套
-   （git status / git log / 复跑 test+lint / grep 计数 + 实证）见 `references/dispatch-baseline.md`。
-   - **验证顺序门（不可跳级）**：**本机真实路径 E2E 先** → ops 部署 → **部署环境 E2E** → **最后才改任务状态**。
-     - 前端 = **浏览器本机 E2E**（localhost 前端 → 已部署后端，真点真输真渲染，§7）。
-     - 后端 = **curl 模拟本机 E2E**（尤其 SSE；起本机栈跑真路径，不是 mock）。
-     - **单测 + codex ≠ 本机 E2E**：结构测试是「结构防火墙」、不证真路径成立（实证：某并发锁功能 73 测试全过 +
-       codex approve，但 codex 自己两轮标"未跑 live DB 锁复现"——拿结构证据顶 Verified = 超前）。
-   - **验证顺序由编排者守，push 时硬 gate 不塞进 cto-guard**——归你的 Git 协作规范（evolab 公开镜像
-     `git-workflow-standard`）+ 服务端分支保护（职责分清）。
+5. **steering / 放行 / 回修**：一律 `references/agent-watch/dispatch send <session> -m "…"`（或 `-f <file>`），
+   以**确认环收尾——会话真转 WORKING 才算送达**，别假设 send-keys 成功=已送达（裸 send-keys 长中文/全角
+   已被 guard DENY）。复审轮 send 后单独 `watch`（必 run_in_background）。收工 `teardown`。
+6. **收工核证 Implemented→Verified**：watcher 测的是 idle、agent 自报的是 "done"——**都只算
+   Implemented**（别让交付状态由执行者自报）。升 **Verified** = ①核证四件套（git status / git log /
+   复跑 test+lint / grep 计数，见 `references/dispatch-baseline.md`）+ ②异构 codex 独立确认（执行者
+   再严的自审仍是同 lineage = self-preference bias）+ ③**本机真实路径 E2E 过**。
+   **roadmap / ACTIVE_CONTEXT / 关单只认 Verified。**
+   - **验证顺序门（不可跳级）**：本机真实路径 E2E（前端 = 浏览器真点真渲染，§7；后端 = curl 模拟真路径，
+     尤其 SSE）→ ops 部署 → 部署环境 E2E → **最后才改任务状态**。**单测 + codex ≠ 本机 E2E**——结构
+     测试是「结构防火墙」、不证真路径成立（实证：73 测试全过 + approve，codex 自标"未跑 live DB 锁复现"）。
+   - push 时硬 gate 归你的 Git 协作规范（`git-workflow-standard`）+ 服务端分支保护，不塞 cto-guard。
 
 ## 2. 对抗式评审循环
 
-**先按风险定评审深度**：低风险走轻量标准 review（`codex review --base`）、高风险（鉴权/迁移/基建/大重构）
-走完整对抗循环。codex 无内置"对抗"档——对抗在 prompt 层（自起会话点名轴 + severity/verdict + 多轮收敛），
-**必须自起会话自控 prompt、别用子命令**。完整模板 + 轴全枚举 + 实证 + ledger 栏目 + 达标线见
-`references/review-dispatch.md`。判据：
+**先按风险定评审深度**：低风险走轻量 `codex review --base`；高风险（鉴权/迁移/基建/大重构）走完整
+对抗循环——codex 无内置"对抗"档，对抗在 prompt 层，**必须自起会话自控 prompt、别用子命令**。
+完整模板 + 轴全枚举 + 实证 + ledger 栏目 + 达标线见 `references/review-dispatch.md`。判据：
 
-- **brief 冷上下文、不夹带自己的结论**（喂 codex 我的判断 = anchoring，换模型却共享推理链 = 去相关价值白费）。
-- **点名最易翻车的轴**（崩溃恢复/并发/旗标关路径/降级/安全契约/多租户隔离/指标诚实性/**缺失消费者
-  〔absence review：新能力谁必须消费？现在消费了吗？——缺失的调用方不在任何 diff 里〕**），让 codex 主动写探针。
-- **评审前先枚举执行路径分叉**（provider/mode、live vs rehydrate…），点 codex 核"还有哪些分支没走到"。
-- **门控/触发型功能必查 under-fire（该触发时触发了没），不只 over-fire**。
-- **评审记录用 ledger 结构、不纯追加**（blocking/queued/advisory/已修/stagnation 逐轮更新）；每轮回修重贴原 goal 不可变验收点。
-- **三分类收敛**：只有 `blocking` 残留才继续循环；**advisory→follow-up，别挡已就绪的 push**；不重复 raise 已判过的。
-- **stagnation 检测**：同一 finding 反复出现 = 卡住，该收敛或升级人介入，别无限对轰。
+- **brief 冷上下文、不夹带自己的结论**（喂评审者我的判断 = anchoring，换模型却共享推理链 = 异构去相关价值白费）。
+- **激进找、出口滤**：brief 鼓励评审者查一切可疑、别写"只报确定的"（源头克制 = 漏报机器）；过滤放
+  verdict 层——finding 须 file:line 证据 + confidence 标注，blocker/major 须探针/失败测试执行复现。
+- **点名最易翻车的轴**（崩溃恢复/并发/旗标关路径/降级/安全契约/多租户隔离/指标诚实性/**缺失消费者**
+  〔absence review：新能力谁必须消费？现在消费了吗？——缺失的调用方不在任何 diff 里〕），让 codex 主动写探针。
+- **评审前枚举执行路径分叉**（provider/mode、live vs rehydrate…），点名核"还有哪些分支没走到"；
+  **门控/触发型功能必查 under-fire（该触发时触发了没），不只 over-fire**。
+- **ledger 结构、不纯追加**（blocking/queued/advisory/**pre-existing 存量单列、记录不阻塞**/已修/stagnation
+  逐轮更新）；每轮回修重贴原 goal 不可变验收点。
+- **分类收敛**：只有 `blocking` 残留才继续循环；**advisory→follow-up，别挡已就绪的 push**；不重复
+  raise 已判过的（收口把已裁决类别沉淀为项目 AGENTS.md 的 Review guidelines/skip rules）；同一 finding
+  反复出现 = stagnation，收敛或升级人介入，别无限对轰。
 - **评审期 omp 别动同一 worktree**（codex 在内跑测试会污染结论）。
 
 ## 3. 变更纪律
 
 - **旗标门控**：行为变更默认藏 env flag 后，默认 OFF = 字节级零变化；例外：ReOpen 批准的修复可默认
   ON（goal 写明理由）。性能/实验类一律 OFF。
-- **measure-before-more / 先量再断**：第一刀砍下后绑定约束会换人——先实测再决定第二刀，别按推算连下多个
-  lever。修 bug 同理，动手前验证 ① bug **当前态真能复现**、② 观测值真被某机制约束（观测 5 < 上限 10 ⇒ 上限
-  不是约束）、③ 执行**真到了**你怀疑的代码（读代码只找候选，"执行到这"要日志/trace 证）。**绑定约束未证时，
-  先派埋点 + 复测、不发投机修复**（实证：读代码三轮推断一个根本不存在的"挂死"、每轮被真数据打回）。常见
-  伪 bug：查错了数据源（空表当真表 / 错日志串 / 错 session）、**"没收到"(客户端) ≠ "没发出"(服务端)**。
-- **病类确认 → 立即系统性枚举全部同模式点**（measure-before-more 的收网侧）：资源泄漏/同模式反模式一旦
-  root-cause 确认为"类"（如"持事务跨 async"），下一步不是修眼前那一处、等下轮监测再显形一处——**当场枚举
-  代码里所有同模式点、逐一分类（安全/持有嫌疑）成表，一轮修完**。实证：idle-txn 5 轮逐个显形逐个修
-  （claim→完成→执行读→SSE→retry-sleep），第 4 轮才做的系统性枚举若第 1 轮就做，5 轮收敛成 ~2 轮。
+- **measure-before-more / 先量再断**：第一刀砍下后绑定约束会换人——先实测再下第二刀。修 bug 动手前
+  验证 ① bug **当前态真能复现**、② 观测值真被怀疑的机制约束（观测 5 < 上限 10 ⇒ 上限不是约束）、
+  ③ 执行**真到了**你怀疑的代码（读代码只找候选，"执行到这"要日志/trace 证）。**绑定约束未证时，先派
+  埋点 + 复测、不发投机修复**（实证：读代码三轮推断一个不存在的"挂死"、每轮被真数据打回）。常见伪
+  bug：查错数据源（空表当真表 / 错日志串 / 错 session）、**"没收到"(客户端) ≠ "没发出"(服务端)**。
+- **病类确认 → 立即系统性枚举全部同模式点**：root-cause 确认为"类"（如"持事务跨 async"）后，当场枚举
+  代码里所有同模式点、逐一分类（安全/持有嫌疑）成表、一轮修完——别修眼前一处等下轮再显形一处
+  （实证：idle-txn 5 轮逐个显形逐个修，第 1 轮就枚举可收敛成 ~2 轮）。
 - **验证诚实**：交付三段式——验证了什么（真跑过）/ 没验证什么 / 剩余风险。本地打桩绕过的环节（真
-  LLM、真队列）显式标注，部署后运维补验。实证：本地 LLM 打桩致 un-awaited coroutine 逃逸生产。
-- **代验路径 ≠ 真路径**（后端/agent/前端通用）：mock / 打桩 / stream smoke 全绿 **≠ 真实路径成立**——按
-  **真实部署路径**验收，真路径常和你 mock 的那条不是同一条（前端实例见 §7）。最尖一条：**别 mock 你正在
-  验证的那个边界**——stub 掉被测函数 = 测试零信息、恰好盖住 bug；真应用 E2E 才是「可测试」门（实证：一天
-  4 个 bug 全过 review+单测，只它抓到）。
-- **编辑前重读会变的文件**：rebase / 另一 agent 动过同一 worktree / 你刚跑了改文件的 git 操作 之后，
-  in-context 文件视图已 stale——先重读再改。带 read-before-edit 护栏的工具会**拦** stale edit（报 `must be read
-  first` 不是 bug、是它在挡你拿过期视图覆盖别人的改动）；没护栏的会**静默覆盖**、更糟。别在读↔编辑间插改文件的命令。
+  LLM、真队列）显式标注，部署后运维补验（实证：本地 LLM 打桩致 un-awaited coroutine 逃逸生产）。
+- **代验路径 ≠ 真路径**：mock / 打桩 / stream smoke 全绿 **≠ 真实路径成立**——按**真实部署路径**验收
+  （前端实例见 §7）。最尖一条：**别 mock 你正在验证的那个边界**——stub 掉被测函数 = 测试零信息、恰好
+  盖住 bug（实证：一天 4 个 bug 全过 review+单测，只有真应用 E2E 抓到）。
+- **编辑前重读会变的文件**：rebase / 另一 agent 动过同一 worktree / 刚跑了改文件的 git 操作之后，
+  in-context 视图已 stale——先重读再改。护栏报 `must be read first` 是在挡 stale edit，不是 bug；
+  没护栏的工具会**静默覆盖**、更糟。别在读↔编辑间插改文件的命令。
 
 ## 4. 间接环境访问（运维 agent 模式）
 
@@ -146,37 +141,35 @@ metadata:
 ## 5. 状态落盘与节奏
 
 - `docs/orchestration/` 是 SoT：`*_GOAL` / `*_FINDINGS|IMPL_omp` / `*_REVIEW_codex` / `*_PROMPT` /
-  `*_RESULT`，命名带任务号、全 file:line 证据。**生命周期**：收口即把文档挪进 `archive/`（README 加
-  索引行），live 只留在跑/在等的；文档只生不死 → live 与历史混杂（实证：某项目积 38 个才首清）。
-- memory：每 workstream 一文件 + 索引一行（状态/PR/敞口/下一步入口），"压缩/等外部输入"前必更新。
+  `*_RESULT`，命名带任务号、全 file:line 证据。**生命周期**：收口即挪 `archive/`（README 加索引行），
+  live 只留在跑/在等的——文档只生不死 → live 与历史混杂（实证：某项目积 38 个才首清）。
+- **信息四分工**：docs = 全 agent 共享状态快照（what/why）· `ACCESS.local.md` = 怎么连上+凭证（含密
+  gitignored，见 repo-governance-bootstrap）· memory = 编排者私有教训 + 入口指针（每 workstream 一文件
+  + 索引一行，"压缩/等外部输入"前必更新）· 短期草稿/进度 = context window 或 `/tmp`（随手可弃）。
   **memory 编排者私有，agent/新 session 只能读 docs**——只更 memory 不同步 docs = 共享治理层腐烂
-  （实证：某项目 ACTIVE_CONTEXT 冻 4 天变废纸）。**信息四分工**：docs=全 agent 共享状态快照（what/why）·
-  `ACCESS.local.md`=怎么连上+凭证（含密 gitignored，见 repo-governance-bootstrap）· memory=编排者私有教训+入口指针 ·
-  短期草稿/进度/待办=context window 或 `/tmp`（随手可弃，别塞 memory 或 ACTIVE_CONTEXT——那是收口快照非草稿）。
-  - **写时纪律（不等复盘）**：卸载边写边做——写 memory 当下就把事实细节进 ACCESS/docs，别囤到复盘再清；
-    高频纪律配 **PostToolUse hook** 兜底（强制层补 salience 衰减；模板见 repo-governance-bootstrap）。
-- **复盘仪式（事件触发：收口 / 压缩前 / 任何 ReOpen 后主动提议）——是 CHECKLIST 不是即兴。**
-  听到"复盘 / 收口 / handoff" → **读 `references/retrospective.md` 七步逐条勾**，别凭记忆即兴（即兴版读着完整却静默漏
-  承重治理步——实证 2026-06-26：被要求"复盘仪式"却自由发挥，漏了 roadmap 翻状态 + ACTIVE_CONTEXT 整篇重写 + 上下文治理）。
-  - **硬门（未过不得宣布完成）**：跑 `bash references/retro-check.sh --base <branch> --docs <docs-dir> --memory <MEMORY.md>`
-    机械校验（已合分支无孤儿 worktree / ACTIVE_CONTEXT 今日重写 / roadmap 近期动 / MEMORY 未超行）；只验机械代理、语义靠你。
+  （实证：ACTIVE_CONTEXT 冻 4 天变废纸）。**写时纪律**：卸载边写边做，别囤到复盘再清；高频纪律配
+  PostToolUse hook 兜底（模板见 repo-governance-bootstrap）。
+- **复盘仪式（事件触发：收口 / 压缩前 / 任何 ReOpen 后主动提议）是 CHECKLIST 不是即兴**：听到"复盘 /
+  收口 / handoff" → **读 `references/retrospective.md` 七步逐条勾**（即兴版必静默漏承重治理步，实证漏
+  roadmap 翻状态 + ACTIVE_CONTEXT 重写）。**硬门**：跑 `bash references/retro-check.sh --base <branch>
+  --docs <docs-dir> --memory <MEMORY.md>` 机械校验，未过不得宣布完成（只验机械代理，语义靠你）。
 - **孤儿扫**：关交付完的会话（持关键上下文且挂起的保留）；扫 agent 起的孤儿——`docker ps` / `ps` /
-  后台 job。临时 compose 用 trap/finally `down --remove-orphans`，repro 禁裸 `while True`（用有界
-  循环/deadline）。实证：某 repro 死循环空转 2.5 天、65% CPU。
+  后台 job；临时 compose 用 trap/finally `down --remove-orphans`；repro 禁裸 `while True`（用有界
+  循环/deadline，实证：死循环空转 2.5 天、65% CPU）。
 
 ## 6. 任务系统（外部任务追踪：Jira / Linear / 飞书 bitable 等）
 
 - 用任务系统的 CLI / API 读写任务；状态机随项目定义（待处理/处理中/可测试/已完成/阻塞/ReOpen）。
 - **关单标准**：修复 → E2E 验证 → 截图证据上传任务附件（验收人一眼对照）→ 一行结论 → 翻状态。
 - ReOpen：先取证再修——上一轮"修好了"的机制可能根本不是绑定约束。
-- **别在治理 docs 里养第二套任务账本**：外部系统是任务 SoT，roadmap 只是它的映射层。规则细节（沿用
-  外部 ID / 写明 SoT / 何时才造内部 RD 号）由 `repo-governance-bootstrap` 的"外部任务系统优先"落地。
+- **别在治理 docs 里养第二套任务账本**：外部系统是任务 SoT，roadmap 只是它的映射层。规则细节由
+  `repo-governance-bootstrap` 的"外部任务系统优先"落地。
 
 ## 7. 前端 fix 验证（浏览器联调）
 
 派完前端任务，**验收纪律：代码 review + 单测都不够，必须回浏览器看真实渲染；且 mock / SSE 帧 / 本地都过
 ≠ 真用户能看到——闭环要登已发布的真应用跑真实一轮 + 截图才算数**（`代验路径≠真路径` 的前端实例，通用原则
-见 §3）。**E2E 是验收、不占编排者主上下文——委派 **Playwright MCP 的子 agent**（§0「不自己跑长 E2E」的前端实例）。
+见 §3）。**E2E 是验收、不占编排者主上下文——委派 Playwright MCP 的子 agent**（§0「不自己跑长 E2E」的前端实例）。
 完整方法论（MCP 主 CLI 补、a11y 优先、**状态形状矩阵**〔新鲜登录/过期会话/贫数据账号/未登录——只测
 新鲜快乐态是结构性漏测〕、网络面板诊断联网 bug、CLI 抓 SSE、**交付闭环**、**E2E 委派子 agent**、
 本地起服务坑入项目 `AGENTS.md`）见 `references/frontend-verify.md`。
@@ -189,12 +182,14 @@ metadata:
 ## 9. 主理人注意力与决策队列（降认知负载）
 
 第三铁律的落地。**目标不是主理人少决，是只决承重的（战略/不可逆/钱/价值），每个给嚼过的选项，且永不必记。**
-完整方法论（七件机制 + 委派板 + 失败模式 + 出处诚实标注 + copy-paste 模板）见 **`references/decision-queue.md`**。
-本节只留承重要点：
+完整架构（三层各归其位 + 六件机制 + 强制层 + 模板）见 **`references/decision-queue.md`**；承重四条：
 
-- **单一决策队列** `docs/DECISION_QUEUE.md`：编排者维护、主理人只读。🔴需他/🟡我驱动/💤parked/✅已清。
-  **完整性保证**=唯一面、不另存、不静默丢（信任前提，否则 offload 失效）。每 🔴 带推荐+静默默认+revisit 触发。
-- **三层委派**：T0 直接做（可逆/已授权/无价值判断）· T1 做了+记一行（可逆但值得知会、可否决）· T2 动手前问
-  （不可逆/对外、战略/优先级/钱/价值、有实质下行的真模糊）。减负=多往 T1 挪、少用 T2 当同步闸。
+- **三档委派下沉权限层**（散文只定义语义，执行靠结构——permission rules enforced by harness, not by
+  the model）：T0 直接做 = allow · T1 做了+记一行（可否决）= allow + hook 自动记账 · T2 动手前问 =
+  ask/deny + guard（不可逆/对外、战略/钱/价值、真模糊）。减负 = 多往 T1 挪、少用 T2 当同步闸。
+- **单一决策队列** `docs/DECISION_QUEUE.md` 只装人脑判断题：🔴需他/💤parked/✅已清（🟡在飞的事归
+  ACTIVE_CONTEXT，别养第二份）。**完整性保证** = 唯一面、不另存、不静默丢（信任前提，否则 offload
+  失效）；每 🔴 带推荐 + 静默默认 + revisit 触发。
 - **静默默认**：主理人没回 → 可逆按写明默认前进、**不可逆一律 HOLD（永不自动越过不可逆）**。
-- 其余机制（聚合绊线 / 批处理升级包 / 心跳 / HELD revisit / 队列腐烂兜底 / 三层治理勿混）见 `references/decision-queue.md`。
+- **新鲜度强制层**：`queue-freshness.py`（UserPromptSubmit hook，wiring 真源 `references/queue-hooks.json`，
+  可选接入）——orchestration 活动比队列新即注入提醒；收口由 retro-check 硬门兜底。

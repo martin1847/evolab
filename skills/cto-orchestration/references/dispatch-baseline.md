@@ -1,8 +1,10 @@
-# 派工基线纪律 + 收工核证
+# 派工基线纪律 + 收工核证（编排者侧规程）
 
-> SKILL.md §1 step1（基线纪律）+ step6（收工核证 Implemented→Verified）的展开。
-> 主干只留判据；这里是命令全串、rebase 三分支判定、squash 论证、核证四件套与实证。
-> 权威 git 细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard` 规划中）；这里只留编排基线。
+> SKILL.md §1 step1（基线纪律）+ step6（收工核证）的展开。**受众是编排者，不是 worker**——
+> 前半发生在 goal 存在之前（开基线），后半发生在 worker 自报 done 之后（独立核证），
+> 都不属于 goal 合同：塞进合同 = 让执行者替编排者守门，恰好废掉"完成状态不由执行者自报"这道防线。
+> worker 侧合同见 `goal-template.md`（本文产出它 header 里的 `cut from latest origin/<base> @ <sha>`）。
+> 权威 git 细节见你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard`）；这里只留编排基线。
 
 ## 基线纪律（fetch + 检查，按需 rebase，集成用 squash）
 
@@ -29,20 +31,9 @@ git worktree add ../wt-<name> -b feat/<name> origin/<base>
   **显式指到新 worktree**，可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。
   实证：审计跑在落后 70 commit 的主 checkout、把已被某 PR 删净的子系统报成"待删"，靠对 origin 重核才在派删除前抓出。
 
-## 收工核证：Implemented → Verified
+## 收工核证四件套（判据与定义见 SKILL §1.6，此处只留每件的操作细节与实证）
 
-watcher 测的是 idle、agent 自报的是 "done"——**都只算 Implemented，不是交付**（别让交付状态由执行者
-自报，§1.4 存活检测是同一主题）。升 **Verified** 仅当：
-
-1. 核证四件套过；
-2. 异构 codex 独立确认（执行者再严的完成自审——哪怕跑了结构化完成审计——仍是同 lineage 自审 =
-   self-preference bias，不可信）。
-
-**roadmap / ACTIVE_CONTEXT / 关单只认 Verified。**
-
-核证四件套：
-
-1. `git status -s` 干净（实证：omp 屡次"声称完成没 commit"）。
-2. `git log origin/<base>..HEAD` 与声明一致。
-3. 独立复跑 test+lint。
+1. `git status -s` 干净（实证：执行 agent 屡次"声称完成没 commit"）。
+2. `git log origin/<base>..HEAD` 与声明一致（多了 = 夹带，少了 = 没交）。
+3. 独立复跑 test+lint——不吃 worker 转述的结果。
 4. 测试计数用 `grep -E 'passed|failed'`，别信被截断的点行。

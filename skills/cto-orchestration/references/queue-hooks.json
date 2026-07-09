@@ -1,0 +1,6 @@
+{
+  "//": "decision-queue 强制层 wiring 真源（可选——仅在用 docs/DECISION_QUEUE.md 的项目接入）。接入=command 前缀替换为本 skill 安装根绝对路径（hooks 不展开 ~、不加解释器前缀——脚本自带 shebang），并进项目 settings。UserPromptSubmit 无需 matcher。",
+  "UserPromptSubmit": [
+    { "matcher": "", "command": "references/queue-freshness.py" }
+  ]
+}
