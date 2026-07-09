@@ -114,7 +114,8 @@ NOT FOR:
 - 所有未来计划必须挂靠到：module / ADR / roadmap item / tracked issue / module evolution section。
 - 禁止：孤立 TODO 文档 / generic TODO dump / disconnected planning docs / 没有 owner-status-rationale 的长期计划 / 随意 `ideas.md`。
 - 局部 TODO 可以存在，但非平凡 TODO 应关联 owner / issue / ADR / roadmap。
-- 架构变化时同步更新：ADR / module docs / module evolution / roadmap status / relevant code comments。
+- 架构变化时同步更新：ADR / module docs / module evolution / roadmap status / relevant code comments——
+  **与代码同一 commit**，别攒批（攒批 = 文档与代码从此各自漂移）。
 - 未来工作管理: 新增或更新 docs/roadmap/deferred/README.md 作为该目录的索引
 - 每个重要的延期项应单独存放在 docs/roadmap/deferred/*-DEFER-*.md 文件中
 

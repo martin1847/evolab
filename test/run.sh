@@ -26,10 +26,13 @@ run_one() { # $1 label  $2... command
 
 echo "######## agent-watch test suite ########"
 
-for t in emit.test.sh watch.test.sh scrape-fallback.test.sh ext-err-detection.test.sh dispatch-teardown.test.sh hook.test.sh cto-guard-bash.test.sh cto-guard-agent.test.sh retro-check.test.sh agent-mail-bus.test.sh mirror-sync.test.sh statusline.test.sh rearm.test.sh; do
+# Auto-discover: every test/*.test.sh runs — a hardcoded list here silently skips
+# new suites (bitten 2026-07-10: two new files, SUMMARY still green at old count).
+for tp in "$HERE"/*.test.sh; do
+  t="$(basename "$tp")"
   echo
   echo "==== $t ===="
-  run_one "$t" bash "$HERE/$t"
+  run_one "$t" bash "$tp"
 done
 
 for bt in omp-watch.bun.ts memory-hook-omp.bun.ts; do

@@ -219,10 +219,12 @@ Last rewritten: YYYY-MM-DD
 
 ## INDEX.md 模板
 
+> INDEX 是 traffic cop：只放链接与一行说明；任何更多的内容 = 放错了地方（内容归对应文档）。
+
 ```markdown
 # Documentation Index
 
-This index maps the repository source of truth.
+This index maps the repository source of truth. Links only — content lives in the linked docs.
 
 ## Decisions
 
