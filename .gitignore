@@ -1,9 +1,13 @@
 .DS_Store
 *.log
 scripts/
+scripts
 
 AGENTS.md
 CLAUDE.md
 .evolab/
 .claude/
 security/
+security
+.evolab
+.claude
