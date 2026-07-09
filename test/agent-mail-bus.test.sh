@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-mail `bus` — hermetic test against a temp $AGENT_MAIL_DIR (user-data dir never touched).
+# agent-mail `agent-bus` — hermetic test against a temp $AGENT_MAIL_DIR (user-data dir never touched).
 # Asserts: register (roster + mailbox), send (id format <YYYYMMDD-HHMM>-<from>-<slug>, frontmatter
 # has NO status/date — state is positional), check (oldest-first pending), archive (state move),
 # unregistered recipient still gets delivery (mail must not bounce).
@@ -7,13 +7,15 @@ set -u
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
 
-BUSBIN="../skills/agent-mail/bus"
+BUSBIN="../skills/agent-mail/agent-bus"
 export AGENT_MAIL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/am-test.XXXXXX")"
+export HOME="$AGENT_MAIL_DIR/home"
+mkdir -p "$HOME"
 trap 'rm -rf "$AGENT_MAIL_DIR"' EXIT
 
-echo "== agent-mail bus =="
+echo "== agent-mail agent-bus =="
 
-chk_eq "bus is executable" 1 "$([ -x "$BUSBIN" ] && echo 1 || echo 0)"
+chk_eq "agent-bus is executable" 1 "$([ -x "$BUSBIN" ] && echo 1 || echo 0)"
 
 # register two agents
 out="$(bash "$BUSBIN" register alpha /tmp/alpha "编排 A 摊")"
@@ -23,7 +25,7 @@ chk_eq "mailbox dirs created" 1 "$([ -d "$AGENT_MAIL_DIR/alpha/inbox" ] && [ -d 
 out="$(bash "$BUSBIN" register alpha /tmp/alpha2 dup)"
 chk_contains "re-register is idempotent" "already in roster" "$out"
 
-# owner-only perms (umask 077): mail is untrusted data on the fs trust boundary — bus-created
+# owner-only perms (umask 077): mail is untrusted data on the fs trust boundary — agent-bus-created
 # dirs must be 700, files 600, so other local users can't read another seat's inbox.
 # GNU-first: BSD stat errors on -c (falls through); GNU stat treats -f as "filesystem info"
 # WITHOUT erroring (never falls through) — the reverse order silently breaks on Linux.
@@ -92,12 +94,22 @@ chk_eq "check unknown agent exits nonzero" 1 "$rc"
 
 # ── mail-check.py (SessionStart pending-mail surfacing; identity: env > arg > registry-workdir) ──
 MAILCHECK="../skills/agent-mail/mail-check.py"
+AGENTBUS_ABS="$(cd ../skills/agent-mail && pwd)/agent-bus"
 chk_eq "mail-check is executable" 1 "$([ -x "$MAILCHECK" ] && echo 1 || echo 0)"
 bash "$BUSBIN" send alpha beta ping2 "再来一封" >/dev/null
 out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=beta "$MAILCHECK")"
 chk_contains "env-self surfaces pending" "1 封" "$out"
 chk_contains "output is SessionStart JSON" "SessionStart" "$out"
 chk_contains "surfacing carries untrusted-data warning" "不可信数据" "$out"
+chk_eq "SessionStart does not create ~/.local/bin" 0 "$([ -d "$HOME/.local/bin" ] && echo 1 || echo 0)"
+COLLIDE_HOME="$AGENT_MAIL_DIR/collide-home"; mkdir -p "$COLLIDE_HOME/.local/bin"
+printf keep > "$COLLIDE_HOME/.local/bin/agent-bus"
+out="$(env -u CLAUDE_PROJECT_DIR HOME="$COLLIDE_HOME" AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
+chk_eq "existing ~/.local/bin/agent-bus is not overwritten" keep "$(cat "$COLLIDE_HOME/.local/bin/agent-bus")"
+mkdir -p "$HOME/.local/bin"
+out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
+chk_eq "SessionStart links agent-bus when ~/.local/bin exists" "$AGENTBUS_ABS" "$(readlink "$HOME/.local/bin/agent-bus" 2>/dev/null || true)"
+chk_eq "linked agent-bus is executable" 1 "$([ -x "$HOME/.local/bin/agent-bus" ] && echo 1 || echo 0)"
 out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
 chk_eq "empty inbox silent" "" "$out"; chk_eq "empty inbox exit 0" 0 "$rc"
 bash "$BUSBIN" send alpha delta hello-d "给 delta" >/dev/null

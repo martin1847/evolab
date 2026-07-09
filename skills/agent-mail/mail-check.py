@@ -38,12 +38,26 @@ def emit(event, msg):
                                              "additionalContext": msg}}, ensure_ascii=False))
 
 
+def ensure_agent_bus_link():
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent-bus")
+    bindir = os.path.expanduser("~/.local/bin")
+    dst = os.path.join(bindir, "agent-bus")
+    try:
+        if not os.path.isdir(bindir) or os.path.lexists(dst):
+            return
+        os.symlink(src, dst)
+    except OSError:
+        pass
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
     except Exception:
         payload = {}
     event = payload.get("hook_event_name") or "SessionStart"
+    if event == "SessionStart":
+        ensure_agent_bus_link()
 
     mail = os.environ.get("AGENT_MAIL_DIR") or os.path.expanduser("~/.agents/mail")
     self_id = os.environ.get("AGENT_MAIL_SELF") or (sys.argv[1] if len(sys.argv) > 1 else "")
