@@ -37,7 +37,7 @@ canonical 定义在 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓
 
 ## 2. 分支模型
 
-- **业务/受保护分支**:`main`/`master`、`develop`/`dev`、`release/**`、`project/*`(项目集成分支,如 `project/pda`)。**Tier 2 / Tier 3 仓:只接受 PR 合入**(Tier 1 仓可直推,仅禁 force-push/删分支)。受保护集 = ACR 出镜像放行集;canonical 定义在 你的 IaC 仓(三档 tier ruleset)。
+- **业务/受保护分支**:`main`/`master`、`develop`/`dev`、`release/**`、`project/*`(项目集成分支,如 `project/example`)。**Tier 2 / Tier 3 仓:只接受 PR 合入**(Tier 1 仓可直推,仅禁 force-push/删分支)。受保护集 = ACR 出镜像放行集;canonical 定义在 你的 IaC 仓(三档 tier ruleset)。
 - **工作分支**:`<type>/<slug>`,`type ∈ {feat, fix, chore, docs, refactor, test, perf}`。从最新 base 起,开发者在自己分支上自由 commit / rebase / force-with-lease。
 
 ## 3. rebase 是条件动作,不是仪式
