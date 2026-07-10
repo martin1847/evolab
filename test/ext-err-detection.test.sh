@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
-# Validates the STALLED-EXTERNAL (exit 5) detection PREDICATE shared by `watch` +
-# `lib/scrape-fallback.sh`:  tail -15 | grep -qiE "$EXT_ERR_RE".
+# Validates the STALLED-EXTERNAL (exit 5) detection PREDICATE of `watch`:
+#   tail -15 | grep -qiE "$EXT_ERR_RE".
 #
 # Scope: the regex predicate ONLY. The live path adds two more gates the predicate
-# can't capture — state=WORKING/BUSY + N consecutive polls — which narrow but do NOT
+# can't capture — state=WORKING + N consecutive polls — which narrow but do NOT
 # close the false-positive surface this test documents.
 #
-# Design: the pattern is EXTRACTED from the real scripts at runtime (not copied), so a
-# regex edit that drifts from what ships is caught here. (Moved from repo-root test/.)
+# Design: the pattern is EXTRACTED from the real script at runtime (not copied), so a
+# regex edit that drifts from what ships is caught here.
 # Run via test/run.sh, or standalone: bash test/ext-err-detection.test.sh
 set -u
 AW_DIR="$(cd "$(dirname "$0")/.." && pwd)/skills/cto-orchestration/references/agent-watch"
 WATCH="$AW_DIR/watch"
-SCRAPE="$AW_DIR/lib/scrape-fallback.sh"
 
 extract_re() { grep '^EXT_ERR_RE=' "$1" | sed 's/^EXT_ERR_RE="${AGENT_WATCH_EXT_ERR_RE:-//; s/}"$//'; }
 RE="$(extract_re "$WATCH")"
-RE_SCRAPE="$(extract_re "$SCRAPE")"
 
 pass=0; fail=0
 chk() { # $1 expect(Y/N)  $2 label  $3 screen-text
@@ -26,8 +24,6 @@ chk() { # $1 expect(Y/N)  $2 label  $3 screen-text
 }
 
 echo "EXT_ERR_RE (from watch): $RE"
-if [ "$RE" = "$RE_SCRAPE" ]; then echo "  ok   [regex-parity] watch == scrape-fallback"; pass=$((pass+1))
-else echo "  FAIL [regex-parity] watch != scrape-fallback drift!"; fail=$((fail+1)); fi
 
 echo "-- true positives (provider-error chrome, MUST match) --"
 chk Y "anthropic-529-overloaded" '> retrying (3/10)

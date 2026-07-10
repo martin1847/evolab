@@ -209,8 +209,8 @@ if [ "$WATCH_MODE" = 1 ]; then
   done
   case "$ok" in
     hook) echo "hook: WORKING sentinel present — hook wired ✓ (Read this output line to confirm, then wait for the completion notification)" ;;
-    pane) echo "hook: no sentinel yet but pane is BUSY — agent working (codex emits WORKING on first tool call, needs hook trust). watch auto-falls back to scrape if the sentinel stays empty ~2min." ;;
-    *)    echo "hook: NO sentinel after 12s and pane not busy — hook not wired / goal not landed / agent slow. watch falls back to scrape; if you meant hook-primary, STOP and re-dispatch."
+    pane) echo "hook: no sentinel yet but pane is BUSY — agent working (codex emits WORKING on first tool call, needs hook trust). watch keeps waiting while the pane is busy; a silent sentinel on an idle pane exits 8 NO-HOOK." ;;
+    *)    echo "hook: NO sentinel after 12s and pane not busy — hook not wired / goal not landed / agent slow. watch will exit 8 NO-HOOK if this persists ~2min; STOP and re-dispatch rather than wait."
           # Quota/auth outages fail the very first tool call and look exactly like this tier —
           # name the real cause instead of letting it read as a wiring problem (LH 2026-07-11).
           tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qiE 'insufficient_quota|invalid_api_key|No API key|credit balance|billing' \
@@ -232,6 +232,7 @@ if [ "$WATCH_MODE" = 1 ]; then
     5) v="STALLED-EXTERNAL (provider-error retry-loop — check backend quota/availability)" ;;
     6) v="IDLE-NO-DELIVERABLE (deliverable not produced this round — poke the agent)" ;;
     7) v="WATCH-TIMEOUT (agent still active — re-arm or verify)" ;;
+    8) v="NO-HOOK (sentinel never fired, pane idle — hook unwired/untrusted; verify manually, then re-dispatch)" ;;
     *) v="unknown" ;;
   esac
   echo "== watch verdict: exit $rc = $v — NOT a dispatch failure (dispatch + goal delivery succeeded earlier in this output) =="

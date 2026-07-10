@@ -121,12 +121,14 @@ chk_not_contains "goal missing launches nothing" "dispatched" "$out"
 sandbox_clean
 
 # --goal accepts a real path containing spaces without re-splitting it.
+# (Idle pane + silent sentinel ⇒ the fused watch ends exit 8 NO-HOOK — the delivery
+# assertion is the point here; rc asserts the verdict is the honest 8, not a fake DONE.)
 sandbox_new
 mkdir -p "$SANDBOX/wt"
 goal="$SANDBOX/goal with spaces.md"; printf 'goal\n' > "$goal"
 pane_fixture "done\n"
 out="$(bash "$DISPATCH" omp gsS "$SANDBOX/wt" --goal "$goal" 2>&1)"; rc=$?
-chk_eq "goal path with spaces rc0" 0 "$rc"
+chk_eq "goal path with spaces rc = NO-HOOK verdict" 8 "$rc"
 chk_contains "goal path with spaces delivered intact" "delivering goal via send: $goal" "$out"
 sandbox_clean
 

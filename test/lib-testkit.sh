@@ -14,7 +14,6 @@ set -u
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AW_DIR="$REPO_ROOT/skills/cto-orchestration/references/agent-watch"
 WATCH="$AW_DIR/watch"
-SCRAPE="$AW_DIR/lib/scrape-fallback.sh"
 EMIT="$AW_DIR/emit.sh"
 EMIT_STDIN="$AW_DIR/hooks/emit-from-stdin.sh"
 DISPATCH="$AW_DIR/dispatch"
@@ -83,7 +82,7 @@ EOF
 
   # fake tmux: scripted. Fixture controls via env:
   #   FAKE_TMUX_DISPLAY_FAIL=1  -> display-message exits 1 (SESSION-GONE path)
-  #   FAKE_TMUX_CAPTURE_FAIL=1  -> capture-pane exits 1 (scrape SESSION-GONE path)
+  #   FAKE_TMUX_CAPTURE_FAIL=1  -> capture-pane exits 1
   #   FAKE_PANE_CMD=<str>       -> pane_current_command output
   #   FAKE_PANE_FILE=<path>     -> file whose contents capture-pane prints
   #   FAKE_TMUX_CMD_FILE=<path> -> new-session's final command string

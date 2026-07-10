@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Unified hook-based agent-state watcher (see README.md). PRIMARY signal = the
 # sentinel events file written by the agent's lifecycle hook (deterministic, not
-# screen-scraping). BACKSTOP = liveness guard (a hard crash emits no hook). FALLBACK
-# = if no sentinel file appears, delegate to the screen-scrape (lib/scrape-fallback.sh) so
-# nothing regresses when a session was launched without the hook.
-# Usage: watch <tmux-session> [busy-marker] [shell-regex]
-# Exit codes (same vocabulary as scrape-fallback): 0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD
+# screen-scraping). BACKSTOP = liveness guard (a hard crash emits no hook). There is
+# deliberately NO screen-scrape fallback (removed 2026-07-11, -190 lines): guessing
+# state from the screen was the suite's biggest misjudgment source (WAITING read as
+# DONE, glyph/layout drift) — a silent hook now exits 8 NO-HOOK instead of guessing.
+# Usage: watch <tmux-session> [busy-regex] [shell-regex]
+# Exit codes: 0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD
 #   / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL (provider-error retry-loop)
 #   / 6 IDLE-NO-DELIVERABLE (terminal-looking but declared deliverable never appeared)
-#   / 7 WATCH-TIMEOUT (bounded polling exhausted while the agent stayed active).
+#   / 7 WATCH-TIMEOUT (bounded polling exhausted while the agent stayed active)
+#   / 8 NO-HOOK (sentinel silent + pane idle ~2min: hook not wired/firing — monitoring
+#     impossible; verify the agent manually or re-dispatch via dispatch, never guess).
 # (D) Deliverable gate — fixes "turn_end != task done" (4 false DONEs on 2026-07-05:
 # multi-step agents emit DONE/idle at every turn/phase boundary; auto-continued next
 # turns and codex inter-phase pauses read as terminal). Set AGENT_WATCH_DELIVERABLE
@@ -18,8 +21,11 @@
 # => exit 6 so the orchestrator POKES instead of trusting a phantom DONE.
 # AGENT_WATCH_POLL_SECS (default 20) overrides poll interval (adversarial-testable).
 set -u
-SESSION="${1:?usage: watch <session> [marker] [shell-regex]}"
-MARKER="${2:-⟦esc⟧}"
+SESSION="${1:?usage: watch <session> [busy-regex] [shell-regex]}"
+# $2 = busy-pane regex (agent chrome proving "working"): keeps NO-HOOK honest for a codex
+# whose hook only fires on its first tool call. Old watchspecs pass omp's ⟦esc⟧ glyph
+# here — still a valid busy regex, so rearm'd pre-removal specs stay compatible.
+BUSY_RE="${2:-esc to interrupt|Working \(|⟦esc⟧|^[[:space:]]*Running }"
 SHELL_RE="${3:-^(-?zsh|-?bash|-?sh|login)$}"
 # (C) External-provider stall: the agent is alive + WORKING but hot-retrying a TRANSIENT
 # provider error (overload / rate-limit / 5xx). omp auto-retries it in place (auto_retry_start ->
@@ -69,20 +75,9 @@ SPEC_ENV=""
 {
   printf 'session=%s\n' "$SESSION"
   printf 'pid=%s\n' "$$"
-  printf 'cmd=%sbash %q %q %q %q\n' "$SPEC_ENV" "$HERE/watch" "$SESSION" "$MARKER" "$SHELL_RE"
+  printf 'cmd=%sbash %q %q %q %q\n' "$SPEC_ENV" "$HERE/watch" "$SESSION" "$BUSY_RE" "$SHELL_RE"
 } > "$SPEC"
 trap 'rm -f "$SPEC" "$STAMP"' EXIT
-
-# Grace window for the hook to produce the first event; else fall back to scrape.
-if [ ! -f "$EVENTS" ]; then
-  sleep 6
-  if [ ! -f "$EVENTS" ]; then
-    echo "=== [$SESSION] no sentinel (hook not wired) → fallback to lib/scrape-fallback.sh ==="
-    # Source the fallback so terminal `exit` paths still run this shell's EXIT trap
-    # and remove the watchspec. `exec` bypasses EXIT traps and leaves a false rearm signal.
-    . "$HERE/lib/scrape-fallback.sh" "$SESSION" "$MARKER" "$SHELL_RE"
-  fi
-fi
 
 DELIVERABLE="${AGENT_WATCH_DELIVERABLE:-}"
 NODELIV_MAX="${AGENT_WATCH_NODELIV_POLLS:-15}"
@@ -116,16 +111,22 @@ while [ "$i" -le "$MAX_POLLS" ]; do
   line=$(tail -1 "$EVENTS" 2>/dev/null)
   state=$(printf '%s' "$line" | awk '{print $2}')
 
-  # Empty-sentinel fallback: dispatch CREATES the events file empty, so the t=0
-  # `! -f` grace above never trips when the hook simply never fires (e.g. codex
-  # hooks not trusted → no events EVER). Result was a blind heartbeat spin. If the
-  # file is still empty after ~2min (6 polls — generous vs an agent that just
-  # hasn't started its first turn), the hook isn't delivering → switch to scrape.
+  # Silent sentinel (file absent OR still empty — dispatch creates it empty; codex with
+  # untrusted hooks never writes): a BUSY pane means the agent is working before its first
+  # emit (codex fires on the first tool call) → keep waiting, MAX_POLLS still bounds us.
+  # Idle pane for ~2min (6 polls) = hook not delivering AND nothing running → exit 8
+  # NO-HOOK: monitoring is impossible; report honestly instead of guessing from the screen
+  # (the removed scrape fallback was the suite's biggest misjudgment source — WAITING
+  # mis-read as DONE dispatched a still-waiting agent to review).
   if [ -z "$line" ]; then
-    empties=$((empties+1))
-    if [ "$empties" -ge 6 ]; then
-      echo "=== [$SESSION] sentinel empty ~2min (hook not firing / untrusted) → fallback to scrape ==="
-      . "$HERE/lib/scrape-fallback.sh" "$SESSION" "$MARKER" "$SHELL_RE"
+    if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qiE "$BUSY_RE"; then
+      empties=0
+    else
+      empties=$((empties+1))
+      if [ "$empties" -ge 6 ]; then
+        echo "=== [$SESSION] NO-HOOK at $(date '+%H:%M:%S') — sentinel silent ~2min and pane idle; hook not wired/firing. Verify the agent manually or re-dispatch via dispatch. ==="
+        tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 8
+      fi
     fi
     lastline="$line"
     [ $((i % 9)) -eq 0 ] && echo "[$SESSION] heartbeat iter $i state=empty $(date '+%H:%M:%S')"

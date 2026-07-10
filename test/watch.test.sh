@@ -72,32 +72,40 @@ chk_eq "exit5 STALLED-EXTERNAL rc" 5 "$WATCH_RC"
 chk_contains "exit5 STALLED-EXTERNAL marker" "STALLED-EXTERNAL" "$WATCH_OUT"
 sandbox_clean
 
-echo "== watch: fallback branches =="
+echo "== watch: silent hook (NO scrape fallback — honest exit 8) =="
 
-# fallback (absent): events file never exists -> enter scrape-fallback.
-# Arrange scrape to terminate deterministically: agent alive+idle, no busy marker,
-# no input chrome -> IDLE/DONE exit 0.
+# exit 8 NO-HOOK (absent): events file never exists, pane idle -> report, don't guess.
 sandbox_new
 # do NOT seed events; ensure it stays absent
 export FAKE_PANE_CMD="omp"
 pane_fixture "all done.\n$ \n"
 run_watch absent-sess
-chk_contains "fallback-absent log" "fallback to lib/scrape-fallback.sh" "$WATCH_OUT"
-chk_contains "fallback-absent reached scrape" "WATCH ARMED" "$WATCH_OUT"   # scrape prints its own ARMED
-chk_eq "fallback-absent scrape exit0" 0 "$WATCH_RC"
-chk_eq "fallback-absent natural exit removes watchspec" 0 "$(find "$WATCH_RUN_DIR" -name '*.watchspec' | wc -l | tr -d ' ')"
+chk_eq "no-hook absent rc8" 8 "$WATCH_RC"
+chk_contains "no-hook absent marker" "NO-HOOK" "$WATCH_OUT"
+chk_not_contains "no-hook never scrapes" "scrape" "$WATCH_OUT"
+chk_eq "no-hook natural exit removes watchspec" 0 "$(find "$WATCH_RUN_DIR" -name '*.watchspec' | wc -l | tr -d ' ')"
 sandbox_clean
 
-# fallback (empty): events file exists but EMPTY -> ~6 polls -> enter scrape.
+# exit 8 NO-HOOK (empty): events file exists but EMPTY, pane idle -> ~6 polls -> exit 8.
 sandbox_new
 : > "$WATCH_RUN_DIR/empty-sess.events"   # exists, empty
 export FAKE_PANE_CMD="omp"
 pane_fixture "idle screen\n$ \n"
 run_watch empty-sess
-chk_contains "fallback-empty log" "sentinel empty" "$WATCH_OUT"
-chk_contains "fallback-empty reached scrape" "polling every 45s" "$WATCH_OUT"
-chk_eq "fallback-empty scrape exit0" 0 "$WATCH_RC"
-chk_eq "fallback-empty natural exit removes watchspec" 0 "$(find "$WATCH_RUN_DIR" -name '*.watchspec' | wc -l | tr -d ' ')"
+chk_eq "no-hook empty rc8" 8 "$WATCH_RC"
+chk_contains "no-hook empty marker" "NO-HOOK" "$WATCH_OUT"
+sandbox_clean
+
+# BUSY pane keeps a silent sentinel alive (codex emits its first event on the first tool
+# call): must NOT fire exit 8 while working; bounded polling ends in exit 7 instead.
+sandbox_new
+: > "$WATCH_RUN_DIR/busy-sess.events"
+export FAKE_PANE_CMD="codex" AGENT_WATCH_MAX_POLLS=8
+pane_fixture "▌ Working (12s · esc to interrupt)\n"
+run_watch busy-sess
+chk_eq "busy pane defers NO-HOOK to timeout rc7" 7 "$WATCH_RC"
+chk_not_contains "busy pane no premature NO-HOOK" "NO-HOOK" "$WATCH_OUT"
+unset AGENT_WATCH_MAX_POLLS
 sandbox_clean
 
 
