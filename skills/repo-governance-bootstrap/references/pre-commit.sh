@@ -17,7 +17,22 @@ if [ -f scripts/docs-check.sh ]; then
   fi
 fi
 
-if [ -f scripts/engineering-gate.conf ]; then
+gate_script=scripts/engineering-gate.sh
+gate_config=scripts/engineering-gate.conf
+if [ -f "$gate_script" ] && [ -f "$gate_config" ]; then
   bash scripts/engineering-gate.sh check || exit $?
   bash scripts/engineering-gate.sh test || exit $?
+elif [ -f "$gate_script" ] || [ -f "$gate_config" ]; then
+  printf '\nproject-gate: BLOCKED — engineering/config\n' >&2
+  if [ ! -f "$gate_script" ]; then
+    printf 'Failed: missing %s\n' "$gate_script" >&2
+  else
+    printf 'Failed: missing %s\n' "$gate_config" >&2
+  fi
+  printf 'Fix:   restore both engineering gate files via repo-governance-bootstrap\n' >&2
+  printf 'Retry: bash .githooks/pre-commit\n' >&2
+  printf 'Read:\n' >&2
+  printf '  AGENTS.md § Engineering Gate\n' >&2
+  printf '  agent-backend-standard/references/engineering-interface.md\n' >&2
+  exit 1
 fi

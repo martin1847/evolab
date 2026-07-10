@@ -62,5 +62,26 @@ has "$out" 'AGENTS.md § Document governance' 'docs failure local standard'
 has "$out" 'repo-governance-bootstrap/SKILL.md § 治理系统观' 'docs failure canonical standard'
 unset FAIL_STAGE
 
+mv "$ROOT/scripts/engineering-gate.conf" "$ROOT/scripts/engineering-gate.conf.off"
+out="$(cd "$ROOT" && bash .githooks/pre-commit 2>&1)"; rc=$?
+eq "$rc" 1 'missing config blocks'
+has "$out" 'Failed: missing scripts/engineering-gate.conf' 'missing config exact failure'
+has "$out" 'AGENTS.md § Engineering Gate' 'missing config local standard'
+has "$out" 'agent-backend-standard/references/engineering-interface.md' 'missing config canonical standard'
+mv "$ROOT/scripts/engineering-gate.conf.off" "$ROOT/scripts/engineering-gate.conf"
+
+mv "$ROOT/scripts/engineering-gate.sh" "$ROOT/scripts/engineering-gate.sh.off"
+out="$(cd "$ROOT" && bash .githooks/pre-commit 2>&1)"; rc=$?
+eq "$rc" 1 'missing script blocks'
+has "$out" 'Failed: missing scripts/engineering-gate.sh' 'missing script exact failure'
+mv "$ROOT/scripts/engineering-gate.sh.off" "$ROOT/scripts/engineering-gate.sh"
+
+mv "$ROOT/scripts/engineering-gate.conf" "$ROOT/scripts/engineering-gate.conf.off"
+mv "$ROOT/scripts/engineering-gate.sh" "$ROOT/scripts/engineering-gate.sh.off"
+out="$(cd "$ROOT" && bash .githooks/pre-commit 2>&1)"; rc=$?
+eq "$rc" 0 'docs-only skips engineering only when both files absent'
+mv "$ROOT/scripts/engineering-gate.conf.off" "$ROOT/scripts/engineering-gate.conf"
+mv "$ROOT/scripts/engineering-gate.sh.off" "$ROOT/scripts/engineering-gate.sh"
+
 echo "== pre-commit-gate: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

@@ -89,6 +89,13 @@ has "$out" 'main.go' 'gofmt lists file'
 has "$out" 'engineering-gate: BLOCKED — go/check' 'gofmt failure stage'
 unset UNFORMATTED
 
+export FAIL_MATCH=gofmt
+out="$(cd "$ROOT" && bash scripts/engineering-gate.sh check 2>&1)"; rc=$?
+eq "$rc" 1 'gofmt tool failure blocks'
+has "$out" 'Failed: gofmt -l <tracked-go-file>' 'gofmt tool failure exact command'
+has "$out" 'engineering-gate: BLOCKED — go/check' 'gofmt tool failure stage'
+unset FAIL_MATCH
+
 printf 'python\t../escape\n' > "$ROOT/scripts/engineering-gate.conf"
 out="$(cd "$ROOT" && bash scripts/engineering-gate.sh check 2>&1)"; rc=$?
 eq "$rc" 1 'unsafe root blocks'

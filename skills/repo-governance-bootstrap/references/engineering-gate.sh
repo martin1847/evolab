@@ -65,6 +65,7 @@ python_profile() {
 
 go_profile() {
   local stage="$1" retry="bash scripts/engineering-gate.sh $1" unformatted
+  local files_tmp unformatted_tmp file
   require_command go "$stage" go "$retry"
   case "$stage" in
     fix)
@@ -72,11 +73,24 @@ go_profile() {
       ;;
     check)
       require_command go check gofmt "$retry"
-      unformatted="$(
-        while IFS= read -r -d '' file; do
-          gofmt -l "$file"
-        done < <(git ls-files -z -- '*.go')
-      )"
+      files_tmp="$(mktemp "${TMPDIR:-/tmp}/engineering-gate.go-files.XXXXXX")" || \
+        blocked go check 'mktemp for tracked Go files' "$retry"
+      unformatted_tmp="$(mktemp "${TMPDIR:-/tmp}/engineering-gate.gofmt.XXXXXX")" || {
+        rm -f "$files_tmp"
+        blocked go check 'mktemp for gofmt output' "$retry"
+      }
+      if ! git ls-files -z -- '*.go' > "$files_tmp"; then
+        rm -f "$files_tmp" "$unformatted_tmp"
+        blocked go check "git ls-files -z -- '*.go'" "$retry"
+      fi
+      while IFS= read -r -d '' file; do
+        if ! gofmt -l "$file" >> "$unformatted_tmp"; then
+          rm -f "$files_tmp" "$unformatted_tmp"
+          blocked go check 'gofmt -l <tracked-go-file>' "$retry"
+        fi
+      done < "$files_tmp"
+      unformatted="$(cat "$unformatted_tmp")"
+      rm -f "$files_tmp" "$unformatted_tmp"
       if [ -n "$unformatted" ]; then
         printf '%s\n' "$unformatted" >&2
         blocked go check "gofmt check (unformatted files listed above)" "$retry"

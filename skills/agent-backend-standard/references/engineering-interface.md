@@ -69,6 +69,21 @@ Normative details:
 Strong static typing is not an exemption. Java and Rust need format, compiler/lint, tests, and runtime
 validation of untrusted input; they simply do not need a Python-style external type checker.
 
+Profile provisioning is part of initialization, not a workstation prerequisite:
+
+- Python pins Ruff, Pyright, and pytest as project dev dependencies in `pyproject.toml` + `uv.lock`;
+  new repositories set Pyright strict, while legacy repositories use §4 ratchets.
+- Go pins `staticcheck` and `golangci-lint` through a repo-owned version manifest/bootstrap (use a
+  `go.mod` tool dependency when supported) and verifies their versions in CI; ambient PATH versions
+  are not the source of truth.
+- Java commits exactly one wrapper (`mvnw` or `gradlew`), pins Spotless and Checkstyle plugin versions,
+  commits formatter/lint configuration, and binds their check goals/tasks to `verify` / `check`.
+- Rust commits `rust-toolchain.toml` with a pinned channel and `rustfmt` / `clippy` components.
+
+The shipped script is a bootstrap template. For a large repository, initialization MAY replace each
+profile's default full local test with a documented deterministic focused suite; AGENTS.md records the
+exact local scope, while CI still runs the full close from the table.
+
 ## §4 Boundary validation and legacy ratchets
 
 At every external boundary, parse and validate once, then pass a trusted typed value internally.
@@ -113,11 +128,12 @@ Missing tools and invalid configuration use the same envelope. A bare `lint fail
 Bootstrap is complete only when:
 
 1. `scripts/engineering-gate.conf` explicitly names every initialized language/module root.
-2. All three commands exist; `check` and `test` are non-mutating.
+2. Profile tools/plugins are repo-pinned as specified in §3; a clean machine does not rely on ambient
+   versions. All three commands exist; `check` and `test` are non-mutating.
 3. `.githooks/pre-commit` calls docs-check (when present), then engineering `check`, then `test`.
 4. Existing hook frameworks or `core.hooksPath` are merged, never overwritten silently.
 5. AGENTS.md records the three commands, active profiles, and the §5 standard pointers.
-6. Positive evidence passes once, and a hermetic negative probe proves a failing stage blocks with the
-   required actionable envelope.
+6. Positive evidence passes once, and hermetic negative probes prove tool failure and partial
+   gate/config installation both block with the required actionable envelope.
 7. CI calls the same wrapper and the language-native full close; a real PR proves the required check can
    turn red.

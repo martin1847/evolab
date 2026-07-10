@@ -160,6 +160,7 @@ bash scripts/engineering-gate.sh test
 
 - `fix` 会改文件，显式运行、review diff、重新 stage；pre-commit 只跑 non-mutating `check` + local `test`。
 - CI 调同一 wrapper，并运行语言原生全量收口；本地 hook 可被 `--no-verify` 绕过，不替代 required CI。
+- 工具/plugin 版本固定在 repo config/lockfile/wrapper/toolchain；不得依赖开发机偶然 PATH。大仓若用 focused local test，实际范围必须写在本节，CI 仍全量。
 - 被门禁阻断时按输出的 Failed / Fix / Retry 操作；规范入口：
   `agent-backend-standard/references/engineering-interface.md`，边界类型细则只见
   `observability-standard/references/standard.md §2`。
