@@ -2,11 +2,13 @@
 # cto-guard-agent — non-Bash tool-call enforcement for cto-orchestration. ONE script, three branches,
 # routed by (hook_event_name, tool_name). Wire in .claude/settings.json:
 #   PreToolUse   matcher "Agent|Task"  -> browser-dispatch MCP guard  (P0a, DENY)
+#   PreToolUse   matcher "Agent|Task"  -> explicit model-tier required (P0c, DENY)
 #   PreToolUse   matcher "TaskStop"    -> kill-a-live-agent guard      (P0b, DENY)
 #   PostToolUse  matcher "Agent|Task"  -> black-hole deadline reminder (existing, ALLOW+context)
 # Rationale (2026-07-04 audit): the failing rules already existed in prose (frontend-verify.md / memory)
 # but didn't fire at dispatch/kill time. Prose that doesn't reach the decision point is net-negative →
-# promote to tool-call hooks. Deny = exit 2 + stderr (shown to agent). Reminder = exit 0 + JSON
+# promote to tool-call hooks. Same conclusion applied again 2026-07-10 for P0c (see below).
+# Deny = exit 2 + stderr (shown to agent). Reminder = exit 0 + JSON
 # hookSpecificOutput.additionalContext. Fail-open: any parse/FS error exits 0, never blocks work.
 # The Agent/Task/TaskStop tools are Claude-Code concepts — harmless no-ops under Codex/omp.
 import sys, json, re, os, glob, time
@@ -79,6 +81,28 @@ def main():
                 "contention → hangs (bit us twice; frontend-verify.md Playwright-first). Rewrite the ToolSearch "
                 "to `select:mcp__playwright__browser_navigate,...` and re-dispatch. (Prose mention like 'never "
                 "use chrome-devtools' is fine — this fires only on the mcp__chrome-devtools tool token.)\n"
+            )
+            return 2
+
+        # ── (P0c) PreToolUse·Agent|Task: dispatch must pin an explicit economic model tier ──────────
+        # 2026-07-10: the human caught the orchestrator dispatching subagents without `model` — two
+        # workers silently inherited the parent session's premium model (Fable) to run mechanical work.
+        # The tiering rule already existed in SKILL.md prose but doesn't fire at dispatch time (same
+        # failure mode as the 2026-07-04 audit above: prose that doesn't reach the decision point is
+        # net-negative) → promote to hook. Exempt: subagent_type "fork" always inherits the parent
+        # model — `model` is ignored for it, so requiring one would be a false demand.
+        subagent_type = ti.get("subagent_type", "") or ""
+        model = str(ti.get("model") or "").strip()
+        if subagent_type != "fork" and not model:
+            sys.stderr.write(
+                "DENY: Agent/Task dispatch missing explicit `model`. Silent inheritance of the parent "
+                "session's model burns premium tier on mechanical work (caught 2026-07-10: two workers "
+                "defaulted to Fable for scripted probes). Pick a tier and re-dispatch with `model` set:\n"
+                "  mechanical/light (file moves, running tests, small patches, scripted probes) -> "
+                "haiku/sonnet\n"
+                "  heavy reasoning (adversarial review, architecture, long-context research) -> opus\n"
+                "  explicit premium tier stays allowed, but it must be a deliberate choice, not silent "
+                "inheritance. (subagent_type \"fork\" is exempt — it always inherits the parent model.)\n"
             )
             return 2
         return 0

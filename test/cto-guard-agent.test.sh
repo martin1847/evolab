@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# cto-guard-agent.py — non-Bash tool-call guard, THREE branches routed on (hook_event_name, tool_name):
+# cto-guard-agent.py — non-Bash tool-call guard, FOUR branches routed on (hook_event_name, tool_name):
 #   P0a PreToolUse·Agent|Task   browser dispatch loading chrome-devtools MCP -> DENY (Playwright-first)
+#   P0c PreToolUse·Agent|Task   dispatch missing explicit `model` -> DENY unless subagent_type "fork"
 #   P0b PreToolUse·TaskStop     killing an ALIVE agent (fresh .output) -> DENY unless override marker
 #   PostToolUse·Agent|Task      browser dispatch -> black-hole deadline reminder (JSON additionalContext)
 set -u
@@ -41,11 +42,24 @@ chk_eq "non-browser no reminder" "" "$OUT"; chk_eq "non-browser exit 0" 0 "$RC"
 run PreToolUse Agent '{"prompt":"browser E2E on localhost:3000; ToolSearch select:mcp__chrome-devtools__take_snapshot"}'
 chk_eq "chrome-devtools tool token denied (exit 2)" 2 "$RC"
 chk_contains "deny points to Playwright" "Playwright" "$ERR"
-run PreToolUse Agent '{"prompt":"browser E2E via Playwright MCP; 绝不用 chrome-devtools 的工具"}'
+run PreToolUse Agent '{"prompt":"browser E2E via Playwright MCP; 绝不用 chrome-devtools 的工具","model":"sonnet"}'
 chk_eq "prose mention (no mcp__ token) allowed" 0 "$RC"
 # note: the token itself matches BROWSER_RE (substring chrome-devtools) → token anywhere = deny.
 run PreToolUse Agent '{"prompt":"analyze mcp__chrome-devtools docs, no browser work"}'
 chk_eq "token alone still denies (token implies browser-ish)" 2 "$RC"
+
+# ── P0c: Agent/Task dispatch missing explicit `model` -> DENY unless subagent_type "fork" ──
+run PreToolUse Agent '{"prompt":"run the test suite"}'
+chk_eq "Agent no model denied (exit 2)" 2 "$RC"
+chk_contains "deny mentions model tiers" "haiku/sonnet" "$ERR"
+run PreToolUse Agent '{"prompt":"run the test suite","model":"sonnet"}'
+chk_eq "Agent with model allowed" 0 "$RC"
+run PreToolUse Agent '{"prompt":"continue prior context","subagent_type":"fork"}'
+chk_eq "fork subagent exempt from model requirement" 0 "$RC"
+run PreToolUse Task '{"prompt":"run the test suite"}'
+chk_eq "Task no model denied (exit 2)" 2 "$RC"
+run PreToolUse Read '{"file_path":"/tmp/x"}'
+chk_eq "non-Agent/Task tool unaffected by model requirement" 0 "$RC"
 
 # ── P0b: TaskStop on an ALIVE agent (fresh transcript) -> DENY; stale or overridden -> allow ──
 TID="zzguardtest$$"
