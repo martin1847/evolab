@@ -61,6 +61,44 @@ chk_not_contains "deliverable match b not leaked into agent args" "$SANDBOX/wt/b
 chk_eq "deliverable glob preserved literally" "$glob" "$(cat "$FAKE_TMUX_DELIV_FILE")"
 sandbox_clean
 
+# Regression: AGENT_ARGS empty (no extra agent args) must not blow up under `set -u`.
+# On bash 3.2 (macOS default) "${AGENT_ARGS[@]}" on a DECLARED-BUT-EMPTY array raises
+# "unbound variable" even though the array exists — hit in real usage 2026-07-10. The
+# script has no `set -e`, so the failure was SILENT: the $(...) building CMD aborted
+# before quote_args ever ran, CMD collapsed to just the env-var prefix (no agent binary
+# at all), dispatch still printed "dispatched ..." and returned rc0, and the tmux pane
+# died immediately because it had nothing to exec. Assert both no error text AND that
+# the tmux command actually contains the agent invocation (catches silent truncation).
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/tmux-command-bare-omp"
+out="$(bash "$DISPATCH" omp bareOmp "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "dispatch omp no-args rc0" 0 "$rc"
+chk_not_contains "dispatch omp no-args no unbound-variable" "unbound variable" "$out"
+chk_contains "dispatch omp no-args cmd not truncated" "omp --hook" "$(cat "$SANDBOX/tmux-command-bare-omp" 2>/dev/null)"
+sandbox_clean
+
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/tmux-command-bare-codex"
+out="$(bash "$DISPATCH" codex bareCdx "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "dispatch codex no-args rc0" 0 "$rc"
+chk_not_contains "dispatch codex no-args no unbound-variable" "unbound variable" "$out"
+chk_contains "dispatch codex no-args cmd not truncated" "AGENT_WATCH_DIR=" "$(cat "$SANDBOX/tmux-command-bare-codex" 2>/dev/null)"
+cmd_codex="$(cat "$SANDBOX/tmux-command-bare-codex" 2>/dev/null)"
+case "$cmd_codex" in *"codex") _record "dispatch codex no-args cmd ends in bare codex" 1 ;; *) _record "dispatch codex no-args cmd ends in bare codex" 0 "got[$cmd_codex]" ;; esac
+sandbox_clean
+
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/tmux-command-bare-claude"
+out="$(bash "$DISPATCH" claude bareClaude "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "dispatch claude no-args rc0" 0 "$rc"
+chk_not_contains "dispatch claude no-args no unbound-variable" "unbound variable" "$out"
+cmd_claude="$(cat "$SANDBOX/tmux-command-bare-claude" 2>/dev/null)"
+case "$cmd_claude" in *"claude") _record "dispatch claude no-args cmd ends in bare claude" 1 ;; *) _record "dispatch claude no-args cmd ends in bare claude" 0 "got[$cmd_claude]" ;; esac
+sandbox_clean
+
 # codex dispatch: writes .codex/hooks.json with ABS replaced by the hooks dir.
 sandbox_new
 mkdir -p "$SANDBOX/wt"

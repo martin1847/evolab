@@ -129,17 +129,17 @@ install_cfg() {
 
 case "$AGENT" in
   omp)
-    CMD="$ENVP $(quote_args omp --hook "$HERE/hooks/omp-watch.ts" "${AGENT_ARGS[@]}")" ;;
+    CMD="$ENVP $(quote_args omp --hook "$HERE/hooks/omp-watch.ts" ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"})" ;;
   codex)
     install_cfg "$CWD/.codex/hooks.json" codex-hooks.json codex
     # keep our tooling out of the tree: local exclude (not the shared .gitignore)
     if EX=$(git -C "$CWD" rev-parse --git-path info/exclude 2>/dev/null); then
       grep -qxF '.codex/' "$EX" 2>/dev/null || printf '.codex/\n' >> "$EX"
     fi
-    CMD="$ENVP $(quote_args codex "${AGENT_ARGS[@]}")" ;;
+    CMD="$ENVP $(quote_args codex ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"})" ;;
   claude)
     install_cfg "$CWD/.claude/settings.json" claude-hooks.json claude
-    CMD="$ENVP $(quote_args claude "${AGENT_ARGS[@]}")" ;;
+    CMD="$ENVP $(quote_args claude ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"})" ;;
   *) echo "ERR: unknown agent '$AGENT' (omp|codex|claude)" >&2; exit 1 ;;
 esac
 
