@@ -100,6 +100,32 @@ chk_eq "gzip archive produces .md.gz" 1 "$([ -e "$gzf" ] && echo 1 || echo 0)"
 chk_eq "gzip archive round-trip byte-identical (gunzip -c)" 1 "$([ "$(gunzip -c "$gzf")" = "$orig_content" ] && echo 1 || echo 0)"
 chk_eq "gzip archive: inbox cleared" 0 "$(ls "$AGENT_MAIL_DIR/beta/inbox/"*atomic-ok*.md 2>/dev/null | wc -l | tr -d ' ')"
 
+# ── 60-day archive retention: explicit prune + opportunistic prune on archive ──
+# fake a 70-day-old archived letter (both .md.gz and pre-gzip plain .md must age out)
+OLD_TS="$(date -v-70d +%Y%m%d%H%M 2>/dev/null || date -d '70 days ago' +%Y%m%d%H%M)"  # BSD then GNU
+oldgz="$AGENT_MAIL_DIR/beta/archive/20260101-0000-alpha-ancient.md.gz"
+oldmd="$AGENT_MAIL_DIR/beta/archive/20260101-0001-alpha-ancient-plain.md"
+printf 'old' | gzip -9 > "$oldgz"; printf 'old plain' > "$oldmd"
+touch -t "$OLD_TS" "$oldgz" "$oldmd"
+out="$(bash "$BUSBIN" prune beta)"; rc=$?
+chk_eq "prune exits 0" 0 "$rc"
+chk_contains "prune reports 2 deleted (default 60d)" "pruned 2 letter" "$out"
+chk_eq "expired .md.gz deleted" 0 "$([ -e "$oldgz" ] && echo 1 || echo 0)"
+chk_eq "expired plain .md deleted" 0 "$([ -e "$oldmd" ] && echo 1 || echo 0)"
+chk_eq "fresh archive survives prune" 1 "$([ -e "$gzf" ] && echo 1 || echo 0)"
+out="$(bash "$BUSBIN" prune beta 10000)"; rc=$?
+chk_eq "prune with nothing expired: exit 0" 0 "$rc"
+chk_contains "prune with explicit days reports 0" "pruned 0 letter" "$out"
+out="$(bash "$BUSBIN" prune beta sixty 2>&1)"; rc=$?
+chk_eq "prune rejects non-numeric days" 1 "$rc"
+# opportunistic: archiving a letter also sweeps this seat's expired archive (no daemon)
+printf 'old2' | gzip -9 > "$oldgz"; touch -t "$OLD_TS" "$oldgz"
+bash "$BUSBIN" send alpha beta prune-chain "触发链路" >/dev/null
+pcf="$(basename "$(ls "$AGENT_MAIL_DIR/beta/inbox/"*prune-chain*.md)" .md)"
+bash "$BUSBIN" archive beta "$pcf" >/dev/null
+chk_eq "archive opportunistically prunes expired letter" 0 "$([ -e "$oldgz" ] && echo 1 || echo 0)"
+chk_eq "just-archived letter survives the sweep" 1 "$([ -e "$AGENT_MAIL_DIR/beta/archive/$pcf.md.gz" ] && echo 1 || echo 0)"
+
 # unregistered recipient: deliver anyway + warn
 out="$(bash "$BUSBIN" send alpha gamma hello "投递给未注册者")"
 chk_contains "warns not registered" "not registered" "$out"

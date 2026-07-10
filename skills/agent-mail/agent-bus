@@ -19,6 +19,7 @@ agent-bus — agent-mail inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, def
   agent-bus send <from> <to> <slug> [subject...]      deliver a letter to recipient inbox (atomic;
                                                        body optional via stdin, empty if a tty)
   agent-bus archive <agent-id> <id>                   move a handled letter to archive (gzip'd)
+  agent-bus prune <agent-id> [days]                   delete archive letters older than N days (default 60)
   agent-bus roster                                    print roster
 EOF
 }
@@ -27,6 +28,19 @@ EOF
 # in a file (absolute path + one-line summary in the letter), not in the mailbox. Keeps grep/context
 # sweeps over the bus cheap and stops half-formed huge letters from ever landing in an inbox.
 BODY_CAP=8192
+
+# Archive retention (days; owner-set policy: 60). Every `archive` opportunistically prunes the same
+# seat's expired letters — no daemon/cron needed; `prune` runs the sweep explicitly. The env var
+# overrides the default; an explicit `prune <id> <days>` argument overrides both.
+RETENTION_DAYS="${AGENT_MAIL_RETENTION_DAYS:-60}"
+
+prune_archive() { # $1 agent-id  $2 days -> prints deleted count; missing archive counts as 0
+  arc="$BUS/$1/archive"
+  [ -d "$arc" ] || { echo 0; return 0; }
+  # -mtime +N = strictly older than N days; both plain .md (pre-gzip history) and .md.gz age out.
+  find "$arc" -maxdepth 1 -type f \( -name '*.md' -o -name '*.md.gz' \) \
+    -mtime +"$2" -print -delete | wc -l | tr -d ' '
+}
 
 ensure_reg() {
   mkdir -p "$BUS"
@@ -113,6 +127,15 @@ EOF
     # on an explicit `zcat`/`zgrep`, so a blind grep can no longer inhale megabytes of old mail.
     gzip -9 -f "$dst"
     echo "archived $(basename "$dst").gz"
+    # Opportunistic retention sweep: archiving is the natural moment the archive grows, so prune
+    # this seat's expired letters here (silent; a prune failure must never fail the archive).
+    prune_archive "$id" "$RETENTION_DAYS" >/dev/null 2>&1 || true
+    ;;
+  prune)
+    id="${1:?agent-id}"; days="${2:-$RETENTION_DAYS}"
+    case "$days" in ''|*[!0-9]*) echo "invalid days: $days (positive integer required)" >&2; exit 1;; esac
+    n="$(prune_archive "$id" "$days")"
+    echo "pruned $n letter(s) older than $days days from $id archive"
     ;;
   roster)
     [ -f "$REG" ] && cat "$REG" || echo "(no registry yet — agent-bus register <agent-id> <workdir> <focus>)"
