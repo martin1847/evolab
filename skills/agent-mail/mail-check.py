@@ -115,7 +115,8 @@ def main():
         shown = ", ".join(_name(n) for n in new[:3])
         msg = (f"agent-mail: 你（{_disp(self_id)}）有 {len(new)} 封新信（共 {len(letters)} 封待处理，"
                f"{inbox}/）：{shown}{'…' if len(new) > 3 else ''}。"
-               f"用 agent-mail skill 处理：全量最旧优先、处理完归档。{WARN}")
+               f"用 agent-mail skill 处理：全量最旧优先、处理完用 agent-bus archive 归档"
+               f"（落盘 .md.gz）。{WARN}")
         emit(event, msg)
         return 0
 
@@ -126,7 +127,8 @@ def main():
     if not letters:
         return 0
     msg = (f"agent-mail: 你（{_disp(self_id)}）inbox 有 {len(letters)} 封未处理信（{inbox}/）。"
-           f"用 agent-mail skill 处理：全量最旧优先、收信只查自己 inbox、处理完归档。{WARN}")
+           f"用 agent-mail skill 处理：全量最旧优先、收信只查自己 inbox、处理完用 "
+           f"agent-bus archive 归档（落盘 .md.gz）。{WARN}")
     emit(event, msg)
     return 0
 
