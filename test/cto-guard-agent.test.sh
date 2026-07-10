@@ -51,9 +51,11 @@ chk_eq "token alone still denies (token implies browser-ish)" 2 "$RC"
 # ── P0c: Agent/Task dispatch missing explicit `model` -> DENY unless subagent_type "fork" ──
 run PreToolUse Agent '{"prompt":"run the test suite"}'
 chk_eq "Agent no model denied (exit 2)" 2 "$RC"
-chk_contains "deny mentions model tiers" "haiku/sonnet" "$ERR"
+chk_contains "deny mentions model tiers" "economy tier" "$ERR"
 run PreToolUse Agent '{"prompt":"run the test suite","model":"sonnet"}'
 chk_eq "Agent with model allowed" 0 "$RC"
+run PreToolUse Agent '{"prompt":"adversarial review of the PR","model":"gpt-5.6"}'
+chk_eq "non-Claude model name allowed (no allowlist)" 0 "$RC"
 run PreToolUse Agent '{"prompt":"continue prior context","subagent_type":"fork"}'
 chk_eq "fork subagent exempt from model requirement" 0 "$RC"
 run PreToolUse Task '{"prompt":"run the test suite"}'

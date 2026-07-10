@@ -91,6 +91,9 @@ def main():
         # failure mode as the 2026-07-04 audit above: prose that doesn't reach the decision point is
         # net-negative) → promote to hook. Exempt: subagent_type "fork" always inherits the parent
         # model — `model` is ignored for it, so requiring one would be a false demand.
+        # The guard intentionally does NOT validate the model value against an allowlist — any explicit
+        # non-empty model passes; the harness enforces its own enum, and non-Claude stacks (codex/omp)
+        # use different names. The rule is "make the tier choice explicit", not "use these models".
         subagent_type = ti.get("subagent_type", "") or ""
         model = str(ti.get("model") or "").strip()
         if subagent_type != "fork" and not model:
@@ -98,11 +101,12 @@ def main():
                 "DENY: Agent/Task dispatch missing explicit `model`. Silent inheritance of the parent "
                 "session's model burns premium tier on mechanical work (caught 2026-07-10: two workers "
                 "defaulted to Fable for scripted probes). Pick a tier and re-dispatch with `model` set:\n"
-                "  mechanical/light (file moves, running tests, small patches, scripted probes) -> "
-                "haiku/sonnet\n"
-                "  heavy reasoning (adversarial review, architecture, long-context research) -> opus\n"
-                "  explicit premium tier stays allowed, but it must be a deliberate choice, not silent "
-                "inheritance. (subagent_type \"fork\" is exempt — it always inherits the parent model.)\n"
+                "  economy tier (mechanical/light: file moves, running tests, small patches, scripted "
+                "probes) -> e.g. haiku/sonnet, gpt-5-mini\n"
+                "  reasoning tier (adversarial review, architecture, long-context research) -> "
+                "e.g. opus, gpt-5.6\n"
+                "  premium/frontier stays allowed, but it must be deliberate, not silent inheritance. "
+                "(subagent_type \"fork\" is exempt — it always inherits the parent model.)\n"
             )
             return 2
         return 0
