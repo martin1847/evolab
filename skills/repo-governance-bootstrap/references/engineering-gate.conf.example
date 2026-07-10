@@ -1,0 +1,8 @@
+# One profile and repository-relative module root per line, separated by a TAB.
+# Supported profiles: python, go, java-maven, java-gradle, rust.
+# Bootstrap removes examples that do not apply and records the resulting list in AGENTS.md.
+python	.
+# go	services/go-api
+# java-maven	services/java-api
+# java-gradle	services/java-worker
+# rust	services/rust-worker

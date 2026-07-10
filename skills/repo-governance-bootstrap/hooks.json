@@ -1,5 +1,5 @@
 {
-  "//": "memory-discipline wiring 真源（canonical entries）。接入=把 command 换成本 skill 安装根的绝对路径（hooks 不展开 ~、不加 python3 前缀——脚本自带 shebang 直接 exec），并进项目 settings 的 PostToolUse（CC .claude/settings.json；codex .codex/hooks.json 同格式，omp 走 TS hook 见 SKILL §11 ③）。",
+  "//": "memory-discipline agent-runtime wiring 真源（canonical entries）。接入=把 command 换成本 skill 安装根的绝对路径（hooks 不展开 ~、不加 python3 前缀——脚本自带 shebang 直接 exec），并进项目 settings 的 PostToolUse（CC .claude/settings.json；codex .codex/hooks.json 同格式，omp 走 TS hook 见 SKILL §11 ③）。Engineering gate 属 Git pre-commit，独立见 references/pre-commit.sh，禁止混入本文件。",
   "PostToolUse": [
     { "matcher": "Write|Edit|MultiEdit", "command": "references/memory-discipline-hook.py" }
   ]
