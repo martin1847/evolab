@@ -1,6 +1,6 @@
 ---
 name: git-workflow-standard
-version: 1.0.3
+version: 1.0.4
 description: 生产级 Git 协作 SOP——受保护分支(main/master/develop/dev/release/**/project/*)按仓库 tier 执行服务端门禁(Tier 1 禁 force/delete;Tier 2 要求 PR 且默认允许 self-merge;Tier 3 显式接入 required CI)、改动从 feature 分支起、base 移动且与你改动重叠才 rebase、集成策略默认 squash、提交不加 AI 签名。任何 git commit / push / 开 PR / 建分支 / 合并场景加载;agent 写完代码准备提交前必读。Use when committing, pushing, opening a PR, branching, rebasing, or merging in any company repo.
 ---
 
@@ -44,4 +44,5 @@ canonical = 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓的 enro
 
 ## 关联
 - 完整规范 + rationale:`references/git-workflow-standard.md`
+- Local-first final-image Docker E2E、`pre-push` critical-path 触发与 release CI single-build/exact-image 规则见 `references/git-workflow-standard.md` §10。
 - 硬层(Ruleset / CODEOWNERS / required checks)= 你的 IaC 仓(IaC CTO 维护);三档 tier 的定义与 enrollment 见该仓。

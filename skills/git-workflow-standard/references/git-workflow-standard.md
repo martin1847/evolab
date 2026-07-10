@@ -102,6 +102,15 @@ trivial 单 commit PR 直接合。默认线性是 SOP 约定;Tier 2 本身不强
 - 编排者多 agent 派工的 Git 纪律细化见 `cto-orchestration`(编排视角);本 skill 是面向所有研发的通用 SOP。
 - 依赖 / 重组件引入的 PR 还要走 `agent-backend-standard` 附录 A(引入门禁 + 退役判据)。
 
+## 10. Local-first final-image Docker E2E 与 CI single-build
+
+- 产品仓库 MUST 声明 Docker 构建与运行输入、包定义与锁文件、workspace 配置、发布 workflow 等 critical paths。开发者机器上的 `pre-push` 仅在这些已声明路径有变更时运行完整的 final-image Docker E2E；未命中时 MAY 跳过。
+- 已声明的 critical paths 存在未提交改动时 MUST fail closed。成功的本地验证 MAY 按“目标 commit + E2E contract digest + base-image digest”指纹缓存；任一组成变化即不得复用。
+- 本地 hook 不是唯一安全边界；`git push --no-verify` 始终可能绕过 `pre-push`，remote CI MUST 独立执行并强制该契约。
+- remote release CI MUST 只构建一次 final image，推送后取得其不可变 digest，并对该 exact pushed digest 执行 layer、entrypoint 与 runtime smoke；全部通过后才可放行 GitOps write-back。
+- 产品仓库只负责项目命令、critical-path 声明与项目 smoke 断言；可复用的平台 tooling 负责 hook/install/cache 机制及 single-build/exact-image workflow 机制。
+- 契约 MUST 保持语言与包管理器中立：Python、Java、JavaScript 或其他栈均通过各自命令与路径声明接入，不在通用机制中绑定特定工具链。
+
 ## 来源(关键锚点)
 - rebasing 黄金律 / merge vs rebase:atlassian.com/git/tutorials/merging-vs-rebasing(+ Linus 2009 "clean AND history" 原始邮件)
 - 合并方式 per-team、无普世解:docs.github.com/articles/about-merge-methods-on-github、gitlab.com/user/project/merge_requests/methods、workingsoftware.dev
