@@ -15,7 +15,7 @@
 >   `orchestrator-core/references/resident-digest.md`，全局没并入才增补到此层。
 > - **①委派边界 vs goal 合同 Guardrails**：有意重叠的纵深防御——goal = 每任务具体合同（精确
 >   scope / flag 名 / 存疑协议），①= 无合同或合同漏写时的**常驻一句话级兜底**，具体化留给 goal。
-> <!-- canonical: templates/CLAUDE.md.example @sha256:99664efc30c0 -->
+> <!-- canonical: templates/CLAUDE.md.example @sha256:65e88cdc862d -->
 
 ```markdown
 ## 委派 Agent 边界（防漂移 anti-drift，常驻兜底；每任务的具体化见 goal 合同）
