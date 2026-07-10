@@ -27,7 +27,10 @@ if [ "${1:-}" = "send" ]; then
   sess="${2:?dispatch send <session> -m <text> | -f <file>}"; mode="${3:?-m|-f}"; arg="${4:?text-or-file}"
   case "$mode" in
     -f) file="$arg";;
-    -m) file="$(mktemp /tmp/dispatch-send-${sess}-XXXXXXXX.md)"; printf '%s\n' "$arg" > "$file";;
+    # No suffix after the X's: with one, macOS mktemp leaves the Xs LITERAL (fixed name →
+    # 2nd -m send collides, "mkstemp failed") and GNU mktemp errors outright. This — not
+    # too-few-Xs — was the root cause of the field-reported send collisions (2026-07-11).
+    -m) file="$(mktemp "/tmp/dispatch-send-${sess}-XXXXXXXX")"; printf '%s\n' "$arg" > "$file";;
     *) echo "usage: dispatch send <session> -m <text> | -f <file>" >&2; exit 1;;
   esac
   [ -e "$file" ] || { echo "instruction file not found: $file" >&2; exit 1; }

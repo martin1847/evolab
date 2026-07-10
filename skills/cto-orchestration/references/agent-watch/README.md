@@ -237,6 +237,24 @@ matcher 别手编——它与脚本实现同包维护、发布门校验一致（
   （或 TS shell-out + 字段映射 `event.input.command`→stdin-JSON + `exit 2`→`{block:true}`）。浏览器提醒在 omp 最难：
   `tool_result` 只能改输出、不能给模型注入 context，要走单独 `context` 事件。
 
+## dispatch-exec（headless 双轨原型，2026-07-11 owner 拍板）
+
+TUI 车道 1000+ 行复杂度同根于"驱动交互式 TUI、从屏幕/hook 反推状态"。exec 车道换根设定：
+**tmux 只当 supervisor**（编排者重启 worker 不死——tmux server 是独立守护进程），pane 里跑
+**headless 引擎**（`claude -p` / `codex exec` / `omp -p`）——无 trust 框、无 send-keys、无抓屏、
+**进程退出=终态、状态全在文件**（`<s>.exec.{meta,out,rc}` + round stamp），watch/status 无状态
+（被收割就再查一次文件，watchspec/rearm 整套自愈不需要）。steering = **resume 多轮**
+（`send` 子命令；claude `--resume <sid>` 须同 cwd、codex `exec resume <thread_id>`、omp `-r <session 文件>`
+经 `--session-dir` 钉死）。headless 问不了人 → goal 必须带存疑协议「存疑写 BLOCKED.md 退出」，
+新鲜 BLOCKED.md 映射 exit 4。typed 码同 watch 词汇（+10=RUNNING，仅 status 用）。
+
+**验证状态**：claude/omp 双轮 live 冒烟绿（round-2 同 session_id 续上下文改同一文件）；hermetic
+20 断言（命令构造+全分类分支）。**未验**：codex 腿 live（本机 exec 默认模型配置坏：`gpt-5.6-sol`
+需更新 CLI，`-m` 透传可绕）；claude `--input-format stream-json` 运行中插话；omp `--mode=rpc` 能力面；
+BLOCKED 协议真任务 fire；权限白名单够用度（claude result 帧自带 `permission_denials` 可统计）。
+**坑两个**：codex exec 的 exit code 不可全信（turn.failed 事件可伴 rc=0，classify 已双查）；
+claude resume 按 cwd 项目域找 session，跨目录 resume 找不到。
+
 ## watchspec 自愈（宿主批量回收后台 watcher 的对策）
 
 实证（2026-07-05，LH 超长会话）：Claude Code 宿主在上下文压缩边界**批量 SIGKILL 后台 shell**——

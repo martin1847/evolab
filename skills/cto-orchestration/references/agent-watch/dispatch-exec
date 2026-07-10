@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# dispatch-exec — headless dispatch (PROTOTYPE, exec lane twin of `dispatch`).
+# tmux is a process SUPERVISOR only (worker survives orchestrator restarts — tmux server
+# is its own daemon); the pane runs a NON-interactive engine. What that buys vs the TUI
+# lane: no trust dialogs, no send-keys/popups, no screen guessing, process exit = terminal
+# state, engine exit code + files = truth. State lives in FILES, so `watch`/`status` are
+# STATELESS — a reaped watcher loses nothing (no watchspec/rearm machinery needed).
+# Steering = resume rounds (same engine session, context kept):
+#   round 1  : dispatch-exec <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>] [engine args...]
+#   round N  : dispatch-exec send <session> (-f <file> | -m <text>)
+#   query    : dispatch-exec status <session>          (one-shot, stateless)
+#   block    : dispatch-exec watch  <session>          (poll until terminal; typed exit, same vocab as watch)
+# Ask-user protocol (headless agents can't prompt): the goal must say "on doubt, write
+# BLOCKED.md to the cwd and stop" — a fresh BLOCKED.md maps to exit 4 WAITING-INPUT.
+# Engine facts baked in (probed 2026-07-11, all three on this machine):
+#   claude: -p --output-format json → result frame has session_id; resume MUST run in the
+#           SAME cwd (sessions are project-scoped — cross-cwd resume finds nothing).
+#   codex : exec --json emits thread.started{thread_id}; `exec resume <id>`; -o writes the
+#           last message to a file. Exit code UNVERIFIED as truth → also grep turn.failed.
+#   omp   : -p --mode=json JSONL; --session-dir pins session storage per dispatch so the
+#           newest file there is unambiguously ours; resume = -r <session-file-path>.
+set -uo pipefail
+DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
+
+meta_get() { sed -n "s/^$2=//p" "$DIR/$1.exec.meta" 2>/dev/null | head -1; }
+q() { printf %q "$1"; }
+
+# ── build the engine command for a round; echoes the shell string the pane runs ──
+# $1 engine  $2 session  $3 cwd  $4 prompt-file  $5 sid ("" = round 1)  $6 extra args (pre-quoted)
+engine_cmd() {
+  local eng="$1" s="$2" cwd="$3" f="$4" sid="$5" extra="$6" out lastf sdir
+  out="$DIR/$s.exec.out"; lastf="$DIR/$s.exec.last"; sdir="$DIR/$s.omp-sessions"
+  case "$eng" in
+    claude)
+      if [ -z "$sid" ]; then echo "claude -p \"\$(cat $(q "$f"))\" --output-format json $extra"
+      else echo "claude -p --resume $(q "$sid") \"\$(cat $(q "$f"))\" --output-format json $extra"; fi ;;
+    codex)
+      if [ -z "$sid" ]; then echo "codex exec --json --skip-git-repo-check -C $(q "$cwd") -o $(q "$lastf") $extra - < $(q "$f")"
+      else echo "codex exec resume $(q "$sid") --json -o $(q "$lastf") $extra - < $(q "$f")"; fi ;;
+    omp)
+      if [ -z "$sid" ]; then echo "omp -p \"\$(cat $(q "$f"))\" --mode=json --session-dir $(q "$sdir") $extra"
+      else echo "omp -p -r $(q "$sid") \"\$(cat $(q "$f"))\" --mode=json --session-dir $(q "$sdir") $extra"; fi ;;
+  esac
+}
+
+# ── start one round under the tmux supervisor ──  $1 session  $2 prompt-file
+start_round() {
+  local s="$1" f="$2" eng cwd sid extra cmd round
+  eng="$(meta_get "$s" engine)"; cwd="$(meta_get "$s" cwd)"
+  sid="$(meta_get "$s" sid)"; extra="$(meta_get "$s" args)"; round="$(meta_get "$s" round)"
+  if tmux has-session -t "$s" 2>/dev/null; then
+    echo "ERR: previous round of '$s' still running (tmux session exists) — wait or teardown" >&2; exit 1
+  fi
+  rm -f "$DIR/$s.exec.rc"
+  : > "$DIR/$s.exec.round-started"                       # freshness stamp: deliverable/BLOCKED must postdate this
+  round=$((round+1)); sed -i '' "s/^round=.*/round=$round/" "$DIR/$s.exec.meta" 2>/dev/null \
+    || sed -i "s/^round=.*/round=$round/" "$DIR/$s.exec.meta"
+  cmd="$(engine_cmd "$eng" "$s" "$cwd" "$f" "$sid" "$extra")"
+  printf '── round %s @ %s ──\n' "$round" "$(date '+%F %T')" >> "$DIR/$s.exec.out"
+  tmux new-session -d -s "$s" -c "$cwd" "$cmd >> $(q "$DIR/$s.exec.out") 2>&1; echo \$? > $(q "$DIR/$s.exec.rc")"
+  echo "round $round started: $eng → tmux '$s' (supervisor only; engine is headless)"
+  echo "out: $DIR/$s.exec.out   rc-on-exit: $DIR/$s.exec.rc"
+}
+
+# ── extract/remember the engine session id after a finished round ──
+harvest_sid() { # $1 session
+  local s="$1" eng sid=""
+  eng="$(meta_get "$s" engine)"
+  case "$eng" in
+    claude) sid="$(grep -o '"session_id":"[^"]*"' "$DIR/$s.exec.out" 2>/dev/null | tail -1 | cut -d'"' -f4)" ;;
+    codex)  sid="$(grep -o '"thread_id":"[^"]*"' "$DIR/$s.exec.out" 2>/dev/null | tail -1 | cut -d'"' -f4)" ;;
+    omp)    sid="$(ls -t "$DIR/$s.omp-sessions"/*.jsonl 2>/dev/null | head -1)" ;;
+  esac
+  [ -n "$sid" ] || return 0
+  grep -q '^sid=' "$DIR/$s.exec.meta" 2>/dev/null \
+    && { sed -i '' "s|^sid=.*|sid=$sid|" "$DIR/$s.exec.meta" 2>/dev/null || sed -i "s|^sid=.*|sid=$sid|" "$DIR/$s.exec.meta"; } \
+    || printf 'sid=%s\n' "$sid" >> "$DIR/$s.exec.meta"
+}
+
+# ── classify a session's state; prints one line, returns the typed code ──
+classify() { # $1 session
+  local s="$1" cwd deliv rc stamp="$DIR/$1.exec.round-started"
+  cwd="$(meta_get "$s" cwd)"; deliv="$(meta_get "$s" deliverable)"
+  if [ ! -f "$DIR/$s.exec.rc" ]; then
+    if tmux has-session -t "$s" 2>/dev/null; then echo "RUNNING (engine alive under tmux supervisor)"; return 10; fi
+    echo "AGENT-DEAD: no rc and no tmux session — round was killed mid-flight; resume via send"; return 2
+  fi
+  rc="$(cat "$DIR/$s.exec.rc")"
+  harvest_sid "$s"
+  if [ -f "$cwd/BLOCKED.md" ] && [ "$cwd/BLOCKED.md" -nt "$stamp" ]; then
+    echo "WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via send"; return 4
+  fi
+  if grep -qiE 'insufficient_quota|invalid_api_key|No API key|credit balance' "$DIR/$s.exec.out" 2>/dev/null && [ "$rc" != 0 ]; then
+    echo "STALLED-EXTERNAL: backend quota/auth error (rc=$rc) — fix credentials, then send to retry"; return 5
+  fi
+  # codex exit code unverified as truth: a failed turn can still exit 0 → check events too.
+  if [ "$rc" != 0 ] || tail -5 "$DIR/$s.exec.out" 2>/dev/null | grep -q '"type":"turn.failed"'; then
+    echo "FAILED: engine rc=$rc (or turn.failed event) — read $DIR/$s.exec.out tail"; return 2
+  fi
+  if [ -n "$deliv" ]; then
+    local f ok=1
+    while IFS= read -r f; do [ -n "$f" ] && [ "$f" -nt "$stamp" ] && ok=0 && break
+    done < <(compgen -G "$deliv" 2>/dev/null)
+    [ "$ok" = 0 ] || { echo "IDLE-NO-DELIVERABLE: rc=0 but '$deliv' not produced this round — read output, send a fix round"; return 6; }
+  fi
+  echo "DONE: rc=0$([ -n "$deliv" ] && echo ", deliverable fresh")"; return 0
+}
+
+case "${1:-}" in
+  send)
+    s="${2:?dispatch-exec send <session> -m <text> | -f <file>}"; mode="${3:?-m|-f}"; arg="${4:?text-or-file}"
+    case "$mode" in
+      -f) f="$arg";;
+      # No suffix after the X's: macOS mktemp leaves Xs LITERAL with a suffix (fixed name,
+      # 2nd call = mkstemp failed) and GNU errors outright — the true root cause of the
+      # long-standing "mktemp collision" (misdiagnosed as too-few-Xs, 2026-07-11).
+      -m) f="$(mktemp "$DIR/$s.exec.msg-XXXXXXXX")"; printf '%s\n' "$arg" > "$f";;
+      *) echo "usage: dispatch-exec send <session> -m <text> | -f <file>" >&2; exit 1;;
+    esac
+    [ -f "$DIR/$s.exec.meta" ] || { echo "ERR: unknown session '$s' (no meta)" >&2; exit 1; }
+    [ -e "$f" ] || { echo "ERR: file not found: $f" >&2; exit 1; }
+    harvest_sid "$s"
+    [ -n "$(meta_get "$s" sid)" ] || { echo "ERR: no engine session id harvested yet — did round 1 finish?" >&2; exit 1; }
+    start_round "$s" "$f"
+    ;;
+  status)
+    s="${2:?dispatch-exec status <session>}"
+    classify "$s"; rc=$?
+    echo "meta: engine=$(meta_get "$s" engine) round=$(meta_get "$s" round) sid=$(meta_get "$s" sid)"
+    exit "$rc"
+    ;;
+  watch)
+    s="${2:?dispatch-exec watch <session>}"
+    POLL="${AGENT_WATCH_POLL_SECS:-15}"; MAX="${AGENT_WATCH_MAX_POLLS:-240}"
+    echo "=== [$s] EXEC-WATCH ARMED at $(date '+%H:%M:%S') (stateless — safe to kill and re-run) ==="
+    i=1
+    while [ "$i" -le "$MAX" ]; do
+      msg="$(classify "$s")"; rc=$?
+      if [ "$rc" != 10 ]; then
+        echo "=== [$s] $msg ==="; tail -3 "$DIR/$s.exec.out" 2>/dev/null; exit "$rc"
+      fi
+      [ $((i % 12)) -eq 0 ] && echo "[$s] heartbeat iter $i still running $(date '+%H:%M:%S')"
+      i=$((i+1)); sleep "$POLL"
+    done
+    echo "=== [$s] WATCH TIMEOUT — engine still running; re-run watch or investigate ==="; exit 7
+    ;;
+  omp|codex|claude)
+    ENG="$1"; S="${2:?session}"; CWD="${3:?cwd}"; shift 3
+    GOAL=""; DELIV=""; EXTRA=""
+    while [ "$#" -gt 0 ]; do case "$1" in
+      --goal) GOAL="${2:?}"; shift 2;;
+      --deliverable) DELIV="${2:?}"; shift 2;;
+      *) EXTRA="${EXTRA}${EXTRA:+ }$(q "$1")"; shift;;
+    esac; done
+    [ -n "$GOAL" ] && [ -e "$GOAL" ] || { echo "ERR: --goal <file> required and must exist" >&2; exit 1; }
+    [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
+    CWD="$(cd "$CWD" && pwd -P)"
+    mkdir -p "$DIR"
+    [ -f "$DIR/$S.exec.meta" ] && { echo "ERR: session '$S' already exists ($DIR/$S.exec.meta) — teardown or pick a new name" >&2; exit 1; }
+    { printf 'engine=%s\ncwd=%s\nround=0\nargs=%s\n' "$ENG" "$CWD" "$EXTRA"
+      [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"; } > "$DIR/$S.exec.meta"
+    start_round "$S" "$GOAL"
+    echo "monitor: dispatch-exec status $S   (one-shot)  |  dispatch-exec watch $S  (blocking, run_in_background)"
+    ;;
+  *)
+    echo "usage: dispatch-exec <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>] [engine args...]" >&2
+    echo "       dispatch-exec send <session> (-f <file> | -m <text>) | status <session> | watch <session>" >&2
+    exit 1
+    ;;
+esac
