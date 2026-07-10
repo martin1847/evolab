@@ -141,6 +141,11 @@ chk_contains "codex goal send lands via pane" "[send] OK" "$out"
 chk_contains "codex goal pane tier" "pane is BUSY" "$out"
 chk_not_contains "codex goal no false alarm" "STOP and re-dispatch" "$out"
 chk_contains "codex goal hands to watch" "handing off to watch" "$out"
+# fused exit code = watch VERDICT; the output must spell it out so a nonzero background
+# notification can't be misread as dispatch failure (3+ field misreads, LH 2026-07-11).
+chk_contains "fused verdict line present" "watch verdict: exit $rc" "$out"
+chk_contains "fused verdict disclaims dispatch failure" "NOT a dispatch failure" "$out"
+chk_contains "engine visibility line" "engine : codex" "$out"
 sandbox_clean
 
 # codex --goal on first-ever launch: trust prompt auto-answered (branch coverage via output).

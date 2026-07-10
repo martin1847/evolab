@@ -5,10 +5,10 @@
 // resolving emit.sh's path from inside the hook loader. Format matches emit.sh.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 
 const SESS = process.env.AGENT_WATCH_SESSION || "";
-const DIR = process.env.AGENT_WATCH_DIR || join(homedir(), ".agents", "run");
+// Default matches the shell scripts: /tmp, not $HOME (codex sandbox blocks $HOME writes).
+const DIR = process.env.AGENT_WATCH_DIR || "/tmp/agent-watch-run";
 
 function emit(state: string, detail = ""): void {
 	if (!SESS) return; // no session bound → no-op, never break the agent

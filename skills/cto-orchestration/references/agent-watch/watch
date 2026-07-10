@@ -12,8 +12,9 @@
 # (D) Deliverable gate — fixes "turn_end != task done" (4 false DONEs on 2026-07-05:
 # multi-step agents emit DONE/idle at every turn/phase boundary; auto-continued next
 # turns and codex inter-phase pauses read as terminal). Set AGENT_WATCH_DELIVERABLE
-# to a path/glob: DONE/idle only exits 0 once >=1 matching file exists; still
-# terminal-looking after AGENT_WATCH_NODELIV_POLLS (default 15) polls without it
+# to a path/glob: DONE/idle only exits 0 once >=1 match exists AND is newer than this
+# round's arm stamp (existence alone early-exits multi-round goals — see STAMP below);
+# still terminal-looking after AGENT_WATCH_NODELIV_POLLS (default 15) polls without it
 # => exit 6 so the orchestrator POKES instead of trusting a phantom DONE.
 # AGENT_WATCH_POLL_SECS (default 20) overrides poll interval (adversarial-testable).
 set -u
@@ -38,7 +39,7 @@ EXT_ERR_RE="${AGENT_WATCH_EXT_ERR_RE:-(overloaded_error|rate_limit_error|stream 
 # the menu UI chrome on a stale screen and classify WAITING instead. Pattern is UI-chrome
 # specific (not content an agent typically prints); override via AGENT_WATCH_MENU_RE.
 MENU_RE="${AGENT_WATCH_MENU_RE:-(enter select|Type to search|navigate.+select.+cancel)}"
-DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
+DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 EVENTS="$DIR/$SESSION.events"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -51,6 +52,14 @@ echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ events=$EVENTS ==
 # lists dead-watcher specs so the orchestrator can re-arm mechanically instead of
 # remembering to.
 SPEC="$DIR/$SESSION.watchspec"
+# Deliverable freshness stamp: the gate must only accept files PRODUCED THIS ROUND. Existence
+# alone early-exits multi-round goals — round-1's file satisfies the glob, so round-2/3's
+# turn-boundary DONE sails through the gate while the agent is mid-work (LH 2026-07-11:
+# identity/checkout2/npmconsume all hit). Create-if-absent (not truncate): SIGKILL leaves the
+# stamp behind and a rearm'd watcher must keep the ORIGINAL arm time, not reset freshness
+# mid-round. The EXIT trap removes it, so each new round's watch stamps its own arm time.
+STAMP="$DIR/$SESSION.watch-armed"
+[ -e "$STAMP" ] || : > "$STAMP"
 # Per-session env must ride in the spec cmd, or a rearm'd watcher silently degrades to the
 # ungated behavior (deliverable gate lost across SIGKILL+rearm — flagged by the gate's author).
 SPEC_ENV=""
@@ -62,7 +71,7 @@ SPEC_ENV=""
   printf 'pid=%s\n' "$$"
   printf 'cmd=%sbash %q %q %q %q\n' "$SPEC_ENV" "$HERE/watch" "$SESSION" "$MARKER" "$SHELL_RE"
 } > "$SPEC"
-trap 'rm -f "$SPEC"' EXIT
+trap 'rm -f "$SPEC" "$STAMP"' EXIT
 
 # Grace window for the hook to produce the first event; else fall back to scrape.
 if [ ! -f "$EVENTS" ]; then
@@ -79,8 +88,17 @@ DELIVERABLE="${AGENT_WATCH_DELIVERABLE:-}"
 NODELIV_MAX="${AGENT_WATCH_NODELIV_POLLS:-15}"
 POLL="${AGENT_WATCH_POLL_SECS:-20}"
 MAX_POLLS="${AGENT_WATCH_MAX_POLLS:-260}"
-# No gate configured => always ok; else require >=1 existing glob match.
-deliverable_ok() { [ -z "$DELIVERABLE" ] && return 0; compgen -G "$DELIVERABLE" > /dev/null 2>&1; }
+# No gate configured => always ok; else require >=1 glob match NEWER than the arm stamp
+# (freshness, see STAMP above — a leftover file from a previous round must not open the gate).
+deliverable_ok() {
+  [ -z "$DELIVERABLE" ] && return 0
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$f" -nt "$STAMP" ] && return 0
+  done < <(compgen -G "$DELIVERABLE" 2>/dev/null)
+  return 1
+}
 
 idle=0; lastline=""; stalls=0; exterr=0; empties=0; nodeliv=0
 i=1

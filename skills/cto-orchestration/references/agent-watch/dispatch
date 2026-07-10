@@ -10,7 +10,7 @@
 # Monitor: watch <session> [busy-marker]
 set -uo pipefail
 HERE_EARLY="$(cd "$(dirname "$0")" && pwd)"
-RUN_EARLY="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
+RUN_EARLY="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 # Pane-busy regex shared by `send` landed() and the --goal verify loop: codex's hook emits
 # WORKING on PreToolUse (not turn start), so before its first tool call — or with hook untrusted —
 # the events sentinel is silent and the pane busy marker is the only honest "it's working" signal.
@@ -87,7 +87,7 @@ done
 # validate BEFORE launching — failing after new-session would leak an orphan session
 if [ -n "$GOAL" ] && [ ! -e "$GOAL" ]; then echo "ERR: --goal file not found: $GOAL" >&2; exit 1; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
-DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
+DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 
 # Build the command tmux's shell will execute without flattening caller argv. Bash 3.2
 # supports indexed arrays + printf %q; every dynamic token is quoted exactly once.
@@ -108,7 +108,8 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then echo "ERR: tmux session '$SE
 OWNER="$DIR/$SESSION.hook-owner"
 rm -f "$OWNER" 2>/dev/null || true
 : > "$DIR/$SESSION.events" 2>/dev/null || true                                  # fresh sentinel per dispatch
-find "$DIR" -maxdepth 1 -name '*.events' -mtime +7 -delete 2>/dev/null || true  # age-purge stale sentinels
+rm -f "$DIR/$SESSION.watch-armed" 2>/dev/null || true                           # stale arm stamp would poison the deliverable freshness gate
+find "$DIR" -maxdepth 1 \( -name '*.events' -o -name '*.watch-armed' \) -mtime +7 -delete 2>/dev/null || true  # age-purge stale files
 
 # Drop a per-agent hook config without clobbering an existing one.
 # $1 = target config path, $2 = template filename under hooks/, $3 = owner kind
@@ -146,6 +147,12 @@ esac
 tmux new-session -d -s "$SESSION" -c "$CWD" "$CMD"
 echo "dispatched $AGENT → tmux session '$SESSION' (cwd $CWD)"
 echo "events : $DIR/$SESSION.events"
+# Engine visibility: a backend quota outage hits every session on that engine AT ONCE —
+# omp/codex default to OpenAI backends, so exec + heterogeneous review can share one quota
+# pool (operational single point; LH 2026-07-11: overnight insufficient_quota took both down
+# while the orchestrator assumed omp was Claude). Say what was actually launched.
+ARGS_SHOWN="${AGENT_ARGS[*]+${AGENT_ARGS[*]}}"
+echo "engine : $AGENT — model/backend = the agent's own default unless overridden in args: ${ARGS_SHOWN:-<none>} (omp/codex default to OpenAI backends; check quota before high-volume runs)"
 if [ -n "$GOAL" ]; then
   sleep 2  # let the agent TUI come up before delivering
   # codex AND claude first-ever launch in a cwd pause on a directory-trust prompt that would EAT
@@ -203,10 +210,32 @@ if [ "$WATCH_MODE" = 1 ]; then
   case "$ok" in
     hook) echo "hook: WORKING sentinel present — hook wired ✓ (Read this output line to confirm, then wait for the completion notification)" ;;
     pane) echo "hook: no sentinel yet but pane is BUSY — agent working (codex emits WORKING on first tool call, needs hook trust). watch auto-falls back to scrape if the sentinel stays empty ~2min." ;;
-    *)    echo "hook: NO sentinel after 12s and pane not busy — hook not wired / goal not landed / agent slow. watch falls back to scrape; if you meant hook-primary, STOP and re-dispatch." ;;
+    *)    echo "hook: NO sentinel after 12s and pane not busy — hook not wired / goal not landed / agent slow. watch falls back to scrape; if you meant hook-primary, STOP and re-dispatch."
+          # Quota/auth outages fail the very first tool call and look exactly like this tier —
+          # name the real cause instead of letting it read as a wiring problem (LH 2026-07-11).
+          tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qiE 'insufficient_quota|invalid_api_key|No API key|credit balance|billing' \
+            && echo "hook: pane shows a BACKEND QUOTA/AUTH error — the engine cannot run at all; fix credentials/quota before re-dispatching." ;;
   esac
   echo "── handing off to watch (blocks until terminal state; this background task completes when the agent is DONE/WAITING) ──"
-  exec bash "$HERE/watch" "$SESSION"
+  bash "$HERE/watch" "$SESSION"; rc=$?
+  # The fused command's exit code IS the watch VERDICT (typed 0-7), and background-task
+  # notifications render any nonzero as "command failed" — misread as dispatch failure 3+
+  # times in the field while dispatch+goal delivery had succeeded (LH 2026-07-11). Spell the
+  # verdict out in the OUTPUT (the thing the orchestrator actually reads): real dispatch
+  # failures exit BEFORE the handing-off marker above.
+  case "$rc" in
+    0) v="DONE" ;;
+    1) v="SESSION-GONE" ;;
+    2) v="AGENT-DEAD (pane fell back to a shell)" ;;
+    3) v="SUSPECTED-HANG" ;;
+    4) v="WAITING-INPUT (agent needs a reply)" ;;
+    5) v="STALLED-EXTERNAL (provider-error retry-loop — check backend quota/availability)" ;;
+    6) v="IDLE-NO-DELIVERABLE (deliverable not produced this round — poke the agent)" ;;
+    7) v="WATCH-TIMEOUT (agent still active — re-arm or verify)" ;;
+    *) v="unknown" ;;
+  esac
+  echo "== watch verdict: exit $rc = $v — NOT a dispatch failure (dispatch + goal delivery succeeded earlier in this output) =="
+  exit "$rc"
 else
   echo "monitor: bash $HERE/watch $SESSION   (or dispatch with --goal <file> to fuse launch+goal+watch into one run_in_background call)"
 fi

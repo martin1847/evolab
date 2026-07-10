@@ -64,7 +64,18 @@ DELIVERABLE="${AGENT_WATCH_DELIVERABLE:-}"
 NODELIV_MAX="${AGENT_WATCH_NODELIV_POLLS:-7}"
 POLL="${AGENT_WATCH_POLL_SECS:-45}"
 MAX_POLLS="${AGENT_WATCH_MAX_POLLS:-130}"
-deliverable_ok() { [ -z "$DELIVERABLE" ] && return 0; compgen -G "$DELIVERABLE" > /dev/null 2>&1; }
+# Freshness (parity with watch): when sourced from `watch`, $STAMP marks arm time and a match
+# must be NEWER than it — a leftover file from a previous round must not open the gate (LH
+# 2026-07-11, multi-round early exit). Standalone runs have no stamp → existence is the best we have.
+deliverable_ok() {
+  [ -z "$DELIVERABLE" ] && return 0
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -z "${STAMP:-}" ] || [ "$f" -nt "$STAMP" ]; then return 0; fi
+  done < <(compgen -G "$DELIVERABLE" 2>/dev/null)
+  return 1
+}
 
 idle=0; samehash=0; lasthash=""; exterr=0; nodeliv=0
 # Immediate ARMED heartbeat so the orchestrator can confirm liveness by READING the

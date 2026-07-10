@@ -113,15 +113,33 @@ chk_contains "exit6 poke hint" "poke" "$WATCH_OUT"
 unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
 sandbox_clean
 
-# deliverable gate OPEN: glob matches -> plain DONE exit 0.
+# deliverable gate OPEN: glob matches AND is newer than the arm stamp -> plain DONE exit 0.
+# Pre-create the stamp with an OLD mtime (create-if-absent keeps it, emulating a rearm'd
+# watcher preserving the original arm time), then produce the deliverable "this round".
 sandbox_new
 seed_events deliv-ok '2026-01-01T00:00:00Z WORKING t0\n2026-01-01T00:00:01Z DONE t1\n'
 export FAKE_PANE_CMD="omp"; pane_fixture "done\n"
+touch -t 202601010000 "$WATCH_RUN_DIR/deliv-ok.watch-armed"
 mkdir -p "$SANDBOX/out"; touch "$SANDBOX/out/report.md"
 export AGENT_WATCH_DELIVERABLE="$SANDBOX/out/*.md" AGENT_WATCH_NODELIV_POLLS=1
 run_watch deliv-ok
 chk_eq "gate-open DONE rc" 0 "$WATCH_RC"
 chk_contains "gate-open DONE marker" "DONE at" "$WATCH_OUT"
+chk_eq "natural exit removes arm stamp" 0 "$([ -e "$WATCH_RUN_DIR/deliv-ok.watch-armed" ] && echo 1 || echo 0)"
+unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
+sandbox_clean
+
+# deliverable gate FRESHNESS (multi-round early-exit regression, LH 2026-07-11): a file
+# left over from a PREVIOUS round matches the glob but predates this round's arm stamp
+# -> gate must stay CLOSED (exit 6 poke), not report a phantom DONE while round 2 runs.
+sandbox_new
+seed_events deliv-stale '2026-01-01T00:00:00Z WORKING t0\n2026-01-01T00:00:01Z DONE t1\n'
+export FAKE_PANE_CMD="omp"; pane_fixture "round-2 in flight\n"
+mkdir -p "$SANDBOX/out"; touch -t 202601010000 "$SANDBOX/out/round1-impl.md"
+export AGENT_WATCH_DELIVERABLE="$SANDBOX/out/*.md" AGENT_WATCH_NODELIV_POLLS=1
+run_watch deliv-stale
+chk_eq "stale deliverable does NOT open the gate rc6" 6 "$WATCH_RC"
+chk_contains "stale deliverable marker" "IDLE-NO-DELIVERABLE" "$WATCH_OUT"
 unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
 sandbox_clean
 

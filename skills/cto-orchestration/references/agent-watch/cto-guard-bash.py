@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # cto-guard-bash — PreToolUse·Bash enforcement for cto-orchestration. Wire to the Bash matcher
-# (CC skill frontmatter `hooks:` / `.claude/settings.json`; Codex `hooks.json`). Catches three Bash
+# (CC skill frontmatter `hooks:` / `.claude/settings.json`; Codex `hooks.json`). Catches the Bash
 # slips the orchestrator keeps making (prose decays → enforce at tool-call time):
 #   (1) trailing shell `&` -> ORPHAN (no completion callback; wrapper falsely reports done)  [DENY]
 #   (2) naive "idle==done" poller (loop + capture-pane + idle grep, no positive-evidence check) [DENY]
@@ -8,6 +8,8 @@
 #       watcher (the PRIMARY signal). This is an OMISSION, not a bad action -> can't DENY (there is no
 #       tool call to intercept); inject salience at dispatch time instead, same doctrine as the
 #       PostToolUse·Agent browser reminder (sibling cto-guard-agent.py). [ALLOW + additionalContext]
+#   (4) raw `tmux send-keys` with long/CJK payload -> route through `dispatch send` [DENY]
+#   (5) blocking `watch`/fused `dispatch --goal` in the foreground -> run_in_background [DENY]
 # Deny = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON hookSpecificOutput.additionalContext
 # (only that reaches the agent). Fail-open: any parse error exits 0, never blocks work. All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
@@ -99,6 +101,33 @@ def main():
     # the Git-workflow standard skill + a server-side branch-protection ruleset,
     # NOT here — cto-guard owns orchestration slips (backgrounding, idle-polling, dispatch, send-keys),
     # not git policy. Don't re-add push checks here.
+
+    # (5) BLOCKING watch / fused `dispatch --goal` run in the FOREGROUND: both block until the
+    #     agent's terminal state — under a foreground Bash timeout (Claude Code default 2min) the
+    #     call is killed mid-watch (exit 143) and the watcher dies with it (field hit: LH
+    #     2026-07-11, `send … && watch` chained foreground). run_in_background:true is the
+    #     documented path. Shell orchestrators that run watch synchronously BY DESIGN (codex/
+    #     shell — README "run it synchronously and read the code") opt out explicitly by
+    #     prefixing the command with AGENT_WATCH_SYNC=1.
+    if not ti.get("run_in_background") and "AGENT_WATCH_SYNC=1" not in cmd:
+        fused = re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)\b", cmd) and "--goal" in cmd
+        # command-position only: `grep x …/agent-watch/watch` (path as an ARGUMENT) must not trip
+        # this, and the interpreter itself must sit at command position too — `emit.sh <path>` let
+        # `\bsh\s` match the ".sh" tail and re-flagged an argument. Both self-inflicted false
+        # positives within minutes of wiring, 2026-07-11. Shape: [;|&(or start] [ENV=v …]
+        # [bash|sh|exec|nohup|time] <token ending in agent-watch/watch>.
+        watchcall = re.search(
+            r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*(?:(?:bash|sh|exec|nohup|time)\s+)?[\"']?\S*agent-watch/watch[\"']?(?:\s|$)",
+            cmd,
+        )
+        if fused or watchcall:
+            sys.stderr.write(
+                "DENY: blocking watch/`dispatch --goal` in the FOREGROUND — it blocks until the agent's "
+                "terminal state, so a foreground Bash timeout (default 2min) kills it mid-watch (exit 143) "
+                "and the watcher dies with it. Re-run with run_in_background:true. Synchronous shell "
+                "orchestrators (codex): prefix the command with AGENT_WATCH_SYNC=1 to pass.\n"
+            )
+            return 2
 
     m = re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
     if m and "--goal" not in cmd:  # `dispatch … --goal` auto-arms the in-process watch → no reminder needed

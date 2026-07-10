@@ -59,6 +59,19 @@ chk_eq "alive spec untouched" 1 "$(ls "$WATCH_RUN_DIR"/*.watchspec 2>/dev/null |
 kill "$alive" 2>/dev/null
 sandbox_clean
 
+# gap-detect: LIVE session with NO watcher at all (natural watcher exit + a new round sent,
+# or never armed) — specs can't see it; scan events sentinels and suggest a re-arm (field:
+# "nothing to re-arm" while a session needed manual watch, LH 2026-07-11).
+sandbox_new
+seed_events orphan-live '2026-01-01T00:00:00Z WORKING t0\n'
+export FAKE_TMUX_HASSESSION=0     # tmux session alive
+out="$(bash "$REARM" 2>&1)"
+chk_contains "gap-detect flags unwatched live session" "NO watcher" "$out"
+chk_contains "gap-detect suggests the watch command" "watch orphan-live" "$out"
+chk_not_contains "gap-detect not reported as empty" "nothing to re-arm" "$out"
+unset FAKE_TMUX_HASSESSION
+sandbox_clean
+
 # empty dir -> honest no-op.
 sandbox_new
 chk_contains "empty dir -> nothing to re-arm" "nothing to re-arm" "$(bash "$REARM" 2>&1)"

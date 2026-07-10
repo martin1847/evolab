@@ -14,10 +14,14 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "    python3 not on PATH — guard test skipped"; exit 0
 fi
 
-mkcmd() { python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$1"; }
-run() { # $1 command -> OUT(stdout) ERR(stderr) RC
+mkcmd() { # $1 command, $2 run_in_background (optional "1")
+  python3 -c 'import json,sys
+ti={"command":sys.argv[1]}
+if len(sys.argv)>2 and sys.argv[2]=="1": ti["run_in_background"]=True
+print(json.dumps({"tool_input":ti}))' "$@"; }
+run() { # $1 command [$2 run_in_background] -> OUT(stdout) ERR(stderr) RC
   local tmpe; tmpe="$(mktemp)"
-  OUT="$(mkcmd "$1" | python3 "$GUARD" 2>"$tmpe")"; RC=$?
+  OUT="$(mkcmd "$@" | python3 "$GUARD" 2>"$tmpe")"; RC=$?
   ERR="$(cat "$tmpe")"; rm -f "$tmpe"
 }
 
@@ -79,12 +83,28 @@ run 'bash references/agent-watch/dispatch omp mysess /wt'
 chk_eq "dispatch w/o watch exit 0" 0 "$RC"
 chk_contains "dispatch w/o watch reminds arm watcher" "watcher" "$(ctx "$OUT")"
 chk_contains "reminder names the session" "mysess" "$(ctx "$OUT")"
-# dispatch WITH watch on the same session in the same command -> silent (no double-nag)
-run 'dispatch omp mysess /wt && bash references/agent-watch/watch mysess'
-chk_eq "dispatch + watch same cmd exit 0" 0 "$RC"; chk_eq "dispatch + watch silent" "" "$OUT"
-# fused `dispatch … --goal g` auto-arms the watch in-process -> no reminder either (no --watch flag exists)
+# dispatch WITH watch on the same session, BACKGROUNDED -> silent (no double-nag)
+run 'dispatch omp mysess /wt && bash references/agent-watch/watch mysess' 1
+chk_eq "dispatch + watch same cmd (bg) exit 0" 0 "$RC"; chk_eq "dispatch + watch silent" "" "$OUT"
+# fused `dispatch … --goal g` BACKGROUNDED auto-arms the watch in-process -> no reminder either
+run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' 1
+chk_eq "fused --goal (bg) exit 0" 0 "$RC"; chk_eq "fused --goal silent (auto watch)" "" "$OUT"
+
+# (5) blocking watch / fused dispatch in the FOREGROUND -> DENY (killed at Bash timeout, exit 143)
 run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
-chk_eq "fused --goal exit 0" 0 "$RC"; chk_eq "fused --goal silent (auto watch)" "" "$OUT"
+chk_eq "fused --goal foreground denied" 2 "$RC"; chk_contains "foreground deny names 143" "143" "$ERR"
+run 'dispatch send mysess -f /tmp/fix.md && bash references/agent-watch/watch mysess'
+chk_eq "chained foreground watch denied (LH field case)" 2 "$RC"
+run 'AGENT_WATCH_DELIVERABLE=/tmp/out/*.md bash references/agent-watch/watch mysess'
+chk_eq "env-prefixed foreground watch denied" 2 "$RC"
+# explicit sync opt-out for shell orchestrators that run watch synchronously by design
+run 'AGENT_WATCH_SYNC=1 bash references/agent-watch/watch mysess; rc=$?'
+chk_eq "AGENT_WATCH_SYNC=1 foreground allowed" 0 "$RC"
+# path as an ARGUMENT is not an invocation (self-inflicted false positives, 2026-07-11)
+run 'grep -n foo references/agent-watch/watch references/agent-watch/dispatch'
+chk_eq "watch path as grep arg allowed" 0 "$RC"
+run 'grep -n x agent-watch/emit.sh agent-watch/watch'
+chk_eq "arg after .sh arg allowed (sh-suffix trap)" 0 "$RC"
 # non-dispatch command -> silent
 run 'git status'
 chk_eq "non-dispatch silent" "" "$OUT"

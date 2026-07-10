@@ -8,7 +8,8 @@
 # design, not laziness (orphaned shells are the exact failure mode this avoids).
 # Stale specs (tmux session gone) are cleaned up here.
 set -u
-DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
+DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 found=0
 shopt -s nullglob
 for spec in "$DIR"/*.watchspec; do
@@ -21,6 +22,20 @@ for spec in "$DIR"/*.watchspec; do
   fi
   found=1
   echo "$cmd"
+done
+# Gap-detect: a LIVE session with NO watcher at all — spec files can't see this (a natural
+# watcher exit removed its spec, then a new round was sent via `dispatch send`, or the session
+# was never armed). Field hit: "nothing to re-arm" while a session needed manual watch (LH
+# 2026-07-11). Scan events sentinels for live sessions not covered by any spec. Printed as a
+# flagged suggestion, not a bare command: re-watching an idle DONE session exits quickly and
+# is harmless, but the orchestrator should decide whether a round is actually in flight.
+for ev in "$DIR"/*.events; do
+  sess="${ev##*/}"; sess="${sess%.events}"
+  [ -e "$DIR/$sess.watchspec" ] && continue                    # covered by the spec pass above
+  tmux has-session -t "$sess" 2>/dev/null || continue
+  found=1
+  echo "# live session '$sess' has NO watcher (natural exit or never armed) — if a round is in flight, re-arm:"
+  echo "bash $HERE/watch $sess"
 done
 [ "$found" -eq 0 ] && echo "# nothing to re-arm"
 exit 0
