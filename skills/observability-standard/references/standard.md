@@ -146,6 +146,8 @@
 ### §5.0 服务基线拓扑(所有服务)
 任何服务的最小 span 拓扑:**入站 server span = root**(带 `trace_id` / `run.id`、`tenant.id`)→ 每次**出站 client span**(HTTP / gRPC / MQ;**先开 client span 再 inject `traceparent`**——使注入的 header 带真实 parent span)→ DB / 缓存 / 外部 API 子 span。trace 是请求在系统里的因果树;§5.1 / §5.2 是 agent / RAG 在此基线上的**增量**。
 
+**Resource 部署身份(MUST)**:每个服务的 OTel Resource 必须带 `service.name` + `service.version`。`service.version` 钉当前实际部署的 release / image tag,例 `20260709-1020-c28e8f2`;部署层用 `OTEL_RESOURCE_ATTRIBUTES=service.version=20260709-1020-c28e8f2` 注入。该值 MUST 非空、非 placeholder(`unknown` / `latest` / `dev` 等),且与 Docker / GitOps 实际部署 tag 一致。release tag 只识别 deployed artifact,不是动态配置版本,不能代替 durable workflow 的 immutable effective-config snapshot。
+
 **这三类基线 span 优先用官方 auto-instrumentation(自动 / 零代码)产出**,而非手写;手写 span 只补自动埋点拿不到的领域环节(§5.1 / §5.2)。各语言 auto-instrumentation 包见**附录 C**。
 
 ### §5.1 Agent 增量(在 §5.0 基线上)
@@ -161,7 +163,9 @@
 | 调用子 agent | invoke agent span | `gen_ai.agent.name`, `agent.role`, 路由依据 |
 | 每次 LLM 调用 | inference span | `gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens`, `gen_ai.response.finish_reasons` |
 | 每次工具调用 | execute tool span | `tool_call_id`、`tool_name`、`tool_status`、`error_type`、`duration_ms`、`resource_identifier`(详见下「envelope 纪律」) |
-| prompt 版本 | 挂在 inference span 上 | `prompt.name/version/variant/tenant` |
+| prompt 版本 | 挂在 inference span 上 | `prompt.name`, `prompt.version`, `prompt.variant`, `prompt.tenant` |
+
+模型与 prompt 版本沿用 `gen_ai.request.model` / `prompt.version` 等既有属性,不另造平行字段。
 
 **工具调用 envelope 纪律(MUST)**:每个工具调用落一条结构化记录(execute_tool span / 持久 envelope),字段 ≥ `tool_call_id` / `tool_name` / `tool_status` / `error_type` / `duration_ms` / `trace_id` / `span_id` / `resource_identifier`。两条硬约束:
 - **稳定显式 id**:`tool_call_id` MUST 显式生成且稳定;**MUST NOT 复用底层框架的 run_id 当持久 id**——否则 parent→child→provider 跨跳无法 join。
@@ -232,6 +236,7 @@
 
 ## §8 落地检查清单
 
+- [ ] OTel Resource 同时有 `service.name` + `service.version`;`service.version` 非空、非 placeholder,且精确匹配当前部署 release / image tag(通过 `OTEL_RESOURCE_ATTRIBUTES` 注入)
 - [ ] 类型检查器进 CI 门禁(工具见 §2 附录 A·<你的语言>)
 - [ ] 边界数据有 schema 校验;跨进程失败建模成结果类型,不靠异常穿透
 - [ ] 日志初始化 / trace-context 关联按语言正确接入(见 §6 附录 B)

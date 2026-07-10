@@ -8,33 +8,36 @@
 | 层 | owner | 形态 | 作用 |
 |---|---|---|---|
 | 软层 | 本 SOP | agent-facing SOP | write-time 预防、教学、对接缝声明 |
-| 硬层 | 你的 IaC 仓 / IaC CTO | GitHub Ruleset / CODEOWNERS / required checks | 强制兜底,绕不过 |
+| 硬层 | 你的 IaC 仓 / IaC CTO | GitHub Ruleset / CODEOWNERS / required checks | 三档 tier 渐进强制,绕不过 |
 
 **为什么两层**:skill 文本随长对话 salience 衰减;纯声明机制无 forcing function 会腐烂。**不可逆动作(直推受保护分支、force push 改写历史)的最终防线必须是硬层**;skill 让 agent 不去撞墙,Ruleset 是墙。
 
 ## 1. 硬门禁契约（服务端已生效；对接缝）
 
-canonical 定义在 你的 IaC ruleset（两层 ruleset）,本 skill 镜像。**服务端已生效(硬层回报)**:Tier 1 baseline 自 2026-06-30、Tier 2 ci ruleset 自 2026-07-04 均 active;Tier 2 的 CODEOWNERS review 待各仓 CODEOWNERS 铺齐后开启(现变量化关闭)。两层:
+canonical 定义在 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓的 enrollment 以 IaC 为准。硬层内部分三档:
 
-**Tier 1 `branch-protection-baseline`(所有仓,含未来仓)** —— 地板,装即生效:
+**Tier 1 baseline(所有仓,含未来仓)** —— 地板,装即生效:
 - Block force pushes、Restrict deletions(仅此两条)。
 - **不要求 PR、不禁 merge-commit、不强制 linear history** → 小仓 / 文档仓可直推、直接合。
 
-**Tier 2 `branch-protection-ci`(白名单 `var.ci_protected_repositories`,默认 = 受保护分支白名单)** —— 完整流程:
-- Require a pull request before merging(+ required approvals ≥1、dismiss stale、Code Owners review、conversation resolution)
-- Require status checks to pass(+ branches up to date)
-- Require linear history
-- Block force pushes、Restrict deletions、Restrict who can push(bypass 名单空 / 仅 break-glass)
+**Tier 2 PR gate(显式白名单)** —— PR 合入地板:
+- Require a pull request before merging + Block force pushes + Restrict deletions。
+- 平台默认 `required_approvals=0`,允许作者 self-merge。
+- 不统一强制 CODEOWNERS review / last-push approval / conversation resolution / linear history / status checks;跨人评审是建议,除非 repo-local gate 显式升格。
+
+**Tier 3 required CI(单独显式 enrollment)** —— 在 Tier 2 上叠加 CI 硬门:
+- Require status checks to pass;仅显式接入的仓生效。
+- aggregate check **MUST always-report**:即使上游失败 / cancelled / skipped,也必须产出明确终态,避免 required check 永久 pending。
 
 **原则:能发布 artifact 的仓必须被保护**——受保护分支集 = 受保护分支白名单 `main` / `master` / `develop` / `dev` / `release/**` / `project/*`。
 
-**已 reconcile(2026-06-25)**:全 agent 开发重定调研 → **merge-commit 弃用、默认线性(squash)**(见 §4),故 Tier 2 强制 linear 是对的、无冲突。集成策略已修订;per-repo linear 开关方案作废(两层 ruleset + 弃 merge-commit 已解决)。
+**集成策略边界**:**merge-commit 弃用、默认 squash**(见 §4)是本 SOP 约定,不是 Tier 2 服务端强制;repo-local 如需 linear history,应在本地门显式声明并强制。
 
-**仓的 tier 归属以 你的 IaC ruleset 为准**(白名单 = 受保护分支白名单);本规范仓走 Tier 1。
+**仓的 tier 归属以 你的 IaC ruleset 为准**;本规范仓走 Tier 1。
 
 ## 2. 分支模型
 
-- **业务/受保护分支**:`main`/`master`、`develop`/`dev`、`release/**`、`project/*`(项目集成分支,如 `project/pda`)。**Tier 2 仓:只接受 PR 合入**(Tier 1 仓可直推,仅禁 force-push/删分支)。受保护集 = ACR 出镜像放行集;canonical 定义在 你的 IaC 仓(两层 ruleset)。
+- **业务/受保护分支**:`main`/`master`、`develop`/`dev`、`release/**`、`project/*`(项目集成分支,如 `project/pda`)。**Tier 2 / Tier 3 仓:只接受 PR 合入**(Tier 1 仓可直推,仅禁 force-push/删分支)。受保护集 = ACR 出镜像放行集;canonical 定义在 你的 IaC 仓(三档 tier ruleset)。
 - **工作分支**:`<type>/<slug>`,`type ∈ {feat, fix, chore, docs, refactor, test, perf}`。从最新 base 起,开发者在自己分支上自由 commit / rebase / force-with-lease。
 
 ## 3. rebase 是条件动作,不是仪式
@@ -49,7 +52,7 @@ git log <branchpoint>..origin/<base>   # 空 = base 没动
 - **base 没动 → 什么都不做**。空 rebase 是 no-op,**"没看到 rebase 命令" ≠ "漏了步骤"**(这是反复被误解的点)。
 - **base 动了且碰了你改的文件 → rebase 或把 base merge 进来**解冲突,再 PR。
 - **base 动了但文件不重叠 → 可不动**(合并自然干净)。
-- **并发会话**:base 可能在你 cut 和 merge 之间被别的 PR 推进——所以 `fetch`+检查**必做**;但"检查"≠"每次都 rebase"。硬层 "branches up to date" 会在合前再卡一次。
+- **并发会话**:base 可能在你 cut 和 merge 之间被别的 PR 推进——所以 `fetch`+检查**必做**;但"检查"≠"每次都 rebase"。若 repo-local 门明确要求 branches up to date,合前还会再卡一次。
 
 ## 4. 集成策略（默认线性,2026-06-25 全 agent 修订）
 
@@ -70,12 +73,12 @@ git log <branchpoint>..origin/<base>   # 空 = base 没动
 
 > bisect 健康 = **每个 commit 都绿** + `--first-parent`;squash 让主线全绿,正是 agent 驱动 bisect 要的(merge 的中间 commit 可能红,descend 进 bubble 就踩坑)。
 
-trivial 单 commit PR 直接合。Tier 2 由 ruleset 强制 linear(见 §1)。
+trivial 单 commit PR 直接合。默认线性是 SOP 约定;Tier 2 本身不强制 linear(见 §1)。
 
 ## 5. PR 流程
 
 - PR 描述讲清 **what / why**(不复述 diff)。
-- 等 **required checks 绿 + 评审通过** 再合。
+- Tier 3 等 **required checks 绿**再合;review / CODEOWNERS 等仅在 repo-local gate 已升格时是阻断条件,否则跨人评审只是建议。
 - 合并方式 = 本仓声明的集成策略(§4)。
 - 合后删 head 分支(硬层可设自动删)。
 

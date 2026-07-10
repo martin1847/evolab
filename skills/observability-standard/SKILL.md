@@ -1,6 +1,6 @@
 ---
 name: observability-standard
-version: 1.1.3
+version: 1.1.4
 description: 生产级可观测性与工程规范,适用于**所有后端服务** —— 普通微服务(auth / 网关 / 业务服务)与 agent / 多 agent / RAG 知识库项目通用。核心:用 trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点、跨进程 W3C traceparent 传播、日志级别纪律、边界类型纪律(含 id 持久化:不往业务行塞 trace_id);agent / RAG 场景在此基线上加 LLM / 工具 / 检索埋点与 GenAI 语义约定。Use this skill whenever writing or reviewing backend code that involves logging setup, OpenTelemetry tracing, structured logs, cross-process context propagation, choosing log levels (INFO vs DEBUG), correlating logs / traces / db to debug, defining types for boundary or inter-service data — and additionally agent orchestration / sub-agents, LLM / tool / retrieval calls, or GenAI semantic conventions. 适用 Python / Go / Java / Rust。Apply it even when the user only says things like "加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪",不限于显式提到规范时。目标:trace_id 串 trace/log、业务 id 反查 db,让线上问题最快定位。
 ---
 
@@ -41,10 +41,11 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 ## 要开的 span
 ### 核心(所有服务)
 - 入站 **server span**(root,带 `trace_id` / `tenant.id`,并把**业务 id**挂成 span 属性(`order.id` / `run.id`)→ 供按业务 id 反查 trace),出站 **client span**(每次跨进程调用,**先开 span 再传 `traceparent`**),DB / 缓存 / 外部 API 子 span。
+- 服务 OTel Resource 必须有 `service.name` + `service.version`;`service.version` = 当前部署的 release / image tag(例 `20260709-1020-c28e8f2`),用 `OTEL_RESOURCE_ATTRIBUTES=service.version=20260709-1020-c28e8f2` 注入。值必须非空、非 placeholder、与部署 tag 一致。tag 只标识 deployed artifact,不代替动态 effective-config snapshot。
 - 这三类基线 span **优先用官方 auto-instrumentation(自动 / 零代码)产出**(HTTP / gRPC / DB 驱动 / 框架中间件;包见 references 附录 C),手写 span 只补领域环节(下方 agent / LLM / 工具 / 检索)。
 
 ### Agent / RAG 扩展(在核心基线上加)
-- agent:`invoke_workflow`(编排)、`invoke_agent`(子 agent,带 `agent.role` + 路由依据)、`inference`(LLM,带 `gen_ai.request.model` / `gen_ai.usage.*_tokens` / `gen_ai.response.finish_reasons`)、`execute_tool`。prompt 版本挂 inference span(`prompt.name/version/variant/tenant`)。
+- agent:`invoke_workflow`(编排)、`invoke_agent`(子 agent,带 `agent.role` + 路由依据)、`inference`(LLM,带 `gen_ai.request.model` / `gen_ai.usage.*_tokens` / `gen_ai.response.finish_reasons`)、`execute_tool`。prompt 版本挂 inference span(`prompt.name` / `prompt.version` / `prompt.variant` / `prompt.tenant`)。模型 / prompt 版本沿用这些既有属性,不另造平行字段。
 - **工具调用 envelope**:稳定 `tool_call_id`(**不复用框架 run_id**)、start+finalize 完整生命周期(别永停 `running`)、`tool_status` 枚举 + `error_type`/`duration_ms`。完整字段见 references §5.1。
 - **RAG 额外**开 `embedding` + `retrieval` span,记 query / top-k / 命中 chunk 的 **id+score** / 最终进上下文的 chunk id;**答案要可溯源到 chunk**。
 - LLM 场景设 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` 锁属性命名(GenAI 约定 2026 仍 experimental)。
