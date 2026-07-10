@@ -104,10 +104,10 @@ trivial 单 commit PR 直接合。默认线性是 SOP 约定;Tier 2 本身不强
 
 ## 10. Local-first final-image Docker E2E 与 CI single-build
 
-- 产品仓库 MUST 声明 Docker 构建与运行输入、包定义与锁文件、workspace 配置、发布 workflow 等 critical paths。开发者机器上的 `pre-push` 仅在这些已声明路径有变更时运行完整的 final-image Docker E2E；未命中时 MAY 跳过。
+- 产品仓库 MUST 声明 Docker 构建与运行输入、包定义与锁文件、workspace 配置、发布 workflow 等 critical paths。开发者机器上的 `pre-push` 仅在这些已声明路径有变更时触发，触发后 MUST 在本机构建该产品**正式（final）应用镜像本体**（不是跑 host 测试，也不是构建代测/mock 镜像），并在该镜像**内部**执行完整的 E2E/smoke 断言；未命中已声明路径时 MAY 跳过。该检查是 push 前硬门——E2E 失败 MUST 阻断本次 push（fail-closed），不得降级为警告或静默放行。
 - 已声明的 critical paths 存在未提交改动时 MUST fail closed。成功的本地验证 MAY 按“目标 commit + E2E contract digest + base-image digest”指纹缓存；任一组成变化即不得复用。
 - 本地 hook 不是唯一安全边界；`git push --no-verify` 始终可能绕过 `pre-push`，remote CI MUST 独立执行并强制该契约。
-- remote release CI MUST 只构建一次 final image，推送后取得其不可变 digest，并对该 exact pushed digest 执行 layer、entrypoint 与 runtime smoke；全部通过后才可放行 GitOps write-back。
+- remote release CI 的职责是：校验交付契约、只构建一次 final image，推送后取得其不可变 digest，并对该 exact pushed digest 执行 layer、entrypoint 与 runtime smoke（镜像内轻量启动/导入检查，不是完整 E2E）；全部通过后才可放行 GitOps write-back。remote MUST NOT 执行产品仓库声明的本地 `docker_e2e_command`——完整 E2E 只在开发机的 `pre-push` 跑。runtime smoke（远端、轻量、绑定 pushed digest）与本地 final-image Docker E2E（本地、完整、pre-push 硬门）是两个不同的门，措辞与语义不可混用。
 - 产品仓库只负责项目命令、critical-path 声明与项目 smoke 断言；可复用的平台 tooling 负责 hook/install/cache 机制及 single-build/exact-image workflow 机制。
 - 契约 MUST 保持语言与包管理器中立：Python、Java、JavaScript 或其他栈均通过各自命令与路径声明接入，不在通用机制中绑定特定工具链。
 
