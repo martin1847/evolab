@@ -1,6 +1,6 @@
 ---
 name: agent-mail
-version: 0.1.10
+version: 0.1.11
 description: 多编排者/长期 agent 身份之间的异步信箱总线——发信、收信、回信、归档、名册注册。每个身份一个 inbox，一封信只有一个去处（收件人 inbox），收信只查自己信箱。触发：给另一个编排者/CTO/agent 写信或提议、查我的信箱、跨编排者协调、看有哪些注册身份。不用于人类电子邮件（gmail/给真人同事或客户写信）或普通消息转发。可选伴随 cto-orchestration 使用（多编排者场景）。Use when writing to / reading mail from another orchestrator agent, coordinating across orchestrators, or managing the agent roster; NOT for human email.
 ---
 
@@ -104,14 +104,18 @@ agent-bus roster                                    # 打印名册
 占位。**正文 > 8192 bytes 硬拒（exit 2），无 override**——大载荷写文件，信里放绝对路径 + 一行摘要；
 **> 2048 bytes 软警告**（stderr，照常投递），指向上面的三行精简模板。
 
-不用 helper 也行：发信 = 手写 md 到对方 inbox；收信 = `ls $AGENT_MAIL_DIR/<我>/inbox/`。
+收信/名册仍可裸查（`ls`/`cat` inbox、registry 随意）；**发信必须走 `agent-bus send`**——size gate、
+精简警告、原子投递全在 helper 里，Write/Edit 直写收件人 inbox = 绕过全部 gate + 手写 frontmatter
+易错（2026-07-10 实证：多封直写信，其一 `from:` 写错）。已接 `mail-guard.py` hook 的席位由 hook
+硬拦（PreToolUse，见 `hooks.json`）；未接的席位靠此条纪律。
 
 ## 接入（新席位，两步，本 skill 自包含——不依赖任何编排 skill 的清单）
 
 1. **注册**：`agent-bus register <席位id> <项目根绝对路径> <职责一句话>`（名册加行 + 信箱建好）。
-2. **wire 收信提醒 hook**：**entry 真源 = 本 skill `hooks.json`（别抄散文）**——读它、command 换安装根
-   绝对路径（hooks 不展开 `~`、不加 `python3 ` 前缀），进项目 settings。**两个事件（Claude Code）**：
-   `SessionStart` 开场全量冒泡 + **`UserPromptSubmit` 增量投递**——长跑 session 永不重启，中途来信靠后者
+2. **wire hooks**：**entry 真源 = 本 skill `hooks.json`（别抄散文）**——读它、command 换安装根
+   绝对路径（hooks 不展开 `~`、不加 `python3 ` 前缀），进项目 settings。**三个 entry（Claude Code）**：
+   `SessionStart` 开场全量冒泡 + **`UserPromptSubmit` 增量投递** + `PreToolUse`（`mail-guard.py`
+   拦 Write/Edit/MultiEdit 直写 inbox，发信必须走 `agent-bus send`）——长跑 session 永不重启，中途来信靠增量投递
    在下一个 prompt turn 冒泡（只报**新到**、报过不复读、无新静默，`.notify-state` 记账；forcing function 不再
    只在开场那一次）。「记得查信箱」不靠记忆；身份零参数，靠名册 workdir 反查、子目录也认。
    - **PATH 便捷入口**：`SessionStart` 时 `mail-check.py` 会尝试把本 skill 的 `agent-bus` symlink 到
