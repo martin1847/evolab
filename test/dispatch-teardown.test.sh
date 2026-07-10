@@ -44,6 +44,23 @@ chk_contains "dispatch omp announces" "dispatched omp" "$out"
 chk_contains "dispatch omp monitor line" "monitor:" "$out"
 sandbox_clean
 
+# Option parsing preserves argv boundaries: spaces stay inside one arg, and a quoted
+# deliverable glob stays literal even when it already matches multiple files.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'a\n' > "$SANDBOX/wt/a.md"; printf 'b\n' > "$SANDBOX/wt/b.md"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/tmux-command" FAKE_TMUX_DELIV_FILE="$SANDBOX/tmux-deliverable"
+glob="$SANDBOX/wt/*.md"
+out="$(bash "$DISPATCH" omp argS "$SANDBOX/wt" --deliverable "$glob" '--label=alpha beta' 'literal*value' 2>&1)"; rc=$?
+chk_eq "dispatch boundary args rc0" 0 "$rc"
+cmd="$(cat "$FAKE_TMUX_CMD_FILE")"
+chk_contains "agent arg with spaces shell-quoted" '--label=alpha\ beta' "$cmd"
+chk_contains "literal star agent arg shell-quoted" 'literal\*value' "$cmd"
+chk_not_contains "deliverable match a not leaked into agent args" "$SANDBOX/wt/a.md" "$cmd"
+chk_not_contains "deliverable match b not leaked into agent args" "$SANDBOX/wt/b.md" "$cmd"
+chk_eq "deliverable glob preserved literally" "$glob" "$(cat "$FAKE_TMUX_DELIV_FILE")"
+sandbox_clean
+
 # codex dispatch: writes .codex/hooks.json with ABS replaced by the hooks dir.
 sandbox_new
 mkdir -p "$SANDBOX/wt"
@@ -63,6 +80,16 @@ out="$(bash "$DISPATCH" omp gS "$SANDBOX/wt" --goal "$SANDBOX/nope.md" 2>&1)"; r
 chk_eq "goal missing rc1" 1 "$rc"
 chk_contains "goal missing msg" "goal file not found" "$out"
 chk_not_contains "goal missing launches nothing" "dispatched" "$out"
+sandbox_clean
+
+# --goal accepts a real path containing spaces without re-splitting it.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+goal="$SANDBOX/goal with spaces.md"; printf 'goal\n' > "$goal"
+pane_fixture "done\n"
+out="$(bash "$DISPATCH" omp gsS "$SANDBOX/wt" --goal "$goal" 2>&1)"; rc=$?
+chk_eq "goal path with spaces rc0" 0 "$rc"
+chk_contains "goal path with spaces delivered intact" "delivering goal via send: $goal" "$out"
 sandbox_clean
 
 # codex --goal fused round-1: no sentinel (codex hook fires on first tool call) but pane busy
@@ -113,20 +140,60 @@ printf '{"existing":true}\n' > "$SANDBOX/wt/.codex/hooks.json"
 out="$(bash "$DISPATCH" codex cdx2 "$SANDBOX/wt" 2>&1)"; rc=$?
 chk_contains "dispatch codex existing WARNs" "NOT modifying" "$out"
 chk_eq "dispatch codex existing not clobbered" '{"existing":true}' "$(cat "$SANDBOX/wt/.codex/hooks.json")"
+out="$(bash "$TEARDOWN" cdx2 "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "teardown after existing codex config rc0" 0 "$rc"
+chk_eq "teardown preserves existing codex config" '{"existing":true}' "$(cat "$SANDBOX/wt/.codex/hooks.json")"
 sandbox_clean
 
 echo "== teardown =="
 
-# teardown: removes sentinel + .codex/hooks.json (+dir), reports kill.
+# teardown removes a Codex config created by this dispatch session.
 sandbox_new
-mkdir -p "$SANDBOX/wt/.codex"
-printf 'WORKING x\n' > "$WATCH_RUN_DIR/tdS.events"
-printf '{}\n' > "$SANDBOX/wt/.codex/hooks.json"
+mkdir -p "$SANDBOX/wt"
+out="$(bash "$DISPATCH" codex tdS "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "owned codex dispatch rc0" 0 "$rc"
+chk_eq "owned codex marker exists" 1 "$([ -f "$WATCH_RUN_DIR/tdS.hook-owner" ] && echo 1 || echo 0)"
 out="$(bash "$TEARDOWN" tdS "$SANDBOX/wt" 2>&1)"; rc=$?
 chk_eq "teardown rc0" 0 "$rc"
 if [ -f "$WATCH_RUN_DIR/tdS.events" ]; then _record "teardown removes sentinel" 0 "still present"; else _record "teardown removes sentinel" 1; fi
 if [ -f "$SANDBOX/wt/.codex/hooks.json" ]; then _record "teardown removes codex cfg" 0 "still present"; else _record "teardown removes codex cfg" 1; fi
+chk_eq "teardown removes codex ownership marker" 0 "$([ -f "$WATCH_RUN_DIR/tdS.hook-owner" ] && echo 1 || echo 0)"
 chk_contains "teardown reports session" "tmux session tdS" "$out"
+sandbox_clean
+
+# A session ownership marker cannot authorize deletion in a different cwd.
+sandbox_new
+mkdir -p "$SANDBOX/owned" "$SANDBOX/other/.codex"
+out="$(bash "$DISPATCH" codex ownS "$SANDBOX/owned" 2>&1)"; rc=$?
+printf '{"other":true}\n' > "$SANDBOX/other/.codex/hooks.json"
+out="$(bash "$TEARDOWN" ownS "$SANDBOX/other" 2>&1)"; rc=$?
+chk_eq "teardown wrong cwd rejected" 1 "$rc"
+chk_eq "wrong cwd config preserved" '{"other":true}' "$(cat "$SANDBOX/other/.codex/hooks.json")"
+chk_eq "owned config preserved after wrong cwd" 1 "$([ -f "$SANDBOX/owned/.codex/hooks.json" ] && echo 1 || echo 0)"
+chk_eq "ownership marker retained after wrong cwd" 1 "$([ -f "$WATCH_RUN_DIR/ownS.hook-owner" ] && echo 1 || echo 0)"
+sandbox_clean
+
+# Replacing a session-created config transfers it out of teardown ownership.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+out="$(bash "$DISPATCH" codex replS "$SANDBOX/wt" 2>&1)"; rc=$?
+printf '{"user_replacement":true}\n' > "$SANDBOX/wt/.codex/hooks.json"
+out="$(bash "$TEARDOWN" replS "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "teardown replaced config rejected" 1 "$rc"
+chk_eq "replaced config preserved" '{"user_replacement":true}' "$(cat "$SANDBOX/wt/.codex/hooks.json")"
+chk_eq "ownership marker retained after replacement" 1 "$([ -f "$WATCH_RUN_DIR/replS.hook-owner" ] && echo 1 || echo 0)"
+sandbox_clean
+
+# teardown also removes a Claude config created by this dispatch session.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+out="$(bash "$DISPATCH" claude tdC "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "owned claude dispatch rc0" 0 "$rc"
+chk_eq "owned claude marker exists" 1 "$([ -f "$WATCH_RUN_DIR/tdC.hook-owner" ] && echo 1 || echo 0)"
+out="$(bash "$TEARDOWN" tdC "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "teardown claude rc0" 0 "$rc"
+chk_eq "teardown removes claude cfg" 0 "$([ -f "$SANDBOX/wt/.claude/settings.json" ] && echo 1 || echo 0)"
+chk_eq "teardown removes claude ownership marker" 0 "$([ -f "$WATCH_RUN_DIR/tdC.hook-owner" ] && echo 1 || echo 0)"
 sandbox_clean
 
 # teardown with no cwd: just removes sentinel, no error.

@@ -58,7 +58,6 @@ AGENT="${1:?usage: dispatch <omp|codex|claude> <session> <cwd> [args...]  |  dis
 SESSION="${2:?session}"
 CWD="${3:?cwd}"
 shift 3 2>/dev/null || true
-EXTRA="$*"
 # `--goal <file>` fuses launch + goal-delivery + hook-verify + watch into ONE call: invoke this whole
 # command via the Bash tool's run_in_background (NOT shell `&`) — no separate send step, no separate
 # `watch` step to slip an `&` onto. Watch arms AUTOMATICALLY with --goal (there is no --watch flag:
@@ -69,57 +68,78 @@ EXTRA="$*"
 # tool call, and only when trusted). Later rounds / steering = `dispatch send`. A first-ever codex
 # OR claude launch in a cwd is ALSO one call: --goal auto-answers the directory-trust prompt (probe below).
 WATCH_MODE=0; GOAL=""; DELIV=""
-set -- $EXTRA; REST=""
+AGENT_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --goal)        shift; GOAL="${1:-}"; WATCH_MODE=1 ;;
+    --goal)
+      [ "$#" -ge 2 ] || { echo "ERR: --goal requires a file" >&2; exit 1; }
+      GOAL="$2"; WATCH_MODE=1; shift 2; continue ;;
     # --deliverable <glob>: arm the watch deliverable gate (see watch header, exit 6) —
     # DONE/idle only counts once the glob matches; use it whenever the goal's产出 is files.
-    --deliverable) shift; DELIV="${1:-}" ;;
-    *)             REST="$REST $1" ;;
+    --deliverable)
+      [ "$#" -ge 2 ] || { echo "ERR: --deliverable requires a glob" >&2; exit 1; }
+      DELIV="$2"; shift 2; continue ;;
+    *) AGENT_ARGS[${#AGENT_ARGS[@]}]="$1" ;;
   esac
-  shift 2>/dev/null || break
+  shift
 done
-EXTRA="$REST"
 [ -n "$DELIV" ] && export AGENT_WATCH_DELIVERABLE="$DELIV"
 # validate BEFORE launching — failing after new-session would leak an orphan session
 if [ -n "$GOAL" ] && [ ! -e "$GOAL" ]; then echo "ERR: --goal file not found: $GOAL" >&2; exit 1; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR="${AGENT_WATCH_DIR:-$HOME/.agents/run}"
-ENVP="AGENT_WATCH_SESSION=$SESSION AGENT_WATCH_DIR=$DIR"
+
+# Build the command tmux's shell will execute without flattening caller argv. Bash 3.2
+# supports indexed arrays + printf %q; every dynamic token is quoted exactly once.
+quote_args() {
+  local out="" arg q
+  for arg in "$@"; do
+    printf -v q '%q' "$arg"
+    out="${out}${out:+ }${q}"
+  done
+  printf '%s' "$out"
+}
+ENVP="AGENT_WATCH_SESSION=$(quote_args "$SESSION") AGENT_WATCH_DIR=$(quote_args "$DIR")"
 
 [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
+CWD="$(cd "$CWD" && pwd -P)"
 mkdir -p "$DIR" 2>/dev/null || true
 if tmux has-session -t "$SESSION" 2>/dev/null; then echo "ERR: tmux session '$SESSION' already exists" >&2; exit 1; fi
+OWNER="$DIR/$SESSION.hook-owner"
+rm -f "$OWNER" 2>/dev/null || true
 : > "$DIR/$SESSION.events" 2>/dev/null || true                                  # fresh sentinel per dispatch
 find "$DIR" -maxdepth 1 -name '*.events' -mtime +7 -delete 2>/dev/null || true  # age-purge stale sentinels
 
 # Drop a per-agent hook config without clobbering an existing one.
-# $1 = target config path, $2 = template filename under hooks/
+# $1 = target config path, $2 = template filename under hooks/, $3 = owner kind
 install_cfg() {
-  local target="$1" tmpl="$HERE/hooks/$2"
+  local target="$1" tmpl="$HERE/hooks/$2" owner="$3"
   if [ -f "$target" ]; then
     echo "WARN: $target exists — NOT modifying. Merge this for the watch to work:" >&2
     sed "s#ABS#$HERE/hooks#g" "$tmpl" >&2
     return 0
   fi
   mkdir -p "$(dirname "$target")"
-  sed "s#ABS#$HERE/hooks#g" "$tmpl" > "$target" && echo "wrote $target"
+  if sed "s#ABS#$HERE/hooks#g" "$tmpl" > "$target"; then
+    fingerprint="$(cksum "$target" | awk '{print $1 ":" $2}')"
+    printf 'kind=%s\ntarget=%s\ncksum=%s\n' "$owner" "$target" "$fingerprint" > "$OWNER"
+    echo "wrote $target (owned by session $SESSION)"
+  fi
 }
 
 case "$AGENT" in
   omp)
-    CMD="$ENVP omp --hook $HERE/hooks/omp-watch.ts $EXTRA" ;;
+    CMD="$ENVP $(quote_args omp --hook "$HERE/hooks/omp-watch.ts" "${AGENT_ARGS[@]}")" ;;
   codex)
-    install_cfg "$CWD/.codex/hooks.json" codex-hooks.json
+    install_cfg "$CWD/.codex/hooks.json" codex-hooks.json codex
     # keep our tooling out of the tree: local exclude (not the shared .gitignore)
     if EX=$(git -C "$CWD" rev-parse --git-path info/exclude 2>/dev/null); then
       grep -qxF '.codex/' "$EX" 2>/dev/null || printf '.codex/\n' >> "$EX"
     fi
-    CMD="$ENVP codex $EXTRA" ;;
+    CMD="$ENVP $(quote_args codex "${AGENT_ARGS[@]}")" ;;
   claude)
-    install_cfg "$CWD/.claude/settings.json" claude-hooks.json
-    CMD="$ENVP claude $EXTRA" ;;
+    install_cfg "$CWD/.claude/settings.json" claude-hooks.json claude
+    CMD="$ENVP $(quote_args claude "${AGENT_ARGS[@]}")" ;;
   *) echo "ERR: unknown agent '$AGENT' (omp|codex|claude)" >&2; exit 1 ;;
 esac
 

@@ -86,6 +86,8 @@ EOF
   #   FAKE_TMUX_CAPTURE_FAIL=1  -> capture-pane exits 1 (scrape SESSION-GONE path)
   #   FAKE_PANE_CMD=<str>       -> pane_current_command output
   #   FAKE_PANE_FILE=<path>     -> file whose contents capture-pane prints
+  #   FAKE_TMUX_CMD_FILE=<path> -> new-session's final command string
+  #   FAKE_TMUX_DELIV_FILE=<path> -> AGENT_WATCH_DELIVERABLE seen by fake tmux
   # new-session / send-keys / kill-session / has-session(=> no session) = no-op success.
   cat > "$BIN/tmux" <<'EOF'
 #!/usr/bin/env bash
@@ -105,7 +107,12 @@ case "$sub" in
     # Default: no such session (rc 1) so `dispatch` proceeds. Override w/ FAKE_TMUX_HASSESSION=0->exists
     if [ "${FAKE_TMUX_HASSESSION:-1}" = "0" ]; then exit 0; else exit 1; fi
     ;;
-  new-session|send-keys|kill-session|set-option|select-pane)
+  new-session)
+    [ -n "${FAKE_TMUX_CMD_FILE:-}" ] && printf '%s\n' "${!#}" > "$FAKE_TMUX_CMD_FILE"
+    [ -n "${FAKE_TMUX_DELIV_FILE:-}" ] && printf '%s\n' "${AGENT_WATCH_DELIVERABLE:-}" > "$FAKE_TMUX_DELIV_FILE"
+    exit 0
+    ;;
+  send-keys|kill-session|set-option|select-pane)
     exit 0
     ;;
   *)
@@ -125,6 +132,7 @@ sandbox_clean() {
   [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"
   unset SANDBOX WATCH_RUN_DIR BIN AGENT_WATCH_DIR
   unset FAKE_TMUX_DISPLAY_FAIL FAKE_TMUX_CAPTURE_FAIL FAKE_PANE_CMD FAKE_PANE_FILE FAKE_TMUX_HASSESSION
+  unset FAKE_TMUX_CMD_FILE FAKE_TMUX_DELIV_FILE
 }
 
 # seed_events <session> <content...>  -- write the sentinel events file.

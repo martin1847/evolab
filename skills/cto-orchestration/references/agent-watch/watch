@@ -7,7 +7,8 @@
 # Usage: watch <tmux-session> [busy-marker] [shell-regex]
 # Exit codes (same vocabulary as scrape-fallback): 0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD
 #   / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL (provider-error retry-loop)
-#   / 6 IDLE-NO-DELIVERABLE (terminal-looking but declared deliverable never appeared).
+#   / 6 IDLE-NO-DELIVERABLE (terminal-looking but declared deliverable never appeared)
+#   / 7 WATCH-TIMEOUT (bounded polling exhausted while the agent stayed active).
 # (D) Deliverable gate — fixes "turn_end != task done" (4 false DONEs on 2026-07-05:
 # multi-step agents emit DONE/idle at every turn/phase boundary; auto-continued next
 # turns and codex inter-phase pauses read as terminal). Set AGENT_WATCH_DELIVERABLE
@@ -55,6 +56,7 @@ SPEC="$DIR/$SESSION.watchspec"
 SPEC_ENV=""
 [ -n "${AGENT_WATCH_DELIVERABLE:-}" ] && SPEC_ENV="AGENT_WATCH_DELIVERABLE=$(printf %q "$AGENT_WATCH_DELIVERABLE") "
 [ -n "${AGENT_WATCH_NODELIV_POLLS:-}" ] && SPEC_ENV="${SPEC_ENV}AGENT_WATCH_NODELIV_POLLS=$(printf %q "$AGENT_WATCH_NODELIV_POLLS") "
+[ -n "${AGENT_WATCH_MAX_POLLS:-}" ] && SPEC_ENV="${SPEC_ENV}AGENT_WATCH_MAX_POLLS=$(printf %q "$AGENT_WATCH_MAX_POLLS") "
 {
   printf 'session=%s\n' "$SESSION"
   printf 'pid=%s\n' "$$"
@@ -67,18 +69,22 @@ if [ ! -f "$EVENTS" ]; then
   sleep 6
   if [ ! -f "$EVENTS" ]; then
     echo "=== [$SESSION] no sentinel (hook not wired) → fallback to lib/scrape-fallback.sh ==="
-    exec bash "$HERE/lib/scrape-fallback.sh" "$SESSION" "$MARKER" "$SHELL_RE"
+    # Source the fallback so terminal `exit` paths still run this shell's EXIT trap
+    # and remove the watchspec. `exec` bypasses EXIT traps and leaves a false rearm signal.
+    . "$HERE/lib/scrape-fallback.sh" "$SESSION" "$MARKER" "$SHELL_RE"
   fi
 fi
 
 DELIVERABLE="${AGENT_WATCH_DELIVERABLE:-}"
 NODELIV_MAX="${AGENT_WATCH_NODELIV_POLLS:-15}"
 POLL="${AGENT_WATCH_POLL_SECS:-20}"
+MAX_POLLS="${AGENT_WATCH_MAX_POLLS:-260}"
 # No gate configured => always ok; else require >=1 existing glob match.
 deliverable_ok() { [ -z "$DELIVERABLE" ] && return 0; compgen -G "$DELIVERABLE" > /dev/null 2>&1; }
 
 idle=0; lastline=""; stalls=0; exterr=0; empties=0; nodeliv=0
-for i in {1..260}; do
+i=1
+while [ "$i" -le "$MAX_POLLS" ]; do
   sleep "$POLL"
   # (A) liveness backstop FIRST — a hard crash fires no hook; foreground back to a
   #     shell => agent gone, not done.
@@ -101,10 +107,11 @@ for i in {1..260}; do
     empties=$((empties+1))
     if [ "$empties" -ge 6 ]; then
       echo "=== [$SESSION] sentinel empty ~2min (hook not firing / untrusted) → fallback to scrape ==="
-      exec bash "$HERE/lib/scrape-fallback.sh" "$SESSION" "$MARKER" "$SHELL_RE"
+      . "$HERE/lib/scrape-fallback.sh" "$SESSION" "$MARKER" "$SHELL_RE"
     fi
     lastline="$line"
     [ $((i % 9)) -eq 0 ] && echo "[$SESSION] heartbeat iter $i state=empty $(date '+%H:%M:%S')"
+    i=$((i+1))
     continue
   fi
   empties=0
@@ -181,5 +188,7 @@ for i in {1..260}; do
   else exterr=0; fi
   lastline="$line"
   [ $((i % 9)) -eq 0 ] && echo "[$SESSION] heartbeat iter $i state=$state $(date '+%H:%M:%S')"
+  i=$((i+1))
 done
 echo "=== [$SESSION] WATCH TIMEOUT — still active, last=$(tail -1 "$EVENTS" 2>/dev/null) ==="
+exit 7

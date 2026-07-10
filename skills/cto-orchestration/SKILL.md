@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.4.0
+version: 1.4.1
 description: "CTO/orchestrator 模式管理多 agent 开发：本人不写产品代码，通过 tmux send-keys 派发 omp（执行）+ codex（评审）混合开发，goal 文档驱动、watcher 监控、对抗式评审循环、旗标门控、运维 agent 间接取证。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话并行开发、或在新项目复制此 CTO 工作流时。【定位】循环式日常编排运营；新项目先跑一次性的 repo-governance-bootstrap 建治理骨架，再用本 skill 派工——两者分工：bootstrap 建结构、本 skill 跑循环。不要用于：单 agent 一次性小任务、不需要多 agent 评审循环的改动、纯文档/治理初始化（用 repo-governance-bootstrap）。"
 metadata:
   requires:
@@ -64,7 +64,7 @@ metadata:
    （goal 模板已自携复述要求）：核对 agent 复述的"碰哪些文件/契约、风险、scope"再放行——弱答当场
    纠正，别把沉默当默许。
 4. **watcher 纪律**（typed 状态全枚举 + 各失败态机制/实证全文见 `references/agent-watch/README.md`）：
-   - **typed 状态 0-6 存在：DEAD≠DONE、WAITING 要回输入**——别把 idle / watcher 裁决当终态。
+   - **typed 状态 0-7 存在：DEAD≠DONE、WAITING 要回输入、WATCH-TIMEOUT≠DONE**——别把 idle / watcher 裁决当终态。
    - **判完成要正向证据**（本地 commit / 产物计数 / review 标记），自己 capture-pane 核证；产出=文件的
      任务派发时直接 `--deliverable <glob>`——glob 未命中不认 DONE、超时 exit 6 = 幻影 DONE 去 poke
      （turn_end ≠ 任务终态，实证单日 4 次假 DONE）。

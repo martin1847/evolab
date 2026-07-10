@@ -78,12 +78,13 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 - `dispatch <omp|codex|claude> <session> <cwd>` — launches the agent wired to the hook (bakes in the
   env-in-command rule + ABS sub; truncates the session sentinel; age-purges old ones).
 - `watch <session> [busy-marker]` — monitor (hook-primary, scrape-fallback). It BLOCKS until a terminal state,
-  then exits a typed code (0–6). **Default (any shell orchestrator — codex etc.): run it synchronously and read
+  then exits a typed code (0–7). **Default (any shell orchestrator — codex etc.): run it synchronously and read
   the code** — `bash <dir>/watch <session>; rc=$?` then branch on `$rc`. A **background orchestrator (Claude Code)**
   instead launches it via its background mechanism (NOT shell `&`, which orphans it) + reads the `WATCH ARMED`
   line + completion notification. Either way, confirm with capture-pane — the code is a lead, not gospel.
   (Validated: a codex shell-orchestrator independently built `…/watch <s>; rc=$?`, read `0=DONE`, then verified.)
-- `teardown <session> [cwd]` — kill the session + remove its sentinel + remove the worktree's `.codex` hook config.
+- `teardown <session> [cwd]` — kill the session + remove its sentinel + remove only the Codex/Claude hook config
+  this dispatch session created; an existing project config is never owned or removed.
 
 ## Validation status（当前态快照；过程史在 git log）
 
@@ -94,9 +95,12 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 | codex adapter | ✅ | e2e 严格档。历史坑双记：① hooks 需 trust——dispatch 已带 `--dangerously-bypass-hook-trust`；② 曾因模板顶层 `_comment` 被 codex 严格解析**静默禁用整文件**、hook 自诞生零 emit——修复 = 模板顶层只许 `hooks` + polish 门焊死；存量项目旧毒版 `.codex/hooks.json` 删掉重派即再生。`PermissionRequest→WAITING` 只盖 tool-approval，自由文本提问靠抓屏兜 |
 | emit / watch / scrape fallback | ✅ | hermetic 套件 |
 | deliverable 门（exit 6） | ✅ | hermetic 对抗测试 |
+| WATCH-TIMEOUT（exit 7） | ✅ | hook-primary + scrape-fallback 均钉显式非零终态；不得冒充 DONE |
 | STALLED-EXTERNAL（exit 5）谓词 | ◑ | 离线 fixture 真/假例全过、watch↔scrape regex parity 已断言；**已知假阳**：agent 编辑错误处理代码/读 provider 日志时同 token 会命中——exit 5 是 advisory，先看屏尾再 kill。未 live 验：WORKING+N-poll 门与真 provider stall |
 
-- `dispatch` 会把 `.codex/hooks.json` 写进 worktree 并自动加 `.git/info/exclude`（防 `git add -A` 夹带）；`teardown` 负责清。
+- `dispatch` 仅在目标不存在时写 `.codex/hooks.json` / `.claude/settings.json`，并以 session ownership marker
+  记录本次创建项；Codex 配置另加 `.git/info/exclude`（防 `git add -A` 夹带）。`teardown <session> <cwd>`
+  只清 marker 精确指向且内容指纹未变的本次创建项；已有或其后被替换的项目配置原样保留。
 
 ---
 
@@ -144,7 +148,8 @@ references/agent-watch/dispatch send <session> -f <fixround.md>   # 确认环收
   turn/阶段边界都发 DONE/呈 idle〔实证 2026-07-05 单日 4 次假 DONE〕。派"产出=文件"的任务设
   `--deliverable <glob>`（dispatch 直传）或 env `AGENT_WATCH_DELIVERABLE`：DONE/idle 仅在 glob 命中后 exit 0，
   超 `AGENT_WATCH_NODELIV_POLLS` 仍缺 → exit 6 = 去 poke agent、别信幻影 DONE。spec 带 env、rearm 重挂不丢门）
-  （DEAD≠DONE、WAITING 要回输入）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
+  / **7 WATCH-TIMEOUT**（有界轮询耗尽但 agent 仍 active；必须继续核证或重挂，绝不按 DONE 消费）
+  （DEAD≠DONE、WAITING 要回输入、WATCH-TIMEOUT≠DONE）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
 - **5 STALLED-EXTERNAL = 外部 provider 错误热重试盲区**（overload/rate-limit/5xx；agent 活着 WORKING 却永不
   DONE，机制见上文 `watch` backstop + Honest limits）。收到 5：**先核证再动手**——扫 exit 5 附带的屏尾，确是
   provider chrome（非 agent 写错误处理代码刷屏误报）再 kill 热重试 agent、换新会话（不带退避状态）。实证盲等 ~13min。
@@ -221,4 +226,3 @@ watcher 心跳正常→同刻消失，事后补发 "was stopped" 通知。这不
   会话已没了 → 清 stale spec。**只打印不执行**——编排者用自己的受控后台机制（Bash 工具
   run_in_background）逐条起，rearm 自己绝不 background（孤儿 shell 正是要避免的失败模式）。
 - 编排者纪律：收到 watcher "was stopped" 通知，跑一次 `rearm`，照单重挂。
-

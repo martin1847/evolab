@@ -16,9 +16,10 @@
 #   FIX: never infer DONE from marker-absence alone. Require POSITIVE liveness —
 #   the agent's TUI must still be the session's foreground process.
 #
-# Exit codes (orchestrator dispatches on these — DONE is only one of six):
+# Exit codes (orchestrator dispatches on these — DONE is only one of eight):
 #   0 IDLE/DONE   2 AGENT DEAD (exited to shell)   3 SUSPECTED HANG
 #   1 SESSION GONE   4 WAITING FOR INPUT   5 STALLED-EXTERNAL (provider-error retry-loop)
+#   6 IDLE-NO-DELIVERABLE   7 WATCH-TIMEOUT
 
 SESSION="${1:?usage: scrape-fallback.sh <session> [marker] [shell-regex]}"
 MARKER="${2:-⟦esc⟧}"
@@ -62,13 +63,15 @@ EXT_ERR_RE="${AGENT_WATCH_EXT_ERR_RE:-(overloaded_error|rate_limit_error|stream 
 DELIVERABLE="${AGENT_WATCH_DELIVERABLE:-}"
 NODELIV_MAX="${AGENT_WATCH_NODELIV_POLLS:-7}"
 POLL="${AGENT_WATCH_POLL_SECS:-45}"
+MAX_POLLS="${AGENT_WATCH_MAX_POLLS:-130}"
 deliverable_ok() { [ -z "$DELIVERABLE" ] && return 0; compgen -G "$DELIVERABLE" > /dev/null 2>&1; }
 
 idle=0; samehash=0; lasthash=""; exterr=0; nodeliv=0
 # Immediate ARMED heartbeat so the orchestrator can confirm liveness by READING the
 # output file at t=0 (ps may not show the process under the harness's backgrounding).
 echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ marker=[$MARKER] — polling every ${POLL}s ==="
-for i in {1..130}; do
+i=1
+while [ "$i" -le "$MAX_POLLS" ]; do
   sleep "$POLL"
   pane=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null) || { echo "[$SESSION] SESSION GONE"; exit 1; }
   cmd=$(tmux display-message -p -t "$SESSION" '#{pane_current_command}' 2>/dev/null)
@@ -138,9 +141,11 @@ for i in {1..130}; do
   # Periodic heartbeat (~every 3min) → orchestrator can Read the output file to
   # confirm the watcher is still alive without relying on ps.
   [ $((i % 4)) -eq 0 ] && echo "[$SESSION] heartbeat iter $i idle=$idle samehash=$samehash $(date '+%H:%M:%S')"
+  i=$((i+1))
 done
 echo "=== [$SESSION] WATCHER TIMEOUT — still busy ==="
 tmux capture-pane -t "$SESSION" -p | tail -25
+exit 7
 
 # Lessons baked in:
 # - tmux has no failure signal: a dead/never-started agent looks like "success +

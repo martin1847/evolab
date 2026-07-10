@@ -79,4 +79,14 @@ chk_contains "scrape exit6 marker" "IDLE-NO-DELIVERABLE" "$SC_OUT"
 unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
 sandbox_clean
 
+# exit 7 WATCH-TIMEOUT: bounded polling exhausted while the live pane remains busy.
+sandbox_new
+export FAKE_PANE_CMD="omp" AGENT_WATCH_MAX_POLLS=1
+pane_fixture "still working ${MARK}\n"
+run_scrape timeout-sc
+chk_eq "scrape exit7 rc" 7 "$SC_RC"
+chk_contains "scrape exit7 marker" "WATCHER TIMEOUT" "$SC_OUT"
+unset AGENT_WATCH_MAX_POLLS
+sandbox_clean
+
 summary

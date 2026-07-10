@@ -74,7 +74,7 @@ sandbox_clean
 
 echo "== watch: fallback branches =="
 
-# fallback (absent): events file never exists -> exec scrape-fallback.
+# fallback (absent): events file never exists -> enter scrape-fallback.
 # Arrange scrape to terminate deterministically: agent alive+idle, no busy marker,
 # no input chrome -> IDLE/DONE exit 0.
 sandbox_new
@@ -85,9 +85,10 @@ run_watch absent-sess
 chk_contains "fallback-absent log" "fallback to lib/scrape-fallback.sh" "$WATCH_OUT"
 chk_contains "fallback-absent reached scrape" "WATCH ARMED" "$WATCH_OUT"   # scrape prints its own ARMED
 chk_eq "fallback-absent scrape exit0" 0 "$WATCH_RC"
+chk_eq "fallback-absent natural exit removes watchspec" 0 "$(find "$WATCH_RUN_DIR" -name '*.watchspec' | wc -l | tr -d ' ')"
 sandbox_clean
 
-# fallback (empty): events file exists but EMPTY -> ~6 polls -> exec scrape.
+# fallback (empty): events file exists but EMPTY -> ~6 polls -> enter scrape.
 sandbox_new
 : > "$WATCH_RUN_DIR/empty-sess.events"   # exists, empty
 export FAKE_PANE_CMD="omp"
@@ -96,6 +97,7 @@ run_watch empty-sess
 chk_contains "fallback-empty log" "sentinel empty" "$WATCH_OUT"
 chk_contains "fallback-empty reached scrape" "polling every 45s" "$WATCH_OUT"
 chk_eq "fallback-empty scrape exit0" 0 "$WATCH_RC"
+chk_eq "fallback-empty natural exit removes watchspec" 0 "$(find "$WATCH_RUN_DIR" -name '*.watchspec' | wc -l | tr -d ' ')"
 sandbox_clean
 
 
@@ -121,6 +123,17 @@ run_watch deliv-ok
 chk_eq "gate-open DONE rc" 0 "$WATCH_RC"
 chk_contains "gate-open DONE marker" "DONE at" "$WATCH_OUT"
 unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
+sandbox_clean
+
+# exit 7 WATCH-TIMEOUT: bounded polling exhausted while the agent remains alive/non-terminal.
+sandbox_new
+seed_events timeout-sess '2026-01-01T00:00:00Z UNKNOWN still-active\n'
+export FAKE_PANE_CMD="omp" AGENT_WATCH_MAX_POLLS=1
+pane_fixture "still active\n"
+run_watch timeout-sess
+chk_eq "exit7 WATCH-TIMEOUT rc" 7 "$WATCH_RC"
+chk_contains "exit7 WATCH-TIMEOUT marker" "WATCH TIMEOUT" "$WATCH_OUT"
+unset AGENT_WATCH_MAX_POLLS
 sandbox_clean
 
 summary

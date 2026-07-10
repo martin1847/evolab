@@ -105,7 +105,7 @@
 |---|---|
 | `*_GOAL.md` | 带 file:line 预判、交付物清单、guardrails 的派工文档 |
 | `*_REVIEW_codex.md` | codex 异构评审的 severity 分级 findings + verdict，逐轮追加 |
-| watcher 状态 | 7 种 typed 信号（DONE / AGENT-DEAD / HANG / WAITING-INPUT / STALLED-EXTERNAL / IDLE-NO-DELIVERABLE…），全枚举见 `references/agent-watch/README.md` |
+| watcher 状态 | 8 种 typed 信号（DONE / AGENT-DEAD / HANG / WAITING-INPUT / STALLED-EXTERNAL / IDLE-NO-DELIVERABLE / WATCH-TIMEOUT…），全枚举见 `references/agent-watch/README.md` |
 | 复盘快照 | 交付清单 + 教训固化 + roadmap/ACTIVE_CONTEXT 翻转 |
 
 ## 它和同类有什么不同
