@@ -90,6 +90,20 @@ chk_contains "refusal mentions pointer-not-payload guidance" "pointer-not-payloa
 chk_eq "oversized letter never lands in inbox" 0 "$(ls "$AGENT_MAIL_DIR/beta/inbox/"*atomic-big*.md 2>/dev/null | wc -l | tr -d ' ')"
 chk_eq "oversized letter leaves no tmp/ residue" 1 "$([ -z "$(ls -A "$AGENT_MAIL_DIR/beta/tmp" 2>/dev/null)" ] && echo 1 || echo 0)"
 
+# soft brevity warning: >2KB warns on stderr but still delivers; ≤2KB stays silent
+# (2>&1 >/dev/null = capture stderr only, so the assertion can't be satisfied by stdout text)
+err="$(python3 -c 'print("y" * 2500, end="")' | bash "$BUSBIN" send alpha beta brevity-warn "2.5KB 信" 2>&1 >/dev/null)"; rc=$?
+chk_eq "2.5KB letter still delivered: exit 0" 0 "$rc"
+chk_contains "2.5KB letter warns on stderr" "aim for <2KB" "$err"
+chk_eq "2.5KB letter lands in inbox despite warning" 1 "$(ls "$AGENT_MAIL_DIR/beta/inbox/"*brevity-warn*.md 2>/dev/null | wc -l | tr -d ' ')"
+err="$(python3 -c 'print("z" * 1024, end="")' | bash "$BUSBIN" send alpha beta brevity-ok "1KB 信" 2>&1 >/dev/null)"; rc=$?
+chk_eq "1KB letter: exit 0" 0 "$rc"
+chk_eq "1KB letter: no warning on stderr" "" "$err"
+# drain the brevity letters so later mail-check assertions see a clean beta inbox
+for bf in "$AGENT_MAIL_DIR/beta/inbox/"*brevity-*.md; do
+  bash "$BUSBIN" archive beta "$(basename "$bf" .md)" >/dev/null
+done
+
 # ── gzip archive round-trip (content survives byte-for-byte through compress+decompress) ──
 orig_content="$(cat "$af")"
 mid="$(basename "$af" .md)"

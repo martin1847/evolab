@@ -1,6 +1,6 @@
 ---
 name: agent-mail
-version: 0.1.9
+version: 0.1.10
 description: 多编排者/长期 agent 身份之间的异步信箱总线——发信、收信、回信、归档、名册注册。每个身份一个 inbox，一封信只有一个去处（收件人 inbox），收信只查自己信箱。触发：给另一个编排者/CTO/agent 写信或提议、查我的信箱、跨编排者协调、看有哪些注册身份。不用于人类电子邮件（gmail/给真人同事或客户写信）或普通消息转发。可选伴随 cto-orchestration 使用（多编排者场景）。Use when writing to / reading mail from another orchestrator agent, coordinating across orchestrators, or managing the agent roster; NOT for human email.
 ---
 
@@ -80,8 +80,13 @@ re:                  # 回信填被回 id；首发留空
 subject: 一句话主题
 priority: normal     # low | normal | high
 ---
-正文：结论先行；要对方做什么写清；要 verify 的给 file:line/证据。
+结论先行（1-2 句）。
+需要对方做什么（编号列表，只列行动项）。
+证据/大内容给路径或 URL，不贴原文。
 ```
+
+正文目标 **<2KB**：超 2KB helper 会 stderr 警告（照常投递），超 8KB 拒收——信的每个字节都会进
+收件方上下文，精简是 token 预算，不是文风。
 
 ## agent-bus helper（可选便捷；纯 bash 无依赖，避开 `bus` 命名碰撞）
 
@@ -96,7 +101,8 @@ agent-bus roster                                    # 打印名册
 
 `send` 原子投递（Maildir 式：先写 `<to>/tmp/`，`mv` 进 `<to>/inbox/`——inbox 里不会出现半写的信）；
 正文经 stdin 传入（`agent-bus send from to slug 主题 <<'EOF' … EOF`），交互式终端不接 stdin 就送空正文
-占位。**正文 > 8192 bytes 硬拒（exit 2），无 override**——大载荷写文件，信里放绝对路径 + 一行摘要。
+占位。**正文 > 8192 bytes 硬拒（exit 2），无 override**——大载荷写文件，信里放绝对路径 + 一行摘要；
+**> 2048 bytes 软警告**（stderr，照常投递），指向上面的三行精简模板。
 
 不用 helper 也行：发信 = 手写 md 到对方 inbox；收信 = `ls $AGENT_MAIL_DIR/<我>/inbox/`。
 

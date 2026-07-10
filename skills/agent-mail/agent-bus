@@ -24,10 +24,12 @@ agent-bus — agent-mail inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, def
 EOF
 }
 
-# Hard cap on letter BODY size (bytes) — see `send`. No override flag: a payload this size belongs
-# in a file (absolute path + one-line summary in the letter), not in the mailbox. Keeps grep/context
-# sweeps over the bus cheap and stops half-formed huge letters from ever landing in an inbox.
+# Letter BODY size thresholds (bytes) — see `send`. BODY_CAP is a hard refusal with no override:
+# a payload that size belongs in a file (absolute path + one-line summary in the letter), not in
+# the mailbox. BODY_SOFT only warns on stderr (delivery proceeds): the owner wants letters lean —
+# every byte of a letter is read by the recipient's context, so brevity is a token budget, not style.
 BODY_CAP=8192
+BODY_SOFT=2048
 
 # Archive retention (days; owner-set policy: 60). Every `archive` opportunistically prunes the same
 # seat's expired letters — no daemon/cron needed; `prune` runs the sweep explicitly. The env var
@@ -94,6 +96,9 @@ case "$cmd" in
     if [ "$bodylen" -gt "$BODY_CAP" ]; then
       echo "refused: body is $bodylen bytes, cap is $BODY_CAP (pointer-not-payload: write the payload to a file, put its absolute path + a one-line summary + the finding it supports in the letter instead — no override)" >&2
       exit 2
+    fi
+    if [ "$bodylen" -gt "$BODY_SOFT" ]; then
+      echo "warning: letter is $bodylen bytes; aim for <2KB — conclusion first, only the action you need from the recipient, evidence as file paths/URLs not inline content" >&2
     fi
     # Maildir-style atomic delivery: compose fully in tmp/, then a same-fs rename into inbox/.
     # There is no window where inbox/ can contain a half-written letter.
