@@ -16,11 +16,17 @@ usage() {
 agent-bus — agent-mail inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, default ~/.agents/mail)
   agent-bus register <agent-id> <workdir> <focus...>  add to roster + create mailbox
   agent-bus check <agent-id>                          list pending (inbox, oldest first)
-  agent-bus send <from> <to> <slug> [subject...]      scaffold a letter into recipient inbox
-  agent-bus archive <agent-id> <id>                   move a handled letter to archive
+  agent-bus send <from> <to> <slug> [subject...]      deliver a letter to recipient inbox (atomic;
+                                                       body optional via stdin, empty if a tty)
+  agent-bus archive <agent-id> <id>                   move a handled letter to archive (gzip'd)
   agent-bus roster                                    print roster
 EOF
 }
+
+# Hard cap on letter BODY size (bytes) — see `send`. No override flag: a payload this size belongs
+# in a file (absolute path + one-line summary in the letter), not in the mailbox. Keeps grep/context
+# sweeps over the bus cheap and stops half-formed huge letters from ever landing in an inbox.
+BODY_CAP=8192
 
 ensure_reg() {
   mkdir -p "$BUS"
@@ -32,7 +38,7 @@ case "$cmd" in
   register)
     id="${1:?agent-id}"; dir="${2:?workdir}"; shift 2; focus="$*"
     ensure_reg
-    mkdir -p "$BUS/$id/inbox" "$BUS/$id/archive"
+    mkdir -p "$BUS/$id/inbox" "$BUS/$id/archive" "$BUS/$id/tmp"
     if ! grep -q "| \`$id\` |" "$REG" 2>/dev/null; then
       # insert AFTER the last table row (not file end — a trailing footer note would break the table)
       row="$(printf '| `%s` | `%s` | %s |' "$id" "$dir" "$focus")"
@@ -46,6 +52,8 @@ case "$cmd" in
   check)
     id="${1:?agent-id}"; ib="$BUS/$id/inbox"
     [ -d "$ib" ] || { echo "no such agent: $id (register first)"; exit 1; }
+    # tmp/ (in-flight `send` writes) is a SIBLING of inbox/, never inside it — this glob
+    # structurally never sees a half-delivered letter, no special-casing needed.
     n=0
     for f in $(ls "$ib"/*.md 2>/dev/null | sort); do   # id 前缀含时间戳 → 文件名序 = 最旧优先
       n=$((n+1))
@@ -57,11 +65,26 @@ case "$cmd" in
     ;;
   send)
     from="${1:?from}"; to="${2:?to}"; slug="${3:?slug}"; shift 3; subject="${*:-<subject>}"
-    ib="$BUS/$to/inbox"
-    [ -d "$ib" ] || { mkdir -p "$ib" "$BUS/$to/archive"; echo "note: $to not registered — mailbox created anyway (mail must not bounce); consider: agent-bus register $to <workdir> <focus>"; }
-    id="$(date +%Y%m%d-%H%M)-$from-$slug"; f="$ib/$id.md"
-    [ -e "$f" ] && { echo "exists: $f"; exit 1; }
-    cat > "$f" <<EOF
+    base="$BUS/$to"; ib="$base/inbox"; tmpd="$base/tmp"
+    [ -d "$ib" ] || { mkdir -p "$ib" "$base/archive"; echo "note: $to not registered — mailbox created anyway (mail must not bounce); consider: agent-bus register $to <workdir> <focus>"; }
+    mkdir -p "$tmpd"
+    id="$(date +%Y%m%d-%H%M)-$from-$slug"; dest="$ib/$id.md"
+    [ -e "$dest" ] && { echo "exists: $dest"; exit 1; }
+    # Body is read from stdin when it's not a tty (piped/redirected — the normal shape for an
+    # agent/CI caller, incl. this test suite); a real interactive tty is left alone (empty body)
+    # so a human at a shell prompt never blocks waiting on Ctrl-D. Read BEFORE touching the
+    # filesystem so an oversized letter never creates a tmp file at all.
+    body=""
+    if [ ! -t 0 ]; then body="$(cat)"; fi
+    bodylen=$(printf '%s' "$body" | wc -c | tr -d ' ')
+    if [ "$bodylen" -gt "$BODY_CAP" ]; then
+      echo "refused: body is $bodylen bytes, cap is $BODY_CAP (pointer-not-payload: write the payload to a file, put its absolute path + a one-line summary + the finding it supports in the letter instead — no override)" >&2
+      exit 2
+    fi
+    # Maildir-style atomic delivery: compose fully in tmp/, then a same-fs rename into inbox/.
+    # There is no window where inbox/ can contain a half-written letter.
+    tmpf="$tmpd/$id.md"
+    cat > "$tmpf" <<EOF
 ---
 id: $id
 from: $from
@@ -73,14 +96,23 @@ priority: normal
 ---
 
 EOF
-    echo "scaffolded $f  (edit it, then it's delivered)"
+    [ -n "$body" ] && printf '%s\n' "$body" >> "$tmpf"
+    mv "$tmpf" "$dest"
+    echo "delivered $dest"
     ;;
   archive)
     id="${1:?agent-id}"; mid="${2:?letter-id}"
     src="$BUS/$id/inbox/$mid.md"; [ -e "$src" ] || src="$BUS/$id/inbox/$mid"
     [ -e "$src" ] || { echo "not found in $id inbox: $mid"; exit 1; }
-    mkdir -p "$BUS/$id/archive"; mv "$src" "$BUS/$id/archive/"
-    echo "archived $(basename "$src")"
+    mkdir -p "$BUS/$id/archive"
+    dst="$BUS/$id/archive/$(basename "$src")"
+    mv "$src" "$dst"
+    # gzip on archive (2026-07-10): a wide `grep -r` over the bus was pulling whole historical
+    # letter BODIES into context — a 979KB SQL letter got fully re-ingested this way by a routine
+    # sweep. Compressed, the id/filename stays visible via `ls`/`zgrep -l`; content only surfaces
+    # on an explicit `zcat`/`zgrep`, so a blind grep can no longer inhale megabytes of old mail.
+    gzip -9 -f "$dst"
+    echo "archived $(basename "$dst").gz"
     ;;
   roster)
     [ -f "$REG" ] && cat "$REG" || echo "(no registry yet — agent-bus register <agent-id> <workdir> <focus>)"

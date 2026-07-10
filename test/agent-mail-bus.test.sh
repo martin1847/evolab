@@ -71,9 +71,34 @@ out="$(bash "$BUSBIN" check beta)"
 chk_contains "check shows 1 pending" "1 pending" "$out"
 chk_contains "check shows sender" "from=alpha" "$out"
 bash "$BUSBIN" archive beta "$base" >/dev/null
-chk_eq "archived file moved" 1 "$([ -e "$AGENT_MAIL_DIR/beta/archive/$base.md" ] && [ ! -e "$f" ] && echo 1 || echo 0)"
+chk_eq "archived file moved+gzipped" 1 "$([ -e "$AGENT_MAIL_DIR/beta/archive/$base.md.gz" ] && [ ! -e "$AGENT_MAIL_DIR/beta/archive/$base.md" ] && [ ! -e "$f" ] && echo 1 || echo 0)"
 out="$(bash "$BUSBIN" check beta)"
 chk_contains "check empty after archive" "inbox empty" "$out"
+
+# ── atomic delivery (tmp/ staging, no half-written inbox files) + payload size gate ──
+out="$(printf 'small body under cap' | bash "$BUSBIN" send alpha beta atomic-ok "小信")"
+chk_contains "atomic send reports delivered" "delivered" "$out"
+af="$(ls "$AGENT_MAIL_DIR/beta/inbox/"*atomic-ok*.md 2>/dev/null | head -1)"
+chk_eq "small letter delivered to inbox" 1 "$([ -n "$af" ] && echo 1 || echo 0)"
+chk_contains "delivered body present" "small body under cap" "$(cat "$af")"
+chk_eq "no tmp/ residue after successful send" 1 "$([ -z "$(ls -A "$AGENT_MAIL_DIR/beta/tmp" 2>/dev/null)" ] && echo 1 || echo 0)"
+
+big="$(python3 -c 'print("x" * 8300, end="")')"
+out="$(printf '%s' "$big" | bash "$BUSBIN" send alpha beta atomic-big "大信" 2>&1)"; rc=$?
+chk_eq "oversized body refused: exit 2" 2 "$rc"
+chk_contains "refusal mentions pointer-not-payload guidance" "pointer-not-payload" "$out"
+chk_eq "oversized letter never lands in inbox" 0 "$(ls "$AGENT_MAIL_DIR/beta/inbox/"*atomic-big*.md 2>/dev/null | wc -l | tr -d ' ')"
+chk_eq "oversized letter leaves no tmp/ residue" 1 "$([ -z "$(ls -A "$AGENT_MAIL_DIR/beta/tmp" 2>/dev/null)" ] && echo 1 || echo 0)"
+
+# ── gzip archive round-trip (content survives byte-for-byte through compress+decompress) ──
+orig_content="$(cat "$af")"
+mid="$(basename "$af" .md)"
+bash "$BUSBIN" archive beta "$mid" >/dev/null
+gzf="$AGENT_MAIL_DIR/beta/archive/$mid.md.gz"
+chk_eq "gzip archive produces .md.gz" 1 "$([ -e "$gzf" ] && echo 1 || echo 0)"
+# gunzip -c (not zcat: BSD zcat on macOS expects .Z, not .gz — gunzip -c is portable)
+chk_eq "gzip archive round-trip byte-identical (gunzip -c)" 1 "$([ "$(gunzip -c "$gzf")" = "$orig_content" ] && echo 1 || echo 0)"
+chk_eq "gzip archive: inbox cleared" 0 "$(ls "$AGENT_MAIL_DIR/beta/inbox/"*atomic-ok*.md 2>/dev/null | wc -l | tr -d ' ')"
 
 # unregistered recipient: deliver anyway + warn
 out="$(bash "$BUSBIN" send alpha gamma hello "投递给未注册者")"
