@@ -9,6 +9,12 @@
 # NOTHING under test is modified — the fakes live only on the test PATH.
 set -u
 
+# Hermetic means hermetic to the CALLER'S env too: a maintainer with the exec-lane
+# switch in ~/.zshenv re-routes every TUI-launch test and skips guard check (5) —
+# suite red on that box, green everywhere else (caught by independent review 2026-07-11).
+# Tests that assert exec routing set the switch INLINE per invocation.
+unset DISPATCH_EXEC AGENT_WATCH_SYNC 2>/dev/null || true
+
 # Resolve the agent-watch dir. test/ lives at the repo root; the scripts under
 # test live under skills/cto-orchestration/references/agent-watch/.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

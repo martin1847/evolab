@@ -39,6 +39,33 @@ out="$(bash "$DEXEC" omp exG "$SANDBOX/wt" 2>&1)"; rc=$?
 chk_eq "missing goal rc1" 1 "$rc"
 sandbox_clean
 
+# codex/omp engine command shapes (claude covered above)
+sandbox_new
+mkdir -p "$SANDBOX/wt"; printf 'go\n' > "$SANDBOX/goal.md"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/tc-codex"
+bash "$DEXEC" codex exC "$SANDBOX/wt" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+cmd="$(cat "$FAKE_TMUX_CMD_FILE")"
+chk_contains "codex engine cmd" "codex exec --json" "$cmd"
+chk_contains "codex engine cwd flag" "-C " "$cmd"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/tc-omp"
+bash "$DEXEC" omp exO "$SANDBOX/wt" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+cmd="$(cat "$FAKE_TMUX_CMD_FILE")"
+chk_contains "omp engine cmd" "omp -p" "$cmd"
+chk_contains "omp pinned session dir" "--session-dir" "$cmd"
+sandbox_clean
+
+# P1 regression (independent review 2026-07-11): launching onto a name held by a LIVE
+# (TUI) tmux session must fail WITHOUT leaving exec.meta — an orphan meta permanently
+# self-routes that session's send/watch/teardown into the exec lane.
+sandbox_new
+mkdir -p "$SANDBOX/wt"; printf 'go\n' > "$SANDBOX/goal.md"
+export FAKE_TMUX_HASSESSION=0   # session name already taken
+out="$(bash "$DEXEC" claude exColl "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "collision launch rc1" 1 "$rc"
+chk_eq "collision leaves NO orphan meta" 0 "$([ -f "$WATCH_RUN_DIR/exColl.exec.meta" ] && echo 1 || echo 0)"
+unset FAKE_TMUX_HASSESSION
+sandbox_clean
+
 echo "== dispatch-exec: status classify =="
 
 mkstate() { # $1 session  $2 cwd — minimal meta + stamp
@@ -75,6 +102,16 @@ printf 'need a decision\n' > "$SANDBOX/wt/BLOCKED.md"
 printf '0\n' > "$WATCH_RUN_DIR/r4.exec.rc"; : > "$WATCH_RUN_DIR/r4.exec.out"
 out="$(bash "$DEXEC" status r4 2>&1)"; rc=$?
 chk_eq "blocked exit4" 4 "$rc"; chk_contains "blocked marker" "BLOCKED.md" "$out"
+sandbox_clean
+
+# same-second cliff (review nit): BLOCKED.md written within the SAME second as the arm
+# stamp must still classify WAITING (>= stamp, not strictly-newer) — a fast round's
+# doubt-protocol must never read as DONE.
+sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate r4s "$SANDBOX/wt"
+printf 'doubt\n' > "$SANDBOX/wt/BLOCKED.md"   # stamp and file land in the same second
+printf '0\n' > "$WATCH_RUN_DIR/r4s.exec.rc"; : > "$WATCH_RUN_DIR/r4s.exec.out"
+out="$(bash "$DEXEC" status r4s 2>&1)"; rc=$?
+chk_eq "same-second BLOCKED exit4" 4 "$rc"
 sandbox_clean
 
 # engine failed rc!=0 -> exit 2 ; quota chrome -> exit 5

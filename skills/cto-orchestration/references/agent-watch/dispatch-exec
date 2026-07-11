@@ -87,7 +87,9 @@ classify() { # $1 session
   fi
   rc="$(cat "$DIR/$s.exec.rc")"
   harvest_sid "$s"
-  if [ -f "$cwd/BLOCKED.md" ] && [ "$cwd/BLOCKED.md" -nt "$stamp" ]; then
+  # `! -ot` (>= stamp), not `-nt`: -nt is strictly-newer with SECOND granularity — a round
+  # that writes BLOCKED.md within the same second as its own arm stamp would read as DONE.
+  if [ -f "$cwd/BLOCKED.md" ] && ! [ "$cwd/BLOCKED.md" -ot "$stamp" ]; then
     echo "WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via send"; return 4
   fi
   if grep -qiE 'insufficient_quota|invalid_api_key|No API key|credit balance' "$DIR/$s.exec.out" 2>/dev/null && [ "$rc" != 0 ]; then
@@ -99,7 +101,7 @@ classify() { # $1 session
   fi
   if [ -n "$deliv" ]; then
     local f ok=1
-    while IFS= read -r f; do [ -n "$f" ] && [ "$f" -nt "$stamp" ] && ok=0 && break
+    while IFS= read -r f; do [ -n "$f" ] && ! [ "$f" -ot "$stamp" ] && ok=0 && break
     done < <(compgen -G "$deliv" 2>/dev/null)
     [ "$ok" = 0 ] || { echo "IDLE-NO-DELIVERABLE: rc=0 but '$deliv' not produced this round — read output, send a fix round"; return 6; }
   fi
@@ -157,6 +159,10 @@ case "${1:-}" in
     CWD="$(cd "$CWD" && pwd -P)"
     mkdir -p "$DIR"
     [ -f "$DIR/$S.exec.meta" ] && { echo "ERR: session '$S' already exists ($DIR/$S.exec.meta) — teardown or pick a new name" >&2; exit 1; }
+    # Collision check BEFORE writing meta: start_round's guard fires too late — a failed
+    # launch would orphan the meta and permanently self-route that (TUI) session name into
+    # the exec lane (P1, independent review 2026-07-11).
+    if tmux has-session -t "$S" 2>/dev/null; then echo "ERR: tmux session '$S' already exists" >&2; exit 1; fi
     { printf 'engine=%s\ncwd=%s\nround=0\nargs=%s\n' "$ENG" "$CWD" "$EXTRA"
       [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"; } > "$DIR/$S.exec.meta"
     start_round "$S" "$GOAL"
