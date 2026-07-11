@@ -235,19 +235,22 @@ if [ -n "$GOAL" ]; then
   bash "$0" send "$SESSION" -f "$GOAL" || echo "WARN: goal delivery reported non-zero (check the session)"
 fi
 if [ "$WATCH_MODE" = 1 ]; then
-  # verify hook wired (first WORKING sentinel within ~12s) — same load-bearing check as the old
+  # verify hook wired (first WORKING or LOADED sentinel within ~12s) — same load-bearing check as the old
   # foreground "起后立刻验 hook" step, just written to output instead of returned synchronously.
-  # Three tiers: sentinel (hook wired) > pane busy (working, sentinel pending — normal for codex
-  # before its first tool call) > neither (alarm). Without the pane tier, codex --goal would
+  # Four tiers: WORKING (turn started) > LOADED (omp factory registered, turn pending) > pane
+  # busy (working, sentinel pending — normal for codex before its first tool call) > neither
+  # (alarm). Without the pane tier, codex --goal would
   # ALWAYS false-alarm "STOP and re-dispatch" on a review that landed fine.
   ok=""
   for _ in 1 2 3 4 5 6; do
     sleep 2
-    grep -q "WORKING" "$DIR/$SESSION.events" 2>/dev/null && { ok=hook; break; }
+    grep -q " WORKING " "$DIR/$SESSION.events" 2>/dev/null && { ok=working; break; }
+    grep -q " LOADED hook_loaded" "$DIR/$SESSION.events" 2>/dev/null && { ok=loaded; break; }
     tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qiE "$BUSY_RE" && { ok=pane; break; }
   done
   case "$ok" in
-    hook) echo "hook: WORKING sentinel present — hook wired ✓ (Read this output line to confirm, then wait for the completion notification)" ;;
+    working) echo "hook: WORKING sentinel present — hook wired and turn started ✓ (Read this output line to confirm, then wait for the completion notification)" ;;
+    loaded) echo "hook: LOADED sentinel present — omp hook factory registered; turn has not started yet ✓ (watch will keep waiting)" ;;
     pane) echo "hook: no sentinel yet but pane is BUSY — agent working (codex emits WORKING on first tool call, needs hook trust). watch keeps waiting while the pane is busy; a silent sentinel on an idle pane exits 8 NO-HOOK." ;;
     *)    echo "hook: NO sentinel after 12s and pane not busy — hook not wired / goal not landed / agent slow. watch will exit 8 NO-HOOK if this persists ~2min; STOP and re-dispatch rather than wait."
           # Quota/auth outages fail the very first tool call and look exactly like this tier —

@@ -14,7 +14,12 @@ const hook = (await import(join(import.meta.dir, "..", "skills", "cto-orchestrat
 
 // Fake `pi`: capture (event -> cb) registrations.
 const reg: Record<string, () => void> = {};
-const pi = { on: (ev: string, cb: () => void) => { reg[ev] = cb; } };
+let emittedBeforeRegistrationCompleted = false;
+const eventsFile = join(dir, `${SESS}.events`);
+const pi = { on: (ev: string, cb: () => void) => {
+  if (existsSync(eventsFile)) emittedBeforeRegistrationCompleted = true;
+  reg[ev] = cb;
+} };
 hook(pi);
 
 let pass = 0, fail = 0;
@@ -27,9 +32,15 @@ const ok = (label: string, cond: boolean, detail = "") => {
 for (const ev of ["turn_start", "tool_call", "waiting", "turn_end", "idle"]) {
   ok(`registers ${ev}`, typeof reg[ev] === "function");
 }
+ok("does not emit before all registrations complete", !emittedBeforeRegistrationCompleted);
+
+// Factory completion proves wiring without claiming that a turn started or completed.
+const loadedLine = readFileSync(eventsFile, "utf8").trim();
+ok("factory immediately emits LOADED", loadedLine.split(" ")[1] === "LOADED", loadedLine);
+ok("LOADED detail is hook_loaded", loadedLine.endsWith(" LOADED hook_loaded"), loadedLine);
+ok("LOADED is not WORKING or DONE", !/ (WORKING|DONE) /.test(loadedLine), loadedLine);
 
 // Fire each, then assert the resulting last line's STATE.
-const eventsFile = join(dir, `${SESS}.events`);
 const lastState = (): string => {
   if (!existsSync(eventsFile)) return "<none>";
   const lines = readFileSync(eventsFile, "utf8").trim().split("\n");

@@ -28,4 +28,5 @@ export default function (pi: any): void {
 	pi.on("waiting", () => emit("WAITING", "waiting"));
 	pi.on("turn_end", () => emit("DONE", "turn_end"));
 	pi.on("idle", () => emit("DONE", "idle"));
+	emit("LOADED", "hook_loaded");
 }

@@ -132,6 +132,30 @@ chk_eq "goal path with spaces rc = NO-HOOK verdict" 8 "$rc"
 chk_contains "goal path with spaces delivered intact" "delivering goal via send: $goal" "$out"
 sandbox_clean
 
+# omp --goal with a completed factory but no turn event -> dedicated LOADED tier;
+# this is wiring proof only and must not be reported as WORKING.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'brief\n' > "$SANDBOX/brief.md"
+export FAKE_TMUX_EVENT_LINE="2026-01-01T00:00:00Z LOADED hook_loaded"
+pane_fixture '$'
+out="$(AGENT_WATCH_MAX_POLLS=2 bash "$DISPATCH" omp oglS "$SANDBOX/wt" --goal "$SANDBOX/brief.md" 2>&1)"; rc=$?
+chk_contains "omp goal loaded tier" "LOADED sentinel present" "$out"
+chk_contains "omp goal loaded says turn pending" "turn has not started yet" "$out"
+chk_not_contains "omp goal loaded is not working tier" "WORKING sentinel present" "$out"
+sandbox_clean
+
+# A lifecycle event after factory load remains the strongest dispatch tier.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'brief\n' > "$SANDBOX/brief.md"
+export FAKE_TMUX_EVENT_LINE="2026-01-01T00:00:00Z WORKING turn_start"
+pane_fixture '$'
+out="$(AGENT_WATCH_MAX_POLLS=2 bash "$DISPATCH" omp ogwS "$SANDBOX/wt" --goal "$SANDBOX/brief.md" 2>&1)"; rc=$?
+chk_contains "omp goal working tier" "WORKING sentinel present" "$out"
+chk_not_contains "omp goal working is not loaded tier" "LOADED sentinel present" "$out"
+sandbox_clean
+
 # codex --goal fused round-1: no sentinel (codex hook fires on first tool call) but pane busy
 # -> tier-2 message, NOT the false "STOP and re-dispatch" alarm; goal delivery lands via pane.
 sandbox_new

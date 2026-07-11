@@ -19,7 +19,10 @@ historical WAITING-as-DONE misjudgment lived in the scrape path — degraded gue
   A fixed literal, not `$TMPDIR`: tmux freezes its env, so `$TMPDIR` can differ between the pane and the
   orchestrator — sentinel written to one dir, watched in another).
   `<session>` = the tmux session name, passed to the agent process via env `AGENT_WATCH_SESSION` at launch.
-- **Line format**: `<ISO8601-UTC> <STATE> [detail]`, one per event. `STATE ∈ {WORKING, WAITING, DONE}`.
+- **Line format**: `<ISO8601-UTC> <STATE> [detail]`, one per event. `STATE ∈ {LOADED, WORKING, WAITING, DONE}`.
+- **omp load sentinel**: after its factory successfully registers every lifecycle callback it emits
+  `LOADED hook_loaded`. This proves module load + factory execution + registration only; it is not
+  WORKING or DONE, and `watch` keeps waiting for the first lifecycle event.
 - **Current state** = the LAST line's STATE. New turn → WORKING again; the watcher reacts to transitions.
 - **Shared emitter**: `emit.sh <STATE> [detail]` appends one line. Every per-agent hook calls ONLY this — state
   semantics live in one place; adapters just map their native events to a STATE.
@@ -36,7 +39,8 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 
 ## `watch` (the monitor)
 1. **Primary**: tail `$AGENT_WATCH_DIR/<session>.events`. Last STATE: `DONE`→exit 0, `WAITING`→exit 4,
-   `WORKING`→keep polling. Reacts to the agent's real lifecycle, no glyph heuristics.
+   `LOADED`/`WORKING`→keep polling (only WORKING enters hang/provider-stall heuristics). Reacts to the
+   agent's real lifecycle, no glyph heuristics.
 2. **Backstop (kept from v1)**: liveness guard — `pane_current_command` back to a shell ⇒ AGENT-DEAD (exit 2),
    for a hard crash where NO hook fires. Hang heuristic — STATE=WORKING + events file stale ~6min AND
    the screen is genuinely frozen (two captures ~3s apart identical) ⇒ exit 3. The frozen-screen

@@ -96,6 +96,20 @@ chk_eq "no-hook empty rc8" 8 "$WATCH_RC"
 chk_contains "no-hook empty marker" "NO-HOOK" "$WATCH_OUT"
 sandbox_clean
 
+# LOADED proves omp wiring but is not a lifecycle terminal or WORKING state: keep waiting
+# to the explicit bound, with no NO-HOOK/HANG/provider-stall classification.
+sandbox_new
+seed_events loaded-sess '2026-01-01T00:00:00Z LOADED hook_loaded\n'
+export FAKE_PANE_CMD="omp" AGENT_WATCH_MAX_POLLS=8
+pane_fixture "idle before first turn\n"
+run_watch loaded-sess
+chk_eq "loaded waits to timeout rc7" 7 "$WATCH_RC"
+chk_not_contains "loaded is not NO-HOOK" "NO-HOOK" "$WATCH_OUT"
+chk_not_contains "loaded is not WORKING hang" "SUSPECTED HANG" "$WATCH_OUT"
+chk_not_contains "loaded is not DONE" "DONE at" "$WATCH_OUT"
+unset AGENT_WATCH_MAX_POLLS
+sandbox_clean
+
 # BUSY pane keeps a silent sentinel alive (codex emits its first event on the first tool
 # call): must NOT fire exit 8 while working; bounded polling ends in exit 7 instead.
 sandbox_new

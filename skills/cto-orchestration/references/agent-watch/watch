@@ -155,6 +155,10 @@ while [ "$i" -le "$MAX_POLLS" ]; do
   empties=0; busywait=0
 
   case "$state" in
+    LOADED)
+      # omp factory completed all registrations, but no turn lifecycle event has fired.
+      # This proves wiring only: keep waiting without entering WORKING hang/stall logic.
+      idle=0; nodeliv=0 ;;
     WAITING)
       echo "=== [$SESSION] WAITING FOR INPUT at $(date '+%H:%M:%S') — $line ==="
       tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 4 ;;
