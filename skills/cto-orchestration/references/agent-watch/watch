@@ -49,6 +49,10 @@ DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 EVENTS="$DIR/$SESSION.events"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# Exec-lane session (headless twin) → delegate to its stateless watch; one `watch`
+# entrypoint serves both lanes (interface/impl split, lane detected by session state).
+[ -f "$DIR/$SESSION.exec.meta" ] && exec "$HERE/dispatch-exec" watch "$SESSION"
+
 echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ events=$EVENTS ==="
 
 # ── watchspec self-heal registry ──────────────────────────────────────────────

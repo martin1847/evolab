@@ -11,6 +11,20 @@
 set -uo pipefail
 HERE_EARLY="$(cd "$(dirname "$0")" && pwd)"
 RUN_EARLY="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
+
+# ── exec-lane switch (interface/impl split) ───────────────────────────────────
+# `dispatch` is the stable INTERFACE; `dispatch-exec` (headless lane) is an alternate
+# implementation. DISPATCH_EXEC=1 routes a LAUNCH to the exec lane with the identical
+# command surface. The switch matters only at launch: send (below) self-routes by
+# session state — an exec-lane session has $RUN/<s>.exec.meta — so later rounds follow
+# the session's own lane even if the env var is gone (no cross-lane drift).
+if [ "${DISPATCH_EXEC:-0}" = "1" ]; then
+  case "${1:-}" in omp|codex|claude) exec "$HERE_EARLY/dispatch-exec" "$@" ;; esac
+fi
+if [ "${1:-}" = "send" ] && [ -n "${2:-}" ] && [ -f "$RUN_EARLY/${2}.exec.meta" ]; then
+  exec "$HERE_EARLY/dispatch-exec" "$@"
+fi
+if [ "${1:-}" = "status" ]; then exec "$HERE_EARLY/dispatch-exec" "$@"; fi
 # Pane-busy regex shared by `send` landed() and the --goal verify loop: codex's hook emits
 # WORKING on PreToolUse (not turn start), so before its first tool call — or with hook untrusted —
 # the events sentinel is silent and the pane busy marker is the only honest "it's working" signal.

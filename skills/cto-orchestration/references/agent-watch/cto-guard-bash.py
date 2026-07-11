@@ -109,7 +109,9 @@ def main():
     #     documented path. Shell orchestrators that run watch synchronously BY DESIGN (codex/
     #     shell — README "run it synchronously and read the code") opt out explicitly by
     #     prefixing the command with AGENT_WATCH_SYNC=1.
-    if not ti.get("run_in_background") and "AGENT_WATCH_SYNC=1" not in cmd:
+    # DISPATCH_EXEC=1 routes the launch to the headless exec lane, which returns
+    # immediately (tmux supervisor detaches) — foreground is fine there.
+    if not ti.get("run_in_background") and "AGENT_WATCH_SYNC=1" not in cmd and "DISPATCH_EXEC=1" not in cmd:
         fused = re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)\b", cmd) and "--goal" in cmd
         # command-position only: `grep x …/agent-watch/watch` (path as an ARGUMENT) must not trip
         # this, and the interpreter itself must sit at command position too — `emit.sh <path>` let

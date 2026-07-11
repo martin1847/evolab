@@ -108,6 +108,7 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 | emit / watch | ✅ | hermetic 套件（scrape fallback 已于 2026-07-11 摘除，哑 hook → exit 8 NO-HOOK） |
 | deliverable 门（exit 6） | ✅ | hermetic 对抗测试 |
 | WATCH-TIMEOUT（exit 7）/ NO-HOOK（exit 8） | ✅ | hermetic 钉显式非零终态；均不得冒充 DONE |
+| headless 车道（dispatch-exec） | ◑ | claude/omp 双轮 live 绿（resume 同 session 续上下文）+ hermetic 全分支；未验：codex 腿 live（本机 exec 模型配置）、BLOCKED 真 fire、运行中插话 |
 | STALLED-EXTERNAL（exit 5）谓词 | ◑ | 离线 fixture 真/假例全过；**已知假阳**：agent 编辑错误处理代码/读 provider 日志时同 token 会命中——exit 5 是 advisory，先看屏尾再 kill。未 live 验：WORKING+N-poll 门与真 provider stall |
 
 - `dispatch` 仅在目标不存在时写 `.codex/hooks.json` / `.claude/settings.json`，并以 session ownership marker
@@ -237,23 +238,22 @@ matcher 别手编——它与脚本实现同包维护、发布门校验一致（
   （或 TS shell-out + 字段映射 `event.input.command`→stdin-JSON + `exit 2`→`{block:true}`）。浏览器提醒在 omp 最难：
   `tool_result` 只能改输出、不能给模型注入 context，要走单独 `context` 事件。
 
-## dispatch-exec（headless 双轨原型，2026-07-11 owner 拍板）
+## headless 车道（DISPATCH_EXEC=1，2026-07-11 起双轨）
 
-TUI 车道 1000+ 行复杂度同根于"驱动交互式 TUI、从屏幕/hook 反推状态"。exec 车道换根设定：
-**tmux 只当 supervisor**（编排者重启 worker 不死——tmux server 是独立守护进程），pane 里跑
-**headless 引擎**（`claude -p` / `codex exec` / `omp -p`）——无 trust 框、无 send-keys、无抓屏、
-**进程退出=终态、状态全在文件**（`<s>.exec.{meta,out,rc}` + round stamp），watch/status 无状态
-（被收割就再查一次文件，watchspec/rearm 整套自愈不需要）。steering = **resume 多轮**
-（`send` 子命令；claude `--resume <sid>` 须同 cwd、codex `exec resume <thread_id>`、omp `-r <session 文件>`
-经 `--session-dir` 钉死）。headless 问不了人 → goal 必须带存疑协议「存疑写 BLOCKED.md 退出」，
-新鲜 BLOCKED.md 映射 exit 4。typed 码同 watch 词汇（+10=RUNNING，仅 status 用）。
+**用法与 TUI 车道完全同面——只多一个开关**，其余命令原样不变：
 
-**验证状态**：claude/omp 双轮 live 冒烟绿（round-2 同 session_id 续上下文改同一文件）；hermetic
-20 断言（命令构造+全分类分支）。**未验**：codex 腿 live（本机 exec 默认模型配置坏：`gpt-5.6-sol`
-需更新 CLI，`-m` 透传可绕）；claude `--input-format stream-json` 运行中插话；omp `--mode=rpc` 能力面；
-BLOCKED 协议真任务 fire；权限白名单够用度（claude result 帧自带 `permission_denials` 可统计）。
-**坑两个**：codex exec 的 exit code 不可全信（turn.failed 事件可伴 rc=0，classify 已双查）；
-claude resume 按 cwd 项目域找 session，跨目录 resume 找不到。
+```bash
+DISPATCH_EXEC=1 dispatch <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>]
+dispatch send <session> -f <fixround.md>   # steering 照旧（自动识别车道，不用再带开关）
+watch <session>                            # 同一入口，自动代理
+teardown <session>                         # 连 headless 状态一起清
+```
+
+差异一句话：agent 以 headless 进程跑（tmux 只当 supervisor，编排者重启 worker 不死）——无 trust 框、
+无弹窗、无抓屏，进程退出=终态，watch 随时可杀可重跑。唯一新纪律：headless 问不了人，goal 里写上
+「存疑就写 BLOCKED.md 到 cwd 并停止」（watch 会报 WAITING）。
+
+实现机制、引擎级事实（resume 语义、退出码坑）见 `dispatch-exec` 脚本头注——使用者不需要。
 
 ## watchspec 自愈（宿主批量回收后台 watcher 的对策）
 

@@ -11,6 +11,12 @@ DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 tmux kill-session -t "$SESSION" 2>/dev/null && echo "killed tmux session $SESSION" || echo "no tmux session $SESSION"
 rm -f "$DIR/$SESSION.events" 2>/dev/null && echo "removed sentinel $DIR/$SESSION.events"
 rm -f "$DIR/$SESSION.watch-armed" 2>/dev/null || true
+# exec-lane state (headless twin): meta/out/rc/stamp/last + pinned omp session dir
+if [ -f "$DIR/$SESSION.exec.meta" ]; then
+  rm -f "$DIR/$SESSION".exec.* 2>/dev/null
+  rm -rf "$DIR/$SESSION.omp-sessions" 2>/dev/null
+  echo "removed exec-lane state $DIR/$SESSION.exec.*"
+fi
 OWNER="$DIR/$SESSION.hook-owner"
 if [ -f "$OWNER" ] && [ -z "$CWD" ]; then
   echo "kept hook ownership marker $OWNER (pass cwd to clean the session-created config)" >&2

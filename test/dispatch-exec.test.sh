@@ -126,4 +126,47 @@ chk_contains "resume cmd carries sid" "--resume sid-abc-123" "$(cat "$FAKE_TMUX_
 chk_eq "send truncates rc for new round" 0 "$([ -f "$WATCH_RUN_DIR/s1.exec.rc" ] && echo 1 || echo 0)"
 sandbox_clean
 
+echo "== interface routing (dispatch/watch/teardown are the stable surface) =="
+
+# DISPATCH_EXEC=1 routes a launch through `dispatch` to the exec lane, same command face.
+sandbox_new
+mkdir -p "$SANDBOX/wt"; printf 'go\n' > "$SANDBOX/goal.md"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/tmux-cmd"
+out="$(DISPATCH_EXEC=1 bash "$DISPATCH" claude ifS "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "switched launch rc0" 0 "$rc"
+chk_contains "switched launch routed to exec lane" "round 1 started" "$out"
+chk_not_contains "switched launch is not TUI" "dispatched claude" "$out"
+# default (no switch) stays TUI
+out="$(bash "$DISPATCH" claude ifT "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_contains "default launch stays TUI" "dispatched claude" "$out"
+# send self-routes by session state (exec.meta present), no switch needed
+printf 'sid=sid-xyz\n' >> "$WATCH_RUN_DIR/ifS.exec.meta"
+printf '0\n' > "$WATCH_RUN_DIR/ifS.exec.rc"; : > "$WATCH_RUN_DIR/ifS.exec.out"
+out="$(bash "$DISPATCH" send ifS -m 'round two' 2>&1)"; rc=$?
+chk_eq "send self-routes rc0" 0 "$rc"
+chk_contains "send self-routes to exec lane" "round 2 started" "$out"
+# watch delegates to the exec classify for exec-lane sessions
+# (send truncated rc; fake tmux has no session -> exec classify says AGENT-DEAD 2 —
+#  the point here is DELEGATION: the TUI watch would have said NO-HOOK 8 instead)
+out="$(bash "$WATCH" ifS 2>&1)"; rc=$?
+chk_eq "watch delegates typed exit" 2 "$rc"
+chk_contains "watch delegate speaks exec vocabulary" "AGENT-DEAD" "$out"
+sandbox_clean
+
+# watch delegation on a finished exec session -> DONE 0
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'engine=claude\ncwd=%s\nround=1\nargs=\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/wd.exec.meta"
+: > "$WATCH_RUN_DIR/wd.exec.round-started"
+printf '{"result":"ok","session_id":"s"}\n' > "$WATCH_RUN_DIR/wd.exec.out"
+printf '0\n' > "$WATCH_RUN_DIR/wd.exec.rc"
+out="$(bash "$WATCH" wd 2>&1)"; rc=$?
+chk_eq "watch delegate DONE rc0" 0 "$rc"
+chk_contains "watch delegate DONE marker" "DONE" "$out"
+# teardown cleans exec-lane state
+out="$(bash "$TEARDOWN" wd 2>&1)"; rc=$?
+chk_eq "teardown exec rc0" 0 "$rc"
+chk_eq "teardown removed exec state" 0 "$(ls "$WATCH_RUN_DIR"/wd.exec.* 2>/dev/null | wc -l | tr -d ' ')"
+sandbox_clean
+
 summary
