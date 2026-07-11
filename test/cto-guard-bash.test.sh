@@ -100,9 +100,11 @@ chk_eq "env-prefixed foreground watch denied" 2 "$RC"
 # explicit sync opt-out for shell orchestrators that run watch synchronously by design
 run 'AGENT_WATCH_SYNC=1 bash references/agent-watch/watch mysess; rc=$?'
 chk_eq "AGENT_WATCH_SYNC=1 foreground allowed" 0 "$RC"
-# exec-lane launch returns immediately -> foreground fine
+# exec-lane launch returns immediately -> foreground fine (inline prefix AND global env)
 run 'DISPATCH_EXEC=1 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
 chk_eq "DISPATCH_EXEC=1 foreground launch allowed" 0 "$RC"
+OUT="$(mkcmd 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' | DISPATCH_EXEC=1 python3 "$GUARD" 2>/dev/null)"; RC=$?
+chk_eq "global DISPATCH_EXEC env also allows foreground" 0 "$RC"
 # path as an ARGUMENT is not an invocation (self-inflicted false positives, 2026-07-11)
 run 'grep -n foo references/agent-watch/watch references/agent-watch/dispatch'
 chk_eq "watch path as grep arg allowed" 0 "$RC"
