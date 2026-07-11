@@ -189,6 +189,33 @@ chk_contains "resume cmd carries sid" "--resume sid-abc-123" "$(cat "$FAKE_TMUX_
 chk_eq "send truncates rc for new round" 0 "$([ -f "$WATCH_RUN_DIR/s1.exec.rc" ] && echo 1 || echo 0)"
 sandbox_clean
 
+# codex resume drops launch-only flags (-s/-C rejected by `exec resume`; self-caught when
+# codex's own re-review round died on argv) but keeps the rest.
+sandbox_new; mkdir -p "$SANDBOX/wt"
+printf 'engine=codex\ncwd=%s\nround=1\nargs=-s workspace-write --skip-git-repo-check\nsid=tid-1\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/cs.exec.meta"
+: > "$WATCH_RUN_DIR/cs.exec.round-started"; : > "$WATCH_RUN_DIR/cs.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/cs.exec.rc"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/tc-resume"
+bash "$DEXEC" send cs -m 'closure' >/dev/null 2>&1
+cmd="$(cat "$FAKE_TMUX_CMD_FILE")"
+chk_contains "codex resume uses thread id" "codex exec resume tid-1" "$cmd"
+chk_not_contains "codex resume drops -s" " -s " "$cmd"
+chk_not_contains "codex resume drops sandbox value" "workspace-write" "$cmd"
+chk_contains "codex resume keeps compatible flags" "--skip-git-repo-check" "$cmd"
+sandbox_clean
+
+# classify reads the CURRENT round only: error tokens quoted in an EARLIER round's output
+# (a review discussing quota detection!) must not flip a plain failure into exit 5.
+sandbox_new; mkdir -p "$SANDBOX/wt"
+printf 'engine=claude\ncwd=%s\nround=2\nargs=\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/xr.exec.meta"
+: > "$WATCH_RUN_DIR/xr.exec.round-started"
+{ printf '── round 1 @ x ──\nreview prose quoting insufficient_quota and No API key\n'
+  printf '── round 2 @ x ──\nerror: unexpected argument\n'; } > "$WATCH_RUN_DIR/xr.exec.out"
+printf '2\n' > "$WATCH_RUN_DIR/xr.exec.rc"
+out="$(bash "$DEXEC" status xr 2>&1)"; rc=$?
+chk_eq "old-round quota prose does not misclassify rc2" 2 "$rc"
+chk_contains "plain FAILED marker" "FAILED" "$out"
+sandbox_clean
+
 echo "== interface routing (dispatch/watch/teardown are the stable surface) =="
 
 # DISPATCH_EXEC=1 routes a launch through `dispatch` to the exec lane, same command face.

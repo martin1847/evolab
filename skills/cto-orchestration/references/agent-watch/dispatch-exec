@@ -24,6 +24,10 @@ DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.exec.meta" 2>/dev/null | head -1; }
 q() { printf %q "$1"; }
+# Output of the CURRENT round only — the out file accumulates rounds, and grepping the
+# whole file misclassified round 2 by matching error tokens QUOTED in round 1's review
+# prose (self-caught 2026-07-11).
+last_round() { awk '/^── round [0-9]+ @/{buf=""; next} {buf=buf $0 RS} END{printf "%s", buf}' "$DIR/$1.exec.out" 2>/dev/null; }
 
 # ── build the engine command for a round; echoes the shell string the pane runs ──
 # $1 engine  $2 session  $3 cwd  $4 prompt-file  $5 sid ("" = round 1)  $6 extra args (pre-quoted)
@@ -36,7 +40,18 @@ engine_cmd() {
       else echo "claude -p --resume $(q "$sid") \"\$(cat $(q "$f"))\" --output-format json $extra"; fi ;;
     codex)
       if [ -z "$sid" ]; then echo "codex exec --json --skip-git-repo-check -C $(q "$cwd") -o $(q "$lastf") $extra - < $(q "$f")"
-      else echo "codex exec resume $(q "$sid") --json -o $(q "$lastf") $extra - < $(q "$f")"; fi ;;
+      else
+        # `codex exec resume` rejects -s/--sandbox/-C (the resumed session keeps its
+        # original cwd/sandbox) — passing launch args verbatim killed round 2 on argv
+        # (self-caught: codex's own re-review round, 2026-07-11). Strip them; keep the rest.
+        local filtered="" skip=0 a
+        eval "set -- $extra"
+        for a in "$@"; do
+          if [ "$skip" = 1 ]; then skip=0; continue; fi
+          case "$a" in -s|--sandbox|-C|--cd) skip=1 ;; *) filtered="${filtered}${filtered:+ }$(q "$a")" ;; esac
+        done
+        echo "codex exec resume $(q "$sid") --json -o $(q "$lastf") $filtered - < $(q "$f")"
+      fi ;;
     omp)
       if [ -z "$sid" ]; then echo "omp -p \"\$(cat $(q "$f"))\" --mode=json --session-dir $(q "$sdir") $extra"
       else echo "omp -p -r $(q "$sid") \"\$(cat $(q "$f"))\" --mode=json --session-dir $(q "$sdir") $extra"; fi ;;
@@ -101,11 +116,11 @@ classify() { # $1 session
   if [ -f "$cwd/BLOCKED.md" ] && ! [ "$cwd/BLOCKED.md" -ot "$stamp" ]; then
     echo "WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via send"; return 4
   fi
-  if grep -qiE 'insufficient_quota|invalid_api_key|No API key|credit balance' "$DIR/$s.exec.out" 2>/dev/null && [ "$rc" != 0 ]; then
+  if [ "$rc" != 0 ] && last_round "$s" | grep -qiE 'insufficient_quota|invalid_api_key|No API key|credit balance'; then
     echo "STALLED-EXTERNAL: backend quota/auth error (rc=$rc) — fix credentials, then send to retry"; return 5
   fi
   # codex exit code unverified as truth: a failed turn can still exit 0 → check events too.
-  if [ "$rc" != 0 ] || tail -5 "$DIR/$s.exec.out" 2>/dev/null | grep -q '"type":"turn.failed"'; then
+  if [ "$rc" != 0 ] || last_round "$s" | tail -5 | grep -q '"type":"turn.failed"'; then
     echo "FAILED: engine rc=$rc (or turn.failed event) — read $DIR/$s.exec.out tail"; return 2
   fi
   if [ -n "$deliv" ]; then
