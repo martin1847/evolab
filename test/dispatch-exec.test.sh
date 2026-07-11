@@ -54,6 +54,32 @@ chk_contains "omp engine cmd" "omp -p" "$cmd"
 chk_contains "omp pinned session dir" "--session-dir" "$cmd"
 sandbox_clean
 
+# tmux new-session FAILURE must not report success nor leave round-1 meta (codex review:
+# unchecked launch printed "round 1 started", orphaned meta, destroyed the previous rc).
+sandbox_new
+mkdir -p "$SANDBOX/wt"; printf 'go\n' > "$SANDBOX/goal.md"
+export FAKE_TMUX_NEWSESSION_FAIL=1
+out="$(bash "$DEXEC" claude exNsf "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "new-session failure rc1" 1 "$rc"
+chk_contains "new-session failure named" "new-session failed" "$out"
+chk_not_contains "no false round-started" "round 1 started" "$out"
+chk_eq "no orphan meta on launch failure" 0 "$([ -f "$WATCH_RUN_DIR/exNsf.exec.meta" ] && echo 1 || echo 0)"
+unset FAKE_TMUX_NEWSESSION_FAIL
+sandbox_clean
+
+# sid UPDATE rewrites the meta line cleanly (codex review: sed replacement corrupted
+# omp path-sids containing & / |) — exactly one sid line, new value wins.
+sandbox_new; mkdir -p "$SANDBOX/wt"
+printf 'engine=claude\ncwd=%s\nround=1\nargs=\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/r8.exec.meta"
+: > "$WATCH_RUN_DIR/r8.exec.round-started"
+printf 'sid=old-sid\n' >> "$WATCH_RUN_DIR/r8.exec.meta"
+printf '{"result":"ok","session_id":"new&weird|sid"}\n' > "$WATCH_RUN_DIR/r8.exec.out"
+printf '0\n' > "$WATCH_RUN_DIR/r8.exec.rc"
+bash "$DEXEC" status r8 >/dev/null 2>&1
+chk_eq "sid updated to new value" 'new&weird|sid' "$(sed -n 's/^sid=//p' "$WATCH_RUN_DIR/r8.exec.meta")"
+chk_eq "exactly one sid line" 1 "$(grep -c '^sid=' "$WATCH_RUN_DIR/r8.exec.meta")"
+sandbox_clean
+
 # P1 regression (independent review 2026-07-11): launching onto a name held by a LIVE
 # (TUI) tmux session must fail WITHOUT leaving exec.meta — an orphan meta permanently
 # self-routes that session's send/watch/teardown into the exec lane.

@@ -151,6 +151,44 @@ chk_contains "stale deliverable marker" "IDLE-NO-DELIVERABLE" "$WATCH_OUT"
 unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
 sandbox_clean
 
+# persisted gate (codex review): env absent but dispatch wrote <s>.deliverable — a bare
+# re-arm (gap-detect prints no env) must NOT degrade to ungated; stale file -> exit 6.
+sandbox_new
+seed_events deliv-persist '2026-01-01T00:00:00Z WORKING t0\n2026-01-01T00:00:01Z DONE t1\n'
+export FAKE_PANE_CMD="omp"; pane_fixture "boundary done\n"
+mkdir -p "$SANDBOX/out"; touch -t 202601010000 "$SANDBOX/out/old.md"
+printf '%s\n' "$SANDBOX/out/*.md" > "$WATCH_RUN_DIR/deliv-persist.deliverable"
+export AGENT_WATCH_NODELIV_POLLS=1
+run_watch deliv-persist
+chk_eq "persisted gate holds without env rc6" 6 "$WATCH_RC"
+unset AGENT_WATCH_NODELIV_POLLS
+sandbox_clean
+
+# same-mtime deliverable opens the gate (codex review: -nt strictness rejected an
+# equal-timestamp valid deliverable; now >= stamp).
+sandbox_new
+seed_events deliv-same '2026-01-01T00:00:00Z WORKING t0\n2026-01-01T00:00:01Z DONE t1\n'
+export FAKE_PANE_CMD="omp"; pane_fixture "done\n"
+touch -t 202601011200 "$WATCH_RUN_DIR/deliv-same.watch-armed"
+mkdir -p "$SANDBOX/out"; touch -t 202601011200 "$SANDBOX/out/report.md"
+export AGENT_WATCH_DELIVERABLE="$SANDBOX/out/*.md" AGENT_WATCH_NODELIV_POLLS=1
+run_watch deliv-same
+chk_eq "same-mtime deliverable rc0" 0 "$WATCH_RC"
+unset AGENT_WATCH_DELIVERABLE AGENT_WATCH_NODELIV_POLLS
+sandbox_clean
+
+# busy-chrome residue must not defer NO-HOOK forever (codex review: an idle prompt with a
+# leftover "Running …" line re-armed the busy tier every poll → ~87min to exit 7). Busy
+# with a silent sentinel is bounded ~30 polls -> exit 8.
+sandbox_new
+: > "$WATCH_RUN_DIR/residue-sess.events"
+export FAKE_PANE_CMD="codex"
+pane_fixture "Running tests completed successfully\n\$ \n"
+run_watch residue-sess
+chk_eq "busy-residue bounded rc8" 8 "$WATCH_RC"
+chk_contains "busy-residue marker" "pane looks busy but sentinel silent" "$WATCH_OUT"
+sandbox_clean
+
 # exit 7 WATCH-TIMEOUT: bounded polling exhausted while the agent remains alive/non-terminal.
 sandbox_new
 seed_events timeout-sess '2026-01-01T00:00:00Z UNKNOWN still-active\n'

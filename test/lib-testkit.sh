@@ -113,6 +113,7 @@ case "$sub" in
     if [ "${FAKE_TMUX_HASSESSION:-1}" = "0" ]; then exit 0; else exit 1; fi
     ;;
   new-session)
+    [ "${FAKE_TMUX_NEWSESSION_FAIL:-0}" = "1" ] && exit 42
     [ -n "${FAKE_TMUX_CMD_FILE:-}" ] && printf '%s\n' "${!#}" > "$FAKE_TMUX_CMD_FILE"
     [ -n "${FAKE_TMUX_DELIV_FILE:-}" ] && printf '%s\n' "${AGENT_WATCH_DELIVERABLE:-}" > "$FAKE_TMUX_DELIV_FILE"
     exit 0
@@ -136,7 +137,7 @@ sandbox_clean() {
   export PATH="${OLD_PATH:-$PATH}"
   [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"
   unset SANDBOX WATCH_RUN_DIR BIN AGENT_WATCH_DIR
-  unset FAKE_TMUX_DISPLAY_FAIL FAKE_TMUX_CAPTURE_FAIL FAKE_PANE_CMD FAKE_PANE_FILE FAKE_TMUX_HASSESSION
+  unset FAKE_TMUX_DISPLAY_FAIL FAKE_TMUX_CAPTURE_FAIL FAKE_PANE_CMD FAKE_PANE_FILE FAKE_TMUX_HASSESSION FAKE_TMUX_NEWSESSION_FAIL
   unset FAKE_TMUX_CMD_FILE FAKE_TMUX_DELIV_FILE
 }
 

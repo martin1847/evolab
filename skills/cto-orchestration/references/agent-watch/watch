@@ -84,22 +84,29 @@ SPEC_ENV=""
 trap 'rm -f "$SPEC" "$STAMP"' EXIT
 
 DELIVERABLE="${AGENT_WATCH_DELIVERABLE:-}"
+# Env absent (bare re-arm from gap-detect: natural exit removed the watchspec that carried
+# it) → fall back to the per-session persisted gate written by dispatch. Without this, a
+# rearm'd watcher silently degraded to ungated and a turn-boundary DONE passed as real
+# (codex independent review 2026-07-11).
+[ -z "$DELIVERABLE" ] && [ -f "$DIR/$SESSION.deliverable" ] && DELIVERABLE="$(cat "$DIR/$SESSION.deliverable")"
 NODELIV_MAX="${AGENT_WATCH_NODELIV_POLLS:-15}"
 POLL="${AGENT_WATCH_POLL_SECS:-20}"
 MAX_POLLS="${AGENT_WATCH_MAX_POLLS:-260}"
-# No gate configured => always ok; else require >=1 glob match NEWER than the arm stamp
-# (freshness, see STAMP above — a leftover file from a previous round must not open the gate).
+# No gate configured => always ok; else require >=1 glob match AT OR AFTER the arm stamp
+# (freshness, see STAMP above — a leftover file from a previous round must not open the
+# gate). `! -ot`, not `-nt`: strict-newer has second granularity, so a same-second valid
+# deliverable was rejected (codex independent review 2026-07-11; parity with exec lane).
 deliverable_ok() {
   [ -z "$DELIVERABLE" ] && return 0
   local f
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    [ "$f" -nt "$STAMP" ] && return 0
+    ! [ "$f" -ot "$STAMP" ] && return 0
   done < <(compgen -G "$DELIVERABLE" 2>/dev/null)
   return 1
 }
 
-idle=0; lastline=""; stalls=0; exterr=0; empties=0; nodeliv=0
+idle=0; lastline=""; stalls=0; exterr=0; empties=0; nodeliv=0; busywait=0
 i=1
 while [ "$i" -le "$MAX_POLLS" ]; do
   sleep "$POLL"
@@ -123,8 +130,16 @@ while [ "$i" -le "$MAX_POLLS" ]; do
   # (the removed scrape fallback was the suite's biggest misjudgment source — WAITING
   # mis-read as DONE dispatched a still-waiting agent to review).
   if [ -z "$line" ]; then
+    # Busy-chrome residue can keep this alive forever: an idle prompt with a leftover line
+    # like "Running tests…" matches BUSY_RE every poll, deferring NO-HOOK to the ~87min
+    # MAX_POLLS timeout (codex independent review 2026-07-11). Busy defers — but bounded:
+    # a hook that has emitted NOTHING in ~10min of "busy" is definitively not delivering.
     if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qiE "$BUSY_RE"; then
-      empties=0
+      empties=0; busywait=$((busywait+1))
+      if [ "$busywait" -ge 30 ]; then
+        echo "=== [$SESSION] NO-HOOK at $(date '+%H:%M:%S') — pane looks busy but sentinel silent ~10min; hook not delivering (or busy-chrome residue on an idle prompt). Verify manually or re-dispatch. ==="
+        tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 8
+      fi
     else
       empties=$((empties+1))
       if [ "$empties" -ge 6 ]; then
@@ -137,7 +152,7 @@ while [ "$i" -le "$MAX_POLLS" ]; do
     i=$((i+1))
     continue
   fi
-  empties=0
+  empties=0; busywait=0
 
   case "$state" in
     WAITING)

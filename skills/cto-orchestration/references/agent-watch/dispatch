@@ -48,6 +48,12 @@ if [ "${1:-}" = "send" ]; then
     *) echo "usage: dispatch send <session> -m <text> | -f <file>" >&2; exit 1;;
   esac
   [ -e "$file" ] || { echo "instruction file not found: $file" >&2; exit 1; }
+  # Rotate the deliverable freshness epoch at DELIVERY time, before anything is sent: a
+  # send IS a new round. Stamping at watch-arm time instead loses both directions — a fast
+  # agent's file lands before a late-arming fused watch (false exit 6), and a rearm'd
+  # watcher after SIGKILL measures round N against round N-1's stamp (false DONE).
+  # (codex independent review 2026-07-11; watch keeps create-if-absent for mid-round rearm.)
+  : > "$RUN_EARLY/$sess.watch-armed" 2>/dev/null || true
   ev="$RUN_EARLY/$sess.events"; before="$(wc -l < "$ev" 2>/dev/null || echo 0)"
   deliver() {
     tmux send-keys -t "$sess" Escape 2>/dev/null || true; sleep 0.6
@@ -101,6 +107,9 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 [ -n "$DELIV" ] && export AGENT_WATCH_DELIVERABLE="$DELIV"
+# The gate also PERSISTS per session (written below after DIR exists): env only lives in
+# the watchspec, so a natural-exit + new-round rearm (gap-detect prints a bare `watch
+# <sess>`) silently dropped the gate → false DONE (codex independent review 2026-07-11).
 # validate BEFORE launching — failing after new-session would leak an orphan session
 if [ -n "$GOAL" ] && [ ! -e "$GOAL" ]; then echo "ERR: --goal file not found: $GOAL" >&2; exit 1; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -122,11 +131,19 @@ ENVP="AGENT_WATCH_SESSION=$(quote_args "$SESSION") AGENT_WATCH_DIR=$(quote_args 
 CWD="$(cd "$CWD" && pwd -P)"
 mkdir -p "$DIR" 2>/dev/null || true
 if tmux has-session -t "$SESSION" 2>/dev/null; then echo "ERR: tmux session '$SESSION' already exists" >&2; exit 1; fi
+# Retained exec-lane state hijacks a same-name TUI session: send/watch/teardown self-route
+# by exec.meta presence, so a TUI reusing the name would lose its controls to the dead
+# exec session (codex independent review 2026-07-11).
+if [ -f "$DIR/$SESSION.exec.meta" ]; then
+  echo "ERR: '$SESSION' has exec-lane state ($DIR/$SESSION.exec.meta) — teardown it or pick a new name" >&2; exit 1
+fi
 OWNER="$DIR/$SESSION.hook-owner"
 rm -f "$OWNER" 2>/dev/null || true
 : > "$DIR/$SESSION.events" 2>/dev/null || true                                  # fresh sentinel per dispatch
 rm -f "$DIR/$SESSION.watch-armed" 2>/dev/null || true                           # stale arm stamp would poison the deliverable freshness gate
-find "$DIR" -maxdepth 1 \( -name '*.events' -o -name '*.watch-armed' \) -mtime +7 -delete 2>/dev/null || true  # age-purge stale files
+if [ -n "$DELIV" ]; then printf '%s\n' "$DELIV" > "$DIR/$SESSION.deliverable"   # persist the gate (see note above)
+else rm -f "$DIR/$SESSION.deliverable" 2>/dev/null || true; fi
+find "$DIR" -maxdepth 1 \( -name '*.events' -o -name '*.watch-armed' -o -name '*.deliverable' \) -mtime +7 -delete 2>/dev/null || true  # age-purge stale files
 
 # Drop a per-agent hook config without clobbering an existing one.
 # $1 = target config path, $2 = template filename under hooks/, $3 = owner kind

@@ -57,7 +57,14 @@ start_round() {
     || sed -i "s/^round=.*/round=$round/" "$DIR/$s.exec.meta"
   cmd="$(engine_cmd "$eng" "$s" "$cwd" "$f" "$sid" "$extra")"
   printf '── round %s @ %s ──\n' "$round" "$(date '+%F %T')" >> "$DIR/$s.exec.out"
-  tmux new-session -d -s "$s" -c "$cwd" "$cmd >> $(q "$DIR/$s.exec.out") 2>&1; echo \$? > $(q "$DIR/$s.exec.rc")"
+  # Check the launch itself: no `set -e` here, so an unchecked failure printed success,
+  # left round-1 meta behind (permanent lane hijack), and destroyed the previous round's
+  # rc (codex independent review 2026-07-11).
+  if ! tmux new-session -d -s "$s" -c "$cwd" "$cmd >> $(q "$DIR/$s.exec.out") 2>&1; echo \$? > $(q "$DIR/$s.exec.rc")"; then
+    echo "ERR: tmux new-session failed for '$s' (round $round not started)" >&2
+    [ "$round" = 1 ] && rm -f "$DIR/$s.exec.meta"
+    exit 1
+  fi
   echo "round $round started: $eng → tmux '$s' (supervisor only; engine is headless)"
   echo "out: $DIR/$s.exec.out   rc-on-exit: $DIR/$s.exec.rc"
 }
@@ -72,9 +79,11 @@ harvest_sid() { # $1 session
     omp)    sid="$(ls -t "$DIR/$s.omp-sessions"/*.jsonl 2>/dev/null | head -1)" ;;
   esac
   [ -n "$sid" ] || return 0
-  grep -q '^sid=' "$DIR/$s.exec.meta" 2>/dev/null \
-    && { sed -i '' "s|^sid=.*|sid=$sid|" "$DIR/$s.exec.meta" 2>/dev/null || sed -i "s|^sid=.*|sid=$sid|" "$DIR/$s.exec.meta"; } \
-    || printf 'sid=%s\n' "$sid" >> "$DIR/$s.exec.meta"
+  # Rewrite, don't sed-substitute: omp sids are PATHS and legal `&`/`|` in them are sed
+  # replacement metacharacters — a second harvest corrupted the stored sid (codex
+  # independent review 2026-07-11).
+  { grep -v '^sid=' "$DIR/$s.exec.meta" 2>/dev/null; printf 'sid=%s\n' "$sid"; } > "$DIR/$s.exec.meta.tmp" \
+    && mv "$DIR/$s.exec.meta.tmp" "$DIR/$s.exec.meta"
 }
 
 # ── classify a session's state; prints one line, returns the typed code ──

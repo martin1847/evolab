@@ -190,6 +190,32 @@ chk_eq "teardown after existing codex config rc0" 0 "$rc"
 chk_eq "teardown preserves existing codex config" '{"existing":true}' "$(cat "$SANDBOX/wt/.codex/hooks.json")"
 sandbox_clean
 
+# send rotates the freshness epoch at delivery time (codex review: late watch-arm stamp
+# missed fast deliverables; SIGKILL+next-round rearm measured against the OLD epoch).
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+touch -t 202601010000 "$WATCH_RUN_DIR/rot.watch-armed" "$SANDBOX/ref"
+seed_events rot 'x WORKING t0\n'
+pane_fixture "▌ Working (3s · esc to interrupt)"
+out="$(bash "$DISPATCH" send rot -m 'next round' 2>&1)"; rc=$?
+chk_eq "send rc0" 0 "$rc"
+chk_eq "send rotates arm stamp" 1 "$([ "$WATCH_RUN_DIR/rot.watch-armed" -nt "$SANDBOX/ref" ] && echo 1 || echo 0)"
+sandbox_clean
+
+# --deliverable persists per session; launch without it clears a stale one; retained
+# exec-lane meta blocks a same-name TUI launch (codex review: lane hijack).
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+bash "$DISPATCH" omp pers "$SANDBOX/wt" --deliverable "$SANDBOX/wt/*.md" >/dev/null 2>&1
+chk_eq "deliverable persisted" "$SANDBOX/wt/*.md" "$(cat "$WATCH_RUN_DIR/pers.deliverable" 2>/dev/null)"
+bash "$TEARDOWN" pers >/dev/null 2>&1
+chk_eq "teardown removes persisted gate" 0 "$([ -f "$WATCH_RUN_DIR/pers.deliverable" ] && echo 1 || echo 0)"
+printf 'engine=claude\n' > "$WATCH_RUN_DIR/hijack.exec.meta"
+out="$(bash "$DISPATCH" omp hijack "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_eq "TUI launch onto exec-lane name rc1" 1 "$rc"
+chk_contains "TUI launch names the exec state" "exec-lane state" "$out"
+sandbox_clean
+
 echo "== teardown =="
 
 # teardown removes a Codex config created by this dispatch session.
