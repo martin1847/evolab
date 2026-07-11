@@ -39,7 +39,7 @@ engine_cmd() {
       if [ -z "$sid" ]; then echo "claude -p \"\$(cat $(q "$f"))\" --output-format json $extra"
       else echo "claude -p --resume $(q "$sid") \"\$(cat $(q "$f"))\" --output-format json $extra"; fi ;;
     codex)
-      if [ -z "$sid" ]; then echo "codex exec --json --skip-git-repo-check -C $(q "$cwd") -o $(q "$lastf") $extra - < $(q "$f")"
+      if [ -z "$sid" ]; then echo "codex exec --dangerously-bypass-hook-trust --json --skip-git-repo-check -C $(q "$cwd") -o $(q "$lastf") $extra - < $(q "$f")"
       else
         # `codex exec resume` rejects -s/--sandbox/-C (the resumed session keeps its
         # original cwd/sandbox) — passing launch args verbatim killed round 2 on argv
@@ -50,7 +50,7 @@ engine_cmd() {
           if [ "$skip" = 1 ]; then skip=0; continue; fi
           case "$a" in -s|--sandbox|-C|--cd) skip=1 ;; *) filtered="${filtered}${filtered:+ }$(q "$a")" ;; esac
         done
-        echo "codex exec resume $(q "$sid") --json -o $(q "$lastf") $filtered - < $(q "$f")"
+        echo "codex exec resume $(q "$sid") --dangerously-bypass-hook-trust --json -o $(q "$lastf") $filtered - < $(q "$f")"
       fi ;;
     omp)
       if [ -z "$sid" ]; then echo "omp -p \"\$(cat $(q "$f"))\" --mode=json --session-dir $(q "$sdir") $extra"

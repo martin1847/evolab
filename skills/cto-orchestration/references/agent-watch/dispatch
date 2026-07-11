@@ -171,7 +171,12 @@ case "$AGENT" in
     if EX=$(git -C "$CWD" rev-parse --git-path info/exclude 2>/dev/null); then
       grep -qxF '.codex/' "$EX" 2>/dev/null || printf '.codex/\n' >> "$EX"
     fi
-    CMD="$ENVP $(quote_args codex ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"})" ;;
+    # --dangerously-bypass-hook-trust: WE author the hooks.json this same run (vetted source,
+    # the flag's documented intended use). Without it a FRESH cwd (worktree) has no persisted
+    # hook trust in ~/.codex/config.toml → codex silently disables the whole file → zero emits
+    # → every watch on the session exits 8 NO-HOOK (caught live 2026-07-11: events file
+    # 0 bytes across two full review rounds — README promised this flag, launch line lacked it).
+    CMD="$ENVP $(quote_args codex --dangerously-bypass-hook-trust ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"})" ;;
   claude)
     install_cfg "$CWD/.claude/settings.json" claude-hooks.json claude
     CMD="$ENVP $(quote_args claude ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"})" ;;
