@@ -94,12 +94,40 @@ patterns (Pydantic, Go validators, Jakarta Validation, Serde plus validation) li
 Legacy adoption MUST be monotonic:
 
 - New/changed code meets the full profile immediately.
-- A baseline, exclude, or allowlist has an owner and a shrinking acceptance metric; it MUST NOT grow
-  merely to make CI green.
+- A baseline, exclude, or allowlist has an owner and a shrinking acceptance metric. Model committed
+  debt as a structured finding multiset `B`, not as a fungible total. The hold gate requires
+  `F_current ⊆ B` and MUST reject otherwise. A total-count-only comparison is non-conformant because
+  an improvement in one file/rule could hide a regression in another. The baseline schema MUST use
+  stable per-finding fingerprints, preserve multiplicity, and distinguish a removed finding from a
+  new finding for the same file/rule; `(file, rule)` alone is not a sufficient identity.
+- **Improvement is part of the ratchet contract, not spare capacity.** At one repository-declared
+  canonical measurement point (normally post-merge CI), only a proven proper subset
+  `F_canonical ⊂ B` is a closeable reduction; substituted findings are a hold failure, not an
+  improvement. The close job MUST durably land an auditable baseline-only update before that
+  baseline generation may admit another debt-bearing integration.
+- The hard layer MUST atomically fence integration admission when it observes a closeable reduction.
+  It may serialize a merge queue, or bind authorization to a baseline generation plus a close-pending
+  state and compare-and-swap it immediately before integration. A stale authorization or lost race
+  re-runs the hold measurement from the new HEAD; it MUST NOT overwrite a newer baseline.
+- `check` remains non-mutating (§2). Local and PR hold gates MUST NOT rewrite baselines. The canonical
+  close job owns refresh, writes only a reduction, touches no source, and MUST avoid self-trigger loops.
+- The baseline artifact MUST pin the tool version, configuration digest, measurement scope, and
+  canonical environment/lifecycle point. A tool/config mismatch requires an explicit reviewed
+  migration and MUST NOT silently relock.
+- Before closing downward, the job MUST prove a complete successful measurement (including a stable
+  analyzed-target/file count or an equivalent sanity floor). Tool crashes, partial reports, or a
+  suspicious coverage drop fail closed and MUST NOT shrink the baseline.
+- A baseline MUST NOT grow merely to make CI green. Any exceptional increase is a separate reviewed
+  governance decision, never an automatic writer path.
 - Python uses strict-path or baseline ratchets rather than a permanent weaker global mode.
 - Java/Go/Rust lint suppressions are narrow and justified at the finding site; no repository-wide
   warning disable without an ADR.
 - No gate command uses `|| true`, soft-fail, or an unbounded retry.
+
+Ownership follows the two-layer boundary: this file owns ratchet semantics; the reusable close engine
+and post-merge workflow belong to the delivery/IaC hard layer. Repository bootstrap MAY emit a thin
+intent declaration plus a pinned reusable-workflow reference only after that engine exists; it MUST
+NOT copy the engine into every repository.
 
 ## §5 Hook and failure contract
 
