@@ -14,6 +14,8 @@ rm -f "$DIR/$SESSION.watch-armed" "$DIR/$SESSION.deliverable" 2>/dev/null || tru
 # exec-lane state (headless twin): meta/out/rc/stamp/last + pinned omp session dir
 if [ -f "$DIR/$SESSION.exec.meta" ]; then
   rm -f "$DIR/$SESSION".exec.* 2>/dev/null
+  rm -f "$DIR/$SESSION.exec.lock" "$DIR/$SESSION".exec.lock-owner-* 2>/dev/null
+  rm -rf "$DIR/$SESSION.exec.lock-reap" 2>/dev/null
   rm -rf "$DIR/$SESSION.omp-sessions" 2>/dev/null
   echo "removed exec-lane state $DIR/$SESSION.exec.*"
 fi

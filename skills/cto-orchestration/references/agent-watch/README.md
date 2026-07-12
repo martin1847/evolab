@@ -156,8 +156,8 @@ references/agent-watch/dispatch send <session> -f <fixround.md>   # 确认环收
 （历史实证：裸起 session 靠抓屏猜状态，误报 DONE + 漏 WAITING、卡 21min 零 ping——正因此 2026-07-11 摘除
 抓屏 fallback，哑 hook 一律 exit 8 NO-HOOK，绝不带病监控）。
 
-**派发后、动手前先过理解门**：第一轮要 agent 复述"这改动碰哪些文件/契约、有哪些风险"，核对无误再放行；
-弱答/跑偏当场纠正，别把沉默当默许。一句复述挡掉大半"误解 goal 就埋头改"。
+**理解门按 lane**：TUI 第一轮复述"碰哪些文件/契约、有哪些风险"后等放行；headless 由 runtime footer
+要求简短复述后直接开工、不等待，真阻塞写 cwd 的 `BLOCKED.md` 并停止。
 
 ### typed 状态（编排者纪律）
 
@@ -253,9 +253,10 @@ watch <session>                            # 同一入口，自动代理
 teardown <session>                         # 连 headless 状态一起清
 ```
 
-差异一句话：agent 以 headless 进程跑（tmux 只当 supervisor，编排者重启 worker 不死）——无 trust 框、
-无弹窗、无抓屏，进程退出=终态，watch 随时可杀可重跑。唯一新纪律：headless 问不了人，goal 里写上
-「存疑就写 BLOCKED.md 到 cwd 并停止」（watch 会报 WAITING）。
+- 终态只读 `dispatch status <session>` / `watch <session>` 的 typed status；不要直接读取 `.exec.rc`。
+- `DONE` 只表示本轮结束；需要下一轮时继续 `dispatch send` resume 同一会话。
+- exit 6 `IDLE-NO-DELIVERABLE` 用 `dispatch send` 补一轮，不要 teardown；`teardown` 只用于收工或明确放弃。
+- 文件产出必须带 `--deliverable <glob>`；非文件结果不得带，不设该门。
 
 实现机制、引擎级事实（resume 语义、退出码坑）见 `dispatch-exec` 脚本头注——使用者不需要。
 

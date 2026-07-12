@@ -17,6 +17,39 @@ echo "== agent-mail agent-bus =="
 
 chk_eq "agent-bus is executable" 1 "$([ -x "$BUSBIN" ] && echo 1 || echo 0)"
 
+# Shipped hooks.json is the canonical three-entry wiring contract; exact shapes prevent
+# an onboarding consumer from silently omitting incremental delivery or the write guard.
+HOOKS="../skills/agent-mail/hooks.json"
+hook_contract="$(python3 - "$HOOKS" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+assert set(d) == {"//", "SessionStart", "UserPromptSubmit", "PreToolUse"}
+assert d["SessionStart"] == [{"command": "mail-check.py"}]
+assert d["UserPromptSubmit"] == [{"command": "mail-check.py"}]
+assert d["PreToolUse"] == [{"matcher": "Write|Edit|MultiEdit", "command": "mail-guard.py"}]
+print("exact")
+PY
+)"; rc=$?
+chk_eq "canonical hooks parse" 0 "$rc"
+chk_eq "canonical hooks have exactly three entries" exact "$hook_contract"
+
+# Consumer exact-once logic must reject "one correct tuple + one duplicate under a wrong matcher".
+dup_counts="$(python3 - <<'PY'
+import os
+d = {"hooks": {"PreToolUse": [
+    {"matcher": "Write|Edit|MultiEdit", "hooks": [{"command": "/x/mail-guard.py"}]},
+    {"matcher": "Read", "hooks": [{"command": "/x/mail-guard.py"}]},
+]}}
+groups = d["hooks"]["PreToolUse"]
+expected = sum(os.path.basename(h["command"]) == "mail-guard.py"
+               for g in groups if g.get("matcher", "") == "Write|Edit|MultiEdit" for h in g["hooks"])
+total = sum(os.path.basename(h["command"]) == "mail-guard.py" for g in groups for h in g["hooks"])
+print(expected, total)
+PY
+)"
+chk_eq "negative fixture keeps expected tuple count at one" "1 2" "$dup_counts"
+chk_not_contains "wrong-matcher duplicate fails total exact-once" "1 1" "$dup_counts"
+
 # register two agents
 out="$(bash "$BUSBIN" register alpha /tmp/alpha "编排 A 摊")"
 chk_contains "register alpha" "registered alpha" "$out"

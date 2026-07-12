@@ -35,10 +35,18 @@ metadata:
 | 评审 agent | 只读对抗式评审（review）、severity + verdict；不改码/commit。须**异构**（与执行不同 lineage） | codex / 另一家强模型 |
 | 运维 agent | 够不着的环境(prod/独立 dev DB)只读取证 + 部署后验证；不修复/改配置 | 用户转交提示词 |
 | 派发载体 | 发指令进、抓屏出的交互会话 | tmux / 其他复用器 |
-| watcher | 轮询"存活+忙碌+等输入"返 typed 状态 | `references/agent-watch/`（dispatch/watch/teardown + hook；hook 主信号、抓屏降级）|
+| watcher | 轮询"存活+忙碌+等输入"返 typed 状态 | `references/agent-watch/`（dispatch/watch/teardown + hook；hook 主信号）|
 
 - **默认 omp 执行、codex 评审，不倒置**——omp(oh-my-pi+Opus)强在自主执行、codex(gpt)强在严苛评审，交叉评审屡抓双方都漏的真问题。
-- **两条派工载体，按任务选**：① **tmux omp/codex** = 实现 + 对抗评审 + 需 steering/多轮回修（`dispatch send` 引导、watcher 取终态、会话持久）——核心开发循环走这条；② **Agent-工具 subagent** = 浏览器 E2E / 研究 / 读密集一次性（能载我的 MCP、大快照隔离在子上下文外、直接返结论）。别用 subagent 干需反复 steering 的实现活、别用 tmux omp 干要 MCP 的浏览器验。**派 subagent 显式指定 model 按活分档**（重推理强模型 / 机械·轻量弱模型）——默认继承主会话模型常让机械活烧强模型；fork 例外（永远继承）。
+- **三条派工 lane，按任务选**：① **tmux TUI lane** = 需要轮内实时交互 / 即时 steering / 菜单或 pane
+  现场的核心开发与对抗评审（`dispatch send` 引导、watcher 取终态、会话持久）；② **`dispatch-exec`
+  headless lane** = 单轮自包含、轮内不交互，后续轮仍可用 `send` resume；tmux 只作 supervisor，终态
+  只认 `dispatch status` / `watch` 的 typed status；文件产出必须声明 `--deliverable` 加 fresh deliverable 门，
+  非文件结果不带；③ **Agent-工具
+  subagent** = 需要浏览器 / MCP / 隔离主上下文的读密集一次性工作（大快照留在子上下文、直接返结论）。
+  需要轮内 steering 的工作走 TUI lane；要浏览器/MCP 的验收别塞给 tmux agent。**派 subagent
+  显式指定 model 按活分档**（重推理强模型 / 机械·轻量弱模型）——默认继承主会话模型常让机械活烧强
+  模型；fork 例外（永远继承）。
 - **编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位）；watcher 起法/忙碌·存活信号按你的工具校准，`requires.bins` 是参考栈、非硬依赖。
 - **多个编排者并行**（各管一摊）时，跨席位异步通信用可选伴随 skill `agent-mail`。
 
@@ -52,7 +60,8 @@ metadata:
 2. **写 goal**（模板 `references/goal-template.md`，放 `docs/orchestration/<NAME>_GOAL.md`）：含
    上下文+前置研究、带 file:line 的预判（标"verify, don't trust"）、交付物、验证要求（每条 Done-when
    绑定证明命令）、guardrails（scope + out-of-scope 枚举 / 存疑协议 / stop-and-report / redaction /
-   commit-local-no-push）。**粒度判据**：一个 goal = 自包含单元 + 一个清晰交付物——太小则协调开销
+   commit-local-no-push）。若依赖 upstream audit/scout，必须填写模板的 Premises 段逐条验证承重 claim。
+   **粒度判据**：一个 goal = 自包含单元 + 一个清晰交付物——太小则协调开销
    吃掉收益，太大则长跑无 check-in、漂移风险随时长涨。
 3. **派发 = 融合一条命令 + 验 hook（硬 gate）+ 理解门**：首选
    `references/agent-watch/dispatch <agent> <session> <cwd> --goal <goal文件>`（Bash 工具
@@ -60,9 +69,9 @@ metadata:
    watch 从设计上无处发生（无独立 `--watch`，论证见 `dispatch` 头注）。**起后立刻 Read 输出按三档判定**：
    `hook: WORKING ✓` / `pane is BUSY`（codex 首个 tool 前正常）可继续；`NO sentinel…pane not busy` =
    goal 没送达 → **停下重起、别带病跑**（手动 send-keys 仅逃生舱，坑枚举见 agent-watch README）。
-   **codex 评审首轮同构**：brief 写成文件、同样 `--goal <brief.md>` 一条命令。**动手前过理解门**
-   （goal 模板已自携复述要求）：核对 agent 复述的"碰哪些文件/契约、风险、scope"再放行——弱答当场
-   纠正，别把沉默当默许。
+   **codex 评审首轮同构**：brief 写成文件、同样 `--goal <brief.md>` 一条命令。**理解门按 lane**：TUI
+   核对 agent 复述的"碰哪些文件/契约、风险、scope"再放行；headless 由 runtime footer 要求简短复述后
+   直接开工、不等待，真阻塞写 cwd 的 `BLOCKED.md` 并停止。
 4. **watcher 纪律**（typed 状态全枚举 + 各失败态机制/实证全文见 `references/agent-watch/README.md`）：
    - **typed 状态 0-7 存在：DEAD≠DONE、WAITING 要回输入、WATCH-TIMEOUT≠DONE**——别把 idle / watcher 裁决当终态。
    - **判完成要正向证据**（本地 commit / 产物计数 / review 标记），自己 capture-pane 核证；产出=文件的
@@ -149,6 +158,8 @@ metadata:
   **memory 编排者私有，agent/新 session 只能读 docs**——只更 memory 不同步 docs = 共享治理层腐烂
   （实证：ACTIVE_CONTEXT 冻 4 天变废纸）。**写时纪律**：卸载边写边做，别囤到复盘再清；高频纪律配
   PostToolUse hook 兜底（模板见 repo-governance-bootstrap）。
+- runtime evidence 推翻 audit/scout claim 时，同一轮回写源文档顶部 `REFUTED CLAIMS` 表
+  （claim / evidence / pointer），不只记 queue / memory。
 - **复盘仪式（事件触发：收口 / 压缩前 / 任何 ReOpen 后主动提议）是 CHECKLIST 不是即兴**：听到"复盘 /
   收口 / handoff" → **读 `references/retrospective.md` 七步逐条勾**（即兴版必静默漏承重治理步，实证漏
   roadmap 翻状态 + ACTIVE_CONTEXT 重写）。**硬门**：跑 `bash references/retro-check.sh --base <branch>

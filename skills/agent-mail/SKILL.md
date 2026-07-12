@@ -118,6 +118,7 @@ agent-bus roster                                    # 打印名册
    拦 Write/Edit/MultiEdit 直写 inbox，发信必须走 `agent-bus send`）——长跑 session 永不重启，中途来信靠增量投递
    在下一个 prompt turn 冒泡（只报**新到**、报过不复读、无新静默，`.notify-state` 记账；forcing function 不再
    只在开场那一次）。「记得查信箱」不靠记忆；身份零参数，靠名册 workdir 反查、子目录也认。
+   **接入层级判据**：同机多注册席位且 hook 能按席位自门控时，用户级只接一次；需要配置隔离或不同版本时，改为项目级接入。
    - **PATH 便捷入口**：`SessionStart` 时 `mail-check.py` 会尝试把本 skill 的 `agent-bus` symlink 到
      `~/.local/bin/agent-bus`；只在 `~/.local/bin` 已存在且目标不存在时创建，**不创建目录、不覆盖已有命令**，
      失败静默跳过。这样常见 PATH 配置下后续可直接跑 `agent-bus`。

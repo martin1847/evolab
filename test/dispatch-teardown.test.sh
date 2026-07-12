@@ -86,7 +86,7 @@ chk_eq "dispatch codex no-args rc0" 0 "$rc"
 chk_not_contains "dispatch codex no-args no unbound-variable" "unbound variable" "$out"
 chk_contains "dispatch codex no-args cmd not truncated" "AGENT_WATCH_DIR=" "$(cat "$SANDBOX/tmux-command-bare-codex" 2>/dev/null)"
 cmd_codex="$(cat "$SANDBOX/tmux-command-bare-codex" 2>/dev/null)"
-case "$cmd_codex" in *"codex") _record "dispatch codex no-args cmd ends in bare codex" 1 ;; *) _record "dispatch codex no-args cmd ends in bare codex" 0 "got[$cmd_codex]" ;; esac
+case "$cmd_codex" in *"codex --dangerously-bypass-hook-trust") _record "dispatch codex no-args cmd ends in codex + hook trust" 1 ;; *) _record "dispatch codex no-args cmd ends in codex + hook trust" 0 "got[$cmd_codex]" ;; esac
 sandbox_clean
 
 sandbox_new

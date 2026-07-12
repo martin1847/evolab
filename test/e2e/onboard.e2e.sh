@@ -52,6 +52,31 @@ chk_contains "行为内核 has 角色绑定" "角色绑定" "$ag"
 # ③ hooks wired, absolute paths (hooks don't expand ~)
 SJ="$WT/.claude/settings.json"
 chk_eq "settings.json exists" 1 "$([ -f "$SJ" ] && echo 1 || echo 0)"
+hook_count() { # event matcher-or-empty command-basename
+  [ -f "$SJ" ] || { echo 0; return; }
+  python3 - "$SJ" "$1" "$2" "$3" <<'PY'
+import json, os, sys
+path, event, matcher, command = sys.argv[1:]
+d = json.load(open(path, encoding="utf-8"))
+n = 0
+for group in d.get("hooks", {}).get(event, []):
+    if group.get("matcher", "") != matcher:
+        continue
+    for hook in group.get("hooks", []):
+        n += os.path.basename(hook.get("command", "")) == command
+print(n)
+PY
+}
+hook_command_count() { # event command-basename, regardless of matcher
+  [ -f "$SJ" ] || { echo 0; return; }
+  python3 - "$SJ" "$1" "$2" <<'PY'
+import json, os, sys
+path, event, command = sys.argv[1:]
+d = json.load(open(path, encoding="utf-8"))
+print(sum(os.path.basename(h.get("command", "")) == command
+          for group in d.get("hooks", {}).get(event, []) for h in group.get("hooks", [])))
+PY
+}
 if [ -f "$SJ" ]; then
   cmds="$(python3 -c '
 import json,sys
@@ -75,6 +100,7 @@ for arr in d.get("hooks",{}).values():
   # matcher must come from the shipped truth-source (guard-hooks.json), not from stale prose copies —
   # KillShell only exists in the truth-source, so its presence proves the source was actually read
   chk_contains "matcher taken from truth-source (has KillShell)" "KillShell" "$(cat "$SJ")"
+
 fi
 
 # ④ orchestration dirs + decision queue
@@ -82,11 +108,16 @@ chk_eq "docs/orchestration/ exists" 1 "$([ -d "$WT/docs/orchestration" ] && echo
 chk_eq "DECISION_QUEUE.md exists" 1 "$([ -f "$WT/docs/DECISION_QUEUE.md" ] && echo 1 || echo 0)"
 
 # ⑤ agent-mail onboarding (only asserted when the optional skill is installed):
-#    checklist step 3 must register a seat (roster row w/ this project's workdir) + wire mail-check
+#    checklist step 3 must register a seat + wire every canonical agent-mail entry exactly once.
 if [ -e "$HOME/.claude/skills/agent-mail" ]; then
   # needle = the unique tmpdir basename: survives path normalization (/var vs /private/var, //)
   chk_contains "mail: seat registered (roster row has project workdir)" "$WTBASE" "$(cat "$TMPMAIL/registry.md" 2>/dev/null)"
-  chk_contains "mail: mail-check wired in settings.json" "mail-check.py" "${cmds:-}"
+  chk_eq "mail: SessionStart mail-check wired exactly once" 1 "$(hook_count SessionStart '' mail-check.py)"
+  chk_eq "mail: SessionStart has no wrong-matcher duplicate" 1 "$(hook_command_count SessionStart mail-check.py)"
+  chk_eq "mail: UserPromptSubmit mail-check wired exactly once" 1 "$(hook_count UserPromptSubmit '' mail-check.py)"
+  chk_eq "mail: UserPromptSubmit has no wrong-matcher duplicate" 1 "$(hook_command_count UserPromptSubmit mail-check.py)"
+  chk_eq "mail: PreToolUse write guard wired exactly once" 1 "$(hook_count PreToolUse 'Write|Edit|MultiEdit' mail-guard.py)"
+  chk_eq "mail: PreToolUse has no wrong-matcher duplicate" 1 "$(hook_command_count PreToolUse mail-guard.py)"
 else
   echo "  [skip] agent-mail not installed — ⑤ skipped"
 fi

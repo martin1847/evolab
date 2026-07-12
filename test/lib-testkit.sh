@@ -115,6 +115,11 @@ case "$sub" in
   new-session)
     [ "${FAKE_TMUX_NEWSESSION_FAIL:-0}" = "1" ] && exit 42
     [ -n "${FAKE_TMUX_CMD_FILE:-}" ] && printf '%s\n' "${!#}" > "$FAKE_TMUX_CMD_FILE"
+    [ -n "${FAKE_TMUX_LAUNCH_LOG:-}" ] && printf '%s\n' "${!#}" >> "$FAKE_TMUX_LAUNCH_LOG"
+    if [ -n "${FAKE_TMUX_HOLD_FILE:-}" ]; then
+      : > "$FAKE_TMUX_HOLD_FILE.started"
+      while [ -e "$FAKE_TMUX_HOLD_FILE" ]; do /bin/sleep 0.02; done
+    fi
     [ -n "${FAKE_TMUX_DELIV_FILE:-}" ] && printf '%s\n' "${AGENT_WATCH_DELIVERABLE:-}" > "$FAKE_TMUX_DELIV_FILE"
     if [ -n "${FAKE_TMUX_EVENT_LINE:-}" ]; then
       while [ "$#" -gt 0 ]; do
@@ -146,6 +151,7 @@ sandbox_clean() {
   unset SANDBOX WATCH_RUN_DIR BIN AGENT_WATCH_DIR
   unset FAKE_TMUX_DISPLAY_FAIL FAKE_TMUX_CAPTURE_FAIL FAKE_PANE_CMD FAKE_PANE_FILE FAKE_TMUX_HASSESSION FAKE_TMUX_NEWSESSION_FAIL
   unset FAKE_TMUX_CMD_FILE FAKE_TMUX_DELIV_FILE FAKE_TMUX_EVENT_LINE
+  unset FAKE_TMUX_LAUNCH_LOG FAKE_TMUX_HOLD_FILE
 }
 
 # seed_events <session> <content...>  -- write the sentinel events file.
