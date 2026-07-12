@@ -39,14 +39,15 @@ metadata:
 
 - **默认 omp 执行、codex 评审，不倒置**——omp(oh-my-pi+Opus)强在自主执行、codex(gpt)强在严苛评审，交叉评审屡抓双方都漏的真问题。
 - **三条派工 lane，按任务选**：① **tmux TUI lane** = 需要轮内实时交互 / 即时 steering / 菜单或 pane
-  现场的核心开发与对抗评审（`dispatch send` 引导、watcher 取终态、会话持久）；② **`dispatch-exec`
-  headless lane** = 单轮自包含、轮内不交互，后续轮仍可用 `send` resume；tmux 只作 supervisor，终态
-  只认 `dispatch status` / `watch` 的 typed status；文件产出必须声明 `--deliverable` 加 fresh deliverable 门，
-  非文件结果不带；③ **Agent-工具
-  subagent** = 需要浏览器 / MCP / 隔离主上下文的读密集一次性工作（大快照留在子上下文、直接返结论）。
-  需要轮内 steering 的工作走 TUI lane；要浏览器/MCP 的验收别塞给 tmux agent。**派 subagent
-  显式指定 model 按活分档**（重推理强模型 / 机械·轻量弱模型）——默认继承主会话模型常让机械活烧强
-  模型；fork 例外（永远继承）。
+  现场的核心开发与对抗评审（`dispatch send` 引导、watcher 取终态、会话持久）；② **headless lane**
+  （`DISPATCH_EXEC=1`——命令面与 TUI 完全同面，只多这个开关；实现 = `dispatch-exec`）=
+  单轮自包含、轮内不交互，后续轮仍可用 `send` resume；tmux 只作 supervisor，
+  终态只认 `dispatch status` / `watch` 的 typed status；
+  文件产出必须声明 `--deliverable` 加 fresh deliverable 门，非文件结果不带；
+  ③ **Agent-工具 subagent** = 需要浏览器 / MCP / 隔离主上下文的读密集一次性工作（大快照留在子上下文、
+  直接返结论）。需要轮内 steering 的工作走 TUI lane；要浏览器/MCP 的验收别塞给 tmux agent。
+  **派 subagent 显式指定 model 按活分档**（重推理强模型 / 机械·轻量弱模型）——默认继承主会话模型
+  常让机械活烧强模型；fork 例外（永远继承）。
 - **编排者本身也可换**（codex/任何 shell+文件 agent 都能坐 CTO 位）；watcher 起法/忙碌·存活信号按你的工具校准，`requires.bins` 是参考栈、非硬依赖。
 - **多个编排者并行**（各管一摊）时，跨席位异步通信用可选伴随 skill `agent-mail`。
 
