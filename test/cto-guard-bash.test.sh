@@ -90,21 +90,27 @@ chk_eq "dispatch + watch same cmd (bg) exit 0" 0 "$RC"; chk_eq "dispatch + watch
 run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' 1
 chk_eq "fused --goal (bg) exit 0" 0 "$RC"; chk_eq "fused --goal silent (auto watch)" "" "$OUT"
 
-# (5) blocking watch / fused dispatch in the FOREGROUND -> DENY (killed at Bash timeout, exit 143)
-run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
-chk_eq "fused --goal foreground denied" 2 "$RC"; chk_contains "foreground deny names 143" "143" "$ERR"
+# (5) blocking watch in the FOREGROUND (any lane) -> DENY (killed at Bash timeout, exit 143);
+#     fused --goal is DEFAULT-exec since the 2026-07-12 flip -> foreground fine unless TUI-escaped
 run 'dispatch send mysess -f /tmp/fix.md && bash references/agent-watch/watch mysess'
-chk_eq "chained foreground watch denied (LH field case)" 2 "$RC"
+chk_eq "chained foreground watch denied (LH field case)" 2 "$RC"; chk_contains "foreground deny names 143" "143" "$ERR"
 run 'AGENT_WATCH_DELIVERABLE=/tmp/out/*.md bash references/agent-watch/watch mysess'
 chk_eq "env-prefixed foreground watch denied" 2 "$RC"
 # explicit sync opt-out for shell orchestrators that run watch synchronously by design
 run 'AGENT_WATCH_SYNC=1 bash references/agent-watch/watch mysess; rc=$?'
 chk_eq "AGENT_WATCH_SYNC=1 foreground allowed" 0 "$RC"
-# exec-lane launch returns immediately -> foreground fine (inline prefix AND global env)
+# default lane = exec, launch returns immediately -> bare fused --goal foreground is fine
+run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
+chk_eq "fused --goal foreground allowed (default exec lane)" 0 "$RC"
 run 'DISPATCH_EXEC=1 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
-chk_eq "DISPATCH_EXEC=1 foreground launch allowed" 0 "$RC"
-OUT="$(mkcmd 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' | DISPATCH_EXEC=1 python3 "$GUARD" 2>/dev/null)"; RC=$?
-chk_eq "global DISPATCH_EXEC env also allows foreground" 0 "$RC"
+chk_eq "DISPATCH_EXEC=1 (legacy no-op) foreground allowed" 0 "$RC"
+# TUI-escaped fused launch blocks through its in-process watch -> foreground denied
+run 'DISPATCH_TUI=1 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
+chk_eq "DISPATCH_TUI=1 fused foreground denied" 2 "$RC"
+run 'DISPATCH_EXEC=0 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
+chk_eq "legacy DISPATCH_EXEC=0 escape also denied foreground" 2 "$RC"
+OUT="$(mkcmd 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' | DISPATCH_TUI=1 python3 "$GUARD" 2>/dev/null)"; RC=$?
+chk_eq "global DISPATCH_TUI env also denies fused foreground" 2 "$RC"
 # path as an ARGUMENT is not an invocation (self-inflicted false positives, 2026-07-11)
 run 'grep -n foo references/agent-watch/watch references/agent-watch/dispatch'
 chk_eq "watch path as grep arg allowed" 0 "$RC"

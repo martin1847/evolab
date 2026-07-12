@@ -12,13 +12,16 @@ set -uo pipefail
 HERE_EARLY="$(cd "$(dirname "$0")" && pwd)"
 RUN_EARLY="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 
-# ── exec-lane switch (interface/impl split) ───────────────────────────────────
-# `dispatch` is the stable INTERFACE; `dispatch-exec` (headless lane) is an alternate
-# implementation. DISPATCH_EXEC=1 routes a LAUNCH to the exec lane with the identical
-# command surface. The switch matters only at launch: send (below) self-routes by
-# session state — an exec-lane session has $RUN/<s>.exec.meta — so later rounds follow
-# the session's own lane even if the env var is gone (no cross-lane drift).
-if [ "${DISPATCH_EXEC:-0}" = "1" ]; then
+# ── lane routing (interface/impl split) ───────────────────────────────────────
+# `dispatch` is the stable INTERFACE. DEFAULT implementation = `dispatch-exec` (headless
+# lane) — flipped 2026-07-12 (owner ruling) after TUI drift red-flagged a third release
+# in a row (claude ≥2.1.205, then omp 16.4.4 + codex 0.144.1 both silently breaking hook
+# load on the same day). Escape hatch back to the interactive TUI lane: DISPATCH_TUI=1
+# (DISPATCH_EXEC=0 honored for muscle-memory back-compat; DISPATCH_EXEC=1 is now a no-op).
+# The switch matters only at launch: send (below) self-routes by session state — an
+# exec-lane session has $RUN/<s>.exec.meta — so later rounds follow the session's own
+# lane even if the env var is gone (no cross-lane drift).
+if [ "${DISPATCH_TUI:-0}" != "1" ] && [ "${DISPATCH_EXEC:-1}" != "0" ]; then
   case "${1:-}" in omp|codex|claude) exec "$HERE_EARLY/dispatch-exec" "$@" ;; esac
 fi
 if [ "${1:-}" = "send" ] && [ -n "${2:-}" ] && [ -f "$RUN_EARLY/${2}.exec.meta" ]; then

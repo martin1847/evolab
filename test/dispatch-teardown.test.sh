@@ -4,6 +4,10 @@
 set -u
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
+# This suite exercises the TUI-lane surface (sentinel truncation / hook install / send /
+# fused verify tiers) — escape the 2026-07-12 exec-default at launch. send/watch/teardown
+# routing stays state-driven and is covered lane-correctly in dispatch-exec.test.sh.
+export DISPATCH_TUI=1
 
 echo "== dispatch =="
 

@@ -38,12 +38,13 @@ metadata:
 | watcher | 轮询"存活+忙碌+等输入"返 typed 状态 | `references/agent-watch/`（dispatch/watch/teardown + hook；hook 主信号）|
 
 - **默认 omp 执行、codex 评审，不倒置**——omp(oh-my-pi+Opus)强在自主执行、codex(gpt)强在严苛评审，交叉评审屡抓双方都漏的真问题。
-- **三条派工 lane，按任务选**：① **tmux TUI lane** = 需要轮内实时交互 / 即时 steering / 菜单或 pane
-  现场的核心开发与对抗评审（`dispatch send` 引导、watcher 取终态、会话持久）；② **headless lane**
-  （`DISPATCH_EXEC=1`——命令面与 TUI 完全同面，只多这个开关；实现 = `dispatch-exec`）=
+- **三条派工 lane，按任务选**：① **headless lane（默认）**——`dispatch` 命令面直接走（实现 =
+  `dispatch-exec`；2026-07-12 起为默认，TUI 车道三次在发布门口被 CLI 漂移收税后翻转）=
   单轮自包含、轮内不交互，后续轮仍可用 `send` resume；tmux 只作 supervisor，
   终态只认 `dispatch status` / `watch` 的 typed status；
   文件产出必须声明 `--deliverable` 加 fresh deliverable 门，非文件结果不带；
+  ② **tmux TUI lane（escape：`DISPATCH_TUI=1`；维护 best-effort）**= 真需要轮内实时交互 / 即时 steering / 菜单或 pane
+  现场时才用（`dispatch send` 引导、watcher 取终态、会话持久）；
   ③ **Agent-工具 subagent** = 需要浏览器 / MCP / 隔离主上下文的读密集一次性工作（大快照留在子上下文、
   直接返结论）。需要轮内 steering 的工作走 TUI lane；要浏览器/MCP 的验收别塞给 tmux agent。
   **派 subagent 显式指定 model 按活分档**（重推理强模型 / 机械·轻量弱模型）——默认继承主会话模型

@@ -112,7 +112,8 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 | emit / watch | ✅ | hermetic 套件（scrape fallback 已于 2026-07-11 摘除，哑 hook → exit 8 NO-HOOK） |
 | deliverable 门（exit 6） | ✅ | hermetic 对抗测试 |
 | WATCH-TIMEOUT（exit 7）/ NO-HOOK（exit 8） | ✅ | hermetic 钉显式非零终态；均不得冒充 DONE |
-| headless 车道（dispatch-exec） | ◑ | claude/omp 双轮 live 绿（resume 同 session 续上下文）+ hermetic 全分支；未验：codex 腿 live（本机 exec 模型配置）、BLOCKED 真 fire、运行中插话 |
+| headless 车道（dispatch-exec，**默认**） | ✅ | claude/omp 双轮 live 绿 + codex exec 双评审全流程 live（派发→watch→resume 复审）+ hermetic 全分支 + e2e dispatch-goal 矩阵；未验：BLOCKED 真 fire、运行中插话 |
+| TUI 车道（escape `DISPATCH_TUI=1`） | ⚠ best-effort | 2026-07-12 known-red：omp 16.4.4 `--hook` 静默不加载（v1.4.0 版 hook 同红=环境漂移）、codex 0.144.1 腿 goal 未执行；claude 腿绿。手动 `E2E_TUI=1 bash test/e2e/dispatch-goal-tui.e2e.sh` 验，修复属适配债、不挡发布 |
 | STALLED-EXTERNAL（exit 5）谓词 | ◑ | 离线 fixture 真/假例全过；**已知假阳**：agent 编辑错误处理代码/读 provider 日志时同 token 会命中——exit 5 是 advisory，先看屏尾再 kill。未 live 验：WORKING+N-poll 门与真 provider stall |
 
 - `dispatch` 仅在目标不存在时写 `.codex/hooks.json` / `.claude/settings.json`，并以 session ownership marker
@@ -244,15 +245,19 @@ matcher 别手编——它与脚本实现同包维护、发布门校验一致（
   （或 TS shell-out + 字段映射 `event.input.command`→stdin-JSON + `exit 2`→`{block:true}`）。浏览器提醒在 omp 最难：
   `tool_result` 只能改输出、不能给模型注入 context，要走单独 `context` 事件。
 
-## headless 车道（DISPATCH_EXEC=1，2026-07-11 起双轨）
+## headless 车道（**默认**，2026-07-12 翻转；TUI escape = `DISPATCH_TUI=1`）
 
-**用法与 TUI 车道完全同面——只多一个开关**，其余命令原样不变：
+**`dispatch` 命令面不变，默认即走 headless**（翻转动因：TUI 车道靠驱动交互界面反推状态，
+claude ≥2.1.205 / omp 16.4.4 / codex 0.144.1 三次 CLI 升级三次静默弄坏它——headless 终态 =
+进程退出 + 文件，没有这个税）。TUI 车道 escape：`DISPATCH_TUI=1`（legacy `DISPATCH_EXEC=0`
+同效；`DISPATCH_EXEC=1` 已是 no-op），维护 best-effort、只修真 bug：
 
 ```bash
-DISPATCH_EXEC=1 dispatch <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>]
-dispatch send <session> -f <fixround.md>   # steering 照旧（自动识别车道，不用再带开关）
+dispatch <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>]   # 默认 headless
+dispatch send <session> -f <fixround.md>   # steering（自动识别车道）
 watch <session>                            # 同一入口，自动代理
 teardown <session>                         # 连 headless 状态一起清
+DISPATCH_TUI=1 dispatch <agent> <session> <cwd> --goal <f>   # 真需轮内交互/菜单才走 TUI
 ```
 
 - 终态只读 `dispatch status <session>` / `watch <session>` 的 typed status；不要直接读取 `.exec.rc`。

@@ -13,7 +13,7 @@ set -u
 # switch in ~/.zshenv re-routes every TUI-launch test and skips guard check (5) —
 # suite red on that box, green everywhere else (caught by independent review 2026-07-11).
 # Tests that assert exec routing set the switch INLINE per invocation.
-unset DISPATCH_EXEC AGENT_WATCH_SYNC 2>/dev/null || true
+unset DISPATCH_EXEC DISPATCH_TUI AGENT_WATCH_SYNC 2>/dev/null || true
 
 # Resolve the agent-watch dir. test/ lives at the repo root; the scripts under
 # test live under skills/cto-orchestration/references/agent-watch/.

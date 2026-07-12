@@ -334,17 +334,22 @@ sandbox_clean
 
 echo "== interface routing (dispatch/watch/teardown are the stable surface) =="
 
-# DISPATCH_EXEC=1 routes a launch through `dispatch` to the exec lane, same command face.
+# DEFAULT lane = exec (2026-07-12 flip): a bare launch through `dispatch` routes headless.
 sandbox_new
 mkdir -p "$SANDBOX/wt"; printf 'go\n' > "$SANDBOX/goal.md"
 export FAKE_TMUX_CMD_FILE="$SANDBOX/tmux-cmd"
-out="$(DISPATCH_EXEC=1 bash "$DISPATCH" claude ifS "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
-chk_eq "switched launch rc0" 0 "$rc"
-chk_contains "switched launch routed to exec lane" "round 1 started" "$out"
-chk_not_contains "switched launch is not TUI" "dispatched claude" "$out"
-# default (no switch) stays TUI
-out="$(bash "$DISPATCH" claude ifT "$SANDBOX/wt" 2>&1)"; rc=$?
-chk_contains "default launch stays TUI" "dispatched claude" "$out"
+out="$(bash "$DISPATCH" claude ifS "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "default launch rc0" 0 "$rc"
+chk_contains "default launch routed to exec lane" "round 1 started" "$out"
+chk_not_contains "default launch is not TUI" "dispatched claude" "$out"
+# legacy DISPATCH_EXEC=1 is a harmless no-op (still exec)
+out="$(DISPATCH_EXEC=1 bash "$DISPATCH" claude ifL "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_contains "legacy DISPATCH_EXEC=1 still exec" "round 1 started" "$out"
+# escape hatch: DISPATCH_TUI=1 (canonical) and DISPATCH_EXEC=0 (muscle-memory) stay TUI
+out="$(DISPATCH_TUI=1 bash "$DISPATCH" claude ifT "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_contains "DISPATCH_TUI=1 launch stays TUI" "dispatched claude" "$out"
+out="$(DISPATCH_EXEC=0 bash "$DISPATCH" claude ifT2 "$SANDBOX/wt" 2>&1)"; rc=$?
+chk_contains "legacy DISPATCH_EXEC=0 escape stays TUI" "dispatched claude" "$out"
 # send self-routes by session state (exec.meta present), no switch needed
 printf 'sid=sid-xyz\n' >> "$WATCH_RUN_DIR/ifS.exec.meta"
 printf '0\n' > "$WATCH_RUN_DIR/ifS.exec.rc"; : > "$WATCH_RUN_DIR/ifS.exec.out"

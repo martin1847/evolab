@@ -107,20 +107,21 @@ def main():
     # NOT here — cto-guard owns orchestration slips (backgrounding, idle-polling, dispatch, send-keys),
     # not git policy. Don't re-add push checks here.
 
-    # (5) BLOCKING watch / fused `dispatch --goal` run in the FOREGROUND: both block until the
-    #     agent's terminal state — under a foreground Bash timeout (Claude Code default 2min) the
-    #     call is killed mid-watch (exit 143) and the watcher dies with it (field hit: LH
-    #     2026-07-11, `send … && watch` chained foreground). run_in_background:true is the
-    #     documented path. Shell orchestrators that run watch synchronously BY DESIGN (codex/
-    #     shell — README "run it synchronously and read the code") opt out explicitly by
+    # (5) BLOCKING watch — and, on the TUI lane, fused `dispatch --goal` — run in the FOREGROUND:
+    #     both block until the agent's terminal state — under a foreground Bash timeout (Claude
+    #     Code default 2min) the call is killed mid-watch (exit 143) and the watcher dies with it
+    #     (field hit: LH 2026-07-11, `send … && watch` chained foreground). run_in_background:true
+    #     is the documented path. Shell orchestrators that run watch synchronously BY DESIGN
+    #     (codex/shell — README "run it synchronously and read the code") opt out explicitly by
     #     prefixing the command with AGENT_WATCH_SYNC=1.
-    # DISPATCH_EXEC=1 routes the launch to the headless exec lane, which returns
-    # immediately (tmux supervisor detaches) — foreground is fine there. Check BOTH the
-    # command string (inline prefix) and this hook's own env: a global switch (e.g. set in
-    # ~/.zshenv) never appears in the command text but is inherited by the hook process.
-    if (not ti.get("run_in_background") and "AGENT_WATCH_SYNC=1" not in cmd
-            and "DISPATCH_EXEC=1" not in cmd and os.environ.get("DISPATCH_EXEC") != "1"):
-        fused = re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)\b", cmd) and "--goal" in cmd
+    # Since the 2026-07-12 default flip, a bare `dispatch --goal` rides the headless exec lane and
+    # RETURNS IMMEDIATELY — foreground is fine; only a TUI-escaped launch (DISPATCH_TUI=1 inline or
+    # in this hook's env, or legacy DISPATCH_EXEC=0) still blocks through its in-process watch.
+    # `watch <session>` blocks on BOTH lanes (exec watch is a poll loop too) — lane-independent deny.
+    if not ti.get("run_in_background") and "AGENT_WATCH_SYNC=1" not in cmd:
+        tui = ("DISPATCH_TUI=1" in cmd or os.environ.get("DISPATCH_TUI") == "1"
+               or "DISPATCH_EXEC=0" in cmd)
+        fused = tui and re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)\b", cmd) and "--goal" in cmd
         # command-position only: `grep x …/agent-watch/watch` (path as an ARGUMENT) must not trip
         # this, and the interpreter itself must sit at command position too — `emit.sh <path>` let
         # `\bsh\s` match the ".sh" tail and re-flagged an argument. Both self-inflicted false
@@ -132,10 +133,10 @@ def main():
         )
         if fused or watchcall:
             sys.stderr.write(
-                "DENY: blocking watch/`dispatch --goal` in the FOREGROUND — it blocks until the agent's "
-                "terminal state, so a foreground Bash timeout (default 2min) kills it mid-watch (exit 143) "
-                "and the watcher dies with it. Re-run with run_in_background:true. Synchronous shell "
-                "orchestrators (codex): prefix the command with AGENT_WATCH_SYNC=1 to pass. "
+                "DENY: blocking watch (or TUI-lane fused `dispatch --goal`) in the FOREGROUND — it blocks "
+                "until the agent's terminal state, so a foreground Bash timeout (default 2min) kills it "
+                "mid-watch (exit 143) and the watcher dies with it. Re-run with run_in_background:true. "
+                "Synchronous shell orchestrators (codex): prefix the command with AGENT_WATCH_SYNC=1 to pass. "
                 "Read: cto-orchestration/references/agent-watch/README.md §Launch.\n"
             )
             return 2
