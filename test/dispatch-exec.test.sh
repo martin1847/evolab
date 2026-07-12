@@ -59,7 +59,8 @@ sandbox_clean
 sandbox_new; mkdir -p "$SANDBOX/winner cwd" "$SANDBOX/loser-cwd"; printf 'go\n' > "$SANDBOX/goal.md"
 export AGENT_WATCH_LOCK_OWNER_PAUSE=0.30 FAKE_TMUX_LAUNCH_LOG="$SANDBOX/first-launch.log" FAKE_TMUX_CMD_FILE="$SANDBOX/winner.cmd"
 bash "$DEXEC" claude firstRace "$SANDBOX/winner cwd" --goal "$SANDBOX/goal.md" > "$SANDBOX/winner.out" 2>&1 & winner_pid=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$WATCH_RUN_DIR/firstRace.exec.lock" ] && break; /bin/sleep 0.02; done
+# bounded 3s: under runner load the background bash can take >0.2s to reach the lock (flaked live 2026-07-12)
+for _ in $(seq 150); do [ -e "$WATCH_RUN_DIR/firstRace.exec.lock" ] && break; /bin/sleep 0.02; done
 out="$(bash "$DEXEC" omp firstRace "$SANDBOX/loser-cwd" --goal "$SANDBOX/goal.md" 2>&1)"; loser_rc=$?
 wait "$winner_pid"; winner_rc=$?
 unset AGENT_WATCH_LOCK_OWNER_PAUSE
@@ -243,7 +244,7 @@ export FAKE_TMUX_HOLD_FILE="$SANDBOX/hold" FAKE_TMUX_LAUNCH_LOG="$SANDBOX/launch
 export AGENT_WATCH_LOCK_OWNER_PAUSE=0.30
 : > "$FAKE_TMUX_HOLD_FILE"
 bash "$DEXEC" send conc -m first > "$SANDBOX/first.out" 2>&1 & first_pid=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$WATCH_RUN_DIR/conc.exec.lock" ] && break; /bin/sleep 0.02; done
+for _ in $(seq 150); do [ -e "$WATCH_RUN_DIR/conc.exec.lock" ] && break; /bin/sleep 0.02; done
 out="$(bash "$DEXEC" send conc -m second 2>&1)"; rc=$?
 chk_eq "concurrent second send rejected" 1 "$rc"
 chk_contains "concurrent rejection names transition" "round transition already in progress" "$out"
@@ -332,7 +333,7 @@ sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate term "$SANDBOX/wt"
 printf 'sid=sid-term\n' >> "$WATCH_RUN_DIR/term.exec.meta"; : > "$WATCH_RUN_DIR/term.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/term.exec.rc"
 export FAKE_TMUX_HOLD_FILE="$SANDBOX/term-hold"; : > "$FAKE_TMUX_HOLD_FILE"
 bash "$DEXEC" send term -m stop-me > "$SANDBOX/term.out" 2>&1 & term_pid=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$FAKE_TMUX_HOLD_FILE.started" ] && break; /bin/sleep 0.02; done
+for _ in $(seq 150); do [ -e "$FAKE_TMUX_HOLD_FILE.started" ] && break; /bin/sleep 0.02; done
 kill -TERM "$term_pid" 2>/dev/null || true; rm -f "$FAKE_TMUX_HOLD_FILE"; wait "$term_pid" 2>/dev/null || true
 for _ in 1 2 3 4 5; do [ ! -d "$WATCH_RUN_DIR/term.exec.lock" ] && break; /bin/sleep 0.02; done
 chk_eq "SIGTERM leaves no round lock" 0 "$([ -e "$WATCH_RUN_DIR/term.exec.lock" ] && echo 1 || echo 0)"
