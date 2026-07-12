@@ -32,18 +32,24 @@
 - 反向裁剪：升到 L2 后，**回头删掉为它服务的 L0 散文和 L1 特例**（保留一行"为什么这里没有 X"的墓志铭即可），
   否则三层同时活着又成新的漂移面。
 
-## L1 出口契约：电必带路（deny-with-directions）
+## L1 出口契约：电在回路（shock-in-the-loop）
 
-拦截只做了一半——被电的一方还需要当场知道**哪条规则、为什么、去哪读、怎么走正路**。每条 DENY 文案
-必带三件：一句 why（带实证日期更佳）+ 正路命令 + **owning doc 指针**（`Read: <skill>/<path>.md §…`）。
-先例：rustc error code + `--explain`、ESLint/clippy 每条违规带 rule 文档 URL；poka-yoke 只盖"硬闸"半边、不含回链。
+类比 HITL（人在回路）：HITL 把「人的判断」放进环里，电在回路把「电击 + 带路」放进环里——拦截只做了
+一半，被电的一方还需要当场知道**哪条规则、为什么、怎么走正路**。拒绝侧子模式 = **deny-with-directions**，
+每条 DENY 文案三件套：一句 why（带实证日期更佳）+ 正路命令 + **owning doc 指针**（`Read: <skill>/<path>.md §…`）。
+三件套即上限、刻意不加 rule-id / Retry 字段（owner 2026-07-12）——重型信封（Failed/Fix/Retry/Read 四行）
+只属于 CI 型 gate（engineering-gate 已用）。先例：rustc `--explain`、ESLint/clippy rule-URL、OPA deny
+带文档链接；poka-yoke 只盖"硬闸"半边、不含回链。
 
 由此得**软硬分工闭环**：文档写方向与判据、保持简洁（写得再细也不会被 100% 执行，细节只稀释真信号）；
-承重规则全部下沉 hook；教学发生在电击那一刻。**双向指针、两边都瘦**——doc 里被强制的规则只留一行
-"已由 X hook 强制"，hook 文案不复述论证、指回 doc。文档给建议，hook 给底线，deny 给路。
+承重且**可确定性判断**的规则下沉强制层——本地 hook 管早反馈，但 hook 可被跳过、不当最终防线，
+不可绕过的收口放 required CI / 服务端 ruleset；无法低误报检测的软建议留在文档，不伪装成硬闸。
+**双向指针、两边都瘦**——doc 里被强制的规则只留一行"已由 X hook 强制"，hook 文案不复述论证、指回 doc。
+文档给建议，hook 给底线，deny 给路。
 
 自指：本契约自己就是机器门——`test/hook-deny-pointer.test.sh` 扫描全部 shipped hook 源码，断言每条
-DENY 含 `.md` 指针（覆盖 f-string / 隐式拼接形态，扫描器负例已验）；新加 DENY 忘带路，门自动红。
+DENY 含 `.md` 指针**且指针目标真实存在**（防指针腐烂；覆盖 f-string / 隐式拼接形态，扫描器负例已验）；
+新加 DENY 忘带路或链错文件，门自动红。
 
 ## 关系
 
