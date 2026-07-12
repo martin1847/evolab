@@ -63,6 +63,18 @@ chk_eq "Task no model denied (exit 2)" 2 "$RC"
 run PreToolUse Read '{"file_path":"/tmp/x"}'
 chk_eq "non-Agent/Task tool unaffected by model requirement" 0 "$RC"
 
+# ── P0d: e2e-runner dispatch (brief carries E2E_ECONOMY=1) must ride an economy tier ──
+run PreToolUse Agent '{"prompt":"run: E2E_ECONOMY=1 bash test/e2e/run.sh and report","model":"opus"}'
+chk_eq "e2e runner on opus denied (exit 2)" 2 "$RC"
+chk_contains "e2e-runner deny names economy tier" "economy tier" "$ERR"
+chk_contains "e2e-runner deny carries doc pointer" "SKILL.md" "$ERR"
+run PreToolUse Agent '{"prompt":"run: E2E_ECONOMY=1 bash test/e2e/run.sh and report","model":"fable"}'
+chk_eq "e2e runner on fable denied" 2 "$RC"
+run PreToolUse Agent '{"prompt":"run: E2E_ECONOMY=1 bash test/e2e/run.sh and report","model":"haiku"}'
+chk_eq "e2e runner on haiku allowed" 0 "$RC"
+run PreToolUse Agent '{"prompt":"adversarial review of test/e2e/onboard.e2e.sh changes","model":"opus"}'
+chk_eq "premium review of e2e code (no marker) allowed" 0 "$RC"
+
 # ── P0b: TaskStop on an ALIVE agent (fresh transcript) -> DENY; stale or overridden -> allow ──
 TID="zzguardtest$$"
 FAKE="/tmp/claude-zztest/a/b/tasks"; mkdir -p "$FAKE"

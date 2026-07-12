@@ -3,6 +3,7 @@
 # routed by (hook_event_name, tool_name). Wire in .claude/settings.json:
 #   PreToolUse   matcher "Agent|Task"  -> browser-dispatch MCP guard  (P0a, DENY)
 #   PreToolUse   matcher "Agent|Task"  -> explicit model-tier required (P0c, DENY)
+#   PreToolUse   matcher "Agent|Task"  -> e2e-runner must be economy tier (P0d, DENY)
 #   PreToolUse   matcher "TaskStop"    -> kill-a-live-agent guard      (P0b, DENY)
 #   PostToolUse  matcher "Agent|Task"  -> black-hole deadline reminder (existing, ALLOW+context)
 # Rationale (2026-07-04 audit): the failing rules already existed in prose (frontend-verify.md / memory)
@@ -95,6 +96,20 @@ def main():
         # The guard intentionally does NOT validate the model value against an allowlist — any explicit
         # non-empty model passes; the harness enforces its own enum, and non-Claude stacks (codex/omp)
         # use different names. The rule is "make the tier choice explicit", not "use these models".
+        # ── (P0d) PreToolUse·Agent|Task: an e2e-runner dispatch must ride an economy tier ───────────
+        # Owner ruling 2026-07-12: live e2e gates are mechanical supervision — cheap model only.
+        # Discriminator = the E2E_ECONOMY=1 marker in the brief (a brief carrying the runner marker
+        # IS an e2e-run dispatch by definition — same zero-false-positive trick as P0a's tool token;
+        # a premium REVIEW of e2e code doesn't carry the marker and must pass). Premium-name check is
+        # deliberately narrow (fable/opus) — cto-guard-bash (6) forces the marker onto every runner.
+        if "E2E_ECONOMY=1" in prompt and re.search(r"\b(fable|opus)\b", str(ti.get("model") or ""), re.I):
+            sys.stderr.write(
+                "DENY: e2e-runner dispatch (brief carries E2E_ECONOMY=1) on a premium model. Running "
+                "live e2e gates is mechanical supervision — re-dispatch with an economy tier (e.g. "
+                "haiku). Read: cto-orchestration/SKILL.md §0 (不自己跑长 E2E / model 按活分档).\n"
+            )
+            return 2
+
         subagent_type = ti.get("subagent_type", "") or ""
         model = str(ti.get("model") or "").strip()
         if subagent_type != "fork" and not model:

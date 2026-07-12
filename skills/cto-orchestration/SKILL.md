@@ -84,7 +84,8 @@ metadata:
      通知）→ 跑 `rearm` 照单重挂。
    - **后台启动一律不加 shell `&`**（已 detached 再加 = 孤儿）；唯一后台正路 = Bash 工具 `run_in_background`。
    - **强制层（结构不靠自律）**：高频坑已由两 guard 脚本代码化 DENY（背景 `&` / 裸 idle 轮询 / CJK 裸
-     send-keys / chrome-devtools 浏览器派发 / 误杀活 agent）——被拦读 deny 文案照做；DENY 全枚举 +
+     send-keys / chrome-devtools 浏览器派发 / 误杀活 agent / 编排者亲跑 live e2e——派便宜模型 worker，
+     runner 命令前缀 `E2E_ECONOMY=1` 自 declare）——被拦读 deny 文案照做；DENY 全枚举 +
      override + wiring 见 `guard-hooks.json`（entry 真源）+ 该目录 README §Wiring。
 5. **steering / 放行 / 回修**：一律 `references/agent-watch/dispatch send <session> -m "…"`（或 `-f <file>`），
    以**确认环收尾——会话真转 WORKING 才算送达**，别假设 send-keys 成功=已送达（裸 send-keys 长中文/全角

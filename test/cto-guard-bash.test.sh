@@ -110,6 +110,22 @@ run 'grep -n foo references/agent-watch/watch references/agent-watch/dispatch'
 chk_eq "watch path as grep arg allowed" 0 "$RC"
 run 'grep -n x agent-watch/emit.sh agent-watch/watch'
 chk_eq "arg after .sh arg allowed (sh-suffix trap)" 0 "$RC"
+# ── (6) live e2e gates: premium orchestrator must dispatch, runner declares E2E_ECONOMY=1 ──
+run 'bash test/e2e/guard-wire.e2e.sh'
+chk_eq "bare e2e gate run denied" 2 "$RC"; chk_contains "e2e deny teaches dispatch+marker" "E2E_ECONOMY=1" "$ERR"
+chk_contains "e2e deny carries doc pointer" "SKILL.md" "$ERR"
+run "zsh -lc 'cd /repo/test/e2e && DISPATCH_EXEC=0 bash onboard.e2e.sh; echo RC=\$?'"
+chk_eq "wrapped e2e gate run denied" 2 "$RC"
+run './test/e2e/run.sh'
+chk_eq "e2e run.sh denied" 2 "$RC"
+run "zsh -lc 'cd /repo/test/e2e && E2E_ECONOMY=1 bash onboard.e2e.sh; echo RC=\$?'"
+chk_eq "declared economy runner allowed" 0 "$RC"
+# path as ARGUMENT (reading/grepping the script) is not an invocation
+run 'grep -n model test/e2e/dispatch-goal.e2e.sh'
+chk_eq "e2e path as grep arg allowed" 0 "$RC"
+run 'head -25 test/e2e/guard-wire.e2e.sh'
+chk_eq "e2e path as head arg allowed" 0 "$RC"
+
 # non-dispatch command -> silent
 run 'git status'
 chk_eq "non-dispatch silent" "" "$OUT"

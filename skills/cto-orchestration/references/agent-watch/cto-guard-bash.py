@@ -10,6 +10,8 @@
 #       PostToolUse·Agent browser reminder (sibling cto-guard-agent.py). [ALLOW + additionalContext]
 #   (4) raw `tmux send-keys` with long/CJK payload -> route through `dispatch send` [DENY]
 #   (5) blocking `watch`/fused `dispatch --goal` in the foreground -> run_in_background [DENY]
+#   (6) live e2e gate run without the E2E_ECONOMY=1 runner marker -> dispatch a cheap-model
+#       worker instead of burning the orchestrator's premium session on supervision [DENY]
 # Deny = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON hookSpecificOutput.additionalContext
 # (only that reaches the agent). Fail-open: any parse error exits 0, never blocks work. All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
@@ -155,6 +157,31 @@ def main():
                 }
             }))
         return 0
+
+    # (6) live e2e gates are economy-tier supervision (owner ruling 2026-07-12): the orchestrator
+    #     (typically on a premium model) must DISPATCH them to a cheap-model worker, not run them
+    #     itself. The dispatched runner declares itself with an E2E_ECONOMY=1 command prefix — same
+    #     explicit-declaration shape as AGENT_WATCH_SYNC=1 in (5). Command-position discipline as in
+    #     (5): reading/grepping an e2e script (path as argument) must not trip this; only executing
+    #     one does. Deliberately NO os.environ passthrough — a global E2E_ECONOMY export would kill
+    #     the guard silently; the marker belongs in the command string the worker was briefed to use.
+    if "E2E_ECONOMY=1" not in cmd:
+        # discriminator = the `.e2e.sh` NAMING suffix (a `cd test/e2e && bash onboard.e2e.sh`
+        # invocation carries no e2e/ path segment — a dir-based match missed it, self-caught in
+        # the hermetic suite before shipping), plus the e2e/run.sh umbrella runner.
+        e2ecall = re.search(
+            r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*(?:(?:bash|sh|zsh|exec|nohup|time)\s+)?[\"']?(?:\S*\.e2e\.sh|\S*e2e/run\.sh)[\"']?(?:[\s;|&)\"']|$)",
+            cmd,
+        )
+        if e2ecall:
+            sys.stderr.write(
+                "DENY: running a live e2e gate in this (premium) session. Live e2e is mechanical "
+                "supervision that burns real minutes + tokens — dispatch it to a CHEAP model instead "
+                "(Agent tool, economy tier e.g. haiku), and have the worker prefix each gate command "
+                "with E2E_ECONOMY=1 (the declaration 'I am the dispatched economy runner'). "
+                "Read: cto-orchestration/SKILL.md §0 (不自己跑长 E2E / model 按活分档).\n"
+            )
+            return 2
 
     return 0
 
