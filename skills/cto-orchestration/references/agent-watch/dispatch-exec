@@ -10,8 +10,12 @@
 #   round N  : dispatch-exec send <session> (-f <file> | -m <text>)
 #   query    : dispatch-exec status <session>          (one-shot, stateless)
 #   block    : dispatch-exec watch  <session>          (poll until terminal; typed exit, same vocab as watch)
-# Ask-user protocol (headless agents can't prompt): the goal must say "on doubt, write
-# BLOCKED.md to the cwd and stop" — a fresh BLOCKED.md maps to exit 4 WAITING-INPUT.
+# Ask-user protocol (headless agents can't prompt): every round prompt carries a footer —
+# "on doubt, write BLOCKED.md to the cwd and stop"; a fresh BLOCKED.md maps to exit 4 WAITING-INPUT.
+# NOT a transaction system (owner ruling 2026-07-12): concurrent dispatch against one
+# session is an orchestrator-discipline bug — the pid lock below only stops the obvious
+# double-send footgun. No reaper, no rollback: a round torn mid-transition is recovered
+# by teardown + re-dispatch, not by machinery.
 # Engine facts baked in (probed 2026-07-11, all three on this machine):
 #   claude: -p --output-format json → result frame has session_id; resume MUST run in the
 #           SAME cwd (sessions are project-scoped — cross-cwd resume finds nothing).
@@ -29,42 +33,17 @@ q() { printf %q "$1"; }
 # prose (self-caught 2026-07-11).
 last_round() { awk '/^── round [0-9]+ @/{buf=""; next} {buf=buf $0 RS} END{printf "%s", buf}' "$DIR/$1.exec.out" 2>/dev/null; }
 
-acquire_round_lock() { # $1 session; complete owner file -> atomic hard-link to fixed lock
-  local s="$1" lock="$DIR/$1.exec.lock" owner pid token reap="$DIR/$1.exec.lock-reap"
-  owner="$(mktemp "$DIR/$s.exec.lock-owner-XXXXXXXX")" || return 1
-  token="$$-$(basename "$owner")"; printf 'pid=%s\ntoken=%s\n' "$$" "$token" > "$owner"
-  while ! ln "$owner" "$lock" 2>/dev/null; do
-    pid="$(sed -n 's/^pid=//p' "$lock" 2>/dev/null | head -1)"
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      rm -f "$owner"; echo "ERR: round transition already in progress for '$s' (pid $pid; PID reuse is treated as live — use teardown only after verification)" >&2; return 1
-    fi
-    # Serialize stale reapers, then re-read under that guard before unlinking.
-    if mkdir "$reap" 2>/dev/null; then
-      pid="$(sed -n 's/^pid=//p' "$lock" 2>/dev/null | head -1)"
-      if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then rm -f "$lock"; fi
-      rmdir "$reap" 2>/dev/null || true
-    else
-      rm -f "$owner"
-      echo "ERR: stale-lock recovery already in progress for '$s'; retry, or teardown after verification" >&2
-      return 1
-    fi
-  done
-  ROUND_LOCK_OWNER="$owner"; ROUND_LOCK_TOKEN="$token"; ROUND_LOCK_PATH="$lock"
-  [ -n "${AGENT_WATCH_LOCK_OWNER_PAUSE:-}" ] && /bin/sleep "$AGENT_WATCH_LOCK_OWNER_PAUSE"
-  return 0
-}
-release_round_lock() {
-  local lock="${ROUND_LOCK_PATH:-}" owner="${ROUND_LOCK_OWNER:-}" token="${ROUND_LOCK_TOKEN:-}" held
-  held="$(sed -n 's/^token=//p' "$lock" 2>/dev/null | head -1)"
-  [ -n "$token" ] && [ "$held" = "$token" ] && rm -f "$lock"
-  [ -n "$owner" ] && rm -f "$owner"
-  ROUND_LOCK_OWNER=""; ROUND_LOCK_TOKEN=""; ROUND_LOCK_PATH=""
-}
-cleanup_initial_meta() {
-  if [ "${INITIAL_META_CREATED:-0}" = 1 ] && [ "${INITIAL_META_COMMITTED:-0}" != 1 ]; then
-    [ -n "${INITIAL_META_OWNER:-}" ] && [ "$INITIAL_META_OWNER" -ef "$DIR/${S:-}.exec.meta" ] 2>/dev/null && rm -f "$DIR/${S}.exec.meta"
-    [ -n "${INITIAL_META_OWNER:-}" ] && rm -f "$INITIAL_META_OWNER"
+LOCKFILE=""
+take_round_lock() { # $1 session — thin double-send guard: holder alive → refuse; dead → take over
+  LOCKFILE="$DIR/$1.exec.lock"
+  local pid; pid="$(cat "$LOCKFILE" 2>/dev/null || true)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    echo "ERR: round transition already in progress for '$1' (pid $pid) — wait, or teardown after verification" >&2
+    return 1
   fi
+  printf '%s\n' "$$" > "$LOCKFILE"
+  trap 'rm -f "$LOCKFILE"' EXIT
+  trap 'exit 130' HUP INT TERM   # route signals through EXIT so the lock never leaks
 }
 
 # Preserve the caller's prompt byte-for-byte as a prefix, then append the same non-interactive
@@ -111,16 +90,10 @@ engine_cmd() {
 
 # ── start one round under the tmux supervisor ──  $1 session  $2 prompt-file
 start_round() {
-  local s="$1" f="$2" eng cwd sid extra cmd round round_prompt gate next_meta next_stamp backup failed=0
-  acquire_round_lock "$s" || exit 1
-  trap 'release_round_lock; cleanup_initial_meta' EXIT
-  trap 'release_round_lock; cleanup_initial_meta; exit 130' HUP INT TERM
+  local s="$1" f="$2" eng cwd sid extra cmd round round_prompt
+  take_round_lock "$s" || exit 1
   eng="$(meta_get "$s" engine)"; cwd="$(meta_get "$s" cwd)"
   sid="$(meta_get "$s" sid)"; extra="$(meta_get "$s" args)"; round="$(meta_get "$s" round)"
-  if [ -n "${EXPECTED_ENGINE:-}" ] && { [ "$eng" != "$EXPECTED_ENGINE" ] || [ "$cwd" != "$EXPECTED_CWD" ]; }; then
-    echo "ERR: session '$s' metadata belongs to engine=$eng cwd=$cwd, not requested engine=$EXPECTED_ENGINE cwd=$EXPECTED_CWD" >&2
-    exit 1
-  fi
   if [ "$round" -gt 0 ]; then
     harvest_sid "$s" || { echo "ERR: could not persist engine session id for '$s'" >&2; exit 1; }
     sid="$(meta_get "$s" sid)"
@@ -133,55 +106,28 @@ start_round() {
   round_prompt="$(build_round_prompt "$s" "$round" "$cwd" "$f")" || {
     echo "ERR: failed to build headless prompt for '$s' round $round" >&2; exit 1
   }
-  gate="$(mktemp "$DIR/$s.exec.gate-r${round}-XXXXXXXX")" || { rm -f "$round_prompt"; exit 1; }
-  next_meta="$(mktemp "$DIR/$s.exec.meta-next-XXXXXXXX")" || { rm -f "$round_prompt" "$gate"; exit 1; }
-  next_stamp="$(mktemp "$DIR/$s.exec.stamp-next-XXXXXXXX")" || { rm -f "$round_prompt" "$gate" "$next_meta"; exit 1; }
-  backup="$(mktemp -d "$DIR/$s.exec.rollback-XXXXXXXX")" || { rm -f "$round_prompt" "$gate" "$next_meta" "$next_stamp"; exit 1; }
-  for name in meta rc round-started out; do
-    if [ -e "$DIR/$s.exec.$name" ]; then cp -p "$DIR/$s.exec.$name" "$backup/$name" || exit 1; else : > "$backup/$name.absent"; fi
-  done
-  awk -v r="$round" 'BEGIN{done=0} /^round=/{print "round=" r; done=1; next} {print} END{if(!done) print "round=" r}' \
-    "$DIR/$s.exec.meta" > "$next_meta" || { rm -f "$round_prompt" "$gate" "$next_meta" "$next_stamp"; exit 1; }
   cmd="$(engine_cmd "$eng" "$s" "$cwd" "$round_prompt" "$sid" "$extra")"
-  cmd="while [ -e $(q "$gate") ]; do /bin/sleep 0.02; done; $cmd"
-  # Check the launch itself: no `set -e` here, so an unchecked failure printed success,
-  # left round-1 meta behind (permanent lane hijack), and destroyed the previous round's
-  # rc (codex independent review 2026-07-11).
+  # Launch FIRST, mutate state only on success: the unchecked-failure path once printed
+  # success, orphaned round-1 meta (permanent lane hijack) and destroyed the previous
+  # round's rc (codex independent review 2026-07-11). The engine needs its first ~50ms+
+  # of CLI startup before touching out/rc, so the post-launch writes below win that race
+  # in practice; a crash in between is teardown-recoverable (see header — no rollback).
   if ! tmux new-session -d -s "$s" -c "$cwd" "$cmd >> $(q "$DIR/$s.exec.out") 2>&1; echo \$? > $(q "$DIR/$s.exec.rc")"; then
     echo "ERR: tmux new-session failed for '$s' (round $round not started)" >&2
-    rm -f "$round_prompt" "$gate" "$next_meta" "$next_stamp"; rm -rf "$backup"
-    [ "$round" = 1 ] && [ "${INITIAL_META_CREATED:-0}" = 1 ] && rm -f "$DIR/$s.exec.meta"
+    rm -f "$round_prompt"; [ "$round" = 1 ] && rm -f "$DIR/$s.exec.meta"
     exit 1
   fi
-  # Commit prepared state while the engine is still behind the gate. Any failure kills the
-  # supervisor and keeps the gate closed: never run work against a silently uncommitted round.
-  mv "$next_meta" "$DIR/$s.exec.meta" || failed=1
-  [ "${AGENT_WATCH_TEST_COMMIT_FAIL_AT:-}" = meta ] && failed=1
-  [ "$failed" = 0 ] && rm -f "$DIR/$s.exec.rc" || true
-  [ "$failed" = 0 ] && mv "$next_stamp" "$DIR/$s.exec.round-started" || { [ "$failed" = 0 ] && failed=1; }
-  [ "${AGENT_WATCH_TEST_COMMIT_FAIL_AT:-}" = stamp ] && failed=1
-  [ "$failed" = 0 ] && printf '── round %s @ %s ──\n' "$round" "$(date '+%F %T')" >> "$DIR/$s.exec.out" || { [ "$failed" = 0 ] && failed=1; }
-  [ "${AGENT_WATCH_TEST_COMMIT_FAIL_AT:-}" = out ] && failed=1
-  if [ "$failed" != 0 ]; then
-    tmux kill-session -t "$s" 2>/dev/null || true
-    for name in meta rc round-started out; do
-      if [ -e "$backup/$name.absent" ]; then rm -f "$DIR/$s.exec.$name"
-      else cp -p "$backup/$name" "$DIR/$s.exec.$name" || true; fi
-    done
-    [ "$round" = 1 ] && [ "${INITIAL_META_CREATED:-0}" = 1 ] && rm -f "$DIR/$s.exec.meta"
-    rm -f "$round_prompt" "$next_meta" "$next_stamp"; rm -rf "$backup"
-    echo "ERR: round $round state commit failed for '$s'; engine was not released" >&2
-    exit 1
-  fi
-  rm -f "$gate" || { tmux kill-session -t "$s" 2>/dev/null || true; echo "ERR: could not release start gate for '$s'" >&2; exit 1; }
-  rm -rf "$backup"; INITIAL_META_COMMITTED=1; [ -n "${INITIAL_META_OWNER:-}" ] && rm -f "$INITIAL_META_OWNER"
+  sed -i '' "s/^round=.*/round=$round/" "$DIR/$s.exec.meta" 2>/dev/null \
+    || sed -i "s/^round=.*/round=$round/" "$DIR/$s.exec.meta"
+  rm -f "$DIR/$s.exec.rc"
+  : > "$DIR/$s.exec.round-started"                       # freshness stamp: deliverable/BLOCKED must postdate this
+  printf '── round %s @ %s ──\n' "$round" "$(date '+%F %T')" >> "$DIR/$s.exec.out"
   echo "round $round started: $eng → tmux '$s' (supervisor only; engine is headless)"
   echo "out: $DIR/$s.exec.out"
   echo "status: dispatch status $s"
-  release_round_lock; trap - EXIT HUP INT TERM
 }
 
-# ── discover is pure-read; harvest persists only while start_round holds the round lock ──
+# ── discover is pure-read (status/watch never mutate meta); harvest persists, writers only ──
 discover_sid() { # $1 session; prints discovered id or empty
   local s="$1" eng sid=""
   eng="$(meta_get "$s" engine)"
@@ -192,7 +138,7 @@ discover_sid() { # $1 session; prints discovered id or empty
   esac
   printf '%s\n' "$sid"
 }
-harvest_sid() { # $1 session; caller MUST hold the round lock
+harvest_sid() { # $1 session; called from start_round only (under the round lock)
   local s="$1" sid tmp
   sid="$(discover_sid "$s")"
   [ -n "$sid" ] || return 0
@@ -285,18 +231,13 @@ case "${1:-}" in
     [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
     CWD="$(cd "$CWD" && pwd -P)"
     mkdir -p "$DIR"
-    EXPECTED_ENGINE="$ENG"; EXPECTED_CWD="$CWD"; INITIAL_META_CREATED=0; INITIAL_META_COMMITTED=0; INITIAL_META_OWNER=""
+    [ -f "$DIR/$S.exec.meta" ] && { echo "ERR: session '$S' already exists ($DIR/$S.exec.meta) — teardown or pick a new name" >&2; exit 1; }
     # Collision check BEFORE writing meta: start_round's guard fires too late — a failed
     # launch would orphan the meta and permanently self-route that (TUI) session name into
     # the exec lane (P1, independent review 2026-07-11).
     if tmux has-session -t "$S" 2>/dev/null; then echo "ERR: tmux session '$S' already exists" >&2; exit 1; fi
-    INITIAL_META_OWNER="$(mktemp "$DIR/$S.exec.meta-init-XXXXXXXX")" || exit 1
     { printf 'engine=%s\ncwd=%s\nround=0\nargs=%s\n' "$ENG" "$CWD" "$EXTRA"
-      [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"; } > "$INITIAL_META_OWNER"
-    if ! ln "$INITIAL_META_OWNER" "$DIR/$S.exec.meta" 2>/dev/null; then
-      rm -f "$INITIAL_META_OWNER"; echo "ERR: session '$S' already exists ($DIR/$S.exec.meta) — teardown or pick a new name" >&2; exit 1
-    fi
-    INITIAL_META_CREATED=1
+      [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"; } > "$DIR/$S.exec.meta"
     start_round "$S" "$GOAL"
     echo "monitor: dispatch status $S   (typed one-shot)  |  watch $S  (blocking, run_in_background)"
     ;;

@@ -29,7 +29,7 @@ chk_contains "engine cmd json output" "--output-format json" "$cmd"
 chk_contains "engine cmd reads generated round prompt" "cat $(printf %q "$round1_prompt")" "$cmd"
 chk_contains "engine cmd passes extra args" "--model haiku" "$cmd"
 chk_contains "supervisor writes rc on exit" "exec.rc" "$cmd"
-chk_eq "engine redirection is after start gate" 1 "$(printf '%s' "$cmd" | grep -qE '^while .*; done; claude .* >> ' && echo 1 || echo 0)"
+chk_eq "engine runs directly, no start-gate spin" 1 "$(printf '%s' "$cmd" | grep -qE '^claude -p .* >> ' && echo 1 || echo 0)"
 goal_bytes="$(wc -c < "$SANDBOX/goal.md" | tr -d ' ')"
 chk_eq "round 1 preserves original prompt bytes as prefix" 0 "$(cmp -s "$SANDBOX/goal.md" <(head -c "$goal_bytes" "$round1_prompt"); echo $?)"
 chk_contains "round 1 appends headless footer" "HEADLESS ROUND PROTOCOL" "$(cat "$round1_prompt")"
@@ -55,25 +55,7 @@ out="$(bash "$DEXEC" claude exS "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
 chk_eq "duplicate session rc1" 1 "$rc"
 sandbox_clean
 
-# Concurrent first launches use atomic create-if-absent metadata; loser cannot overwrite winner.
-sandbox_new; mkdir -p "$SANDBOX/winner cwd" "$SANDBOX/loser-cwd"; printf 'go\n' > "$SANDBOX/goal.md"
-export AGENT_WATCH_LOCK_OWNER_PAUSE=0.30 FAKE_TMUX_LAUNCH_LOG="$SANDBOX/first-launch.log" FAKE_TMUX_CMD_FILE="$SANDBOX/winner.cmd"
-bash "$DEXEC" claude firstRace "$SANDBOX/winner cwd" --goal "$SANDBOX/goal.md" > "$SANDBOX/winner.out" 2>&1 & winner_pid=$!
-# bounded 3s: under runner load the background bash can take >0.2s to reach the lock (flaked live 2026-07-12)
-for _ in $(seq 150); do [ -e "$WATCH_RUN_DIR/firstRace.exec.lock" ] && break; /bin/sleep 0.02; done
-out="$(bash "$DEXEC" omp firstRace "$SANDBOX/loser-cwd" --goal "$SANDBOX/goal.md" 2>&1)"; loser_rc=$?
-wait "$winner_pid"; winner_rc=$?
-unset AGENT_WATCH_LOCK_OWNER_PAUSE
-chk_eq "concurrent first-launch winner succeeds" 0 "$winner_rc"
-chk_eq "concurrent first-launch loser rejected" 1 "$loser_rc"
-chk_eq "first-launch metadata keeps winner engine" claude "$(sed -n 's/^engine=//p' "$WATCH_RUN_DIR/firstRace.exec.meta")"
-winner_cwd="$(cd "$SANDBOX/winner cwd" && pwd -P)"
-chk_eq "first-launch metadata keeps winner cwd" "$winner_cwd" "$(sed -n 's/^cwd=//p' "$WATCH_RUN_DIR/firstRace.exec.meta")"
-chk_contains "first-launch actual command matches winner" "claude -p" "$(cat "$SANDBOX/winner.cmd")"
-chk_eq "concurrent first launches start one tmux engine" 1 "$(wc -l < "$FAKE_TMUX_LAUNCH_LOG" | tr -d ' ')"
-sandbox_clean
-
-# Prompt construction failure is pre-commit: previous round remains DONE, including rc and round.
+# Prompt construction failure precedes any state mutation: previous round remains DONE.
 sandbox_new; mkdir -p "$SANDBOX/wt" "$SANDBOX/not-a-prompt"
 mkmeta="$WATCH_RUN_DIR/bf.exec.meta"
 printf 'engine=claude\ncwd=%s\nround=1\nargs=\nsid=sid-bf\n' "$SANDBOX/wt" > "$mkmeta"
@@ -241,7 +223,6 @@ echo "== dispatch-exec: send (resume round) =="
 sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate conc "$SANDBOX/wt"
 printf 'sid=sid-conc\n' >> "$WATCH_RUN_DIR/conc.exec.meta"; : > "$WATCH_RUN_DIR/conc.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/conc.exec.rc"
 export FAKE_TMUX_HOLD_FILE="$SANDBOX/hold" FAKE_TMUX_LAUNCH_LOG="$SANDBOX/launch.log"
-export AGENT_WATCH_LOCK_OWNER_PAUSE=0.30
 : > "$FAKE_TMUX_HOLD_FILE"
 bash "$DEXEC" send conc -m first > "$SANDBOX/first.out" 2>&1 & first_pid=$!
 for _ in $(seq 150); do [ -e "$WATCH_RUN_DIR/conc.exec.lock" ] && break; /bin/sleep 0.02; done
@@ -255,7 +236,6 @@ chk_eq "concurrent sends increment round once" 2 "$(sed -n 's/^round=//p' "$WATC
 chk_eq "concurrent metadata leaves no temp" 0 "$(find "$WATCH_RUN_DIR" -name 'conc.exec.meta-*' | wc -l | tr -d ' ')"
 chk_not_contains "concurrent loser has no mktemp collision" "mktemp" "$out"
 chk_not_contains "concurrent winner has no mktemp collision" "mktemp" "$(cat "$SANDBOX/first.out")"
-unset AGENT_WATCH_LOCK_OWNER_PAUSE
 sandbox_clean
 
 # Pure-read status racing a send cannot roll metadata back after locked sid harvest/round commit.
@@ -273,27 +253,17 @@ chk_eq "status race keeps deliverable" "$SANDBOX/wt/*.artifact" "$(sed -n 's/^de
 chk_eq "status race persists discovered sid once" 1 "$(grep -c '^sid=sid-srace$' "$WATCH_RUN_DIR/srace.exec.meta")"
 sandbox_clean
 
-# Dead owner PID makes the mkdir lock stale and recoverable.
+# Dead holder PID makes the lock stale: the next send takes over and proceeds.
 sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate stale "$SANDBOX/wt"
 printf 'sid=sid-stale\n' >> "$WATCH_RUN_DIR/stale.exec.meta"; : > "$WATCH_RUN_DIR/stale.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/stale.exec.rc"
-printf 'pid=99999999\ntoken=dead-owner\n' > "$WATCH_RUN_DIR/stale.exec.lock"
+printf '99999999\n' > "$WATCH_RUN_DIR/stale.exec.lock"
 out="$(bash "$DEXEC" send stale -m retry 2>&1)"; rc=$?
 chk_eq "stale round lock recovers" 0 "$rc"
 chk_eq "stale recovery starts round 2" 2 "$(sed -n 's/^round=//p' "$WATCH_RUN_DIR/stale.exec.meta")"
 chk_eq "stale lock removed after launch" 0 "$([ -e "$WATCH_RUN_DIR/stale.exec.lock" ] && echo 1 || echo 0)"
 sandbox_clean
 
-# A competing stale reaper fails boundedly instead of spinning forever.
-sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate reapbusy "$SANDBOX/wt"
-printf 'sid=sid-reap\n' >> "$WATCH_RUN_DIR/reapbusy.exec.meta"; : > "$WATCH_RUN_DIR/reapbusy.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/reapbusy.exec.rc"
-printf 'pid=99999999\ntoken=dead-owner\n' > "$WATCH_RUN_DIR/reapbusy.exec.lock"; mkdir "$WATCH_RUN_DIR/reapbusy.exec.lock-reap"
-out="$(bash "$DEXEC" send reapbusy -m retry 2>&1)"; rc=$?
-chk_eq "busy stale reaper rejects boundedly" 1 "$rc"
-chk_contains "busy stale reaper suggests retry or teardown" "retry, or teardown" "$out"
-chk_eq "busy stale reaper preserves round" 1 "$(sed -n 's/^round=//p' "$WATCH_RUN_DIR/reapbusy.exec.meta")"
-sandbox_clean
-
-# Resume launch failure is rollback-safe: prior DONE round/meta/rc/output remain authoritative.
+# Resume launch failure mutates nothing: prior DONE round/meta/rc/output remain authoritative.
 sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate lf "$SANDBOX/wt"
 printf 'sid=sid-lf\n' >> "$WATCH_RUN_DIR/lf.exec.meta"; printf 'prior output\n' > "$WATCH_RUN_DIR/lf.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/lf.exec.rc"
 before_meta="$(cat "$WATCH_RUN_DIR/lf.exec.meta")"; before_out="$(cat "$WATCH_RUN_DIR/lf.exec.out")"
@@ -306,27 +276,8 @@ chk_eq "resume launch failure preserves rc" 0 "$(cat "$WATCH_RUN_DIR/lf.exec.rc"
 chk_eq "resume launch failure preserves output" "$before_out" "$(cat "$WATCH_RUN_DIR/lf.exec.out")"
 out="$(bash "$DEXEC" status lf 2>&1)"; rc=$?
 chk_eq "resume launch failure leaves prior DONE" 0 "$rc"
-chk_eq "resume launch failure cleans prepared files" 0 "$(find "$WATCH_RUN_DIR" \( -name 'lf.exec.gate-*' -o -name 'lf.exec.meta-next-*' -o -name 'lf.exec.stamp-next-*' -o -name 'lf.exec.prompt-*' \) | wc -l | tr -d ' ')"
+chk_eq "resume launch failure cleans prepared files" 0 "$(find "$WATCH_RUN_DIR" -name 'lf.exec.prompt-*' | wc -l | tr -d ' ')"
 sandbox_clean
-
-# Mid-commit failures at meta/stamp/out all restore the previous completed round and never release.
-for fail_at in meta stamp out; do
-  sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate "cf$fail_at" "$SANDBOX/wt"
-  sess="cf$fail_at"; printf 'sid=sid-%s\n' "$fail_at" >> "$WATCH_RUN_DIR/$sess.exec.meta"
-  printf 'old-output-%s\n' "$fail_at" > "$WATCH_RUN_DIR/$sess.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/$sess.exec.rc"
-  printf 'old-stamp-%s\n' "$fail_at" > "$WATCH_RUN_DIR/$sess.exec.round-started"
-  before_meta="$(cat "$WATCH_RUN_DIR/$sess.exec.meta")"; before_out="$(cat "$WATCH_RUN_DIR/$sess.exec.out")"; before_stamp="$(cat "$WATCH_RUN_DIR/$sess.exec.round-started")"
-  out="$(AGENT_WATCH_TEST_COMMIT_FAIL_AT="$fail_at" bash "$DEXEC" send "$sess" -m retry 2>&1)"; rc=$?
-  chk_eq "commit-$fail_at injection fails" 1 "$rc"
-  chk_contains "commit-$fail_at reports engine not released" "engine was not released" "$out"
-  chk_eq "commit-$fail_at restores meta" "$before_meta" "$(cat "$WATCH_RUN_DIR/$sess.exec.meta")"
-  chk_eq "commit-$fail_at restores rc" 0 "$(cat "$WATCH_RUN_DIR/$sess.exec.rc")"
-  chk_eq "commit-$fail_at restores stamp" "$before_stamp" "$(cat "$WATCH_RUN_DIR/$sess.exec.round-started")"
-  chk_eq "commit-$fail_at restores output" "$before_out" "$(cat "$WATCH_RUN_DIR/$sess.exec.out")"
-  out="$(bash "$DEXEC" status "$sess" 2>&1)"; rc=$?
-  chk_eq "commit-$fail_at leaves prior DONE" 0 "$rc"
-  sandbox_clean
-done
 
 # SIGTERM during a held launch must run the lock cleanup trap.
 sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate term "$SANDBOX/wt"
@@ -335,7 +286,7 @@ export FAKE_TMUX_HOLD_FILE="$SANDBOX/term-hold"; : > "$FAKE_TMUX_HOLD_FILE"
 bash "$DEXEC" send term -m stop-me > "$SANDBOX/term.out" 2>&1 & term_pid=$!
 for _ in $(seq 150); do [ -e "$FAKE_TMUX_HOLD_FILE.started" ] && break; /bin/sleep 0.02; done
 kill -TERM "$term_pid" 2>/dev/null || true; rm -f "$FAKE_TMUX_HOLD_FILE"; wait "$term_pid" 2>/dev/null || true
-for _ in 1 2 3 4 5; do [ ! -d "$WATCH_RUN_DIR/term.exec.lock" ] && break; /bin/sleep 0.02; done
+for _ in $(seq 150); do [ ! -e "$WATCH_RUN_DIR/term.exec.lock" ] && break; /bin/sleep 0.02; done
 chk_eq "SIGTERM leaves no round lock" 0 "$([ -e "$WATCH_RUN_DIR/term.exec.lock" ] && echo 1 || echo 0)"
 sandbox_clean
 
@@ -415,7 +366,7 @@ printf 'engine=claude\ncwd=%s\nround=1\nargs=\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR
 : > "$WATCH_RUN_DIR/wd.exec.round-started"
 printf '{"result":"ok","session_id":"s"}\n' > "$WATCH_RUN_DIR/wd.exec.out"
 printf '0\n' > "$WATCH_RUN_DIR/wd.exec.rc"
-printf 'pid=99999999\ntoken=dead-owner\n' > "$WATCH_RUN_DIR/wd.exec.lock"
+printf '99999999\n' > "$WATCH_RUN_DIR/wd.exec.lock"   # stale lock: watch/teardown must not care
 out="$(bash "$WATCH" wd 2>&1)"; rc=$?
 chk_eq "watch delegate DONE rc0" 0 "$rc"
 chk_contains "watch delegate DONE marker" "DONE" "$out"
