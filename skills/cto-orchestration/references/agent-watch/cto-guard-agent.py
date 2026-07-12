@@ -59,7 +59,8 @@ def main():
                     "artifact (a11y-driven browser agents write snapshots, not image screenshots — 'zero "
                     "screenshots' != stuck; killed real progress twice on 2026-07-04). POKE it first via "
                     "SendMessage and read its reply. Only if it CONFIRMS stuck / reports BROWSER-UNAVAILABLE: "
-                    f"`touch /tmp/cto-allow-kill-{tid}` then re-run TaskStop.\n"
+                    f"`touch /tmp/cto-allow-kill-{tid}` then re-run TaskStop. "
+                    "Read: cto-orchestration/references/agent-watch/README.md (完成通知黑洞).\n"
                 )
                 return 2
         return 0
@@ -106,7 +107,8 @@ def main():
                 "  reasoning tier (adversarial review, architecture, long-context research) -> "
                 "e.g. opus, gpt-5.6\n"
                 "  premium/frontier stays allowed, but it must be deliberate, not silent inheritance. "
-                "(subagent_type \"fork\" is exempt — it always inherits the parent model.)\n"
+                "(subagent_type \"fork\" is exempt — it always inherits the parent model.) "
+                "Read: cto-orchestration/SKILL.md §0 (model 按活分档).\n"
             )
             return 2
         return 0

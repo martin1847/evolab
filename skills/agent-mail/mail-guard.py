@@ -65,7 +65,7 @@ def main():
         "  <body: conclusion first, action items, evidence as paths/URLs>\n"
         "  EOF\n"
         "Reading mail and the roster directly stays fine; only delivery must go through "
-        "`agent-bus send`.\n"
+        "`agent-bus send`. Read: agent-mail/SKILL.md §agent-bus helper.\n"
     )
     return 2
 

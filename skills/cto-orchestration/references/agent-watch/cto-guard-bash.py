@@ -43,7 +43,8 @@ def main():
             "DENY: shell & backgrounding -> ORPHAN (no completion callback; the orchestrator can't track it "
             "and the wrapper falsely reports done). Fires on trailing `&`, `& ;`, `& disown`, AND "
             "background-then-chain `foo & bar` (e.g. `nohup … & echo`). `&&`, `2>&1`/`&>`/`N>&M` redirects, "
-            "and quoted `&` are allowed. Drop the & and use the Bash tool run_in_background:true instead.\n"
+            "and quoted `&` are allowed. Drop the & and use the Bash tool run_in_background:true instead. "
+            "Read: cto-orchestration/references/agent-watch/README.md §typed 状态.\n"
         )
         return 2
 
@@ -62,7 +63,8 @@ def main():
             "DENY: hand-rolled 'idle==done' poller (loop+capture-pane+idle grep, no positive-evidence "
             "check). idle≠done — staged tasks idle at every commit boundary. Add a POSITIVE check: git "
             "deliverable (git diff --stat / git log ..HEAD) for agent completion, or a pane grep for "
-            "Verdict/prompt for reviews.\n"
+            "Verdict/prompt for reviews. Read: cto-orchestration/references/agent-watch/README.md "
+            "§判完成要正向证据.\n"
         )
         return 2
 
@@ -93,7 +95,8 @@ def main():
                 "24-min stall, 2026-07-04). Use `bash <agent-watch>/dispatch send <session> -m \"…\"` (or "
                 "-f <file>) instead — it writes the instruction to a file, sends only a short ASCII "
                 "reference, and VERIFIES the session transitioned to WORKING. Control-key sends "
-                "(Enter/Escape/C-u/short ASCII menu picks) are fine and not blocked.\n"
+                "(Enter/Escape/C-u/short ASCII menu picks) are fine and not blocked. "
+                "Read: cto-orchestration/references/agent-watch/README.md (裸 send-keys 坑枚举).\n"
             )
             return 2
 
@@ -130,7 +133,8 @@ def main():
                 "DENY: blocking watch/`dispatch --goal` in the FOREGROUND — it blocks until the agent's "
                 "terminal state, so a foreground Bash timeout (default 2min) kills it mid-watch (exit 143) "
                 "and the watcher dies with it. Re-run with run_in_background:true. Synchronous shell "
-                "orchestrators (codex): prefix the command with AGENT_WATCH_SYNC=1 to pass.\n"
+                "orchestrators (codex): prefix the command with AGENT_WATCH_SYNC=1 to pass. "
+                "Read: cto-orchestration/references/agent-watch/README.md §Launch.\n"
             )
             return 2
 
