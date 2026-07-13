@@ -20,6 +20,8 @@ chk_eq "launch rc0" 0 "$rc"
 chk_contains "launch announces round 1" "round 1 started" "$out"
 chk_eq "meta engine" claude "$(sed -n 's/^engine=//p' "$WATCH_RUN_DIR/exS.exec.meta")"
 chk_eq "meta round" 1 "$(sed -n 's/^round=//p' "$WATCH_RUN_DIR/exS.exec.meta")"
+chk_eq "legacy launch has no workflow meta" 0 "$(grep -c '^workflow=' "$WATCH_RUN_DIR/exS.exec.meta" || true)"
+chk_eq "legacy launch has no max-rounds meta" 0 "$(grep -c '^max_rounds=' "$WATCH_RUN_DIR/exS.exec.meta" || true)"
 chk_eq "round stamp exists" 1 "$([ -f "$WATCH_RUN_DIR/exS.exec.round-started" ] && echo 1 || echo 0)"
 chk_eq "no rc yet" 0 "$([ -f "$WATCH_RUN_DIR/exS.exec.rc" ] && echo 1 || echo 0)"
 cmd="$(cat "$FAKE_TMUX_CMD_FILE")"
@@ -74,6 +76,58 @@ sandbox_new
 mkdir -p "$SANDBOX/wt"
 out="$(bash "$DEXEC" omp exG "$SANDBOX/wt" 2>&1)"; rc=$?
 chk_eq "missing goal rc1" 1 "$rc"
+sandbox_clean
+
+echo "== dispatch-exec: explicit review-loop budget =="
+
+# workflow and a positive max-rounds are an inseparable opt-in; invalid launches leave no meta.
+sandbox_new
+mkdir -p "$SANDBOX/wt"; printf 'review\n' > "$SANDBOX/goal.md"
+for case_args in \
+  '--workflow review-loop' \
+  '--max-rounds 2' \
+  '--workflow other --max-rounds 2' \
+  '--workflow review-loop --max-rounds 0' \
+  '--workflow review-loop --max-rounds nope'
+do
+  set -- $case_args
+  out="$(bash "$DEXEC" codex badBudget "$SANDBOX/wt" --goal "$SANDBOX/goal.md" "$@" 2>&1)"; rc=$?
+  chk_eq "invalid budget rejected: $case_args" 1 "$rc"
+  chk_eq "invalid budget leaves no meta: $case_args" 0 "$([ -e "$WATCH_RUN_DIR/badBudget.exec.meta" ] && echo 1 || echo 0)"
+done
+sandbox_clean
+
+# max-rounds counts total rounds: round 1 launches, round 2 resumes, the next send exits 9
+# before launch or any authoritative session-state mutation.
+sandbox_new
+mkdir -p "$SANDBOX/wt"; printf 'review\n' > "$SANDBOX/goal.md"
+export FAKE_TMUX_LAUNCH_LOG="$SANDBOX/launch.log"; : > "$FAKE_TMUX_LAUNCH_LOG"
+out="$(bash "$DEXEC" codex reviewBudget "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 2 2>&1)"; rc=$?
+chk_eq "review-loop launch rc0" 0 "$rc"
+chk_eq "review-loop workflow persisted" review-loop "$(sed -n 's/^workflow=//p' "$WATCH_RUN_DIR/reviewBudget.exec.meta")"
+chk_eq "review-loop max persisted" 2 "$(sed -n 's/^max_rounds=//p' "$WATCH_RUN_DIR/reviewBudget.exec.meta")"
+printf '{"type":"thread.started","thread_id":"tid-budget"}\n' >> "$WATCH_RUN_DIR/reviewBudget.exec.out"
+printf '0\n' > "$WATCH_RUN_DIR/reviewBudget.exec.rc"
+out="$(bash "$DEXEC" send reviewBudget -m 'round two' 2>&1)"; rc=$?
+chk_eq "round below max allowed" 0 "$rc"
+chk_eq "allowed send reaches round 2" 2 "$(sed -n 's/^round=//p' "$WATCH_RUN_DIR/reviewBudget.exec.meta")"
+printf 'round two done\n' >> "$WATCH_RUN_DIR/reviewBudget.exec.out"
+printf '0\n' > "$WATCH_RUN_DIR/reviewBudget.exec.rc"
+before_meta="$(cat "$WATCH_RUN_DIR/reviewBudget.exec.meta")"
+before_rc="$(cat "$WATCH_RUN_DIR/reviewBudget.exec.rc")"
+before_out="$(cat "$WATCH_RUN_DIR/reviewBudget.exec.out")"
+before_launches="$(wc -l < "$FAKE_TMUX_LAUNCH_LOG" | tr -d ' ')"
+before_msgs="$(find "$WATCH_RUN_DIR" -name 'reviewBudget.exec.msg-*' | wc -l | tr -d ' ')"
+out="$(bash "$DEXEC" send reviewBudget -m 'round three' 2>&1)"; rc=$?
+chk_eq "round at max exits 9" 9 "$rc"
+chk_contains "round at max names budget exhaustion" "BUDGET-EXHAUSTED" "$out"
+chk_eq "budget refusal preserves meta" "$before_meta" "$(cat "$WATCH_RUN_DIR/reviewBudget.exec.meta")"
+chk_eq "budget refusal preserves rc" "$before_rc" "$(cat "$WATCH_RUN_DIR/reviewBudget.exec.rc")"
+chk_eq "budget refusal preserves out" "$before_out" "$(cat "$WATCH_RUN_DIR/reviewBudget.exec.out")"
+chk_eq "budget refusal does not launch" "$before_launches" "$(wc -l < "$FAKE_TMUX_LAUNCH_LOG" | tr -d ' ')"
+chk_eq "budget refusal leaves no prompt" 0 "$(find "$WATCH_RUN_DIR" -name 'reviewBudget.exec.prompt-r3-*' | wc -l | tr -d ' ')"
+chk_eq "budget refusal creates no message temp" "$before_msgs" "$(find "$WATCH_RUN_DIR" -name 'reviewBudget.exec.msg-*' | wc -l | tr -d ' ')"
+chk_eq "budget refusal releases lock" 0 "$([ -e "$WATCH_RUN_DIR/reviewBudget.exec.lock" ] && echo 1 || echo 0)"
 sandbox_clean
 
 # codex/omp engine command shapes (claude covered above)
@@ -350,6 +404,11 @@ out="$(DISPATCH_TUI=1 bash "$DISPATCH" claude ifT "$SANDBOX/wt" 2>&1)"; rc=$?
 chk_contains "DISPATCH_TUI=1 launch stays TUI" "dispatched claude" "$out"
 out="$(DISPATCH_EXEC=0 bash "$DISPATCH" claude ifT2 "$SANDBOX/wt" 2>&1)"; rc=$?
 chk_contains "legacy DISPATCH_EXEC=0 escape stays TUI" "dispatched claude" "$out"
+# TUI has no durable round counter: explicit review-loop flags must fail, not leak to the engine.
+out="$(DISPATCH_TUI=1 bash "$DISPATCH" codex ifTR "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 2 2>&1)"; rc=$?
+chk_eq "TUI review-loop rejected" 1 "$rc"
+chk_contains "TUI review-loop rejection is clear" "TUI review-loop is unsupported" "$out"
+chk_eq "TUI review-loop did not launch" 0 "$([ -e "$WATCH_RUN_DIR/ifTR.events" ] && echo 1 || echo 0)"
 # send self-routes by session state (exec.meta present), no switch needed
 printf 'sid=sid-xyz\n' >> "$WATCH_RUN_DIR/ifS.exec.meta"
 printf '0\n' > "$WATCH_RUN_DIR/ifS.exec.rc"; : > "$WATCH_RUN_DIR/ifS.exec.out"

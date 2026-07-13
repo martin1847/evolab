@@ -64,7 +64,9 @@ metadata:
    绑定证明命令）、guardrails（scope + out-of-scope 枚举 / 存疑协议 / stop-and-report / redaction /
    commit-local-no-push）。若依赖 upstream audit/scout，必须填写模板的 Premises 段逐条验证承重 claim。
    **粒度判据**：一个 goal = 自包含单元 + 一个清晰交付物——太小则协调开销
-   吃掉收益，太大则长跑无 check-in、漂移风险随时长涨。
+   吃掉收益，太大则长跑无 check-in、漂移风险随时长涨。iterative/speculative（调研、实验、新能力、
+   自动化、多轮评审）可按需保留单行 `Value gate: <existing gap → incremental value>; falsifier:
+   <cheapest check + rejection signal>`；若无额外价值判断必要则删除，普通 bugfix / 明确小改也删除该行。
 3. **派发 = 融合一条命令 + 验 hook（硬 gate）+ 理解门**：首选
    `references/agent-watch/dispatch <agent> <session> <cwd> --goal <goal文件>`（Bash 工具
    `run_in_background:true` 调一次）——内建 launch→送 goal→验 hook→**自动 watch**，最高频的漏挂
@@ -106,6 +108,10 @@ metadata:
 **先按风险定评审深度**：低风险走轻量 `codex review --base`；高风险（鉴权/迁移/基建/大重构）走完整
 对抗循环——codex 无内置"对抗"档，对抗在 prompt 层，**必须自起会话自控 prompt、别用子命令**。
 完整模板 + 轴全枚举 + 实证 + ledger 栏目 + 达标线见 `references/review-dispatch.md`。判据：
+
+- **显式轮数止损**：首轮 headless 派发加 `--workflow review-loop --max-rounds N`；初轮计 1，后续仍用
+  `dispatch send`。runtime exec.meta 是轮数唯一真源，GOAL 不重复写 review-loop 轮数；到限后 send
+  `BUDGET-EXHAUSTED` exit 9，保持上一轮状态不变并升级人工。
 
 - **brief 冷上下文、不夹带自己的结论**（喂评审者我的判断 = anchoring，换模型却共享推理链 = 异构去相关价值白费）。
 - **激进找、出口滤**：brief 鼓励评审者查一切可疑、别写"只报确定的"（源头克制 = 漏报机器）；过滤放

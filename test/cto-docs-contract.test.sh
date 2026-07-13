@@ -6,8 +6,12 @@ cd "$(dirname "$0")"
 
 SKILL="../skills/cto-orchestration/SKILL.md"
 GOAL="../skills/cto-orchestration/references/goal-template.md"
+REVIEW="../skills/cto-orchestration/references/review-dispatch.md"
+DEXEC="../skills/cto-orchestration/references/agent-watch/dispatch-exec"
 skill_body="$(cat "$SKILL")"
 goal_body="$(cat "$GOAL")"
+review_body="$(cat "$REVIEW")"
+dexec_body="$(cat "$DEXEC")"
 readme_body="$(cat ../skills/cto-orchestration/references/agent-watch/README.md)"
 
 echo "== cto docs contract =="
@@ -40,5 +44,23 @@ chk_contains "SKILL headless gate starts" "headless 由 runtime footer 要求简
 chk_contains "README lane gate split" "理解门按 lane" "$readme_body"
 chk_not_contains "README has no blanket wait gate" "核对无误再放行" "$readme_body"
 chk_not_contains "relative-path contract removed" "Paths relative to" "$goal_body"
+
+value_gate='Value gate: <existing gap → incremental value>; falsifier: <cheapest check + rejection signal>'
+chk_eq "goal has exactly one conditional value-gate line" 1 "$(grep -cF "$value_gate" "$GOAL")"
+chk_contains "value gate is optional for iterative speculative work" "iterative/speculative 任务" "$goal_body"
+chk_contains "value gate says retain only as needed" "可按需保留下一行" "$goal_body"
+chk_contains "value gate deletes when no extra value judgment is needed" "若无额外价值判断必要则删除" "$goal_body"
+chk_contains "ordinary bugfix deletes value gate" "普通 bugfix / 明确小改删除它" "$goal_body"
+chk_not_contains "goal has no fixed Existing coverage field" "Existing coverage:" "$goal_body"
+chk_not_contains "goal has no fixed Incremental value field" "Incremental value:" "$goal_body"
+chk_not_contains "goal has no fixed Cheapest falsification field" "Cheapest falsification" "$goal_body"
+chk_not_contains "goal has no fixed Stop-loss field" "Stop-loss:" "$goal_body"
+chk_contains "review loop launch is explicit" "--workflow review-loop" "$review_body"
+chk_contains "review loop launch requires max rounds" "--max-rounds <N>" "$review_body"
+chk_contains "review loop runtime meta is sole source" "stop-loss 只认 runtime exec.meta" "$review_body"
+chk_contains "goal does not duplicate review rounds" "本 GOAL 不复制轮数" "$goal_body"
+chk_contains "runtime persists workflow" "workflow=%s" "$dexec_body"
+chk_contains "runtime persists max rounds" "max_rounds=%s" "$dexec_body"
+chk_contains "runtime owns budget exhausted" "BUDGET-EXHAUSTED" "$dexec_body"
 
 summary

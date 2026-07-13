@@ -24,6 +24,19 @@ RUN_EARLY="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 if [ "${DISPATCH_TUI:-0}" != "1" ] && [ "${DISPATCH_EXEC:-1}" != "0" ]; then
   case "${1:-}" in omp|codex|claude) exec "$HERE_EARLY/dispatch-exec" "$@" ;; esac
 fi
+# review-loop round budgets are enforced from exec.meta by the headless runtime. The TUI
+# lane has no durable round counter, so reject the opt-in flags instead of leaking them to
+# an engine as unknown args or silently running without the promised stop-loss.
+case "${1:-}" in
+  omp|codex|claude)
+    for arg in "$@"; do
+      case "$arg" in --workflow|--max-rounds)
+        echo "ERR: --workflow/--max-rounds require the default headless lane; TUI review-loop is unsupported" >&2
+        exit 1;;
+      esac
+    done
+    ;;
+esac
 if [ "${1:-}" = "send" ] && [ -n "${2:-}" ] && [ -f "$RUN_EARLY/${2}.exec.meta" ]; then
   exec "$HERE_EARLY/dispatch-exec" "$@"
 fi
@@ -80,7 +93,7 @@ if [ "${1:-}" = "send" ]; then
   echo "[send] STILL STUCK — TUI may be wedged. inspect: tmux capture-pane -t $sess -p | tail -8" >&2; exit 2
 fi
 # ── launch mode (default) ─────────────────────────────────────────────────────
-AGENT="${1:?usage: dispatch <omp|codex|claude> <session> <cwd> [args...]  |  dispatch send <session> -m/-f …}"
+AGENT="${1:?usage: dispatch <omp|codex|claude> <session> <cwd> [--workflow review-loop --max-rounds N] [args...]  |  dispatch send <session> -m/-f …}"
 SESSION="${2:?session}"
 CWD="${3:?cwd}"
 shift 3 2>/dev/null || true

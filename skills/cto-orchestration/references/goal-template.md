@@ -13,6 +13,9 @@
 <凭据/环境入口给**绝对路径**（如 `ACCESS.local.md`——worker cwd 在 worktree，相对搜找不到，实证）；
 build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 
+> iterative/speculative 任务（调研、实验、新能力、自动化、多轮评审）可按需保留下一行；若无额外价值判断必要则删除。普通 bugfix / 明确小改删除它。
+Value gate: <existing gap → incremental value>; falsifier: <cheapest check + rejection signal>
+
 ## Pre-triage hypotheses (verify, don't trust)
 
 - **H1 (likely primary)**: <假设 + file:line 证据>
@@ -40,8 +43,8 @@ build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 - [ ] <可验证后置条件 + **证明命令与预期输出**（如 "`npm test` exits 0"）——写成只看输出即可机械判
   pass/fail 的形态（两个评审独立判得同一结论；harness 原生完成判定器如 Claude Code `/goal` 可直接消费这种条件）>
 - [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立，E2E 范围匹配声明范围。
-- **预算**：<N 轮 / 时长上限>。耗尽仍未达成 = 保持任务 active + STOP and report——预算耗尽 ≠ 完成，
-  别把易达成的子集当目标；不确定 = 未完成。
+- 普通非 review-loop 长跑可按需写时长 / 成本预算；耗尽仍未达成 = 保持任务 active + STOP and report。
+  review-loop 的轮数预算只由 runtime `--max-rounds` / exec.meta 强制，本 GOAL 不复制轮数。
 - 鉴权/会话/用户数据相关改动：验证须覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 / 未登录），
   不得只测新鲜快乐态（见 frontend-verify「状态形状矩阵」）。
 
