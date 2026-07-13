@@ -82,6 +82,13 @@ trivial 单 commit PR 直接合。默认线性是 SOP 约定;Tier 2 本身不强
 - 合并方式 = 本仓声明的集成策略(§4)。
 - 合后删 head 分支(硬层可设自动删)。
 
+### 5.1 合后判定与安全清理
+
+- 先分清三个问题:**历史上是否合入**查 forge 的精确 PR;**改动是否仍在当前目标分支**查 tree / behavior test;**是否已经部署**查不可变 release SHA / image digest / GitOps provenance。三者不得互相代证。
+- `git merge-base --is-ancestor <head> <base>` 只回答 commit 拓扑。squash / rebase-merge 会重写拓扑,原 head 不必成为 base 的 ancestor;**MUST NOT** 据此单独断言“未合入”或授权清理。
+- Forge 取证至少绑定 repository、exact PR、base、head branch + head OID、merged state / `mergedAt` 与 merge commit。commit message 里的 PR 号、`git cherry` / patch-id、反向 apply 或内容相似度只作线索,不得单独放行删除。
+- 自动清理必须 fail closed:先 fresh fetch,再核 exact PR + head OID、目标分支仍包含 forge 的 merge commit、worktree clean 且 head 无新增 commit;只处理 allowlist 内 feature branch,先 dry-run,删除前按 OID 再校验。worktree、local ref、remote ref 分开处理;远端删除必须显式授权。
+
 ## 6. 提交信息纪律
 
 - 讲清意图;祈使句、简洁。

@@ -1,6 +1,6 @@
 ---
 name: git-workflow-standard
-version: 1.0.4
+version: 1.0.5
 description: 生产级 Git 协作 SOP——受保护分支(main/master/develop/dev/release/**/project/*)按仓库 tier 执行服务端门禁(Tier 1 禁 force/delete;Tier 2 要求 PR 且默认允许 self-merge;Tier 3 显式接入 required CI)、改动从 feature 分支起、base 移动且与你改动重叠才 rebase、集成策略默认 squash、提交不加 AI 签名。任何 git commit / push / 开 PR / 建分支 / 合并场景加载;agent 写完代码准备提交前必读。Use when committing, pushing, opening a PR, branching, rebasing, or merging in any company repo.
 ---
 
@@ -35,6 +35,7 @@ canonical = 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓的 enro
 - **rebase-merge**:偏好保留 PR 内分块 commit 且要线性的仓。
 - **为何弃 merge-commit**:全 agent、无人读 git 历史 → merge-commit 卖点失效(详见 references §4)。**这是 SOP 默认,不是 Tier 2 服务端硬门**;repo-local 若强制 linear 再按本地门执行。
 - **对抗评审的知识**(约束 / 被否方案)落 **ADR + PR 记录 + commit trailer**,不进 commit graph —— squash 丢 exhaust 不丢 knowledge。
+- **合后判定**:squash / rebase-merge 后原 head 不必是 base 的 ancestor,**MUST NOT** 用 ancestry 单独断言“未合入”或授权清理。历史合入查 forge 的精确 PR;当前内容查 tree / test;部署查不可变 release provenance(见 references §5.1)。
 
 ## MUST NOT
 - 任何 tier 都不得 force-push 受保护分支；Tier 2 / Tier 3 不得直推(Tier 1 可按 repo-local 规则直推)。
