@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Test suite for cto-orchestration references/queue-freshness.py (UserPromptSubmit hook).
+# Test suite for cto-orchestration references/queue-freshness.py
+# (SessionStart + UserPromptSubmit hook).
 # Hermetic: each case builds a temp project + isolated TMPDIR (rate-limit stamps live in
 # tempfile.gettempdir()), feeds stdin JSON, asserts stdout. NOTHING under test is modified.
 set -u
@@ -20,7 +21,7 @@ mkproj(){
   printf '# goal\n' > "$d/docs/orchestration/X_GOAL.md"
   echo "$d"
 }
-run(){ printf '{"cwd":"%s"}' "$1" | TMPDIR="$1/tmp" "$SCRIPT" 2>&1; }
+run(){ printf '{"cwd":"%s","hook_event_name":"%s"}' "$1" "${2:-UserPromptSubmit}" | TMPDIR="$1/tmp" "$SCRIPT" 2>&1; }
 
 echo "== queue-freshness.test =="
 
@@ -54,6 +55,26 @@ assert_empty "$out" "E/no orchestration activity"
 out="$(printf 'not json' | TMPDIR="$(mktemp -d)" "$SCRIPT" 2>&1)"; rc=$?
 assert_empty "$out" "F/bad stdin silent"
 [ "$rc" -eq 0 ] && ok || no "F/bad stdin rc: expected 0 got $rc"
+
+# G — cleared-history residue is surfaced even without orchestration activity
+r="$(mktemp -d)"; mkdir -p "$r/docs" "$r/tmp"
+printf '# queue\n## ✅ CLEARED（保持为空）\n| D-1 | already decided |\n' > "$r/docs/DECISION_QUEUE.md"
+out="$(run "$r")"
+assert_has "$out" "Treat every one as CLOSED" "G/cleared residue stays closed"
+assert_has "$out" "never rehydrate" "G/cleared residue forbids reactivation"
+
+# H — SessionStart always surfaces residue and uses the correct event name (no mid-session throttle)
+out="$(run "$r" SessionStart)"
+assert_has "$out" '"hookEventName": "SessionStart"' "H/session-start event"
+assert_has "$out" "git history is the audit trail" "H/session-start cleanup direction"
+out2="$(run "$r" SessionStart)"
+assert_has "$out2" "additionalContext" "H/session-start is not rate-limited"
+
+# I — an empty cleared section is clean and silent when the queue is otherwise fresh
+r="$(mktemp -d)"; mkdir -p "$r/docs" "$r/tmp"
+printf '# queue\n## ✅ CLEARED（保持为空）\n' > "$r/docs/DECISION_QUEUE.md"
+out="$(run "$r" SessionStart)"
+assert_empty "$out" "I/empty cleared section"
 
 echo "== queue-freshness: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

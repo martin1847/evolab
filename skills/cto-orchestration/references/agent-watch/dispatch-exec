@@ -7,6 +7,7 @@
 # STATELESS — a reaped watcher loses nothing (no watchspec/rearm machinery needed).
 # Steering = resume rounds (same engine session, context kept):
 #   round 1  : dispatch-exec <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>]
+#              [--require-preflight]
 #              [--workflow review-loop --max-rounds N] [engine args...]
 #   round N  : dispatch-exec send <session> (-f <file> | -m <text>)
 #   query    : dispatch-exec status <session>          (one-shot, stateless)
@@ -25,6 +26,7 @@
 #   omp   : -p --mode=json JSONL; --session-dir pins session storage per dispatch so the
 #           newest file there is unambiguously ours; resume = -r <session-file-path>.
 set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.exec.meta" 2>/dev/null | head -1; }
@@ -243,12 +245,13 @@ case "${1:-}" in
     ;;
   omp|codex|claude)
     ENG="$1"; S="${2:?session}"; CWD="${3:?cwd}"; shift 3
-    GOAL=""; DELIV=""; WORKFLOW=""; MAX_ROUNDS=""; EXTRA=""
+    GOAL=""; DELIV=""; WORKFLOW=""; MAX_ROUNDS=""; REQUIRE_PREFLIGHT=0; EXTRA=""
     while [ "$#" -gt 0 ]; do case "$1" in
       --goal) GOAL="${2:?}"; shift 2;;
       --deliverable) DELIV="${2:?}"; shift 2;;
       --workflow) WORKFLOW="${2:?}"; shift 2;;
       --max-rounds) MAX_ROUNDS="${2:?}"; shift 2;;
+      --require-preflight) REQUIRE_PREFLIGHT=1; shift;;
       *) EXTRA="${EXTRA}${EXTRA:+ }$(q "$1")"; shift;;
     esac; done
     if [ -n "$WORKFLOW" ] || [ -n "$MAX_ROUNDS" ]; then
@@ -261,6 +264,7 @@ case "${1:-}" in
       [ "$MAX_ROUNDS" -gt 0 ] || { echo "ERR: --max-rounds must be a positive integer" >&2; exit 1; }
     fi
     [ -n "$GOAL" ] && [ -e "$GOAL" ] || { echo "ERR: --goal <file> required and must exist" >&2; exit 1; }
+    if [ "$REQUIRE_PREFLIGHT" = 1 ]; then "$HERE/../goal-preflight.py" "$GOAL" || exit 1; fi
     [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
     CWD="$(cd "$CWD" && pwd -P)"
     mkdir -p "$DIR"
@@ -278,7 +282,7 @@ case "${1:-}" in
     echo "monitor: dispatch status $S   (typed one-shot)  |  watch $S  (blocking, run_in_background)"
     ;;
   *)
-    echo "usage: dispatch-exec <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>] [--workflow review-loop --max-rounds N] [engine args...]" >&2
+    echo "usage: dispatch-exec <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>] [--require-preflight] [--workflow review-loop --max-rounds N] [engine args...]" >&2
     echo "       dispatch-exec send <session> (-f <file> | -m <text>) | status <session> | watch <session>" >&2
     exit 1
     ;;

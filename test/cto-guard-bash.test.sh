@@ -87,7 +87,8 @@ chk_eq "poller + Verdict positive allowed" 0 "$RC"
 run 'tmux capture-pane -p | grep Working'
 chk_eq "single capture (no loop) allowed" 0 "$RC"
 
-# (3) dispatch WITHOUT a later `watch <session>` -> ALLOW + JSON additionalContext reminder (omission)
+# (3) launch without a watcher -> ALLOW + JSON reminder. Default EXEC never auto-watches;
+#     only a TUI launch fused with --goal owns an in-process watch.
 ctx() { printf '%s' "$1" | python3 -c 'import sys,json
 try: d=json.load(sys.stdin)
 except Exception: print(""); sys.exit()
@@ -99,9 +100,13 @@ chk_contains "reminder names the session" "mysess" "$(ctx "$OUT")"
 # dispatch WITH watch on the same session, BACKGROUNDED -> silent (no double-nag)
 run 'dispatch omp mysess /wt && bash references/agent-watch/watch mysess' 1
 chk_eq "dispatch + watch same cmd (bg) exit 0" 0 "$RC"; chk_eq "dispatch + watch silent" "" "$OUT"
-# fused `dispatch … --goal g` BACKGROUNDED auto-arms the watch in-process -> no reminder either
+# default EXEC with fused --goal still returns immediately -> reminder
 run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' 1
-chk_eq "fused --goal (bg) exit 0" 0 "$RC"; chk_eq "fused --goal silent (auto watch)" "" "$OUT"
+chk_eq "exec fused --goal (bg) exit 0" 0 "$RC"
+chk_contains "exec fused --goal reminds separate watch" "has no in-process watcher" "$(ctx "$OUT")"
+# TUI fused --goal owns its in-process watcher -> silent
+run 'DISPATCH_TUI=1 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' 1
+chk_eq "TUI fused --goal (bg) exit 0" 0 "$RC"; chk_eq "TUI fused --goal silent" "" "$OUT"
 
 # (5) blocking watch in the FOREGROUND (any lane) -> DENY (killed at Bash timeout, exit 143);
 #     fused --goal is DEFAULT-exec since the 2026-07-12 flip -> foreground fine unless TUI-escaped

@@ -1,5 +1,8 @@
 {
-  "//": "decision-queue 强制层 wiring 真源（可选——仅在用 docs/DECISION_QUEUE.md 的项目接入）。接入=command 前缀替换为本 skill 安装根绝对路径（hooks 不展开 ~、不加解释器前缀——脚本自带 shebang），并进项目 settings。UserPromptSubmit 无需 matcher。",
+  "//": "decision-queue hygiene/freshness reminder wiring 真源（可选——仅在用 docs/DECISION_QUEUE.md 的项目接入；提醒不阻断）。接入=command 前缀替换为本 skill 安装根绝对路径（hooks 不展开 ~、不加解释器前缀——脚本自带 shebang），并进项目 settings。SessionStart 保证新/恢复/压缩后上下文看见清理状态；UserPromptSubmit 做运行中节流提醒。",
+  "SessionStart": [
+    { "matcher": "", "command": "references/queue-freshness.py" }
+  ],
   "UserPromptSubmit": [
     { "matcher": "", "command": "references/queue-freshness.py" }
   ]

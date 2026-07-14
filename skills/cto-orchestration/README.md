@@ -33,9 +33,8 @@
 
 `cto-orchestration` 把真实多 agent 项目打磨出的编排纪律沉淀成 skill——编排者绝不写产品代码，执行/评审异构分离，watcher 盯**存活信号**（agent 死了退回 shell ≠ 任务完成），行为变更藏旗标。它编码的是**派发链路里所有会骗你的静默失败**：假完成、假评审、假绿灯、孤儿进程空转。整体理念 **A²**（Agentic AI × Anything，一拖多）见[仓库根 README](../../README.md)。
 
-> **为什么是 tmux 交互，而不是 `claude -p` / subagent 派发？** 编排不是"发了就等结果"——你要在 agent
-> 跑偏时纠偏、塞进新事实、插入临时任务。headless / subagent 跑完才回、中途插不进话；tmux `send-keys`
-> 让你随时 steering，这是这套工作流能用的前提。
+> **为什么默认是 headless EXEC？** 单轮自包含换来稳定的进程终态与可恢复 round；上一轮停止后用
+> `dispatch send` resume。只有任务必须轮内即时 steering / 菜单交互时，才用 `DISPATCH_TUI=1` 走 tmux TUI。
 
 ## 效果示例
 
@@ -57,10 +56,11 @@
 | 层 | 角色 | 模型选择 | 为什么 |
 |---|---|---|---|
 | **编排** | 你（CTO） | **最强模型**，如 Fable 5 | 定方向、拆 goal、判评审、做决策——智力最值钱的一层，丝滑度直接决定全局质量 |
-| **执行** | omp / Claude Code | **够用就行的相对弱模型**（如 Opus） | 类比工程师按图施工：goal 写得够细，执行不需要最强模型；omp 执行效率高、吞吐好 |
-| **评审** | codex | **异构家族**（GPT 系） | 和执行**不同 lineage**，失败模式独立，交叉评审才抓得到双方都漏的真问题——同模型自审 = self-preference bias |
+| **执行** | omp / Claude Code | **按活分档** | 机械活可用弱模型；重推理 + 长上下文必须用强模型，别按“worker”位置固定降级 |
+| **评审** | codex / 另一 agent | **实际不同 lineage** | 核对真实 model/backend；工具名本身不证明异构，同模型自审仍有 self-preference bias |
 
-> **关键洞察**：CTO 用强模型定方向、工程师用够用的模型执行——把算力花在最该花的地方。执行侧 `omp` 可无缝换成 **Claude Code**，没区别；甚至三层全用同一模型也跑得通，只是评审的对抗价值会打折。**评审侧推荐绑 codex**——这套对抗式评审循环是专门围着它调出来的。
+> **关键洞察**：模型按活分档，不按位置降级。执行侧 `omp` 可换成 **Claude Code**；评审侧默认用 codex，
+> 但派发前仍要核实际 model/backend，三层同 lineage 会削弱对抗价值。
 
 <div align="center">
 
@@ -105,7 +105,7 @@
 |---|---|
 | `*_GOAL.md` | 带 file:line 预判、交付物清单、guardrails 的派工文档 |
 | `*_REVIEW_codex.md` | codex 异构评审的 severity 分级 findings + verdict，逐轮追加 |
-| watcher 状态 | 8 种 typed 信号（DONE / AGENT-DEAD / HANG / WAITING-INPUT / STALLED-EXTERNAL / IDLE-NO-DELIVERABLE / WATCH-TIMEOUT…），全枚举见 `references/agent-watch/README.md` |
+| watcher 状态 | lane-aware typed 信号（含 RUNNING / DONE / WAITING-INPUT / AGENT-DEAD / NO-HOOK 等），全枚举见 `references/agent-watch/README.md` |
 | 复盘快照 | 交付清单 + 教训固化 + roadmap/ACTIVE_CONTEXT 翻转 |
 
 ## 它和同类有什么不同

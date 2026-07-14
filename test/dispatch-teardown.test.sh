@@ -124,6 +124,24 @@ chk_contains "goal missing msg" "goal file not found" "$out"
 chk_not_contains "goal missing launches nothing" "dispatched" "$out"
 sandbox_clean
 
+# --require-preflight is an opt-in launch gate, consumed by dispatch before any TUI state.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf '# ordinary goal\n' > "$SANDBOX/goal.md"
+out="$(bash "$DISPATCH" omp preTui "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --require-preflight 2>&1)"; rc=$?
+chk_eq "TUI required preflight rejects missing declaration" 1 "$rc"
+chk_contains "TUI preflight rejection names gate" "preflight gate" "$out"
+chk_not_contains "TUI preflight rejection launches nothing" "dispatched" "$out"
+chk_eq "TUI preflight rejection creates no sentinel" 0 "$([ -e "$WATCH_RUN_DIR/preTui.events" ] && echo 1 || echo 0)"
+sandbox_clean
+
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+out="$(bash "$DISPATCH" omp preNoGoal "$SANDBOX/wt" --require-preflight 2>&1)"; rc=$?
+chk_eq "TUI preflight requires goal" 1 "$rc"
+chk_contains "TUI preflight missing-goal message" "requires --goal" "$out"
+sandbox_clean
+
 # --goal accepts a real path containing spaces without re-splitting it.
 # (Idle pane + silent sentinel ⇒ the fused watch ends exit 8 NO-HOOK — the delivery
 # assertion is the point here; rc asserts the verdict is the honest 8, not a fake DONE.)

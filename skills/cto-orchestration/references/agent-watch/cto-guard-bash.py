@@ -133,9 +133,9 @@ def main():
                 "DENY: raw `tmux send-keys` with long/non-ASCII (中文/①②③/全角/长串) text -> the omp "
                 "skill-popup eats Enter, the message stalls in the input buffer, the session sits idle, "
                 "and the watcher can't tell 'waiting for release' from 'release didn't land' (self-inflicted "
-                "24-min stall, 2026-07-04). Use `bash <agent-watch>/dispatch send <session> -m \"…\"` (or "
-                "-f <file>) instead — it writes the instruction to a file, sends only a short ASCII "
-                "reference, and VERIFIES the session transitioned to WORKING. Control-key sends "
+                "24-min stall, 2026-07-04). On TUI use `bash <agent-watch>/dispatch send <session> -m \"…\"` "
+                "(or -f <file>); its short ASCII reference verifies WORKING. EXEC does not read pane input: "
+                "wait for the round to stop, then use the same command to resume a new round. Control-key sends "
                 "(Enter/Escape/C-u/short ASCII menu picks) are fine and not blocked. "
                 "Read: cto-orchestration/references/agent-watch/README.md (裸 send-keys 坑枚举).\n"
             )
@@ -181,11 +181,15 @@ def main():
             return 2
 
     m = re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
-    if m and "--goal" not in cmd:  # `dispatch … --goal` auto-arms the in-process watch → no reminder needed
+    if m:
         session = m.group(2)
-        if not re.search(r"\bwatch[\"'\s]+" + re.escape(session) + r"\b", cmd):
+        tui = ("DISPATCH_TUI=1" in cmd or os.environ.get("DISPATCH_TUI") == "1"
+               or "DISPATCH_EXEC=0" in cmd)
+        fused_tui = tui and "--goal" in cmd
+        if not fused_tui and not re.search(r"\bwatch[\"'\s]+" + re.escape(session) + r"\b", cmd):
             ctx = (
-                f"REMINDER (cto-guard): you are dispatching tmux session '{session}'. Arm the watcher "
+                f"REMINDER (cto-guard): session '{session}' has no in-process watcher. Default EXEC "
+                f"returns after round launch; only TUI with fused --goal watches in-process. Arm the watcher "
                 f"as the PRIMARY signal right after it starts — run `bash <agent-watch>/watch {session}` "
                 f"via the Bash tool with run_in_background:true (NOT shell &, which orphans it). A "
                 f"ScheduleWakeup timer is only the BACKSTOP, not a substitute for the watcher."

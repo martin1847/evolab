@@ -2,8 +2,9 @@
 
 > 把"降低主理人认知负载"当**编排设计目标**，但不让主理人变甩手掌柜——承重决定仍归他。
 > 这是 SKILL §第二铁律（执行前验证、不明先问）的操作化：不是每事问，而是把"该谁决"事先设计掉。
-> **2026-07 重定位**：审批流与工作记忆是两种东西，拆开——**三档委派下沉 harness 权限层（结构强制），
-> 队列文件只装人脑的判断题（🔴/💤），新鲜度配 shipped hook**。散文规则会随长上下文稀释
+> **2026-07 重定位**：审批流与工作记忆是两种东西，拆开——**三档委派应下沉 harness 权限层，
+> 队列文件只装人脑的判断题（🔴/💤）**。这是目标架构，不冒充当前通用实现：本 bundle 已落地的是
+> 可选 freshness reminder 与 retro warning，尚无通用 T1 自动记账 / T2 deny。散文规则会随长上下文稀释
 > （context rot / instruction drift），官方判词："Permission rules are **enforced by Claude Code,
 > not by the model**. Instructions in your prompt or CLAUDE.md **shape** what Claude tries to do,
 > but they don't change what Claude Code **allows**."（code.claude.com/docs/en/permissions）
@@ -16,16 +17,16 @@
 
 | 层 | 装什么 | 载体（强制级别） |
 |---|---|---|
-| **权限层** | T0/T1/T2 三档委派的**执行** | harness permission rules + hook（结构，模型绕不过） |
-| **队列文件** | 🔴 需人拍板的判断题 + 💤 parked | markdown（散文，配新鲜度 hook 兜底） |
+| **权限层** | T0/T1/T2 三档委派的执行目标 | 按项目接 permission rules / hook；本 bundle 未完整实现 |
+| **队列文件** | 🔴 需人拍板的判断题 + 💤 parked | markdown；可选 freshness reminder 只提醒、不阻断 |
 | **工作记忆** | 🟡 在飞的事、进度 | ACTIVE_CONTEXT / 任务系统——**别在队列里养第二份** |
 
-- **三档委派 → 权限层映射**（语义定义在散文，执行在配置）：
+- **三档委派 → 权限层映射**（语义定义；项目接好相应配置后才算强制）：
   - **T0 直接做不烦他**（可逆、已授权、无价值判断）→ `allow` rules / acceptEdits。
-  - **T1 做了+记一行（可否决）**→ `allow` + PostToolUse hook 自动记账——记录由 hook 确定性追加，
-    不靠模型"记得记"。他异步翻、可回退。减负关键 = 多往 T1 挪、少用 T2 当同步闸。
-  - **T2 动手前必问**（不可逆/对外、战略/优先级/钱/价值、有实质下行的真模糊）→ `ask`/`deny` rules +
-    PreToolUse hook deny（**连 bypassPermissions 都拦**）。cto-guard 与服务端分支保护是既有实例。
+  - **T1 做了+记一行（可否决）**→ 目标映射为 `allow` + PostToolUse 自动记账；当前无通用 shipped 记账 hook，
+    未接入的项目仍靠编排者维护。减负关键 = 多往 T1 挪、少用 T2 当同步闸。
+  - **T2 动手前必问**（不可逆/对外、战略/优先级/钱/价值、有实质下行的真模糊）→ 目标映射为
+    `ask`/`deny` rules + PreToolUse deny。现有 cto-guard 与服务端分支保护只覆盖各自列出的动作，不是通用 T2 门。
 - **需要即时拍板的 ≤4 个问题**：用 harness 原生批量提问（如 AskUserQuestion，1-4 问 × 每问 2-4 选项，
   带推荐与默认），别一问一 turn 切碎注意力；**异步/不急的进队列**。
 - 队列瘦身后只剩权限系统管不了的**判断题**——这正是它该有的形态：审批流要"不可遗忘、可批量、可恢复"，
@@ -39,6 +40,8 @@
    - 每个 🔴 = 什么 / 为何归他 / 选项 / **我的推荐** / **静默默认** / **revisit 触发**。带推荐+默认让
      "决定"变"确认/微调"。证据：Masicampo & Baumeister 2011（终结反刍靠具体计划）；Leroy（注意力残留，
      "ready-to-resume"注记降再入成本）。[research-backed]
+   - **只存活跃项**：已处理项立即移出队列，审计轨迹用 git history；不在 `RECENTLY CLEARED`
+     里留正文，防止新上下文把关闭项再活化。
 2. **静默默认**：主理人没回 → **可逆按写明默认前进；不可逆一律 HOLD，永不自动越过**（这条不可破）。
 3. **聚合绊线**：逐事件看都可逆，但一串双向门会闩死一个单向门（lock-in / 蔓延花费 / scope drift）——
    累积变不可逆时升 T2 并点名该模式。[composed]
@@ -48,19 +51,19 @@
 6. **HELD 项 revisit 节奏**："HOLD 到底"安全上对，但会烂成靠不作为决策——每个 HELD/💤 带 revisit
    触发（事件或日期），到点主动重浮。
 
-## 强制层（治「队列腐烂」——本机制曾经的最弱点，散文建议已升 shipped hook）
+## 已落地兜底（提醒，不冒充权限门）
 
-- **平时**：`queue-freshness.py`（UserPromptSubmit hook，wiring 真源 `queue-hooks.json`，可选接入）——
-  `docs/orchestration/` 活动比队列新超过 grace（默认 1h）→ 注入 system-reminder 提醒刷新；
-  ≤1 次/小时防唠叨。四分支已合成测试（stale 提醒/限流/新鲜静默/无队列静默）。
-- **收口**：`retro-check.sh` 硬门已含"DECISION_QUEUE.md 在则新鲜"断言（复盘七步之一）。
+- **平时 / 新上下文**：`queue-freshness.py`（SessionStart + UserPromptSubmit，wiring 真源
+  `queue-hooks.json`，可选接入）检出已清区残留与 stale queue。SessionStart 每次冒泡，运行中提醒
+  ≤1 次/小时。hook 不删数据；它明确标注残留项已关闭，禁止再活化。
+- **收口**：`retro-check.sh` 对“已清区仍有正文”返回 blocking FAIL；队列仅不新鲜仍只告警、exit 0。
 - **为什么是提醒不是 Stop-block**：block 需要"本 turn 存在未记账 T2"的确定性信号，当前无此信号源——
   伪精确的门比诚实的提醒更糟（误拦 + Stop hook 8 次连 block 熔断）。若未来 T2 拦截落 marker 文件，
   可升级为门。
 
 ## 失败模式（盯住）
 
-- ~~队列腐烂（编排者忘更新）~~ → **已配强制层**（上节 hook + 收口硬门）；语义质量仍靠检查点纪律。
+- **队列腐烂（编排者忘更新）** → 已有 hook + 收口 warning 降低漏检，尚未 fail-closed；语义质量仍靠检查点纪律。
 - **橡皮图章 / 失去态势感知** → 心跳 + 升级包强制带"已做步骤"。
 - **聚合盲区** → 绊线（机制 3）。
 - **HOLD 烂掉** → revisit 触发（机制 6）。
@@ -94,5 +97,5 @@
 | # | 决定 | 为何归你 | 我的推荐 | 静默默认 | revisit 触发 |
 
 ## 💤 PARKED / GATED  | 项 | 为何 parked | revisit 触发 |
-## ✅ RECENTLY CLEARED（留最近几条作凭证）
+## ✅ CLEARED（保持为空；凭证在 git history）
 ```

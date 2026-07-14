@@ -78,6 +78,25 @@ out="$(bash "$DEXEC" omp exG "$SANDBOX/wt" 2>&1)"; rc=$?
 chk_eq "missing goal rc1" 1 "$rc"
 sandbox_clean
 
+# Explicit preflight gate validates before any session state or agent launch; ordinary
+# dispatch remains unchanged when the flag is absent.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf '# ordinary goal\n' > "$SANDBOX/goal.md"
+export FAKE_TMUX_LAUNCH_LOG="$SANDBOX/launch.log"; : > "$FAKE_TMUX_LAUNCH_LOG"
+out="$(bash "$DEXEC" omp preMissing "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --require-preflight 2>&1)"; rc=$?
+chk_eq "required preflight rejects missing declaration" 1 "$rc"
+chk_contains "required preflight rejection names gate" "preflight gate" "$out"
+chk_eq "preflight rejection leaves no meta" 0 "$([ -e "$WATCH_RUN_DIR/preMissing.exec.meta" ] && echo 1 || echo 0)"
+chk_eq "preflight rejection launches nothing" 0 "$(wc -l < "$FAKE_TMUX_LAUNCH_LOG" | tr -d ' ')"
+
+printf 'Value gate: gap -> value; Preflight: query runtime metrics => 39.5%% hit cap\n' > "$SANDBOX/goal.md"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/preflight-cmd"
+out="$(bash "$DEXEC" omp preValid "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --require-preflight 2>&1)"; rc=$?
+chk_eq "observed preflight launches" 0 "$rc"
+chk_not_contains "preflight control flag not leaked to engine" "--require-preflight" "$(cat "$FAKE_TMUX_CMD_FILE")"
+sandbox_clean
+
 echo "== dispatch-exec: explicit review-loop budget =="
 
 # workflow and a positive max-rounds are an inseparable opt-in; invalid launches leave no meta.
@@ -342,6 +361,16 @@ for _ in $(seq 150); do [ -e "$FAKE_TMUX_HOLD_FILE.started" ] && break; /bin/sle
 kill -TERM "$term_pid" 2>/dev/null || true; rm -f "$FAKE_TMUX_HOLD_FILE"; wait "$term_pid" 2>/dev/null || true
 for _ in $(seq 150); do [ ! -e "$WATCH_RUN_DIR/term.exec.lock" ] && break; /bin/sleep 0.02; done
 chk_eq "SIGTERM leaves no round lock" 0 "$([ -e "$WATCH_RUN_DIR/term.exec.lock" ] && echo 1 || echo 0)"
+sandbox_clean
+
+# A RUNNING headless round cannot accept steering; send is round-between resume only.
+sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate sr "$SANDBOX/wt"
+printf 'sid=sid-running\n' >> "$WATCH_RUN_DIR/sr.exec.meta"; : > "$WATCH_RUN_DIR/sr.exec.out"
+export FAKE_TMUX_HASSESSION=0
+out="$(bash "$DEXEC" send sr -m 'interrupt now' 2>&1)"; rc=$?
+chk_eq "send while RUNNING rejected" 1 "$rc"
+chk_contains "RUNNING rejection names round boundary" "previous round" "$out"
+unset FAKE_TMUX_HASSESSION
 sandbox_clean
 
 # send without harvested sid refused; with sid builds a resume command.

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# retro-check.sh — deterministic gate for the cto-orchestration 复盘仪式 (SKILL.md §5 hard gate).
-# Verifies MECHANICAL governance invariants only (did the steps run / are artifacts fresh) —
-# NOT semantic quality (whether the sync is meaningful). Exit non-zero on any FAIL so a caller
-# (or a Stop/PreCompact hook) can block "复盘 done" until the floor is met.
+# retro-check.sh — deterministic mechanical check for cto-orchestration 复盘 (SKILL.md §5).
+# Verifies mechanical proxies only, not semantic quality. Worktree and ACTIVE_CONTEXT failures
+# return non-zero; roadmap, decision-queue, and memory findings are warnings and do not block.
 #
 # Usage:
 #   bash retro-check.sh --base <branch> --docs <docs-dir> [--memory <MEMORY.md>] [--memory-cap N] [--repo <git-dir>]
@@ -75,6 +74,20 @@ echo "4) 决策队列刷新 (DECISION_QUEUE.md 在则近期动过):"
 DQ="$DOCS/DECISION_QUEUE.md"
 if [ -f "$DQ" ]; then
   if [ -n "$(find "$DQ" -mtime -1 2>/dev/null)" ]; then ok "DECISION_QUEUE.md modified within 24h"; else warn "DECISION_QUEUE.md not touched in 24h — refresh (清 ✅ / revisit 到期重浮 / 全局图); 队列腐烂是 §9 最弱点"; fi
+  cleared_history="$(awk '
+    /^##[[:space:]]+/ {
+      if (inside) exit
+      upper=toupper($0)
+      inside=(index($0, "✅") && (index(upper, "CLEARED") || index($0, "已清")))
+      next
+    }
+    inside && $0 !~ /^[[:space:]]*$/ && $0 !~ /^[[:space:]]*<!--/ { print; exit }
+  ' "$DQ")"
+  if [ -n "$cleared_history" ]; then
+    fail "DECISION_QUEUE.md retains cleared history — remove it before handoff/compact; git history is the audit trail"
+  else
+    ok "decision queue contains active/parked items only"
+  fi
 else echo "  [skip] no $DQ (decision-queue 是 opt-in)"; fi
 
 # 5) MEMORY.md size (soft)

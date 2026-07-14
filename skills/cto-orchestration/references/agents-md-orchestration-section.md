@@ -15,7 +15,7 @@
 >   `orchestrator-core/references/resident-digest.md`，全局没并入才增补到此层。
 > - **①委派边界 vs goal 合同 Guardrails**：有意重叠的纵深防御——goal = 每任务具体合同（精确
 >   scope / flag 名 / 存疑协议），①= 无合同或合同漏写时的**常驻一句话级兜底**，具体化留给 goal。
-> <!-- canonical: templates/CLAUDE.md.example @sha256:e7a492ca8444 -->
+> <!-- canonical: templates/CLAUDE.md.example @sha256:ad146dd714ca -->
 
 ```markdown
 ## 委派 Agent 边界（防漂移 anti-drift，常驻兜底；每任务的具体化见 goal 合同）
@@ -39,6 +39,7 @@
 - **Agency 按可逆性**：可逆（改本地文件/写测试/只读命令）直接做不请示；不可逆（rm / push /
   migration / prod 部署 / 删分支 / 对外消息）先说意图 + blast radius、等明确放行；边界模糊按不可逆。
   卡死 / 同一路径连败两次：停下报告 blocked + 已试过什么，别硬耕。
+- **主理人减负**：agent 持有状态、压缩决策、可逆事项自驱；风险不静默，带证据、影响边界和下一步及时冒泡。
 - **反驳与执行**：三种情况必须 push back（明示反对 + 依据）——方案有真问题 / 有显著更简的路 /
   触达生产前；风格偏好、命名、等价路径闭嘴执行；同一论点被否后不重复。
 - **置信度**：区分「读到 / 推测 / 赌」，不知道就说、先读再答；禁 confident-sounding guesses，

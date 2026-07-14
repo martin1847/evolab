@@ -13,8 +13,8 @@
 <凭据/环境入口给**绝对路径**（如 `ACCESS.local.md`——worker cwd 在 worktree，相对搜找不到，实证）；
 build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 
-> iterative/speculative 任务（调研、实验、新能力、自动化、多轮评审）可按需保留下一行；若无额外价值判断必要则删除。普通 bugfix / 明确小改删除它。
-Value gate: <existing gap → incremental value>; falsifier: <cheapest check + rejection signal>
+> 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行并用 `--require-preflight` 派发；普通 bugfix、机械改动和纯研究删除它。
+Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only falsifier actually run> => <observed result>
 Optional absence-evidence gate (delete unless the decision relies on not observing X): known-positive probe: <how the detector proves it can see X>; otherwise report UNKNOWN.
 
 ## Pre-triage hypotheses (verify, don't trust)
@@ -56,9 +56,9 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - 禁止删 / 改 / 跳过测试、断言或 grader，禁止压制错误顶替修 root cause——测试集对执行者只读
   （成功标准"红→绿"最易被 game）。
 - 旗标门控：<flag 名，默认 ON/OFF + 理由>。
-- **动手前理解门（按 lane）**：TUI lane 先复述"碰哪些文件/契约、有哪些风险、scope 是什么"，等编排者
-  放行再动手（高风险任务升级为先交 mini-plan）；headless lane 简短复述后直接开工、不得等待交互，真阻塞
-  才写 `/absolute/path/to/cwd/BLOCKED.md` 并停止。
+- **动手前理解门**：TUI lane 先复述"碰哪些文件/契约、有哪些风险、scope 是什么"，等编排者放行再动手
+  （高风险任务升级为先交 mini-plan）。headless 的复述 / 立即开工 / BLOCKED 协议由 runtime 每轮固定追加，
+  本 GOAL 不复制。
 - **存疑协议**：goal 没写明的事项标 `NEEDS-CLARIFICATION: <具体问题>` 停下问，**禁止合理化猜测**
   （猜而不问是 goal 执行最常见的静默失败）；需要超 scope 改动、或同一路径连败两次：STOP and
   report（blocked + 已试过什么），不自行扩权、别硬耕。

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Unified dispatch: launch a coding agent in a tmux session wired to the hook-based
-# agent-state watch (see README.md). Bakes in the two things that bite otherwise:
+# Unified dispatch: stable interface for the default headless EXEC lane and the TUI escape
+# lane, both exposed through lane-aware typed status (see README.md). The TUI path bakes in:
 #   1) env set INSIDE the tmux command (a running tmux server freezes its env, so a
 #      client-side prefix never reaches the pane → hook no-ops silently).
 #   2) ABS substitution in codex/claude hook configs.
@@ -93,20 +93,17 @@ if [ "${1:-}" = "send" ]; then
   echo "[send] STILL STUCK — TUI may be wedged. inspect: tmux capture-pane -t $sess -p | tail -8" >&2; exit 2
 fi
 # ── launch mode (default) ─────────────────────────────────────────────────────
-AGENT="${1:?usage: dispatch <omp|codex|claude> <session> <cwd> [--workflow review-loop --max-rounds N] [args...]  |  dispatch send <session> -m/-f …}"
+AGENT="${1:?usage: dispatch <omp|codex|claude> <session> <cwd> [--require-preflight] [args...]  |  dispatch send <session> -m/-f …}"
 SESSION="${2:?session}"
 CWD="${3:?cwd}"
 shift 3 2>/dev/null || true
-# `--goal <file>` fuses launch + goal-delivery + hook-verify + watch into ONE call: invoke this whole
-# command via the Bash tool's run_in_background (NOT shell `&`) — no separate send step, no separate
-# `watch` step to slip an `&` onto. Watch arms AUTOMATICALLY with --goal (there is no --watch flag:
-# goal-without-watch has no doctrine-legit case, and watch-without-goal watches an idle agent and
-# exits immediately — a flag that must only be used with another flag is an API footgun; removed at
-# the source, design > guard). Works for codex review round 1 too (--goal <review-brief.md>): the
-# verify loop falls back to the pane busy marker where codex has no sentinel yet (hook fires on first
-# tool call, and only when trusted). Later rounds / steering = `dispatch send`. A first-ever codex
-# OR claude launch in a cwd is ALSO one call: --goal auto-answers the directory-trust prompt (probe below).
-WATCH_MODE=0; GOAL=""; DELIV=""
+# On the TUI lane, `--goal <file>` fuses goal-delivery + hook-verify + watch into this blocking call;
+# invoke it through the host's background mechanism (NOT shell `&`). The default EXEC lane is routed
+# above before this code and instead returns after starting one headless round; its caller must arm the
+# lane-aware `watch <session>` separately. Works for codex review round 1 too. Later TUI steering uses
+# `dispatch send`; EXEC `send` is round-between resume only. A first-ever codex or claude TUI launch in
+# a cwd auto-answers the directory-trust prompt below.
+WATCH_MODE=0; GOAL=""; DELIV=""; REQUIRE_PREFLIGHT=0
 AGENT_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -118,6 +115,8 @@ while [ "$#" -gt 0 ]; do
     --deliverable)
       [ "$#" -ge 2 ] || { echo "ERR: --deliverable requires a glob" >&2; exit 1; }
       DELIV="$2"; shift 2; continue ;;
+    --require-preflight)
+      REQUIRE_PREFLIGHT=1; shift; continue ;;
     *) AGENT_ARGS[${#AGENT_ARGS[@]}]="$1" ;;
   esac
   shift
@@ -128,6 +127,10 @@ done
 # <sess>`) silently dropped the gate → false DONE (codex independent review 2026-07-11).
 # validate BEFORE launching — failing after new-session would leak an orphan session
 if [ -n "$GOAL" ] && [ ! -e "$GOAL" ]; then echo "ERR: --goal file not found: $GOAL" >&2; exit 1; fi
+if [ "$REQUIRE_PREFLIGHT" = 1 ]; then
+  [ -n "$GOAL" ] || { echo "ERR: --require-preflight requires --goal <file>" >&2; exit 1; }
+  "$HERE_EARLY/../goal-preflight.py" "$GOAL" || exit 1
+fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 
@@ -276,7 +279,7 @@ if [ "$WATCH_MODE" = 1 ]; then
   esac
   echo "── handing off to watch (blocks until terminal state; this background task completes when the agent is DONE/WAITING) ──"
   bash "$HERE/watch" "$SESSION"; rc=$?
-  # The fused command's exit code IS the watch VERDICT (typed 0-7), and background-task
+  # The fused command's exit code IS the watch VERDICT (typed 0-8), and background-task
   # notifications render any nonzero as "command failed" — misread as dispatch failure 3+
   # times in the field while dispatch+goal delivery had succeeded (LH 2026-07-11). Spell the
   # verdict out in the OUTPUT (the thing the orchestrator actually reads): real dispatch

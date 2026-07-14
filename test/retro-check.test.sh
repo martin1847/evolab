@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test suite for cto-orchestration references/retro-check.sh (复盘仪式 hard gate).
+# Test suite for cto-orchestration references/retro-check.sh (复盘机械门与 warning).
 # Hermetic: each case builds a temp git repo + bare origin + docs fixtures, runs
 # the gate, asserts exit code + key output lines. NOTHING under test is modified.
 set -u
@@ -79,6 +79,19 @@ assert_has "$out" "DECISION_QUEUE.md not touched" "F/stale-queue warns"
 r="$(mkrepo)"; out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "G/no-queue rc"
 assert_has "$out" "decision-queue 是 opt-in" "G/no-queue skips"
+
+# Case H — cleared history retained in active queue → hard FAIL
+r="$(mkrepo)"
+printf '# queue\n## 🔴 NEEDS YOU\n\n## ✅ CLEARED（保持为空）\n| D-1 | already decided |\n' > "$r/docs/DECISION_QUEUE.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "H/cleared-history rc"
+assert_has "$out" "retains cleared history" "H/cleared-history blocks"
+
+# Case I — empty cleared section is allowed
+r="$(mkrepo)"; printf '# queue\n## ✅ CLEARED（保持为空）\n' > "$r/docs/DECISION_QUEUE.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "I/empty-cleared rc"
+assert_has "$out" "active/parked items only" "I/empty-cleared clean"
 
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]
