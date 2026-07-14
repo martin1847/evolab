@@ -44,7 +44,8 @@ metadata:
   终态只认 `dispatch status` / `watch` 的 typed status；
   文件产出必须声明 `--deliverable` 加 fresh deliverable 门，非文件结果不带；
   ② **tmux TUI lane（escape：`DISPATCH_TUI=1`；维护 best-effort）**= 真需要轮内实时交互 / 即时 steering / 菜单或 pane
-  现场时才用（`dispatch send` 引导、watcher 取终态、会话持久）；
+  现场时才用（`dispatch send` 引导、watcher 取终态、会话持久）；headless 进程轮内不读输入，实时 steering
+  走 TUI，文件协作须由 goal 显式约定，否则 teardown 后重派（见 `references/agent-watch/README.md` §Honest limits）；
   ③ **Agent-工具 subagent** = 需要浏览器 / MCP / 隔离主上下文的读密集一次性工作（大快照留在子上下文、
   直接返结论）。需要轮内 steering 的工作走 TUI lane；要浏览器/MCP 的验收别塞给 tmux agent。
   **派 subagent 显式指定 model 按活分档**（重推理强模型 / 机械·轻量弱模型）——默认继承主会话模型
@@ -84,7 +85,7 @@ metadata:
    - **纯事件驱动会盲等**：按预期时长 ×2 设 fallback 自检（`ScheduleWakeup`/cron），到点无终态主动
      capture-pane——治 WORKING 卡死/热重试的**永不 DONE**（与**假 DONE** 是两个失败态）。浏览器/E2E
      subagent 完成通知会黑洞 → 派发即配 deadline 正向证据 watch；watcher 被宿主批量收割（"was stopped"
-     通知）→ 跑 `rearm` 照单重挂。
+     通知）→ 跑 `rearm` 照单重挂；它同时检查 TUI `.events` 与 headless `.exec.meta`，结果仍须结合 typed status 核证。
    - **后台启动一律不加 shell `&`**（已 detached 再加 = 孤儿）；唯一后台正路 = Bash 工具 `run_in_background`。
    - **强制层（结构不靠自律）**：高频坑已由两 guard 脚本代码化 DENY（背景 `&` / 裸 idle 轮询 / CJK 裸
      send-keys / chrome-devtools 浏览器派发 / 误杀活 agent / 编排者亲跑 live e2e——派便宜模型 worker，
@@ -139,6 +140,9 @@ metadata:
 - **病类确认 → 立即系统性枚举全部同模式点**：root-cause 确认为"类"（如"持事务跨 async"）后，当场枚举
   代码里所有同模式点、逐一分类（安全/持有嫌疑）成表、一轮修完——别修眼前一处等下轮再显形一处
   （实证：idle-txn 5 轮逐个显形逐个修，第 1 轮就枚举可收敛成 ~2 轮）。
+- **否定性结论的灵敏度**：仅当决策依赖“未观察到 X”时才触发；先用 known-positive probe 校准检测链路，
+  不能证明它看得见 X 则保持 `UNKNOWN`。Goodhart 根因是可见的验证动作数量会替代不可见的验证有效性；
+  坏验证因此比不验证更危险：它把“不知道”伪装成知道，制造虚假确信。
 - **验证诚实**：交付三段式——验证了什么（真跑过）/ 没验证什么 / 剩余风险。本地打桩绕过的环节（真
   LLM、真队列）显式标注，部署后运维补验（实证：本地 LLM 打桩致 un-awaited coroutine 逃逸生产）。
 - **代验路径 ≠ 真路径**：mock / 打桩 / stream smoke 全绿 **≠ 真实路径成立**——按**真实部署路径**验收

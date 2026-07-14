@@ -72,6 +72,40 @@ chk_not_contains "gap-detect not reported as empty" "nothing to re-arm" "$out"
 unset FAKE_TMUX_HASSESSION
 sandbox_clean
 
+# Headless gap-detect: an exec sentinel with no watcher process must be reported.
+sandbox_new
+printf 'engine=codex\n' > "$WATCH_RUN_DIR/headless-missing.exec.meta"
+cat > "$BIN/pgrep" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$BIN/pgrep"
+export FAKE_TMUX_HASSESSION=0
+out="$(bash "$REARM" 2>&1)"
+chk_contains "missing headless watcher is reported" "NO watcher" "$out"
+chk_contains "missing headless watcher gets re-arm command" "watch headless-missing" "$out"
+unset FAKE_TMUX_HASSESSION
+sandbox_clean
+
+# A healthy headless watcher must not be reported. The metacharacter-heavy session also proves
+# rearm passes an escaped, option-safe regex to pgrep rather than interpolating the name raw.
+sandbox_new
+printf 'engine=codex\n' > "$WATCH_RUN_DIR/head.less[1].exec.meta"
+cat > "$BIN/pgrep" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "-f" ] || exit 1
+[ "$2" = "--" ] || exit 1
+[ "$3" = 'dispatch-exec[[:space:]]+watch[[:space:]]+head\.less\[1\]$' ] || exit 1
+exit 0
+EOF
+chmod +x "$BIN/pgrep"
+export FAKE_TMUX_HASSESSION=0
+out="$(bash "$REARM" 2>&1)"
+chk_not_contains "healthy headless watcher is not reported" "NO watcher" "$out"
+chk_contains "healthy headless watcher leaves nothing to re-arm" "nothing to re-arm" "$out"
+unset FAKE_TMUX_HASSESSION
+sandbox_clean
+
 # empty dir -> honest no-op.
 sandbox_new
 chk_contains "empty dir -> nothing to re-arm" "nothing to re-arm" "$(bash "$REARM" 2>&1)"

@@ -62,6 +62,19 @@ chk_eq "send-keys short ASCII allowed" 0 "$RC"
 run 'bash references/agent-watch/dispatch send s1 -m "长中文放行指令：按评审意见回修①②"'
 chk_eq "dispatch send safe path allowed" 0 "$RC"
 
+# Heredoc bodies are safe to ignore only when Bash disables expansion by quoting the delimiter.
+quoted_heredoc="$(printf '%s\n' "cat <<'EOF'" 'tmux send-keys -t s1 "这只是文档里的提及①②③" Enter' 'EOF')"
+run "$quoted_heredoc"
+chk_eq "quoted heredoc body mentioning guarded command allowed" 0 "$RC"
+
+unquoted_heredoc="$(printf '%s\n' 'cat <<EOF' '$(tmux send-keys -t s1 "这会在 heredoc 中执行①②③" Enter)' 'EOF')"
+run "$unquoted_heredoc"
+chk_eq "unquoted heredoc command substitution remains guarded" 2 "$RC"
+
+guarded_after_heredoc="$(printf '%s\n' "cat <<'EOF'" 'tmux send-keys -t s1 "quoted body mention①②③" Enter' 'EOF' 'tmux send-keys -t s1 "实际执行①②③" Enter')"
+run "$guarded_after_heredoc"
+chk_eq "guarded command after quoted heredoc remains guarded" 2 "$RC"
+
 # (2) naive idle==done poller, DENY
 run 'while true; do tmux capture-pane -p | grep Working; sleep 5; done'
 chk_eq "naive idle poller denied (exit 2)" 2 "$RC"; chk_contains "idle poller stderr" "idle" "$ERR"

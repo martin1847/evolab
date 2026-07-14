@@ -6,12 +6,14 @@
 # commands (one per line) — the orchestrator launches each via its own tracked
 # background mechanism (run_in_background). It never backgrounds anything itself:
 # design, not laziness (orphaned shells are the exact failure mode this avoids).
-# Stale specs (tmux session gone) are cleaned up here.
+# It also scans .events/.exec.meta for live sessions missing a watcher; headless
+# liveness is determined by its watcher process. Stale specs are cleaned up here.
 set -u
 DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 found=0
 shopt -s nullglob
+regex_escape() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|]/\\&/g'; }
 for spec in "$DIR"/*.watchspec; do
   pid="$(sed -n 's/^pid=//p' "$spec")"
   sess="$(sed -n 's/^session=//p' "$spec")"
@@ -29,12 +31,25 @@ done
 # 2026-07-11). Scan events sentinels for live sessions not covered by any spec. Printed as a
 # flagged suggestion, not a bare command: re-watching an idle DONE session exits quickly and
 # is harmless, but the orchestrator should decide whether a round is actually in flight.
-for ev in "$DIR"/*.events; do
-  sess="${ev##*/}"; sess="${sess%.events}"
-  [ -e "$DIR/$sess.watchspec" ] && continue                    # covered by the spec pass above
+#
+# Scan both lane sentinels. Use a plain string set for macOS Bash 3.2 compatibility.
+seen=" "
+for ev in "$DIR"/*.events "$DIR"/*.exec.meta; do
+  sess="${ev##*/}"
+  case "$ev" in
+    *.exec.meta) sess="${sess%.exec.meta}" ;;
+    *)           sess="${sess%.events}" ;;
+  esac
+  case "$seen" in *" $sess "*) continue ;; esac                # same session via both sentinels
+  seen="$seen$sess "
+  [ -e "$DIR/$sess.watchspec" ] && continue                    # TUI lane: covered by the spec pass above
+  # Headless watch execs into dispatch-exec and has no watchspec; match its process command.
+  # Session names are data, so escape ERE metacharacters and protect a leading dash with `--`.
+  escaped_sess="$(regex_escape "$sess")"
+  pgrep -f -- "dispatch-exec[[:space:]]+watch[[:space:]]+$escaped_sess\$" >/dev/null 2>&1 && continue
   tmux has-session -t "$sess" 2>/dev/null || continue
   found=1
-  echo "# live session '$sess' has NO watcher (natural exit or never armed) — if a round is in flight, re-arm:"
+  echo "# live session '$sess' has NO watcher (natural exit, never armed, or SIGTERM-reaped) — if a round is in flight, re-arm:"
   echo "bash $HERE/watch $sess"
 done
 [ "$found" -eq 0 ] && echo "# nothing to re-arm"

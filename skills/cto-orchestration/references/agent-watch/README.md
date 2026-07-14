@@ -62,6 +62,18 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
    A busy pane keeps the wait alive (codex emits its first event on the first tool call), bounded by MAX_POLLS.
 
 ## Honest limits
+
+### 轮内插话：headless 车道结构上不支持
+`dispatch-exec` 的三个引擎都以一次性非交互模式运行（`omp -p` / `codex exec` / `claude -p`），不读取
+运行中的交互输入。因此：
+- `dispatch send` 在 round 运行中报 `ERR: previous round still running` **不只是串行化保护**——
+  即使绕过它、直接 `tmux send-keys` 也无效：那个进程根本不读 stdin。
+- **轮内要影响 worker，只有三条路**：① **TUI 车道**（`DISPATCH_TUI=1`，真交互会话，可即时 steering）
+  ② **文件通道**（goal 里约定 worker 周期性检查 `<cwd>/STEERING.md`，有内容即照做——headless 下的
+  唯一轮内通道，需 goal 显式契约）③ **teardown + 重派**（代价 = 丢弃本轮进度）。
+- 轮**间** steering 照常：`dispatch send`（resume 下一轮）。
+
+### 其他
 - Hooks fire INSIDE the agent process → a hard crash (SIGKILL/segfault) emits nothing. The liveness guard, not
   the hook, catches that. Two layers by design.
 - **codex** WAITING only covers `PermissionRequest` (tool-approval). A free-form "ask the user" menu may not fire
@@ -112,7 +124,7 @@ Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notifi
 | emit / watch | ✅ | hermetic 套件（scrape fallback 已于 2026-07-11 摘除，哑 hook → exit 8 NO-HOOK） |
 | deliverable 门（exit 6） | ✅ | hermetic 对抗测试 |
 | WATCH-TIMEOUT（exit 7）/ NO-HOOK（exit 8） | ✅ | hermetic 钉显式非零终态；均不得冒充 DONE |
-| headless 车道（dispatch-exec，**默认**） | ✅ | claude/omp 双轮 live 绿 + codex exec 双评审全流程 live（派发→watch→resume 复审）+ hermetic 全分支 + e2e dispatch-goal 矩阵；未验：BLOCKED 真 fire、运行中插话 |
+| headless 车道（dispatch-exec，**默认**） | ✅ | claude/omp 双轮 live 绿 + codex exec 双评审全流程 live（派发→watch→resume 复审）+ hermetic 全分支 + e2e dispatch-goal 矩阵；未验：BLOCKED 真 fire。**「运行中插话」不是未验项——见下方 §轮内插话** |
 | TUI 车道（escape `DISPATCH_TUI=1`） | ⚠ best-effort | 2026-07-12 known-red：omp 16.4.4 `--hook` 静默不加载（v1.4.0 版 hook 同红=环境漂移）、codex 0.144.1 腿 goal 未执行；claude 腿绿。手动 `E2E_TUI=1 bash test/e2e/dispatch-goal-tui.e2e.sh` 验，修复属适配债、不挡发布 |
 | STALLED-EXTERNAL（exit 5）谓词 | ◑ | 离线 fixture 真/假例全过；**已知假阳**：agent 编辑错误处理代码/读 provider 日志时同 token 会命中——exit 5 是 advisory，先看屏尾再 kill。未 live 验：WORKING+N-poll 门与真 provider stall |
 
@@ -282,7 +294,8 @@ watcher 心跳正常→同刻消失，事后补发 "was stopped" 通知。这不
 
 - `watch` 起时写 `$DIR/<session>.watchspec`（含 pid + 完整重挂命令），**EXIT trap 删除**——
   自然退出（DONE/WAITING/HANG…）不留痕；SIGKILL 跳过 trap → **spec 幸存 = 非正常死亡证据**。
-- **`rearm`**（本目录）：扫描 spec，pid 已死且 tmux 会话还在 → 打印重挂命令（一行一条）；
-  会话已没了 → 清 stale spec。**只打印不执行**——编排者用自己的受控后台机制（Bash 工具
-  run_in_background）逐条起，rearm 自己绝不 background（孤儿 shell 正是要避免的失败模式）。
+- **`rearm`**（本目录）：扫描 spec，并从 `.events` / `.exec.meta` 发现 live session 缺 watcher；headless
+  没有 watchspec，以 watcher 进程判存活。缺口 → 打印重挂命令，会话已没了 → 清 stale spec。
+  **只打印不执行**——编排者用自己的受控后台机制（Bash 工具 run_in_background）逐条起，rearm 自己绝不
+  background（孤儿 shell 正是要避免的失败模式）。
 - 编排者纪律：收到 watcher "was stopped" 通知，跑一次 `rearm`，照单重挂。

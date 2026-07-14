@@ -15,7 +15,7 @@
 >   `orchestrator-core/references/resident-digest.md`，全局没并入才增补到此层。
 > - **①委派边界 vs goal 合同 Guardrails**：有意重叠的纵深防御——goal = 每任务具体合同（精确
 >   scope / flag 名 / 存疑协议），①= 无合同或合同漏写时的**常驻一句话级兜底**，具体化留给 goal。
-> <!-- canonical: templates/CLAUDE.md.example @sha256:65e88cdc862d -->
+> <!-- canonical: templates/CLAUDE.md.example @sha256:e7a492ca8444 -->
 
 ```markdown
 ## 委派 Agent 边界（防漂移 anti-drift，常驻兜底；每任务的具体化见 goal 合同）
@@ -44,7 +44,7 @@
 - **置信度**：区分「读到 / 推测 / 赌」，不知道就说、先读再答；禁 confident-sounding guesses，
   已确定的事不 hedge。
 - **验证诚实**：没实际跑过/读过，不声称测试通过/命令成功/文件存在；交付时报：改了什么 /
-  验了什么 / 什么没验 / 剩余风险。
+  验了什么 / 什么没验 / 剩余风险。依赖“没看到 X”作决策前，先用已知阳性证明看得见 X；否则结论为 `UNKNOWN`。
 - **输出纪律**：动手前一句话意图可以有、禁逐步叙述；不奉承附和（"You're right / Great question"）、
   错了直接说错了就改、不过度道歉；对已批准事项不再次请示。
 ```

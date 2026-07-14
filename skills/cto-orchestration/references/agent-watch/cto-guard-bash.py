@@ -25,7 +25,46 @@ def main():
     except Exception:
         return 0
     ti = data.get("tool_input", {}) or {}
-    cmd = (ti.get("command", "") or "").replace("\n", " ")
+    raw = ti.get("command", "") or ""
+    # Only a QUOTED heredoc delimiter disables expansion, so only those bodies are data-safe to
+    # ignore. Unquoted `<<EOF` bodies may execute command substitutions and must remain visible to
+    # every guard rule. Preserve opener/closer lines so commands after the heredoc are still scanned.
+    def _strip_quoted_heredocs(s: str) -> str:
+        lines = s.splitlines(keepends=True)
+        opener = re.compile(r"<<(?P<tabs>-?)(?!<)[ \t]*(?P<quote>['\"])(?P<tag>[^'\"\r\n]+)(?P=quote)")
+        any_op = re.compile(r"<<-?(?!<)[ \t]*(?:['\"][^'\"\r\n]+['\"]|[^\s;|&<>]+)")
+        out = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            out.append(line)
+            quoted = list(opener.finditer(line))
+            # Mixed quoted/unquoted heredocs share one body stream; leave the whole command intact
+            # rather than guessing which body belongs to which delimiter.
+            if not quoted or len(quoted) != len(any_op.findall(line)):
+                i += 1
+                continue
+            cursor = i + 1
+            rendered = []
+            for match in quoted:
+                tag = match.group("tag")
+                strip_tabs = match.group("tabs") == "-"
+                end = None
+                for j in range(cursor, len(lines)):
+                    candidate = lines[j].rstrip("\r\n")
+                    if (candidate == tag or
+                            (strip_tabs and candidate.startswith("\t") and candidate.lstrip("\t") == tag)):
+                        end = j
+                        break
+                if end is None:
+                    return s  # unterminated/ambiguous: scan conservatively, strip nothing
+                rendered.extend(("<<<HEREDOC-BODY-STRIPPED>>>\n", lines[end]))
+                cursor = end + 1
+            out.extend(rendered)
+            i = cursor
+        return "".join(out)
+    raw = _strip_quoted_heredocs(raw)
+    cmd = raw.replace("\n", " ")
     if not cmd:
         return 0
     # quote-stripped view: drop "..."/'...'/`...` spans so a token that only appears inside a quoted

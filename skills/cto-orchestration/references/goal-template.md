@@ -15,6 +15,7 @@ build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 
 > iterative/speculative 任务（调研、实验、新能力、自动化、多轮评审）可按需保留下一行；若无额外价值判断必要则删除。普通 bugfix / 明确小改删除它。
 Value gate: <existing gap → incremental value>; falsifier: <cheapest check + rejection signal>
+Optional absence-evidence gate (delete unless the decision relies on not observing X): known-positive probe: <how the detector proves it can see X>; otherwise report UNKNOWN.
 
 ## Pre-triage hypotheses (verify, don't trust)
 
