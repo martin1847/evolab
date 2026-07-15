@@ -16,15 +16,9 @@ git worktree add ../wt-<name> -b feat/<name> origin/<base>
 
 **不让 agent 在过期基线开工。**
 
-- **rebase 不是仪式、是条件动作**：push/PR 前 `git fetch` 后查 base 有没有动
-  （`git log <branchpoint>..origin/<base>` 空=没动）。**没动 → 什么都不做**（别空转 rebase，
-  否则看着像"忘了"其实是 no-op）。**动了且碰了你改的文件 → rebase** 解冲突再 PR；动了但文件不重叠
-  → 可不动（合并自然干净）。
-- **集成（并回主干）默认 squash（linear history）；merge-commit 已弃用**：全 agent 开发没人读
-  git 历史，agent 要逻辑原子 + message 清楚的 commit（squash 产物），中间 wip churn 是 context 污染。
-  出 artifact 的仓由 IaC ruleset 强制 linear，merge-commit 会被挡。对抗评审知识落
-  **ADR + PR 记录 + commit trailer**（`Constraint:` / `Rejected-alternative:`），不靠 commit graph。
-- 多会话并发时 base 常被别的 PR 推进，所以 **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
+- **rebase 条件动作 / 集成默认 squash（merge-commit 弃用）**：判据、ADR-trailer 与合后 ancestry
+  陷阱归 `git-workflow-standard`（§工作流、§集成策略），此处不复读。编排位只记一条：多会话并发时
+  base 常被别的 PR 推进，**`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
 - 按 SHA 部署的项目：squash / rebase-merge 的 ancestry 都干净线性（`contains <sha>` 成立）。
 - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主
   checkout、非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout

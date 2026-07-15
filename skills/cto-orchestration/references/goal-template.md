@@ -31,6 +31,14 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - [ ] **Claim**: <承重前提> — **Verify by**: <独立证明命令 / runtime evidence + 预期结果>
 - [ ] **Claim**: <...> — **Verify by**: <...>
 
+## North-star gate（目标仓/伞仓声明了方向文档时保留，否则整节删除）
+
+> 动手前逐条过闸（spec-kit Constitution Check 同构；编排者写 goal 时先自过一遍，执行者开工前复核）：
+- Direction doc: `/absolute/path/to/NORTH_STAR.md`
+- Touches: <NS-x: 一句话自证合规 / NS-y: 潜在张力 + 本 goal 的处理方式>
+- 任何「无法一句话自证合规」的触碰 → 升 THINK 档：写 impact + 被拒的更简替代及理由；
+  仍存疑 → STOP AND REPORT，不得静默继续（放宽任何既有门禁同此协议）。
+
 ## Task / Deliverables
 
 1. <可验证的具体产出，含交付物绝对路径>

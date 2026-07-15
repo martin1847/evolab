@@ -181,7 +181,7 @@ Last rewritten: YYYY-MM-DD
 ## ACCESS.local.md 模板
 
 > **gitignored，永不提交/推送。** 含明文凭证，只在本机做快速反查。生成时字段留空待用户填，
-> stub 里绝不写真实 secret。凭证 canonical home 是外部 vault，此文件是本机缓存。
+> stub 里绝不写真实 secret（vault/缓存关系模板正文自带）。
 
 ```markdown
 # <项目> 接入与访问（仅本机 — 已 gitignore，永不提交/推送）
@@ -254,7 +254,6 @@ This index maps the repository source of truth. Links only — content lives in 
 
 ## NORTH_STAR 模板（可选——伞仓或有明确长期方向的仓）
 
-> ADR 记录"当时决定了什么、为什么"（历史）；NORTH_STAR 记录"什么必须/绝不发生"（方向）。
 > 定长一到两页、原则 ≤7-8 条（Amazon tenets 尺寸纪律）；每条带稳定 ID（`NS-1`…），评审
 > brief、门禁与 ADR 按 ID 引用。宪法本身用 semver（spec-kit 约定：MAJOR=删改原则语义 /
 > MINOR=新增原则或实质扩充 / PATCH=措辞澄清）。原则写法把 TOGAF 四字段
@@ -309,15 +308,23 @@ dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI
 
 > 适用：maintained-only 仓（按需修、无 feature drive、无 ADR/roadmap 脚手架——即全量
 > 宪法 `PROJECT_AGENT.md` 的启用条件不满足时）。目标 <60 行：agent 进来 30 秒知道
-> 「这是什么、什么不许做、怎么构建」。CLAUDE.md 仍是一行 `@AGENTS.md`。伞仓场景配套
-> 覆盖检查：每个含自有 `.git` 的一级子仓必须有根 AGENTS.md（低活跃仓用本变体即达标），
-> 一行门：`for d in */; do [ -d "$d/.git" ] && [ ! -f "${d}AGENTS.md" ] && echo "MISSING: $d"; done`。
-> 生成语言从项目。
+> 「这是什么、什么不许做、怎么构建」。CLAUDE.md 仍是一行 `@AGENTS.md`。伞仓覆盖检查
+> （判据见 SKILL.md 伞仓三件套②）一行门：
+> `for d in */; do [ -d "$d/.git" ] && [ ! -f "${d}AGENTS.md" ] && echo "MISSING: $d"; done`。
+> 生成语言从项目。节序按 blast radius 递减——最危险的纪律排第一节，agent 截断读取时
+> 先看到的必须是最不能错的事。
 
 ```markdown
 # <repo> — Agent 指南
 
 <一句话定位。>（伞仓场景加：能力簇归属见伞仓 `docs/modules/<cluster>.md`。）
+
+## 纪律（blast radius 最大的事排最前）
+
+- Commit 留本地，owner 明确批准才 push；不加 AI 签名行。
+- Secret、内部 hostname/IP、拓扑绝不进 committed tree / 日志 / 文档。
+- 行为变更藏 flag、默认 OFF；不顺手 refactor、不动格式。
+- 存疑或需超 scope：STOP and report，不自行扩权。
 
 ## 边界（Scope）
 
@@ -335,9 +342,4 @@ dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI
 
 <从仓内文件推导的真实命令；未实跑过的标 `(not verified)`——禁止编造命令。>
 
-## 纪律
-
-- 行为变更藏 flag、默认 OFF；不顺手 refactor、不动格式。
-- Secret、内部 hostname/IP、拓扑绝不进 committed tree / 日志 / 文档。
-- Commit 留本地，owner 明确批准才 push；不加 AI 签名行。
 ```

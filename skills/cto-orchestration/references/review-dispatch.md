@@ -1,5 +1,8 @@
 # codex 评审派发模板（brief 文本）
 
+> 目录：[首轮评审](#首轮评审) · [复审](#复审第-n-轮) · [收敛准则注入](#收敛准则注入防乒乓第-3-轮左右仍未收敛时) ·
+> [修复派回模板](#修复派回-omp-模板) · [对抗式评审循环展开](#skill-2-对抗式评审循环的展开)（深度分档 / 冷上下文 / 高危轴 / ledger + 收敛）
+
 > 首轮：brief 写成文件（`docs/orchestration/*_REVIEW_BRIEF.md`），
 > `agent-watch/dispatch codex <proj>-<task>-codex <同一worktree> --goal <brief.md> --workflow review-loop
 > --max-rounds <N>`——与 omp 派发同构。默认 EXEC 启动后立即另挂 `watch`；复审轮同样是
