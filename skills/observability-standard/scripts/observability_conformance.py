@@ -90,9 +90,36 @@ def validate(snapshot: dict[str, Any], profile: dict[str, Any]) -> list[str]:
             for key in profile["required_inference"]:
                 if not attrs.get(key):
                     fail(errors, "inference.field", key)
-        if span.get("streaming") and not span.get("stream_completed"):
-            if span.get("status") not in {"error", "cancelled"}:
+        if span.get("streaming"):
+            if span.get("stream_completed") and span.get("status") != "success":
+                fail(errors, "stream.completed_status", str(span.get("span_id")))
+            if not span.get("stream_completed") and span.get("status") not in {"error", "cancelled"}:
                 fail(errors, "stream.invalid_terminal_state", str(span.get("span_id")))
+
+    if snapshot.get("gen_ai_enabled", False):
+        domain_attrs = next((span.get("attributes", {}) for span in spans if span.get("role") == "domain"), {})
+        for key in profile.get("required_agent_attributes", []):
+            if not domain_attrs.get(key):
+                fail(errors, "agent.field", key)
+        metric_labels = snapshot.get("metric_label_keys", [])
+        for key in profile.get("high_cardinality_keys", []):
+            if key in metric_labels:
+                fail(errors, "metric.high_cardinality", key)
+        async_spans = [span for span in spans if span.get("async_boundary")]
+        if not async_spans:
+            fail(errors, "async.evidence_missing", "captured worker/callback span is required")
+        for span in async_spans:
+            if not span.get("parent_span_id"):
+                fail(errors, "async.parent", str(span.get("span_id")))
+            if span.get("context_restored") is not True:
+                fail(errors, "async.context_not_restored", str(span.get("span_id")))
+        guard = snapshot.get("static_guard", {})
+        producers = guard.get("semantic_producers", [])
+        if not isinstance(producers, list) or len(producers) != 1:
+            fail(errors, "static_guard.semantic_producer", str(producers))
+        for key in ("vendor_or_legacy_paths", "arbitrary_metadata_flatteners"):
+            if guard.get(key) != []:
+                fail(errors, f"static_guard.{key}", str(guard.get(key)))
 
     all_keys = walk_keys(snapshot)
     telemetry_keys = walk_keys(resource)
@@ -103,11 +130,8 @@ def validate(snapshot: dict[str, Any], profile: dict[str, Any]) -> list[str]:
             fail(errors, "legacy.key", key)
     for key in profile["content_keys"]:
         present = any(found == key or found.startswith(f"{key}.") for found in all_keys)
-        if present and not snapshot.get("content_capture_allowed", False):
+        if present:
             fail(errors, "content.leak", key)
-        environment = resource.get("deployment.environment.name")
-        if present and environment not in profile.get("content_capture_environments", []):
-            fail(errors, "content.environment", str(environment))
     processes = snapshot.get("processes", [])
     if not isinstance(processes, list) or not processes:
         fail(errors, "processes.missing", "bootstrap evidence is required")
