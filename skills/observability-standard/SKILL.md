@@ -47,10 +47,12 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 ### Agent / RAG 扩展(在核心基线上加)
 - agent:workflow/agent/tool 用 `gen_ai.operation.name=invoke_workflow|invoke_agent|execute_tool`;模型 inference span 用真实 API operation(`chat` / `generate_content` / `text_completion`),**不是** `inference`。核心字段用 `gen_ai.provider.name`、`gen_ai.request.model`、`gen_ai.usage.*_tokens`、`gen_ai.response.finish_reasons`;prompt 版本用 `gen_ai.prompt.name` / `gen_ai.prompt.version`;tool id 用 `gen_ai.tool.call.id`。`gen_ai.conversation.id` 仅写真正 conversation/thread id,不得拿 trace/request/hash 顶替。GenAI 当前为 Development,按 pinned oracle 校验,不要把 custom 字段称作 OTel 标准(见 references §5.1)。
+- 组织级 agent custom 字段固定为 `im.agent.role`、`im.agent.invocation.id`、`im.workflow.phase`:role/phase 必须是低基数枚举;invocation id 是高基数关联 id,不得进 metric label。QAE DEV 一步映射 `qae.metadata.actor→im.agent.role`、`qae.metadata.subclaw_id→im.agent.invocation.id`、`qae.metadata.phase→im.workflow.phase`;旧键进入 forbidden list,不双写。
 - **工具调用 envelope**:稳定 `tool_call_id`(**不复用框架 run_id**)、start+finalize 完整生命周期(别永停 `running`)、`tool_status` 枚举 + `error_type`/`duration_ms`。完整字段见 references §5.1。
 - **RAG 额外**开 `embedding` + `retrieval` span,记 query / top-k / 命中 chunk 的 **id+score** / 最终进上下文的 chunk id;**答案要可溯源到 chunk**。
 - 仅当所用 instrumentation 仍需旧版迁移开关时设 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`;升级时按 pinned oracle 复核,不得把 `latest` 当稳定契约。
 - LiteLLM Proxy 新接入只选 OTel V2;V1/V2、generic OTLP/vendor preset 与 custom callback 不得重复产同一 inference span。generation span 必须挂当前 domain/invocation span;async worker/callback/poller/streaming 捕获并恢复 context。streaming 只有完整消费才 success,early close/cancel/provider error 分别终结且必须有 conformance 证据(见 references §5.1)。
+- 当前 V2 conformance profile 对明文 model I/O 无条件 fail-closed:即使 dev runtime flag 为 true,任何 content key 也必须失败;放开须发布新的显式 profile 版本,不能由运行时开关绕过。
 - 持久化执行(Temporal/DBOS/Restate/自建)恢复时会丢 trace context,须持久化 `traceparent` 并重建。
 
 ## 类型纪律
