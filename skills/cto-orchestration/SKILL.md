@@ -1,6 +1,6 @@
 ---
 name: cto-orchestration
-version: 1.5.1
+version: 1.5.2
 description: "CTO/orchestrator 模式管理多 agent 软件交付：默认 headless EXEC、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
 metadata:
   requires:
