@@ -172,7 +172,7 @@
 | 每次工具调用 | execute tool span | `gen_ai.operation.name=execute_tool`,`gen_ai.tool.name`,`gen_ai.tool.call.id`;组织 envelope 另含 status/error/duration/resource(见下) |
 | prompt 版本 | 挂在 inference span 上 | `gen_ai.prompt.name`,`gen_ai.prompt.version`;变量属于 opt-in content |
 
-`inference` 是 span 概念,不是 operation value。`gen_ai.conversation.id` 仅在真实 conversation/session/thread id readily available 时写,不得生成新 UUID、trace id 或内容 hash 顶替。模型与 prompt 版本沿用 `gen_ai.request.model` / `gen_ai.prompt.version`,不另造平行字段。`tenant.id`、角色/阶段、`tool_status` 等 custom 字段必须标明组织语义,不得宣称为 OTel 标准。
+`inference` 是 span 概念,不是 operation value。`gen_ai.conversation.id` 仅在真实 conversation/session/thread id readily available 时写,不得生成新 UUID、trace id 或内容 hash 顶替。模型与 prompt 版本沿用 `gen_ai.request.model` / `gen_ai.prompt.version`,不另造平行字段。组织级 custom 字段必须由 profile extension 声明:低基数字段钉 allowlist + 长度,跨 span 关联 id 钉同 trace 一致性且不得进 metric label;公共 profile 不内置任何公司/项目 namespace。`tenant.id`、组织字段、`tool_status` 等 custom 字段不得宣称为 OTel 标准。
 
 **工具调用 envelope 纪律(MUST)**:每个工具调用落一条结构化记录(execute_tool span / 持久 envelope),字段 ≥ `tool_call_id` / `tool_name` / `tool_status` / `error_type` / `duration_ms` / `trace_id` / `span_id` / `resource_identifier`。两条硬约束:
 - **稳定显式 id**:`tool_call_id` MUST 显式生成且稳定;**MUST NOT 复用底层框架的 run_id 当持久 id**——否则 parent→child→provider 跨跳无法 join。
@@ -187,7 +187,7 @@
 - generation/inference span 必须是当前 domain/invocation span 的 child;instrumentation 每进程 bootstrap 一次,不能只在 API handler 注册。
 - async callback、worker、poller、streaming 在脱离点捕获并恢复 OTel context;callback 晚到也恢复原 parent。
 - streaming 覆盖正常耗尽、provider error、client cancel/disconnect、consumer early-close;只有正常完整消费才 success,其余必须终结为对应 error/cancelled,不得泄漏未结束 span。
-- 明文 `gen_ai.system_instructions` / input/output messages、prompt variables、tool arguments/results 默认不采集。启用必须同时满足 instrumentation-specific 显式开关、非生产、脱敏、访问控制、保留期与审计;默认 conformance 用 sentinel 证明 spans/events/legacy mapper 均无内容泄漏。
+- 当前 V2 conformance profile 对明文 `gen_ai.system_instructions` / input/output messages、prompt variables、tool arguments/results 无条件 fail-closed:即使 dev runtime flag 为 true也拒绝;放开须发布新的显式 profile 版本,不能由运行时开关绕过。sentinel 必须证明 spans/events/legacy mapper 均无内容泄漏。
 
 ### §5.2 RAG / 知识库 增量
 在 §5.1 基础上**加开检索链路的 span**(GenAI 约定含 embeddings、retrieval span)。理由:RAG 的两类失败——**检索没召回**(知识在库里但没取到)与 **生成幻觉**(取到了但模型瞎编)——只有靠 retrieval span 才能区分;没有它,你看到错误答案根本不知道该修检索还是修 prompt。
@@ -295,7 +295,7 @@
 - `observability_conformance_command`:单一非交互命令,正向全绿 exit 0,任一语义/静态检查失败 exit 非 0,stdout 输出机器可读 JSON summary。
 - `observability_conformance_paths`:repo-relative path/glob 列表,覆盖 instrumentation bootstrap、resource/config、LLM/agent/tool/workflow、async worker/streaming 与 conformance fixtures;IaC 用它决定何时触发。
 
-command 必须调用同一 pinned semantic oracle:`references/conformance-profile-v2.json` + `scripts/observability_conformance.py`。<!-- trunk:conformance-profile-v2.json --> 产品仓把真实 spans/resource/process snapshot 归一化后交给 oracle,并在同一 command 内补 vendor import/legacy key/arbitrary metadata flattening static guard。覆盖:resource ownership、真实 tenant absence/presence、GenAI required/allowed 字段、parent+async propagation、streaming 终态、默认无内容。mutation 至少分别破坏 parent、字段名、tenant boundary、content gate、worker bootstrap,每项单独证明 exit 非 0。IaC/delivery 只消费 command、paths、exit code 与 JSON result,**MUST NOT**复制字段清单、解析应用实现或成为语义 source of truth。
+command 必须调用同一 pinned semantic oracle:`references/conformance-profile-v2.json` + `scripts/observability_conformance.py`。<!-- trunk:conformance-profile-v2.json --> 产品仓把真实 spans/resource/process snapshot 归一化后交给 oracle;async 脱离点必须提供捕获到的 worker/callback span(`async_boundary`、真实 parent、同 trace、`context_restored=true`),不能用 bootstrap bool 代替。`static_guard.semantic_producers` 必须精确等于 profile 钉住的单一 producer,且 `vendor_or_legacy_paths`、`arbitrary_metadata_flatteners` 为空;项目自定义字段 allowlist/一致性键及 forbidden exact/prefix 也只由 profile extension 声明,其中 prefix 扫描完整 snapshot(含 events),避免把 oracle 扩成通用源码 scanner。覆盖:resource ownership、真实 tenant absence/presence、GenAI required/allowed 字段、parent+async propagation、streaming 终态、默认无内容。mutation 至少分别破坏 parent、字段名、tenant boundary、content gate、worker evidence、single producer、vendor/legacy path、metadata flattening,每项单独证明 exit 非 0。IaC/delivery 只消费 command、paths、exit code 与 JSON result,**MUST NOT**复制字段清单、解析应用实现或成为语义 source of truth。
 
 **达标线:规范里每一条会被违反且能自动检测的铁律,都要有一个会让 CI 变红的 gate。检测不了的(纯人工判断项)才进人工清单。** 立规范时若只产出文档不产出 gate,等于没立。
 

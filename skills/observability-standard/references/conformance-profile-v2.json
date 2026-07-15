@@ -7,7 +7,12 @@
   "gen_ai_required_span_roles": ["domain", "inference"],
   "required_span_fields": ["trace_id", "span_id"],
   "required_inference": ["gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.request.model"],
-  "content_capture_environments": ["development", "test", "staging"],
+  "custom_attribute_allowlists": {},
+  "custom_attribute_max_length": 32,
+  "consistent_trace_attributes": [],
+  "metric_label_forbidden_keys": [],
+  "approved_semantic_producer": "litellm_sdk_semconv",
   "content_keys": ["gen_ai.system_instructions", "gen_ai.input.messages", "gen_ai.output.messages", "gen_ai.prompt.variable", "gen_ai.tool.call.arguments", "gen_ai.tool.call.result"],
-  "forbidden_keys": ["gen_ai.prompt", "gen_ai.completion", "prompt.name", "prompt.version", "tool_call_id"]
+  "forbidden_keys": ["gen_ai.prompt", "gen_ai.completion", "prompt.name", "prompt.version", "tool_call_id"],
+  "forbidden_key_prefixes": []
 }
