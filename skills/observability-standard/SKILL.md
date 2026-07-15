@@ -47,7 +47,7 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 ### Agent / RAG 扩展(在核心基线上加)
 - agent:workflow/agent/tool 用 `gen_ai.operation.name=invoke_workflow|invoke_agent|execute_tool`;模型 inference span 用真实 API operation(`chat` / `generate_content` / `text_completion`),**不是** `inference`。核心字段用 `gen_ai.provider.name`、`gen_ai.request.model`、`gen_ai.usage.*_tokens`、`gen_ai.response.finish_reasons`;prompt 版本用 `gen_ai.prompt.name` / `gen_ai.prompt.version`;tool id 用 `gen_ai.tool.call.id`。`gen_ai.conversation.id` 仅写真正 conversation/thread id,不得拿 trace/request/hash 顶替。GenAI 当前为 Development,按 pinned oracle 校验,不要把 custom 字段称作 OTel 标准(见 references §5.1)。
-- 组织级 agent custom 字段固定为 `im.agent.role`、`im.agent.invocation.id`、`im.workflow.phase`:role/phase 必须是低基数枚举;invocation id 是高基数关联 id,不得进 metric label。QAE DEV 一步映射 `qae.metadata.actor→im.agent.role`、`qae.metadata.subclaw_id→im.agent.invocation.id`、`qae.metadata.phase→im.workflow.phase`;旧键进入 forbidden list,不双写。
+- 组织级 custom 字段必须由 profile extension 声明:低基数字段钉 allowlist + 长度,跨 span 关联 id 钉同 trace 一致性且不得进 metric label;公共 profile 不内置任何公司/项目 namespace。
 - **工具调用 envelope**:稳定 `tool_call_id`(**不复用框架 run_id**)、start+finalize 完整生命周期(别永停 `running`)、`tool_status` 枚举 + `error_type`/`duration_ms`。完整字段见 references §5.1。
 - **RAG 额外**开 `embedding` + `retrieval` span,记 query / top-k / 命中 chunk 的 **id+score** / 最终进上下文的 chunk id;**答案要可溯源到 chunk**。
 - 仅当所用 instrumentation 仍需旧版迁移开关时设 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`;升级时按 pinned oracle 复核,不得把 `latest` 当稳定契约。
@@ -65,7 +65,7 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 **没有 gate 的规范 = 形式化,必然漂移**——靠人工对照清单的规范,会在"没测试看的地方"悄悄烂掉,埋点的洞恰好出现在没人 gate 的模块(实证见 §9)。**强制手段是采纳可观测性的一等交付物,不是事后补丁。** 立规范必须同时立 gate(机制按栈替换):
 - **conformance 测试断 span 覆盖 + parent 正确,且会变红**:进程内捕获 span(语言的进程内 span 捕获器,见 references 附录 C),断言每条新 LLM/工具/检索/领域决策路径**发出领域 span 且 parent 正确**;**必带负例探针**(删 span / 断 parent → 测试变红),只测 happy-path 不强制任何东西。
-- **统一接口**:仓库声明 `observability_conformance_command` + `observability_conformance_paths`;命令复用 `references/conformance-profile-v2.json` 与 `scripts/observability_conformance.py`,覆盖 resource/tenant、GenAI 字段、parent+async/streaming、默认无内容、vendor/legacy static guard,并输出机器可读结果。IaC 只执行 command、按 paths 触发、消费 exit code/result,不得复制字段 oracle(见 references §9.5)。
+- **统一接口**:仓库声明 `observability_conformance_command` + `observability_conformance_paths`;命令复用 `references/conformance-profile-v2.json` 与 `scripts/observability_conformance.py`,覆盖 resource/tenant、GenAI 字段、parent+async/streaming、默认无内容、vendor/legacy static guard;profile 声明的 forbidden prefix 扫完整 snapshot(含 events)。IaC 只执行 command、按 paths 触发、消费 exit code/result,不得复制字段 oracle(见 references §9.5)。
 - **gate 真在 CI 跑、能 fail build**:workflow 放工具识别的位置(GitHub Actions 只跑**仓库根** `.github/workflows/`)、paths 覆盖、**无 `|| true`/soft-fail**;**在真 PR 上验证 gate 确实触发**,别假设。
 - **每条铁律 → 机制**:铁律5(禁厂商 SDK)→ 静态 import 契约(各语言 import 守卫,见 references 附录 C);铁律4(传 traceparent)→ 跨边界断言下游 span 同 trace_id;类型纪律 → 类型检查进 CI(见 references 附录 A)。
 - **孤儿 span 陷阱**(最常见隐形失败):`create_task`/goroutine/线程池/队列交接丢 ambient context → 子 span 变孤儿 root,"埋了却不可见";跨脱离点捕获并重 attach context,conformance 断言异步两侧同 trace_id。
