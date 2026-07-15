@@ -2,6 +2,9 @@
 *.log
 scripts/
 scripts
+!skills/observability-standard/scripts/
+!skills/observability-standard/scripts/*.py
+skills/observability-standard/scripts/__pycache__/
 
 AGENTS.md
 CLAUDE.md

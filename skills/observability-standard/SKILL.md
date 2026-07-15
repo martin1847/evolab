@@ -1,6 +1,6 @@
 ---
 name: observability-standard
-version: 1.1.4
+version: 1.2.0
 description: 生产级可观测性与工程规范,适用于**所有后端服务** —— 普通微服务(auth / 网关 / 业务服务)与 agent / 多 agent / RAG 知识库项目通用。核心:用 trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点、跨进程 W3C traceparent 传播、日志级别纪律、边界类型纪律(含 id 持久化:不往业务行塞 trace_id);agent / RAG 场景在此基线上加 LLM / 工具 / 检索埋点与 GenAI 语义约定。Use this skill whenever writing or reviewing backend code that involves logging setup, OpenTelemetry tracing, structured logs, cross-process context propagation, choosing log levels (INFO vs DEBUG), correlating logs / traces / db to debug, defining types for boundary or inter-service data — and additionally agent orchestration / sub-agents, LLM / tool / retrieval calls, or GenAI semantic conventions. 适用 Python / Go / Java / Rust。Apply it even when the user only says things like "加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪",不限于显式提到规范时。目标:trace_id 串 trace/log、业务 id 反查 db,让线上问题最快定位。
 ---
 
@@ -40,15 +40,17 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 ## 要开的 span
 ### 核心(所有服务)
-- 入站 **server span**(root,带 `trace_id` / `tenant.id`,并把**业务 id**挂成 span 属性(`order.id` / `run.id`)→ 供按业务 id 反查 trace),出站 **client span**(每次跨进程调用,**先开 span 再传 `traceparent`**),DB / 缓存 / 外部 API 子 span。
+- 入站 **server span**(root,带 `trace_id`,并把**业务 id**挂成 span 属性(`order.id` / `run.id`)→ 供按业务 id 反查 trace),出站 **client span**(每次跨进程调用,**先开 span 再传 `traceparent`**),DB / 缓存 / 外部 API 子 span。`tenant.id` 是非标准 custom span/log 属性,仅在确有并已验证真实业务 tenant 时写;共享后端、产品名、环境或 K8s namespace 均不构成 tenant。
 - 服务 OTel Resource 必须有 `service.name` + `service.version`;`service.version` = 当前部署的 release / image tag(例 `20260709-1020-c28e8f2`),用 `OTEL_RESOURCE_ATTRIBUTES=service.version=20260709-1020-c28e8f2` 注入。值必须非空、非 placeholder、与部署 tag 一致。tag 只标识 deployed artifact,不代替动态 effective-config snapshot。
+- Resource identity 分层:`service.namespace` = 稳定逻辑系统分组,`deployment.environment.name` = 部署环境,`k8s.cluster.*` / `k8s.namespace.name` = 运行位置;三者不得互相代替或冒充 tenant。应用/部署合同拥有稳定 service identity,Collector 只补运行时属性且不得覆盖已声明身份(完整 ownership 见 references §5.0)。共享 OTLP/SigNoZ 只共享存储与查询面,不提供安全租户隔离。
 - 这三类基线 span **优先用官方 auto-instrumentation(自动 / 零代码)产出**(HTTP / gRPC / DB 驱动 / 框架中间件;包见 references 附录 C),手写 span 只补领域环节(下方 agent / LLM / 工具 / 检索)。
 
 ### Agent / RAG 扩展(在核心基线上加)
-- agent:`invoke_workflow`(编排)、`invoke_agent`(子 agent,带 `agent.role` + 路由依据)、`inference`(LLM,带 `gen_ai.request.model` / `gen_ai.usage.*_tokens` / `gen_ai.response.finish_reasons`)、`execute_tool`。prompt 版本挂 inference span(`prompt.name` / `prompt.version` / `prompt.variant` / `prompt.tenant`)。模型 / prompt 版本沿用这些既有属性,不另造平行字段。
+- agent:workflow/agent/tool 用 `gen_ai.operation.name=invoke_workflow|invoke_agent|execute_tool`;模型 inference span 用真实 API operation(`chat` / `generate_content` / `text_completion`),**不是** `inference`。核心字段用 `gen_ai.provider.name`、`gen_ai.request.model`、`gen_ai.usage.*_tokens`、`gen_ai.response.finish_reasons`;prompt 版本用 `gen_ai.prompt.name` / `gen_ai.prompt.version`;tool id 用 `gen_ai.tool.call.id`。`gen_ai.conversation.id` 仅写真正 conversation/thread id,不得拿 trace/request/hash 顶替。GenAI 当前为 Development,按 pinned oracle 校验,不要把 custom 字段称作 OTel 标准(见 references §5.1)。
 - **工具调用 envelope**:稳定 `tool_call_id`(**不复用框架 run_id**)、start+finalize 完整生命周期(别永停 `running`)、`tool_status` 枚举 + `error_type`/`duration_ms`。完整字段见 references §5.1。
 - **RAG 额外**开 `embedding` + `retrieval` span,记 query / top-k / 命中 chunk 的 **id+score** / 最终进上下文的 chunk id;**答案要可溯源到 chunk**。
-- LLM 场景设 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` 锁属性命名(GenAI 约定 2026 仍 experimental)。
+- 仅当所用 instrumentation 仍需旧版迁移开关时设 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`;升级时按 pinned oracle 复核,不得把 `latest` 当稳定契约。
+- LiteLLM Proxy 新接入只选 OTel V2;V1/V2、generic OTLP/vendor preset 与 custom callback 不得重复产同一 inference span。generation span 必须挂当前 domain/invocation span;async worker/callback/poller/streaming 捕获并恢复 context。streaming 只有完整消费才 success,early close/cancel/provider error 分别终结且必须有 conformance 证据(见 references §5.1)。
 - 持久化执行(Temporal/DBOS/Restate/自建)恢复时会丢 trace context,须持久化 `traceparent` 并重建。
 
 ## 类型纪律
@@ -61,6 +63,7 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 **没有 gate 的规范 = 形式化,必然漂移**——靠人工对照清单的规范,会在"没测试看的地方"悄悄烂掉,埋点的洞恰好出现在没人 gate 的模块(实证见 §9)。**强制手段是采纳可观测性的一等交付物,不是事后补丁。** 立规范必须同时立 gate(机制按栈替换):
 - **conformance 测试断 span 覆盖 + parent 正确,且会变红**:进程内捕获 span(语言的进程内 span 捕获器,见 references 附录 C),断言每条新 LLM/工具/检索/领域决策路径**发出领域 span 且 parent 正确**;**必带负例探针**(删 span / 断 parent → 测试变红),只测 happy-path 不强制任何东西。
+- **统一接口**:仓库声明 `observability_conformance_command` + `observability_conformance_paths`;命令复用 `references/conformance-profile-v2.json` 与 `scripts/observability_conformance.py`,覆盖 resource/tenant、GenAI 字段、parent+async/streaming、默认无内容、vendor/legacy static guard,并输出机器可读结果。IaC 只执行 command、按 paths 触发、消费 exit code/result,不得复制字段 oracle(见 references §9.5)。
 - **gate 真在 CI 跑、能 fail build**:workflow 放工具识别的位置(GitHub Actions 只跑**仓库根** `.github/workflows/`)、paths 覆盖、**无 `|| true`/soft-fail**;**在真 PR 上验证 gate 确实触发**,别假设。
 - **每条铁律 → 机制**:铁律5(禁厂商 SDK)→ 静态 import 契约(各语言 import 守卫,见 references 附录 C);铁律4(传 traceparent)→ 跨边界断言下游 span 同 trace_id;类型纪律 → 类型检查进 CI(见 references 附录 A)。
 - **孤儿 span 陷阱**(最常见隐形失败):`create_task`/goroutine/线程池/队列交接丢 ambient context → 子 span 变孤儿 root,"埋了却不可见";跨脱离点捕获并重 attach context,conformance 断言异步两侧同 trace_id。
