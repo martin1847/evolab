@@ -126,19 +126,6 @@
 - **配置分工(所有权切分)**:语义级别(哪条日志算 INFO/DEBUG)归**代码**,且默认取安静侧;级别阈值按环境开归**部署层运行时配置**。rationale:"一份构建物服务多环境"时 stage/prod 跑同一构建物/同一 profile,构建期配置分不开环境,环境详细度必须是运行时可覆盖项——由此得所有权切分:代码管语义,部署层(manifests/env)管环境。**注意 logger 类别阈值通常优先于全局级别**:全局开 DEBUG 不会带出被类别阈值压住的行,要看见须显式开该类别。各语言的运行时级别覆盖机制:Java(JUL/JBoss LogManager/Logback)类别级别属运行时配置(Quarkus 形如 `QUARKUS_LOG_CATEGORY__<CAT>__LEVEL`,注意 native 受构建期 min-level 下限约束);Python `logging` 按 logger 名 setLevel,入口从 env/配置读;Go `slog.LevelVar` / zap `AtomicLevel` 运行时可调;Rust `tracing` `EnvFilter`(`RUST_LOG=target=level`)。
 - **静音前查 sink**:若部署环境此前以日志流当 trace 落地(无 collector),静音 span 导出 = trace 信号整体消失;先补 OTLP collector(exporter 选择在部分栈是构建期属性——如 Quarkus native——切换须重构建,排期考虑)或有意识接受盲区再静音。
 
-**span 导出日志与环境分级(多语言通用)**:
-- **span 复述进日志流 = 噪音**:console/logging 型 span exporter 把每个 span 复述成一条日志——每请求一条、exporter 线程在请求上下文之外 → `trace_id` 关联字段为空,连"日志必带 trace_id"都不过。此类 exporter 各语言 OTel SDK 都有(Java `LoggingSpanExporter` / Python `ConsoleSpanExporter` / Go `stdouttrace` / Rust stdout exporter),**定位都是 dev 期验证埋点,不是部署环境的 trace sink**。trace 信号的正解是 OTLP 后端;部署环境把该 exporter 的 logger 类别阈值默认压到 `WARN`(保留 SDK 自身告警),dev 覆盖回可见。
-- **环境三档矩阵(默认形状)**:
-
-  | 环境 | 全局级别 | span 导出行 | 来源 |
-  |---|---|---|---|
-  | dev | DEBUG | 可见 | 代码内 dev 默认(开发就近调试) |
-  | staging | DEBUG | 可见 | 部署层运行时配置开 |
-  | prod | INFO(骨架) | 隐藏 | 默认即安静侧,零配置 |
-
-- **配置分工(所有权切分)**:语义级别(哪条日志算 INFO/DEBUG)归**代码**,且默认取安静侧;级别阈值按环境开归**部署层运行时配置**。rationale:"一份构建物服务多环境"时 stage/prod 跑同一构建物/同一 profile,构建期配置分不开环境,环境详细度必须是运行时可覆盖项——由此得所有权切分:代码管语义,部署层(manifests/env)管环境。**注意 logger 类别阈值通常优先于全局级别**:全局开 DEBUG 不会带出被类别阈值压住的行,要看见须显式开该类别。各语言的运行时级别覆盖机制:Java(JUL/JBoss LogManager/Logback)类别级别属运行时配置(Quarkus 形如 `QUARKUS_LOG_CATEGORY__<CAT>__LEVEL`,注意 native 受构建期 min-level 下限约束);Python `logging` 按 logger 名 setLevel,入口从 env/配置读;Go `slog.LevelVar` / zap `AtomicLevel` 运行时可调;Rust `tracing` `EnvFilter`(`RUST_LOG=target=level`)。
-- **静音前查 sink**:若部署环境此前以日志流当 trace 落地(无 collector),静音 span 导出 = trace 信号整体消失;先补 OTLP collector(exporter 选择在部分栈是构建期属性——如 Quarkus native——切换须重构建,排期考虑)或有意识接受盲区再静音。
-
 ---
 
 ## §5 OTel Span 拓扑
@@ -176,6 +163,7 @@
 
 **工具调用 envelope 纪律(MUST)**:每个工具调用落一条结构化记录(execute_tool span / 持久 envelope),字段 ≥ `tool_call_id` / `tool_name` / `tool_status` / `error_type` / `duration_ms` / `trace_id` / `span_id` / `resource_identifier`。两条硬约束:
 - **稳定显式 id**:`tool_call_id` MUST 显式生成且稳定;**MUST NOT 复用底层框架的 run_id 当持久 id**——否则 parent→child→provider 跨跳无法 join。
+- **键名分层**:`tool_call_id` 是**持久 envelope 的列名**;span/telemetry 属性一律用标准键 `gen_ai.tool.call.id`(同一个值)——`tool_call_id` 直接进 span 属性会被 conformance oracle 判 legacy key(profile `forbidden_keys`)。
 - **完整生命周期**:start **与** finalize 都要写,`tool_status` 必终结到 `success`/`failed`/`timeout`/`cancelled`/`blocked`;**只写 start 会让记录永停 `running`**(常见实漏)。
 
 拓扑铁律:子 agent 之间若不直连、只经编排者中转,则所有 agent span 都挂在编排 span 下,trace 天然呈**树**(= 编排拓扑的镜像),而非网,便于定位。
@@ -258,7 +246,7 @@
 - [ ] 一次 run 骨架仅靠 INFO 可重建;DEBUG 生产默认关、可按 trace 开
 - [ ] 密钥/PII/客户机密在日志边界脱敏;LLM 全文走 DEBUG/内容开关
 - [ ] **跨进程一律传播 W3C `traceparent`**;持久化执行恢复时重建 trace context
-- [ ] LLM / agent 场景:`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` 已设
+- [ ] LLM / agent 场景:若所用 instrumentation 仍依赖旧版迁移机制,`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` 已设(条件见 §5.1;不依赖则不设)
 - [ ] 埋点只依赖 OTel API/SDK + OTLP;应用代码无厂商 SDK import;标准组件用 auto-instrumentation(包见附录 C);厂商差异在 Collector / exporter 层
 - [ ] RAG 项目:开 embedding/retrieval span;答案可溯源到 chunk id
 - [ ] 业务实体 id 作 span 属性(`order.id` / `run.id`)→ 可按业务 id 反查 trace(零新增列);**不往业务行加 `trace_id` 列**
