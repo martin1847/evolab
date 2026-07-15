@@ -3,6 +3,8 @@
 > SKILL.md §8（新项目接入）的展开 = 整段操作清单。主干只留一行指针。
 
 1. 项目无治理结构 → 先跑 `/repo-governance-bootstrap` 生成 docs/AGENTS.md 骨架。
+   **已有骨架的存量仓不短路**：对照 bootstrap 目标结构逐项核缺（伞仓 NORTH_STAR / docs-check·
+   pre-commit 门 / hooks 接线），缺则单项补、不整仓重跑（实证：某伞仓因"已初始化"被短路，漏建三项）。
 2. bootstrap 已生成完整 AGENTS.md（含 Work Modes / Validation）；再把
    同目录 `agents-md-orchestration-section.md` 的**两节**增补进去——①委派 Agent 边界（常驻兜底，
    与 goal 合同纵深防御）+ ②编排者行为内核（角色绑定必并；纪律 bullets **按该文件头部的三层分工
