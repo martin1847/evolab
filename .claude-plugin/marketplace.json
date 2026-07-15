@@ -36,6 +36,38 @@
         "."
       ],
       "description": "写码纪律的 skill 形态（先思考/简单优先零投机/外科手术式/目标驱动+验证诚实）——给不支持条件 rules 的 agent（如 codex）；与 templates/rules/coding.md 镜像对（硬门锁同步），同一 agent 二选一勿同装。"
+    },
+    {
+      "name": "orchestrator-core",
+      "source": "./skills/orchestrator-core",
+      "skills": [
+        "."
+      ],
+      "description": "编排内核——领域无关的多智能体编排不变式（先编排再工作、派发契约、回收工程、常驻 digest、self-evolution），cto-orchestration 等编排皮共用的底层；装旗舰皮时必装。"
+    },
+    {
+      "name": "observability-standard",
+      "source": "./skills/observability-standard",
+      "skills": [
+        "."
+      ],
+      "description": "生产级可观测性规范：trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OTel 埋点与 W3C traceparent 传播、日志级别纪律；agent/RAG 场景加 GenAI 语义约定 + 可执行 conformance oracle。Python/Go/Java/Rust 通用。"
+    },
+    {
+      "name": "git-workflow-standard",
+      "source": "./skills/git-workflow-standard",
+      "skills": [
+        "."
+      ],
+      "description": "生产级 Git 协作 SOP：受保护分支按 tier 门禁、feature 分支起步、rebase 条件动作、集成默认 squash、提交不加 AI 签名；commit/push/PR/merge 场景必读。"
+    },
+    {
+      "name": "agent-backend-standard",
+      "source": "./skills/agent-backend-standard",
+      "skills": [
+        "."
+      ],
+      "description": "agent 时代后端工程手册（hub）：架构与控制流、上下文/prompt 工程、工具设计（ACI）、记忆与检索、持久层纪律，加 repo-owned engineering gate 四语言稳定接口与组件 lifecycle/ratchet 收口契约。"
     }
   ]
 }
