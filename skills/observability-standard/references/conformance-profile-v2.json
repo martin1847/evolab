@@ -1,0 +1,13 @@
+{
+  "schema_version": "observability-conformance/v2",
+  "allowed_operations": ["chat", "create_agent", "embeddings", "execute_tool", "generate_content", "invoke_agent", "invoke_workflow", "plan", "retrieval", "text_completion"],
+  "required_resource": ["service.name", "service.version"],
+  "forbidden_service_versions": ["dev", "latest", "unknown"],
+  "required_span_roles": [],
+  "gen_ai_required_span_roles": ["domain", "inference"],
+  "required_span_fields": ["trace_id", "span_id"],
+  "required_inference": ["gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.request.model"],
+  "content_capture_environments": ["development", "test", "staging"],
+  "content_keys": ["gen_ai.system_instructions", "gen_ai.input.messages", "gen_ai.output.messages", "gen_ai.prompt.variable", "gen_ai.tool.call.arguments", "gen_ai.tool.call.result"],
+  "forbidden_keys": ["gen_ai.prompt", "gen_ai.completion", "prompt.name", "prompt.version", "tool_call_id"]
+}

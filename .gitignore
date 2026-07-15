@@ -2,6 +2,8 @@
 *.log
 scripts/
 scripts
+!skills/observability-standard/scripts/
+!skills/observability-standard/scripts/*.py
 
 AGENTS.md
 CLAUDE.md
