@@ -144,28 +144,35 @@
 ## §5 OTel Span 拓扑
 
 ### §5.0 服务基线拓扑(所有服务)
-任何服务的最小 span 拓扑:**入站 server span = root**(带 `trace_id` / `run.id`、`tenant.id`)→ 每次**出站 client span**(HTTP / gRPC / MQ;**先开 client span 再 inject `traceparent`**——使注入的 header 带真实 parent span)→ DB / 缓存 / 外部 API 子 span。trace 是请求在系统里的因果树;§5.1 / §5.2 是 agent / RAG 在此基线上的**增量**。
+任何服务的最小 span 拓扑:**入站 server span = root**(带 `trace_id` / `run.id`)→ 每次**出站 client span**(HTTP / gRPC / MQ;**先开 client span 再 inject `traceparent`**——使注入的 header 带真实 parent span)→ DB / 缓存 / 外部 API 子 span。trace 是请求在系统里的因果树;§5.1 / §5.2 是 agent / RAG 在此基线上的**增量**。
 
 **Resource 部署身份(MUST)**:每个服务的 OTel Resource 必须带 `service.name` + `service.version`。`service.version` 钉当前实际部署的 release / image tag,例 `20260709-1020-c28e8f2`;部署层用 `OTEL_RESOURCE_ATTRIBUTES=service.version=20260709-1020-c28e8f2` 注入。该值 MUST 非空、非 placeholder(`unknown` / `latest` / `dev` 等),且与 Docker / GitOps 实际部署 tag 一致。release tag 只识别 deployed artifact,不是动态配置版本,不能代替 durable workflow 的 immutable effective-config snapshot。
+
+**Resource ownership 与冲突优先级**:
+- `service.namespace`:稳定逻辑系统/产品分组,由应用或部署合同声明;不是 Kubernetes namespace。
+- `deployment.environment.name`:部署环境,由部署配置声明;优先标准值 `development|test|staging|production`,不参与 service identity 唯一性。
+- `k8s.cluster.name` / `k8s.cluster.uid`:由平台/IaC或可靠 detector 提供;name 便于查询,uid 才是 cluster identity。
+- `k8s.namespace.name`:由 Collector `k8sattributes` 等运行时富化;应用不得伪造。Collector MAY 补缺失的运行时属性,**MUST NOT 覆盖**应用/部署合同已声明的 `service.name` / `service.namespace` / `service.version`。
+
+共享 OTLP/SigNoZ 只表示共用存储/查询面,**不构成安全 tenant 隔离**。`tenant.id` 不属于 OTel 标准,是 custom request/span/log 属性;仅在确有并已验证真实业务 tenant 时写,不得写入 Resource,不得填产品名、环境、`service.namespace` 或 `k8s.namespace.name`,也不得作为 metric label。无真实 tenant 时必须缺失。
 
 **这三类基线 span 优先用官方 auto-instrumentation(自动 / 零代码)产出**,而非手写;手写 span 只补自动埋点拿不到的领域环节(§5.1 / §5.2)。各语言 auto-instrumentation 包见**附录 C**。
 
 ### §5.1 Agent 增量(在 §5.0 基线上)
 
-> 现状:GenAI 语义约定截至 2026 多为 **experimental**,主流后端已支持。
-> 生产显式设 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` 锁属性命名,避免依赖升级悄改 span/属性名打乱看板与告警。
+> 基线:OpenTelemetry GenAI conventions 当前状态为 **Development**。字段以仓库 pinned oracle 为准;仅当具体 instrumentation 仍依赖旧版迁移机制时设置 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`,不得把 `latest` 当稳定契约。
 >
 > **接入 LLM 可观测平台(Langfuse / Phoenix 等)优先走 OTLP ingestion** —— 当作一个 OTLP 后端接,不在应用代码引其 SDK(Langfuse 已支持 OTLP)。
 
 | 概念 | OTel span / 操作 | 关键属性 |
 |---|---|---|
-| 编排 | invoke workflow span | `gen_ai.operation.name=invoke_workflow`;root 业务属性 `run.id` / `tenant.id`(承自 §5.0) |
-| 调用子 agent | invoke agent span | `gen_ai.agent.name`, `agent.role`, 路由依据 |
-| 每次 LLM 调用 | inference span | `gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens`, `gen_ai.response.finish_reasons` |
-| 每次工具调用 | execute tool span | `tool_call_id`、`tool_name`、`tool_status`、`error_type`、`duration_ms`、`resource_identifier`(详见下「envelope 纪律」) |
-| prompt 版本 | 挂在 inference span 上 | `prompt.name`, `prompt.version`, `prompt.variant`, `prompt.tenant` |
+| 编排 | invoke workflow span | `gen_ai.operation.name=invoke_workflow`,真实可得时 `gen_ai.workflow.name` |
+| 调用子 agent | invoke agent span | `gen_ai.operation.name=invoke_agent`,`gen_ai.agent.name`,真实可得时 id/version/conversation |
+| 每次 LLM 调用 | inference span | `gen_ai.operation.name=chat|generate_content|text_completion`,`gen_ai.provider.name`,`gen_ai.request.model`,`gen_ai.usage.input_tokens/output_tokens`,`gen_ai.response.finish_reasons` |
+| 每次工具调用 | execute tool span | `gen_ai.operation.name=execute_tool`,`gen_ai.tool.name`,`gen_ai.tool.call.id`;组织 envelope 另含 status/error/duration/resource(见下) |
+| prompt 版本 | 挂在 inference span 上 | `gen_ai.prompt.name`,`gen_ai.prompt.version`;变量属于 opt-in content |
 
-模型与 prompt 版本沿用 `gen_ai.request.model` / `prompt.version` 等既有属性,不另造平行字段。
+`inference` 是 span 概念,不是 operation value。`gen_ai.conversation.id` 仅在真实 conversation/session/thread id readily available 时写,不得生成新 UUID、trace id 或内容 hash 顶替。模型与 prompt 版本沿用 `gen_ai.request.model` / `gen_ai.prompt.version`,不另造平行字段。`tenant.id`、角色/阶段、`tool_status` 等 custom 字段必须标明组织语义,不得宣称为 OTel 标准。
 
 **工具调用 envelope 纪律(MUST)**:每个工具调用落一条结构化记录(execute_tool span / 持久 envelope),字段 ≥ `tool_call_id` / `tool_name` / `tool_status` / `error_type` / `duration_ms` / `trace_id` / `span_id` / `resource_identifier`。两条硬约束:
 - **稳定显式 id**:`tool_call_id` MUST 显式生成且稳定;**MUST NOT 复用底层框架的 run_id 当持久 id**——否则 parent→child→provider 跨跳无法 join。
@@ -174,6 +181,13 @@
 拓扑铁律:子 agent 之间若不直连、只经编排者中转,则所有 agent span 都挂在编排 span 下,trace 天然呈**树**(= 编排拓扑的镜像),而非网,便于定位。
 
 **持久化执行(durable execution,如 Temporal / DBOS / Restate / 自建)专项**:工作流跨重启/恢复时默认会**丢失原 trace context**,恢复后那段会脱离原 trace。必须把 `traceparent` 一并持久化进工作流状态、恢复时重建。当成显式设计项,不要假设自动。
+
+**LiteLLM OTel V2 profile**:Proxy 新接入显式启用 V2并关闭 legacy compatibility;V1/V2 二选一。generic OTLP、vendor preset、custom OTel callback 只能形成一个语义 span 生产路径;fan-out 只在 exporter 层做,并以 collector 端 `(trace_id,span_id)` 计数证明无重复。LiteLLM 的“standards-based”不等于逐字段 conformance,每次升级仍按 pinned oracle 验证。
+
+- generation/inference span 必须是当前 domain/invocation span 的 child;instrumentation 每进程 bootstrap 一次,不能只在 API handler 注册。
+- async callback、worker、poller、streaming 在脱离点捕获并恢复 OTel context;callback 晚到也恢复原 parent。
+- streaming 覆盖正常耗尽、provider error、client cancel/disconnect、consumer early-close;只有正常完整消费才 success,其余必须终结为对应 error/cancelled,不得泄漏未结束 span。
+- 明文 `gen_ai.system_instructions` / input/output messages、prompt variables、tool arguments/results 默认不采集。启用必须同时满足 instrumentation-specific 显式开关、非生产、脱敏、访问控制、保留期与审计;默认 conformance 用 sentinel 证明 spans/events/legacy mapper 均无内容泄漏。
 
 ### §5.2 RAG / 知识库 增量
 在 §5.1 基础上**加开检索链路的 span**(GenAI 约定含 embeddings、retrieval span)。理由:RAG 的两类失败——**检索没召回**(知识在库里但没取到)与 **生成幻觉**(取到了但模型瞎编)——只有靠 retrieval span 才能区分;没有它,你看到错误答案根本不知道该修检索还是修 prompt。
@@ -274,6 +288,14 @@
 
 ### 9.4 宪法条款
 - 仓库 `AGENTS.md` / `CONTRIBUTING` 写明:**新增 LLM / 工具 / 检索 / 领域决策路径,必须有 parent 正确的领域 span**,指向本 skill。让它成为人 + agent 评审时会对照的成文规则,而非靠记忆。
+
+### 9.5 可执行 conformance 接口
+
+每个接入仓必须在 repo-owned engineering contract 声明:
+- `observability_conformance_command`:单一非交互命令,正向全绿 exit 0,任一语义/静态检查失败 exit 非 0,stdout 输出机器可读 JSON summary。
+- `observability_conformance_paths`:repo-relative path/glob 列表,覆盖 instrumentation bootstrap、resource/config、LLM/agent/tool/workflow、async worker/streaming 与 conformance fixtures;IaC 用它决定何时触发。
+
+command 必须调用同一 pinned semantic oracle:`references/conformance-profile-v2.json` + `scripts/observability_conformance.py`。<!-- trunk:conformance-profile-v2.json --> 产品仓把真实 spans/resource/process snapshot 归一化后交给 oracle,并在同一 command 内补 vendor import/legacy key/arbitrary metadata flattening static guard。覆盖:resource ownership、真实 tenant absence/presence、GenAI required/allowed 字段、parent+async propagation、streaming 终态、默认无内容。mutation 至少分别破坏 parent、字段名、tenant boundary、content gate、worker bootstrap,每项单独证明 exit 非 0。IaC/delivery 只消费 command、paths、exit code 与 JSON result,**MUST NOT**复制字段清单、解析应用实现或成为语义 source of truth。
 
 **达标线:规范里每一条会被违反且能自动检测的铁律,都要有一个会让 CI 变红的 gate。检测不了的(纯人工判断项)才进人工清单。** 立规范时若只产出文档不产出 gate,等于没立。
 
