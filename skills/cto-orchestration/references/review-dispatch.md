@@ -106,6 +106,12 @@ provider 的独立分支，整条提取被绕过仍全绿）。
 门控）评审天然盯"会不会误触发"，常漏"真实输入下到底触发没"。实证：referent func-call 触发器检测的是**抽取后
 被改写过的** content（指代已被改没）→ 真实场景永不触发；评审查了误触发、漏了漏触发，靠真模型验才抓出。
 
+**架构符合性轴（仓库声明了方向文档时必挂）**：若目标仓（或其伞仓）声明了北极星 / constitution /
+ADR 类方向文档，brief 里给出其绝对路径，并要求评审者：①对照改动逐条检查是否触碰任何带 ID 的原则
+（引用原则 ID，如 `NS-3`），tripwire 清单是现成的检查表；②改动若新增结构性约束（gate/lint/门禁），
+反向验证约束真咬得动——"绿因为零覆盖"（规则空转、pattern 不匹配、检查器没跑）是 blocking 级 finding；
+③方向文档与 accepted ADR 冲突时不择边，报编排者升级主理人。没有方向文档的仓跳过本轴，不造假锚点。
+
 ### ledger 结构 + 收敛准则
 
 写 `docs/orchestration/<NAME>_REVIEW_codex.md`——severity 分级 findings + verdict，维护

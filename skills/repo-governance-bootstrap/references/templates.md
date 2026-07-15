@@ -3,7 +3,8 @@
 > 主干只留步骤与判据；所有生成物模板在此。目录：
 > [ADR](#adr-模板) · [组件引入 ADR lifecycle 变体](#组件引入-adr-变体lifecycle) · [模块文档](#模块文档模板) ·
 > [Roadmap 条目](#roadmap-条目模板) · [Deferred 条目](#deferred-延期条目模板) · [Deferred 索引](#deferred-索引模板roadmapdeferredreadmemd) ·
-> [ACTIVE_CONTEXT](#active_contextmd-模板) · [ACCESS.local](#accesslocalmd-模板) · [INDEX](#indexmd-模板)
+> [ACTIVE_CONTEXT](#active_contextmd-模板) · [ACCESS.local](#accesslocalmd-模板) · [INDEX](#indexmd-模板) ·
+> [NORTH_STAR](#north_star-模板可选伞仓或有明确长期方向的仓) · [AGENTS.md minimal 变体](#agentsmd-minimal-变体维护型低活跃仓)
 
 ## ADR 模板
 
@@ -247,4 +248,96 @@ This index maps the repository source of truth. Links only — content lives in 
 | Capability | Component | ADR | Roadmap |
 | --- | --- | --- | --- |
 | <capability> | `<path>` | ADR-0001 | <ID> |
+```
+
+---
+
+## NORTH_STAR 模板（可选——伞仓或有明确长期方向的仓）
+
+> ADR 记录"当时决定了什么、为什么"（历史）；NORTH_STAR 记录"什么必须/绝不发生"（方向）。
+> 定长一到两页、原则 ≤7-8 条（Amazon tenets 尺寸纪律）；每条带稳定 ID（`NS-1`…），评审
+> brief、门禁与 ADR 按 ID 引用。宪法本身用 semver（spec-kit 约定：MAJOR=删改原则语义 /
+> MINOR=新增原则或实质扩充 / PATCH=措辞澄清）。原则写法把 TOGAF 四字段
+> （Name / Statement / Rationale / Implications）收敛成两行：Statement 一句 MUST/NEVER
+> 判定句 + Rationale/裁决依据；Implications 落到「越线信号」节。生成语言从项目
+> （项目文档用英文就生成英文，结构不变）。
+
+```markdown
+# 北极星 — <项目 / 生态名>
+
+Status: accepted (maintainer, YYYY-MM-DD)
+Version: 1.0.0 | Ratified: YYYY-MM-DD | Last amended: YYYY-MM-DD
+
+> 本文件记录长期方向：什么必须发生 / 什么绝不发生。ADR 记录决策历史。
+> 与 accepted ADR 冲突 = 两者必有一错：停下升级 maintainer，绝不静默择边。
+
+## 终局（Destination）
+
+<一段话：这个项目/生态长期要变成什么；护城河是什么（组合还是单点）。>
+
+## 不可协商原则
+
+- **NS-1 — <名称>.** <Statement：一句 MUST/NEVER 判定句。> <Rationale：为什么；
+  冲突时按什么裁。>（来源：README / ADR-xxxx / …）
+- **NS-2 — …**（≤7-8 条；每条必须可被评审判定，禁模糊 "should"）
+
+## 工法（agent 时代工程纪律，可选节）
+
+<canonical vs non-canonical 显式声明 / 就近 AGENTS.md / 防腐门必须 build-failing
+且咬整类、baseline 只收不放 / 行为变更藏 flag 默认 OFF。>
+
+## 越线信号（Tripwires）— 出现以下情况即偏航
+
+- <每条对应一个 NS-ID 的具体反模式，写成评审可机械判定的形态>（NS-x）
+
+## 生效路径（Enforcement）
+
+本文件是软层（L1），只通过更硬的层生效：评审合同引用 NS-ID → 编辑时 hook →
+build-failing 门（按语言：ArchUnit / cargo-deny / import-linter / NetArchTest /
+dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI。
+
+## 治理（Governance）
+
+修订仅限 maintainer，须附书面理由；版本按上述 semver 递增并更新 Last amended；
+原则语义变更后**同一变更内**同步下游消费者（评审模板 / 门禁规则 / 子仓 AGENTS.md
+指针）。
+```
+
+---
+
+## AGENTS.md minimal 变体（维护型/低活跃仓）
+
+> 适用：maintained-only 仓（按需修、无 feature drive、无 ADR/roadmap 脚手架——即全量
+> 宪法 `PROJECT_AGENT.md` 的启用条件不满足时）。目标 <60 行：agent 进来 30 秒知道
+> 「这是什么、什么不许做、怎么构建」。CLAUDE.md 仍是一行 `@AGENTS.md`。伞仓场景配套
+> 覆盖检查：每个含自有 `.git` 的一级子仓必须有根 AGENTS.md（低活跃仓用本变体即达标），
+> 一行门：`for d in */; do [ -d "$d/.git" ] && [ ! -f "${d}AGENTS.md" ] && echo "MISSING: $d"; done`。
+> 生成语言从项目。
+
+```markdown
+# <repo> — Agent 指南
+
+<一句话定位。>（伞仓场景加：能力簇归属见伞仓 `docs/modules/<cluster>.md`。）
+
+## 边界（Scope）
+
+- FOR: <2-3 条>
+- NOT FOR: <1-2 条>
+- 维护型仓：只在具体压力（真实 bug / 真实消费者需求）下动，不做推测性 feature
+  parity。
+
+## 生态规则（伞仓场景才有本节）
+
+- Wire 兼容性源头在 <参照仓>；本仓跟随 wire、绝不 fork 协议、绝不先行改 wire。
+- 长期方向：伞仓 `docs/NORTH_STAR.md`（相关处按 NS-ID 引用）。
+
+## 构建与测试
+
+<从仓内文件推导的真实命令；未实跑过的标 `(not verified)`——禁止编造命令。>
+
+## 纪律
+
+- 行为变更藏 flag、默认 OFF；不顺手 refactor、不动格式。
+- Secret、内部 hostname/IP、拓扑绝不进 committed tree / 日志 / 文档。
+- Commit 留本地，owner 明确批准才 push；不加 AI 签名行。
 ```
