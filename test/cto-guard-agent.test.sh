@@ -37,6 +37,14 @@ run PostToolUse Task '{"prompt":"take a screenshot of the dev server"}'
 chk_contains "browser Task reminded" "BLACK-HOLE" "$(ctx "$OUT")"
 run PostToolUse Agent '{"prompt":"refactor the auth module and run unit tests"}'
 chk_eq "non-browser no reminder" "" "$OUT"; chk_eq "non-browser exit 0" 0 "$RC"
+run PostToolUse Agent 'null'
+chk_eq "PostToolUse malformed tool_input soft-abstains" 0 "$RC"; chk_eq "PostToolUse malformed tool_input silent" "" "$OUT$ERR"
+run PostToolUse Task '{}'
+chk_eq "PostToolUse missing prompt soft-abstains" 0 "$RC"; chk_eq "PostToolUse missing prompt silent" "" "$OUT$ERR"
+run PostToolUse Agent '{"prompt":42}'
+chk_eq "PostToolUse wrong prompt type soft-abstains" 0 "$RC"; chk_eq "PostToolUse wrong prompt type silent" "" "$OUT$ERR"
+tmpe="$(mktemp)"; out="$(python3 -c 'import io,json,runpy,sys; sys.stdin=io.StringIO("{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Agent\",\"tool_input\":{\"prompt\":\"run browser E2E\"}}"); original=json.dumps; json.dumps=lambda *a,**k: (_ for _ in ()).throw(RuntimeError("boom")); runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "PostToolUse internal failure soft-abstains" 0 "$rc"; chk_eq "PostToolUse internal failure silent" "" "$out$err"
 
 # ── P0a: browser dispatch that LOADS chrome-devtools MCP -> DENY; prose mention passes ──
 run PreToolUse Agent '{"prompt":"browser E2E on localhost:3000; ToolSearch select:mcp__chrome-devtools__take_snapshot"}'
@@ -93,7 +101,15 @@ chk_eq "unknown task allows (no transcript found)" 0 "$RC"
 rm -rf /tmp/claude-zztest
 
 # ── degenerate ──
-out="$(printf '' | python3 "$GUARD")"; rc=$?
-chk_eq "empty stdin exit 0" 0 "$rc"; chk_eq "empty stdin no output" "" "$out"
+tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"model":"sonnet"}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "matching Agent missing prompt is checker error" 2 "$rc"; chk_contains "missing prompt marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"TaskStop","tool_input":{"task_id":42}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "matching TaskStop wrong id type is checker error" 2 "$rc"; chk_contains "wrong id type marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":null}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "non-applicable tool stays allowed" 0 "$rc"; chk_eq "non-applicable tool silent" "" "$err"
+tmpe="$(mktemp)"; out="$(python3 -c 'import glob,io,runpy,sys; sys.stdin=io.StringIO("{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TaskStop\",\"tool_input\":{\"task_id\":\"broken-checker\"}}"); glob.glob=lambda *a,**k: (_ for _ in ()).throw(RuntimeError("boom")); runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "internal Agent checker failure exits 2" 2 "$rc"; chk_contains "internal Agent checker failure marker" "CHECKER-ERROR" "$err"
 
 summary

@@ -12,20 +12,41 @@
 #   (5) blocking `watch`/fused `dispatch --goal` in the foreground -> run_in_background [DENY]
 #   (6) live e2e gate run without the E2E_ECONOMY=1 runner marker -> dispatch a cheap-model
 #       worker instead of burning the orchestrator's premium session on supervision [DENY]
-# Deny = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON hookSpecificOutput.additionalContext
-# (only that reaches the agent). Fail-open: any parse error exits 0, never blocks work. All-Python: the
+# Deny/checker error = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON
+# hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
 # extraction would be fragile in a guard.
 import sys, json, re, os
+
+
+def checker_error(message):
+    sys.stderr.write(f"CHECKER-ERROR: {message}\n")
+    return 2
 
 
 def main():
     try:
         data = json.load(sys.stdin)
     except Exception:
+        return checker_error("invalid hook JSON.")
+    if not isinstance(data, dict):
+        return checker_error("hook payload must be an object.")
+    event = data.get("hook_event_name")
+    tool = data.get("tool_name")
+    if event is not None and not isinstance(event, str):
+        return checker_error("hook_event_name must be a string.")
+    if tool is not None and not isinstance(tool, str):
+        return checker_error("tool_name must be a string.")
+    if event != "PreToolUse" or tool != "Bash":
         return 0
-    ti = data.get("tool_input", {}) or {}
-    raw = ti.get("command", "") or ""
+    ti = data.get("tool_input")
+    if not isinstance(ti, dict):
+        return checker_error("PreToolUse Bash requires object tool_input.")
+    if "command" not in ti or not isinstance(ti["command"], str):
+        return checker_error("PreToolUse Bash requires string tool_input.command.")
+    if "run_in_background" in ti and not isinstance(ti["run_in_background"], bool):
+        return checker_error("tool_input.run_in_background must be boolean.")
+    raw = ti["command"]
     # Only a QUOTED heredoc delimiter disables expansion, so only those bodies are data-safe to
     # ignore. Unquoted `<<EOF` bodies may execute command substitutions and must remain visible to
     # every guard rule. Preserve opener/closer lines so commands after the heredoc are still scanned.
@@ -231,4 +252,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        sys.exit(checker_error("internal guard failure."))

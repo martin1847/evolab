@@ -10,12 +10,17 @@
 # Scope: DENY only <bus>/<id>/inbox/... file writes. tmp/ is the helper's own staging area,
 # archive/ moves go through `agent-bus archive` (and this guard only sees Write/Edit, not mv),
 # registry.md sits at the bus root — none of those match. Reading anything stays free.
-# Deny = exit 2 + stderr (shown to the agent). Fail-open: any parse error exits 0, never blocks.
+# Deny/checker error = exit 2 + stderr (shown to the agent).
 import json
 import os
 import sys
 
 GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
+
+
+def checker_error(message):
+    sys.stderr.write(f"CHECKER-ERROR: {message}\n")
+    return 2
 
 
 def bus_root():
@@ -41,19 +46,20 @@ def main():
     try:
         data = json.load(sys.stdin)
     except Exception:
-        return 0
+        return checker_error("invalid hook JSON.")
+    if not isinstance(data, dict):
+        return checker_error("hook payload must be an object.")
     if data.get("hook_event_name") != "PreToolUse":
         return 0
     if data.get("tool_name") not in GUARDED_TOOLS:
         return 0
-    ti = data.get("tool_input") or {}
-    file_path = ti.get("file_path") or ""
-    if not file_path:
-        return 0
-    try:
-        hit = inbox_target(file_path)
-    except Exception:
-        return 0  # fail-open: a guard must never block on its own bug
+    ti = data.get("tool_input")
+    if not isinstance(ti, dict):
+        return checker_error("guarded mail write requires object tool_input.")
+    file_path = ti.get("file_path")
+    if not isinstance(file_path, str) or not file_path:
+        return checker_error("guarded mail write requires string tool_input.file_path.")
+    hit = inbox_target(file_path)
     if not hit:
         return 0
     sys.stderr.write(
@@ -74,4 +80,4 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
-        sys.exit(0)  # fail-open
+        sys.exit(checker_error("internal guard failure."))

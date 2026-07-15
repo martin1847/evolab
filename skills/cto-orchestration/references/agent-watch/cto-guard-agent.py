@@ -9,8 +9,8 @@
 # Rationale (2026-07-04 audit): the failing rules already existed in prose (frontend-verify.md / memory)
 # but didn't fire at dispatch/kill time. Prose that doesn't reach the decision point is net-negative →
 # promote to tool-call hooks. Same conclusion applied again 2026-07-10 for P0c (see below).
-# Deny = exit 2 + stderr (shown to agent). Reminder = exit 0 + JSON
-# hookSpecificOutput.additionalContext. Fail-open: any parse/FS error exits 0, never blocks work.
+# Deny/checker error = exit 2 + stderr (shown to agent). Reminder = exit 0 + JSON
+# hookSpecificOutput.additionalContext.
 # The Agent/Task/TaskStop tools are Claude-Code concepts — harmless no-ops under Codex/omp.
 import sys, json, re, os, glob, time
 
@@ -21,14 +21,32 @@ BROWSER_RE = re.compile(
 )
 
 
+def checker_error(message):
+    sys.stderr.write(f"CHECKER-ERROR: {message}\n")
+    return 2
+
+
 def main():
     try:
         data = json.load(sys.stdin)
     except Exception:
+        return checker_error("invalid hook JSON.")
+    if not isinstance(data, dict):
+        return checker_error("hook payload must be an object.")
+    event = data.get("hook_event_name", "")
+    tool = data.get("tool_name", "")
+    if not isinstance(event, str) or not isinstance(tool, str):
+        return checker_error("hook event and tool names must be strings.")
+    applicable = (
+        event == "PreToolUse" and tool in ("Agent", "Task", "TaskStop", "KillShell")
+    ) or (event == "PostToolUse" and tool in ("Agent", "Task"))
+    if not applicable:
         return 0
-    event = data.get("hook_event_name", "") or ""
-    tool = data.get("tool_name", "") or ""
-    ti = data.get("tool_input", {}) or {}
+    ti = data.get("tool_input")
+    if not isinstance(ti, dict):
+        if event == "PostToolUse":
+            return 0
+        return checker_error("guarded tool requires object tool_input.")
 
     # ── (P0b) PreToolUse·TaskStop: don't kill an agent that is still alive ──────────
     # 2026-07-04: killed a working browser agent twice because I used "no screenshots in the dir I
@@ -38,32 +56,31 @@ def main():
     # poke it (SendMessage) first, and override only after confirming it's truly stuck.
     if event == "PreToolUse" and tool in ("TaskStop", "KillShell"):
         FRESH_S = 120
-        tid = ti.get("task_id") or ti.get("shell_id") or ""
-        if tid:
-            if os.path.exists(f"/tmp/cto-allow-kill-{tid}"):
-                return 0  # explicit override
-            # /tmp works on BOTH platforms (macOS /tmp is a symlink into /private/tmp and
-            # glob follows it); the /private prefix alone made this guard silently fail-open
-            # on Linux — no transcript ever found => every kill allowed (caught by CI run #1).
-            hits = (glob.glob(f"/tmp/claude-*/*/*/tasks/{tid}.output")
-                    or glob.glob(f"/tmp/claude-*/**/tasks/{tid}.output", recursive=True)
-                    or glob.glob(f"/private/tmp/claude-*/*/*/tasks/{tid}.output")
-                    or glob.glob(f"/private/tmp/claude-*/**/tasks/{tid}.output", recursive=True))
-            try:
-                age = min(time.time() - os.path.getmtime(h) for h in hits) if hits else 1e9
-            except Exception:
-                age = 1e9
-            if age < FRESH_S:
-                sys.stderr.write(
-                    f"DENY: TaskStop on '{tid}' — its transcript grew {int(age)}s ago, so it is ALIVE, "
-                    "not black-holed. Liveness = output-file freshness, NOT presence of a specific "
-                    "artifact (a11y-driven browser agents write snapshots, not image screenshots — 'zero "
-                    "screenshots' != stuck; killed real progress twice on 2026-07-04). POKE it first via "
-                    "SendMessage and read its reply. Only if it CONFIRMS stuck / reports BROWSER-UNAVAILABLE: "
-                    f"`touch /tmp/cto-allow-kill-{tid}` then re-run TaskStop. "
-                    "Read: cto-orchestration/references/agent-watch/README.md (完成通知黑洞).\n"
-                )
-                return 2
+        id_field = "task_id" if tool == "TaskStop" else "shell_id"
+        tid = ti.get(id_field)
+        if not isinstance(tid, str) or not tid:
+            return checker_error(f"PreToolUse {tool} requires string tool_input.{id_field}.")
+        if os.path.exists(f"/tmp/cto-allow-kill-{tid}"):
+            return 0  # explicit override
+        # /tmp works on BOTH platforms (macOS /tmp is a symlink into /private/tmp and
+        # glob follows it); the /private prefix alone made this guard silently fail-open
+        # on Linux — no transcript ever found => every kill allowed (caught by CI run #1).
+        hits = (glob.glob(f"/tmp/claude-*/*/*/tasks/{tid}.output")
+                or glob.glob(f"/tmp/claude-*/**/tasks/{tid}.output", recursive=True)
+                or glob.glob(f"/private/tmp/claude-*/*/*/tasks/{tid}.output")
+                or glob.glob(f"/private/tmp/claude-*/**/tasks/{tid}.output", recursive=True))
+        age = min(time.time() - os.path.getmtime(h) for h in hits) if hits else 1e9
+        if age < FRESH_S:
+            sys.stderr.write(
+                f"DENY: TaskStop on '{tid}' — its transcript grew {int(age)}s ago, so it is ALIVE, "
+                "not black-holed. Liveness = output-file freshness, NOT presence of a specific "
+                "artifact (a11y-driven browser agents write snapshots, not image screenshots — 'zero "
+                "screenshots' != stuck; killed real progress twice on 2026-07-04). POKE it first via "
+                "SendMessage and read its reply. Only if it CONFIRMS stuck / reports BROWSER-UNAVAILABLE: "
+                f"`touch /tmp/cto-allow-kill-{tid}` then re-run TaskStop. "
+                "Read: cto-orchestration/references/agent-watch/README.md (完成通知黑洞).\n"
+            )
+            return 2
         return 0
 
     # ── (P0a) PreToolUse·Agent|Task: browser E2E must use Playwright, never chrome-devtools ────────
@@ -74,7 +91,12 @@ def main():
     # Discriminator = the tool token `mcp__chrome-devtools` (loading/using it), NOT the bare word
     # "chrome-devtools" (a correct prompt says "绝不用 chrome-devtools" in prose — must pass).
     if event == "PreToolUse" and tool in ("Agent", "Task"):
-        prompt = ti.get("prompt", "") or ""
+        prompt = ti.get("prompt")
+        if not isinstance(prompt, str):
+            return checker_error(f"PreToolUse {tool} requires string tool_input.prompt.")
+        for field in ("model", "subagent_type"):
+            if field in ti and not isinstance(ti[field], str):
+                return checker_error(f"tool_input.{field} must be a string.")
         if BROWSER_RE.search(prompt) and re.search(r"mcp__chrome-?devtools", prompt, re.I):
             sys.stderr.write(
                 "DENY: browser/E2E subagent dispatched to load chrome-devtools MCP (`mcp__chrome-devtools...`). "
@@ -130,21 +152,29 @@ def main():
 
     # ── (existing) PostToolUse·Agent|Task: black-hole deadline reminder ────────────────────────────
     if event == "PostToolUse" and tool in ("Agent", "Task"):
-        prompt = ti.get("prompt", "") or ""
-        if not BROWSER_RE.search(prompt):
+        try:
+            prompt = ti.get("prompt", "")
+            if not isinstance(prompt, str):
+                return 0
+            if not BROWSER_RE.search(prompt):
+                return 0
+            msg = (
+                "[browser/long subagent launched] Its completion notification can BLACK-HOLE (a live Playwright "
+                "session / dev server / bg fork keeps it from firing — you'll blind-wait forever). DO NOW, don't "
+                "rely on the auto-notify: set a deadline-bounded background watch on POSITIVE evidence (output-file "
+                "growth / milestone SendMessage — NOT screenshot-count, a11y agents write no images); if it goes "
+                "quiet past the deadline, SendMessage to poke it, then kill+relaunch rather than wait. (cto S1.4/S7.)"
+            )
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": msg}}))
+        except Exception:
             return 0
-        msg = (
-            "[browser/long subagent launched] Its completion notification can BLACK-HOLE (a live Playwright "
-            "session / dev server / bg fork keeps it from firing — you'll blind-wait forever). DO NOW, don't "
-            "rely on the auto-notify: set a deadline-bounded background watch on POSITIVE evidence (output-file "
-            "growth / milestone SendMessage — NOT screenshot-count, a11y agents write no images); if it goes "
-            "quiet past the deadline, SendMessage to poke it, then kill+relaunch rather than wait. (cto S1.4/S7.)"
-        )
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": msg}}))
         return 0
 
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        sys.exit(checker_error("internal guard failure."))

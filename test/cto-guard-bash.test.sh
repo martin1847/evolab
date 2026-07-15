@@ -18,7 +18,7 @@ mkcmd() { # $1 command, $2 run_in_background (optional "1")
   python3 -c 'import json,sys
 ti={"command":sys.argv[1]}
 if len(sys.argv)>2 and sys.argv[2]=="1": ti["run_in_background"]=True
-print(json.dumps({"tool_input":ti}))' "$@"; }
+print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":ti}))' "$@"; }
 run() { # $1 command [$2 run_in_background] -> OUT(stdout) ERR(stderr) RC
   local tmpe; tmpe="$(mktemp)"
   OUT="$(mkcmd "$@" | python3 "$GUARD" 2>"$tmpe")"; RC=$?
@@ -154,10 +154,18 @@ chk_eq "e2e path as head arg allowed" 0 "$RC"
 run 'git status'
 chk_eq "non-dispatch silent" "" "$OUT"
 
-# degenerate: never block, exit 0
+# checker controls: malformed/missing/broken must not collapse into a clean allow.
 run ''
 chk_eq "empty command allowed" 0 "$RC"; chk_eq "empty command no stderr" "" "$ERR"
-out="$(printf '' | python3 "$GUARD")"; rc=$?
-chk_eq "empty stdin exit 0" 0 "$rc"; chk_eq "empty stdin no output" "" "$out"
+tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "matching Bash missing command is checker error" 2 "$rc"; chk_contains "missing command marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":42}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "matching Bash wrong command type is checker error" 2 "$rc"; chk_contains "wrong command type marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "non-applicable Bash event stays allowed" 0 "$rc"; chk_eq "non-applicable Bash event silent" "" "$err"
+tmpe="$(mktemp)"; out="$(python3 -c 'import io,re,runpy,sys; sys.stdin=io.StringIO("{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}"); re.search=lambda *a,**k: (_ for _ in ()).throw(RuntimeError("boom")); runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "internal Bash checker failure exits 2" 2 "$rc"; chk_contains "internal Bash checker failure marker" "CHECKER-ERROR" "$err"
 
 summary

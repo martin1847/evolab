@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # mail-guard.py — PreToolUse guard: Write/Edit/MultiEdit into <bus>/<id>/inbox/ -> DENY (exit 2),
 # pointing at `agent-bus send` (direct writes bypass size/brevity/atomic gates; 2026-07-10 live).
-# tmp/, archive/, bus-root files, unrelated paths, other tools/events -> allow. Fail-open on
-# garbage stdin. Hermetic: HOME and AGENT_MAIL_DIR point into a temp sandbox.
+# tmp/, archive/, bus-root files, unrelated paths, other tools/events -> allow. Checker failures
+# are explicit exit 2. Hermetic: HOME and AGENT_MAIL_DIR point into a temp sandbox.
 set -u
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
@@ -65,12 +65,16 @@ chk_eq "env-override bus inbox denied (exit 2)" 2 "$RC"
 OUT="$(mkp PreToolUse Write "$HOME/.agents/mail/beta/inbox/w.md" | AGENT_MAIL_DIR="$CUSTOM" python3 "$GUARD" 2>/dev/null)"; RC=$?
 chk_eq "default-root path allowed when env points elsewhere" 0 "$RC"
 
-# ── degenerate: fail-open ──
-out="$(printf '' | python3 "$GUARD")"; rc=$?
-chk_eq "empty stdin exit 0" 0 "$rc"; chk_eq "empty stdin no output" "" "$out"
-out="$(printf 'not json' | python3 "$GUARD")"; rc=$?
-chk_eq "garbage stdin exit 0" 0 "$rc"
-out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{}}' | python3 "$GUARD")"; rc=$?
-chk_eq "missing file_path exit 0" 0 "$rc"
+# ── checker controls ──
+tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "matching Write missing file_path is checker error" 2 "$rc"; chk_contains "missing file_path marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":42}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "matching Edit wrong file_path type is checker error" 2 "$rc"; chk_contains "wrong file_path marker" "CHECKER-ERROR" "$err"
+tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "non-applicable mail event stays allowed" 0 "$rc"; chk_eq "non-applicable mail event silent" "" "$err"
+tmpe="$(mktemp)"; out="$(python3 -c 'import io,os.path,runpy,sys; sys.stdin=io.StringIO("{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}"); os.path.realpath=lambda *a,**k: (_ for _ in ()).throw(RuntimeError("boom")); runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "internal mail checker failure exits 2" 2 "$rc"; chk_contains "internal mail checker failure marker" "CHECKER-ERROR" "$err"
 
 summary
