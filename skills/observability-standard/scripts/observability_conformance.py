@@ -104,11 +104,12 @@ def validate(snapshot: dict[str, Any], profile: dict[str, Any]) -> list[str]:
             if not span.get("stream_completed") and span.get("status") not in {"error", "cancelled"}:
                 fail(errors, "stream.invalid_terminal_state", str(span.get("span_id")))
 
+    metric_labels = snapshot.get("metric_label_keys", [])
+    for key in profile.get("metric_label_forbidden_keys", []):
+        if key in metric_labels:
+            fail(errors, "metric.high_cardinality", key)
+
     if snapshot.get("gen_ai_enabled", False):
-        metric_labels = snapshot.get("metric_label_keys", [])
-        for key in profile.get("metric_label_forbidden_keys", []):
-            if key in metric_labels:
-                fail(errors, "metric.high_cardinality", key)
         async_spans = [span for span in spans if span.get("async_boundary")]
         if not async_spans:
             fail(errors, "async.evidence_missing", "captured worker/callback span is required")
