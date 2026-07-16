@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:evolab:release-evidence:v1",
+  "title": "Release Evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "service.version", "git_sha", "image_digest"],
+  "properties": {
+    "schema_version": {"const": "release-evidence/v1"},
+    "service.version": {
+      "type": "string",
+      "pattern": "^[0-9]{8}-[0-9]{4}-[0-9a-f]{7,12}$"
+    },
+    "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "config_repo_revision": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "work_items": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    }
+  }
+}

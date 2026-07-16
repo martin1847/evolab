@@ -1,6 +1,6 @@
 ---
 name: git-workflow-standard
-version: 1.0.5
+version: 1.1.0
 description: 生产级 Git 协作 SOP——受保护分支(main/master/develop/dev/release/**/project/*)按仓库 tier 执行服务端门禁(Tier 1 禁 force/delete;Tier 2 要求 PR 且默认允许 self-merge;Tier 3 显式接入 required CI)、改动从 feature 分支起、base 移动且与你改动重叠才 rebase、集成策略默认 squash、提交不加 AI 签名。任何 git commit / push / 开 PR / 建分支 / 合并场景加载;agent 写完代码准备提交前必读。Use when committing, pushing, opening a PR, branching, rebasing, or merging in any company repo.
 ---
 
@@ -36,6 +36,7 @@ canonical = 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓的 enro
 - **为何弃 merge-commit**:全 agent、无人读 git 历史 → merge-commit 卖点失效(详见 references §4)。**这是 SOP 默认,不是 Tier 2 服务端硬门**;repo-local 若强制 linear 再按本地门执行。
 - **对抗评审的知识**(约束 / 被否方案)落 **ADR + PR 记录 + commit trailer**,不进 commit graph —— squash 丢 exhaust 不丢 knowledge。
 - **合后判定**:squash / rebase-merge 后原 head 不必是 base 的 ancestor,**MUST NOT** 用 ancestry 单独断言“未合入”或授权清理。历史合入查 forge 的精确 PR;当前内容查 tree / test;部署查不可变 release provenance(见 references §5.1)。
+- **发布证据**:release CI 对 exact pushed digest 完成 smoke 后、GitOps write-back 前,必须产出 immutable `release-evidence/v1`(schema 见 references):只用 `service.version` release tag 贯穿部署,必含完整 `git_sha` 与 `image_digest`;不另造 `release_id`,也不把 SHA/digest 复制到每条 telemetry。
 
 ## MUST NOT
 - 任何 tier 都不得 force-push 受保护分支；Tier 2 / Tier 3 不得直推(Tier 1 可按 repo-local 规则直推)。
@@ -45,5 +46,5 @@ canonical = 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓的 enro
 
 ## 关联
 - 完整规范 + rationale:`references/git-workflow-standard.md`
-- Local-first final-image Docker E2E、`pre-push` critical-path 触发与 release CI single-build/exact-image 规则见 `references/git-workflow-standard.md` §10。
+- Local-first final-image Docker E2E、`pre-push` critical-path 触发、release CI single-build/exact-image 与 Release Evidence 规则见 `references/git-workflow-standard.md` §10；机器合同见 `references/release-evidence-v1.schema.json`。
 - 硬层(Ruleset / CODEOWNERS / required checks)= 你的 IaC 仓(IaC CTO 维护);三档 tier 的定义与 enrollment 见该仓。

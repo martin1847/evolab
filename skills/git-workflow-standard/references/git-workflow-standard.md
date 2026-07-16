@@ -115,6 +115,7 @@ trivial 单 commit PR 直接合。默认线性是 SOP 约定;Tier 2 本身不强
 - 已声明的 critical paths 存在未提交改动时 MUST fail closed。成功的本地验证 MAY 按“目标 commit + E2E contract digest + base-image digest”指纹缓存；任一组成变化即不得复用。
 - 本地 hook 不是唯一安全边界；`git push --no-verify` 始终可能绕过 `pre-push`，remote CI MUST 独立执行并强制该契约。
 - remote release CI 的职责是：校验交付契约、只构建一次 final image，推送后取得其不可变 digest，并对该 exact pushed digest 执行 layer、entrypoint 与 runtime smoke（镜像内轻量启动/导入检查，不是完整 E2E）；全部通过后才可放行 GitOps write-back。remote MUST NOT 执行产品仓库声明的本地 `docker_e2e_command`——完整 E2E 只在开发机的 `pre-push` 跑。runtime smoke（远端、轻量、绑定 pushed digest）与本地 final-image Docker E2E（本地、完整、pre-push 硬门）是两个不同的门，措辞与语义不可混用。
+- exact pushed digest 的 smoke 通过后、GitOps write-back 前,release CI MUST 产出 immutable `release-evidence/v1`,并按 `release-evidence-v1.schema.json` 验证。必填仅四项:`schema_version`、`service.version`(与 Docker/GitOps tag 完全一致)、完整 `git_sha`、`image_digest`;`config_repo_revision` 与 `work_items` 仅在有真实来源时可选。一个 evidence 只能绑定一个 commit 与一个 digest;DEV→STAGE 提升同一制品时复用同一 evidence。不得另造平行 `release_id`,不得把完整 SHA/digest 复制到每条 telemetry;trace 继续用 `service.version` 下钻到 evidence。
 - 产品仓库只负责项目命令、critical-path 声明与项目 smoke 断言；可复用的平台 tooling 负责 hook/install/cache 机制及 single-build/exact-image workflow 机制。
 - 契约 MUST 保持语言与包管理器中立：Python、Java、JavaScript 或其他栈均通过各自命令与路径声明接入，不在通用机制中绑定特定工具链。
 
