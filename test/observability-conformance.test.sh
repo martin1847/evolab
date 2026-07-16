@@ -42,7 +42,7 @@ p=json.load(open(sys.argv[1])); m=sys.argv[3]
 if m=="version_numeric": p["resource"]["service.version"]=123
 elif m=="version_slash": p["resource"]["service.version"]="team/tag"
 elif m=="version_space": p["resource"]["service.version"]="bad tag"
-else: p["resource"]["service.version"]="Latest"
+else: p["resource"]["service.version"]="LaTeSt"
 json.dump(p, open(sys.argv[2], "w"))
 PY
   if python3 "$ORACLE" "$TMP/non-gen-ai-$mutation.json" --profile "$PROFILE" >"$TMP/non-gen-ai-$mutation.out"; then
