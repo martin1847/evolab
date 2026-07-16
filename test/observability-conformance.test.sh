@@ -19,7 +19,7 @@ import json, sys
 p=json.load(open(sys.argv[1]))
 p["custom_attribute_allowlists"]={"example.agent.role":["primary","worker"],"example.workflow.phase":["execute","prepare"]}
 p["consistent_trace_attributes"]=["example.agent.invocation.id"]
-p["metric_label_forbidden_keys"]=["example.agent.invocation.id"]
+p["metric_label_forbidden_keys"].append("example.agent.invocation.id")
 p["forbidden_keys"].append("example.deprecated")
 p["forbidden_key_prefixes"]=["example.legacy."]
 json.dump(p, open(sys.argv[2], "w"))
@@ -34,6 +34,15 @@ cat >"$TMP/non-gen-ai.json" <<'JSON'
 {"resource":{"service.name":"gateway","service.version":"tag"},"tenant":{"verified":false},"processes":[{"name":"api","instrumentation_bootstrapped":true}],"spans":[{"trace_id":"trace","span_id":"server","parent_span_id":null,"role":"server","ended":true,"attributes":{}}]}
 JSON
 python3 "$ORACLE" "$TMP/non-gen-ai.json" --profile "$PROFILE" >/dev/null
+
+python3 - "$TMP/non-gen-ai.json" "$TMP/non-gen-ai-run-label.json" <<'PY'
+import json, sys
+p=json.load(open(sys.argv[1])); p["metric_label_keys"]=["run.id"]
+json.dump(p, open(sys.argv[2], "w"))
+PY
+if python3 "$ORACLE" "$TMP/non-gen-ai-run-label.json" --profile "$PROFILE" >/dev/null; then
+  echo "non-GenAI run.id metric label unexpectedly passed" >&2; exit 1
+fi
 
 for mutation in parent field role_enum role_length phase_enum invocation_missing invocation_mismatch metric_label tenant content_dev_flag bootstrap empty resource_tenant span_tenant legacy_exact legacy_prefix_span legacy_prefix_event placeholder stream_completed_status stream_incomplete_status async_missing async_restore async_parent async_trace producer_count producer_v1 producer_vendor vendor_path metadata_flatten malformed trace; do
   python3 - "$TMP/good.json" "$TMP/$mutation.json" "$mutation" <<'PY'
@@ -76,4 +85,4 @@ PY
     echo "mutation unexpectedly passed: $mutation" >&2; exit 1
   fi
 done
-echo "observability conformance: 2 positive profiles + 31 mutations clean"
+echo "observability conformance: 2 positive profiles + 32 mutations clean"
