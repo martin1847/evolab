@@ -310,7 +310,7 @@ dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI
 > 宪法 `PROJECT_AGENT.md` 的启用条件不满足时）。目标 <60 行：agent 进来 30 秒知道
 > 「这是什么、什么不许做、怎么构建」。CLAUDE.md 仍是一行 `@AGENTS.md`。伞仓覆盖检查
 > （判据见 SKILL.md 伞仓三件套②）一行门：
-> `for d in */; do [ -d "$d/.git" ] && [ ! -f "${d}AGENTS.md" ] && echo "MISSING: $d"; done`。
+> `missing=0; for d in */; do if [ -e "${d}.git" ] && [ ! -f "${d}AGENTS.md" ]; then echo "MISSING: $d"; missing=1; fi; done; exit "$missing"`。
 > 生成语言从项目。节序按 blast radius 递减——最危险的纪律排第一节，agent 截断读取时
 > 先看到的必须是最不能错的事。
 
@@ -322,7 +322,7 @@ dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI
 ## 纪律（blast radius 最大的事排最前）
 
 - Commit 留本地，owner 明确批准才 push；不加 AI 签名行。
-- Secret、内部 hostname/IP、拓扑绝不进 committed tree / 日志 / 文档。
+- Secret、内部 hostname/IP、拓扑只进外部 vault 与 gitignored `ACCESS.local.md`；绝不进 committed tree / traces / 日志 / 对外消息。
 - 行为变更藏 flag、默认 OFF；不顺手 refactor、不动格式。
 - 存疑或需超 scope：STOP and report，不自行扩权。
 
