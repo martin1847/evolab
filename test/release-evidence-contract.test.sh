@@ -15,7 +15,7 @@ profile = json.load(open(sys.argv[2]))
 properties = schema["properties"]
 required = {"schema_version", "service.version", "git_sha", "image_digest"}
 version_pattern = "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
-placeholders = ["dev", "Dev", "DEV", "latest", "Latest", "LATEST", "unknown", "Unknown", "UNKNOWN"]
+placeholder_pattern = "^(?:[dD][eE][vV]|[lL][aA][tT][eE][sS][tT]|[uU][nN][kK][nN][oO][wW][nN])$"
 
 assert set(schema) == {"$schema", "$id", "title", "type", "additionalProperties", "required", "properties"}
 assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
@@ -29,7 +29,7 @@ assert properties["schema_version"] == {"const": "release-evidence/v1"}
 assert properties["service.version"] == {
     "type": "string",
     "pattern": version_pattern,
-    "not": {"enum": placeholders},
+    "not": {"pattern": placeholder_pattern},
 }
 assert properties["git_sha"] == {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
 assert properties["image_digest"] == {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
@@ -40,7 +40,7 @@ assert properties["work_items"] == {
     "uniqueItems": True,
 }
 assert profile["service_version_pattern"] == properties["service.version"]["pattern"]
-assert profile["forbidden_service_versions"] == properties["service.version"]["not"]["enum"]
+assert profile["forbidden_service_version_pattern"] == properties["service.version"]["not"]["pattern"]
 
 def valid(doc):
     if not isinstance(doc, dict) or required - doc.keys() or doc.keys() - properties.keys():
@@ -51,7 +51,7 @@ def valid(doc):
     rule = properties["service.version"]
     if not isinstance(version, str) or not re.fullmatch(rule["pattern"], version):
         return False
-    if version in rule["not"]["enum"]:
+    if re.fullmatch(rule["not"]["pattern"], version):
         return False
     for key in ("git_sha", "image_digest", "config_repo_revision"):
         if key in doc:
@@ -79,7 +79,7 @@ assert valid({key: good[key] for key in schema["required"]})
 for tag in ("20260716-1430-a1b2c3d", "v1.5.2", "1.5.2", "sha-a1b2c3d", "manual-20260708-4b38eb7", "a" * 128):
     assert valid(good | {"service.version": tag}), tag
 
-for version in ("", "dev", "LATEST", "unknown", "a/b", "a:b", "版本1", "\0", "a" * 129, " v1.5.2", "v1.5.2 ", 123):
+for version in ("", "dev", "dEv", "LaTeSt", "UnKnOwN", "a/b", "a:b", "版本1", "\0", "a" * 129, " v1.5.2", "v1.5.2 ", 123):
     assert not valid(good | {"service.version": version}), repr(version)
 for patch in (
     {"config_repo_revision": "short"},

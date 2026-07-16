@@ -3,7 +3,7 @@
   "allowed_operations": ["chat", "create_agent", "embeddings", "execute_tool", "generate_content", "invoke_agent", "invoke_workflow", "plan", "retrieval", "text_completion"],
   "required_resource": ["service.name", "service.version"],
   "service_version_pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
-  "forbidden_service_versions": ["dev", "Dev", "DEV", "latest", "Latest", "LATEST", "unknown", "Unknown", "UNKNOWN"],
+  "forbidden_service_version_pattern": "^(?:[dD][eE][vV]|[lL][aA][tT][eE][sS][tT]|[uU][nN][kK][nN][oO][wW][nN])$",
   "required_span_roles": [],
   "gen_ai_required_span_roles": ["domain", "inference"],
   "required_span_fields": ["trace_id", "span_id"],

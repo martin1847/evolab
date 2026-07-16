@@ -46,7 +46,7 @@ def validate(snapshot: dict[str, Any], profile: dict[str, Any]) -> list[str]:
             fail(errors, "resource.service_version_type", type(service_version).__name__)
         elif not re.fullmatch(profile["service_version_pattern"], service_version):
             fail(errors, "resource.service_version_shape", service_version)
-        elif service_version in profile.get("forbidden_service_versions", []):
+        elif re.fullmatch(profile["forbidden_service_version_pattern"], service_version):
             fail(errors, "resource.placeholder", service_version)
 
     tenant = snapshot.get("tenant", {})
