@@ -9,7 +9,10 @@
     "schema_version": {"const": "release-evidence/v1"},
     "service.version": {
       "type": "string",
-      "pattern": "^[0-9]{8}-[0-9]{4}-[0-9a-f]{7,12}$"
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+      "not": {
+        "enum": ["dev", "Dev", "DEV", "latest", "Latest", "LATEST", "unknown", "Unknown", "UNKNOWN"]
+      }
     },
     "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
     "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},

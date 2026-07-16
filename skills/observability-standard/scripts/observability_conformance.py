@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -39,9 +40,14 @@ def validate(snapshot: dict[str, Any], profile: dict[str, Any]) -> list[str]:
     for key in profile["required_resource"]:
         if not resource.get(key):
             fail(errors, "resource.missing", key)
-    service_version = str(resource.get("service.version", "")).lower()
-    if service_version in profile.get("forbidden_service_versions", []):
-        fail(errors, "resource.placeholder", service_version)
+    service_version = resource.get("service.version")
+    if service_version is not None:
+        if not isinstance(service_version, str):
+            fail(errors, "resource.service_version_type", type(service_version).__name__)
+        elif not re.fullmatch(profile["service_version_pattern"], service_version):
+            fail(errors, "resource.service_version_shape", service_version)
+        elif service_version in profile.get("forbidden_service_versions", []):
+            fail(errors, "resource.placeholder", service_version)
 
     tenant = snapshot.get("tenant", {})
     tenant_id = tenant.get("id")

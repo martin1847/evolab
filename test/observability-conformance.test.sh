@@ -35,6 +35,26 @@ cat >"$TMP/non-gen-ai.json" <<'JSON'
 JSON
 python3 "$ORACLE" "$TMP/non-gen-ai.json" --profile "$PROFILE" >/dev/null
 
+for mutation in version_numeric version_slash version_space version_placeholder; do
+  python3 - "$TMP/non-gen-ai.json" "$TMP/non-gen-ai-$mutation.json" "$mutation" <<'PY'
+import json, sys
+p=json.load(open(sys.argv[1])); m=sys.argv[3]
+if m=="version_numeric": p["resource"]["service.version"]=123
+elif m=="version_slash": p["resource"]["service.version"]="team/tag"
+elif m=="version_space": p["resource"]["service.version"]="bad tag"
+else: p["resource"]["service.version"]="Latest"
+json.dump(p, open(sys.argv[2], "w"))
+PY
+  if python3 "$ORACLE" "$TMP/non-gen-ai-$mutation.json" --profile "$PROFILE" >"$TMP/non-gen-ai-$mutation.out"; then
+    echo "non-GenAI service.version mutation unexpectedly passed: $mutation" >&2; exit 1
+  fi
+  if [ "$mutation" = version_numeric ]; then expected=resource.service_version_type
+  elif [ "$mutation" = version_placeholder ]; then expected=resource.placeholder
+  else expected=resource.service_version_shape
+  fi
+  grep -Fq "$expected" "$TMP/non-gen-ai-$mutation.out"
+done
+
 python3 - "$TMP/non-gen-ai.json" "$TMP/non-gen-ai-run-label.json" <<'PY'
 import json, sys
 p=json.load(open(sys.argv[1])); p["metric_label_keys"]=["run.id"]
@@ -44,7 +64,7 @@ if python3 "$ORACLE" "$TMP/non-gen-ai-run-label.json" --profile "$PROFILE" >/dev
   echo "non-GenAI run.id metric label unexpectedly passed" >&2; exit 1
 fi
 
-for mutation in parent field role_enum role_length phase_enum invocation_missing invocation_mismatch metric_label tenant content_dev_flag bootstrap empty resource_tenant span_tenant legacy_exact legacy_prefix_span legacy_prefix_event placeholder stream_completed_status stream_incomplete_status async_missing async_restore async_parent async_trace producer_count producer_v1 producer_vendor vendor_path metadata_flatten malformed trace; do
+for mutation in parent field role_enum role_length phase_enum invocation_missing invocation_mismatch metric_label tenant content_dev_flag bootstrap empty resource_tenant span_tenant legacy_exact legacy_prefix_span legacy_prefix_event placeholder version_numeric version_slash version_space stream_completed_status stream_incomplete_status async_missing async_restore async_parent async_trace producer_count producer_v1 producer_vendor vendor_path metadata_flatten malformed trace; do
   python3 - "$TMP/good.json" "$TMP/$mutation.json" "$mutation" <<'PY'
 import json, sys
 p=json.load(open(sys.argv[1])); m=sys.argv[3]
@@ -66,6 +86,9 @@ elif m=="legacy_exact": p["spans"][0]["attributes"]["example.deprecated"]="x"
 elif m=="legacy_prefix_span": p["spans"][0]["attributes"]["example.legacy.unexpected"]="x"
 elif m=="legacy_prefix_event": p["events"]=[{"attributes":{"example.legacy.actor":"primary"}}]
 elif m=="placeholder": p["resource"]["service.version"]="latest"
+elif m=="version_numeric": p["resource"]["service.version"]=123
+elif m=="version_slash": p["resource"]["service.version"]="team/tag"
+elif m=="version_space": p["resource"]["service.version"]="bad tag"
 elif m=="stream_completed_status": p["spans"][2]["status"]="error"
 elif m=="stream_incomplete_status": p["spans"][2]["stream_completed"]=False; p["spans"][2]["status"]="success"
 elif m=="async_missing": p["spans"][1].pop("async_boundary")
@@ -85,4 +108,4 @@ PY
     echo "mutation unexpectedly passed: $mutation" >&2; exit 1
   fi
 done
-echo "observability conformance: 2 positive profiles + 32 mutations clean"
+echo "observability conformance: 2 positive profiles + 39 mutations clean"
