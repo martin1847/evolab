@@ -9,7 +9,7 @@
 #   round 1  : dispatch-exec <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>]
 #              [--require-preflight]
 #              [--workflow review-loop --max-rounds N] [engine args...]
-#   round N  : dispatch-exec send <session> (-f <file> | -m <text>)
+#   round N  : dispatch-exec send <session> (-f <file> | -m <text>) [-d|--deliverable <glob>]
 #   query    : dispatch-exec status <session>          (one-shot, stateless)
 #   block    : dispatch-exec watch  <session>          (poll until terminal; typed exit, same vocab as watch)
 # Ask-user protocol (headless agents can't prompt): every round prompt carries a footer —
@@ -36,7 +36,12 @@ q() { printf %q "$1"; }
 # prose (self-caught 2026-07-11).
 last_round() { awk '/^── round [0-9]+ @/{buf=""; next} {buf=buf $0 RS} END{printf "%s", buf}' "$DIR/$1.exec.out" 2>/dev/null; }
 
-LOCKFILE=""
+LOCKFILE=""; PENDING_EPOCH=""; INPUT_SNAPSHOT=""
+cleanup_round_transition() {
+  [ -z "$LOCKFILE" ] || rm -f "$LOCKFILE"
+  [ -z "$PENDING_EPOCH" ] || rm -f "$PENDING_EPOCH"
+  [ -z "$INPUT_SNAPSHOT" ] || rm -f "$INPUT_SNAPSHOT"
+}
 take_round_lock() { # $1 session — thin double-send guard: holder alive → refuse; dead → take over
   LOCKFILE="$DIR/$1.exec.lock"
   local pid; pid="$(cat "$LOCKFILE" 2>/dev/null || true)"
@@ -45,7 +50,7 @@ take_round_lock() { # $1 session — thin double-send guard: holder alive → re
     return 1
   fi
   printf '%s\n' "$$" > "$LOCKFILE"
-  trap 'rm -f "$LOCKFILE"' EXIT
+  trap cleanup_round_transition EXIT
   trap 'exit 130' HUP INT TERM   # route signals through EXIT so the lock never leaks
 }
 
@@ -58,6 +63,21 @@ check_round_budget() { # $1 session — caller holds the round lock
     return 9
   fi
   return 0
+}
+
+check_review_continuation_lease() { # $1 session  $2 -m|-f  $3 message|file
+  local s="$1" mode="$2" source="$3" round workflow body
+  workflow="$(meta_get "$s" workflow)"; round="$(meta_get "$s" round)"
+  [ "$workflow" = "review-loop" ] && [ "$round" -ge 2 ] || return 0
+  if [ "$mode" = -m ]; then body="$source"
+  else
+    body="$(cat "$source")" || {
+      echo "ERR: could not read review-loop continuation brief: $source" >&2; return 1
+    }
+  fi
+  if printf '%s\n' "$body" | grep -Eq '^SHIP-BLOCKING:[[:space:]]*[^[:space:]].*$'; then return 0; fi
+  echo "ERR: review-loop continuation lease missing for round $((round+1)); add an independent 'SHIP-BLOCKING: <non-empty rationale>' line to the message/brief" >&2
+  return 1
 }
 
 # Preserve the caller's prompt byte-for-byte as a prefix, then append the same non-interactive
@@ -103,8 +123,9 @@ engine_cmd() {
 }
 
 # ── start one round under the tmux supervisor ──  $1 session  $2 prompt-file
-start_round() { # $1 session  $2 prompt-file  $3 optional: lock already held
-  local s="$1" f="$2" lock_held="${3:-0}" eng cwd sid extra cmd round round_prompt
+start_round() { # $1 session  $2 prompt-file  $3 lock held  $4 replace deliverable  $5 new deliverable
+  local s="$1" f="$2" lock_held="${3:-0}" replace_deliv="${4:-0}" new_deliv="${5:-}"
+  local eng cwd sid extra cmd round round_prompt pending_epoch
   if [ "$lock_held" != 1 ]; then
     take_round_lock "$s" || exit 1
     check_round_budget "$s" || exit $?
@@ -124,20 +145,33 @@ start_round() { # $1 session  $2 prompt-file  $3 optional: lock already held
     echo "ERR: failed to build headless prompt for '$s' round $round" >&2; exit 1
   }
   cmd="$(engine_cmd "$eng" "$s" "$cwd" "$round_prompt" "$sid" "$extra")"
-  # Launch FIRST, mutate state only on success: the unchecked-failure path once printed
+  # The epoch must predate any output the new process can create, but stay invisible
+  # until launch succeeds so a failed resume leaves the previous round authoritative.
+  pending_epoch="$(mktemp "$DIR/$s.exec.round-started.pending-XXXXXXXX")" || {
+    echo "ERR: could not prepare freshness epoch for '$s' round $round" >&2
+    rm -f "$round_prompt"; exit 1
+  }
+  PENDING_EPOCH="$pending_epoch"
+  # Launch before mutating authoritative state: the unchecked-failure path once printed
   # success, orphaned round-1 meta (permanent lane hijack) and destroyed the previous
   # round's rc (codex independent review 2026-07-11). The engine needs its first ~50ms+
   # of CLI startup before touching out/rc, so the post-launch writes below win that race
   # in practice; a crash in between is teardown-recoverable (see header — no rollback).
   if ! tmux new-session -d -s "$s" -c "$cwd" "$cmd >> $(q "$DIR/$s.exec.out") 2>&1; echo \$? > $(q "$DIR/$s.exec.rc")"; then
     echo "ERR: tmux new-session failed for '$s' (round $round not started)" >&2
-    rm -f "$round_prompt"; [ "$round" = 1 ] && rm -f "$DIR/$s.exec.meta"
+    rm -f "$pending_epoch" "$round_prompt"; [ "$round" = 1 ] && rm -f "$DIR/$s.exec.meta"
     exit 1
   fi
-  sed -i '' "s/^round=.*/round=$round/" "$DIR/$s.exec.meta" 2>/dev/null \
-    || sed -i "s/^round=.*/round=$round/" "$DIR/$s.exec.meta"
+  # Hide the old terminal result, then publish the epoch before the new round+gate.
+  # Readers can see RUNNING/AGENT-DEAD during this tiny commit window, never false DONE.
   rm -f "$DIR/$s.exec.rc"
-  : > "$DIR/$s.exec.round-started"                       # freshness stamp: deliverable/BLOCKED must postdate this
+  mv "$pending_epoch" "$DIR/$s.exec.round-started" || {
+    echo "ERR: could not install freshness epoch for '$s' round $round" >&2; exit 1
+  }
+  PENDING_EPOCH=""
+  commit_round_meta "$s" "$round" "$replace_deliv" "$new_deliv" || {
+    echo "ERR: could not commit round $round metadata for '$s'" >&2; exit 1
+  }
   printf '── round %s @ %s ──\n' "$round" "$(date '+%F %T')" >> "$DIR/$s.exec.out"
   echo "round $round started: $eng → tmux '$s' (supervisor only; engine is headless)"
   echo "out: $DIR/$s.exec.out"
@@ -169,6 +203,22 @@ harvest_sid() { # $1 session; called from start_round only (under the round lock
   return 0
 }
 
+commit_round_meta() { # $1 session  $2 round  $3 replace-deliverable  $4 new-deliverable
+  local s="$1" round="$2" replace="$3" deliverable="$4" meta="$DIR/$1.exec.meta" tmp
+  tmp="$(mktemp "$DIR/$s.exec.meta-XXXXXXXX")" || return 1
+  { grep -vE '^(round|deliverable)=' "$meta" 2>/dev/null || true
+    printf 'round=%s\n' "$round"
+    if [ "$replace" = 1 ]; then printf 'deliverable=%s\n' "$deliverable"
+    else grep '^deliverable=' "$meta" 2>/dev/null || true
+    fi
+  } > "$tmp" && mv "$tmp" "$meta"
+  local rc=$?; [ -e "$tmp" ] && rm -f "$tmp"; return "$rc"
+}
+
+strictly_newer() { # $1 candidate  $2 epoch — nanosecond-aware on BSD/GNU find
+  [ -e "$1" ] && [ -e "$2" ] && [ -n "$(find "$1" -newer "$2" -print -quit 2>/dev/null)" ]
+}
+
 # ── classify a session's state; prints one line, returns the typed code ──
 classify() { # $1 session
   local s="$1" cwd deliv rc stamp="$DIR/$1.exec.round-started"
@@ -178,9 +228,7 @@ classify() { # $1 session
     echo "AGENT-DEAD: no rc and no tmux session — round was killed mid-flight; resume via send"; return 2
   fi
   rc="$(cat "$DIR/$s.exec.rc")"
-  # `! -ot` (>= stamp), not `-nt`: -nt is strictly-newer with SECOND granularity — a round
-  # that writes BLOCKED.md within the same second as its own arm stamp would read as DONE.
-  if [ -f "$cwd/BLOCKED.md" ] && ! [ "$cwd/BLOCKED.md" -ot "$stamp" ]; then
+  if [ -f "$cwd/BLOCKED.md" ] && strictly_newer "$cwd/BLOCKED.md" "$stamp"; then
     echo "WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via send"; return 4
   fi
   if [ "$rc" != 0 ] && last_round "$s" | grep -qiE 'insufficient_quota|invalid_api_key|No API key|credit balance'; then
@@ -192,7 +240,7 @@ classify() { # $1 session
   fi
   if [ -n "$deliv" ]; then
     local f ok=1
-    while IFS= read -r f; do [ -n "$f" ] && ! [ "$f" -ot "$stamp" ] && ok=0 && break
+    while IFS= read -r f; do [ -n "$f" ] && strictly_newer "$f" "$stamp" && ok=0 && break
     done < <(compgen -G "$deliv" 2>/dev/null)
     [ "$ok" = 0 ] || { echo "IDLE-NO-DELIVERABLE: rc=0 but '$deliv' not produced this round — read output, then dispatch send $s; do not teardown"; return 6; }
   fi
@@ -201,17 +249,38 @@ classify() { # $1 session
 
 case "${1:-}" in
   send)
-    s="${2:?dispatch-exec send <session> -m <text> | -f <file>}"; mode="${3:?-m|-f}"; arg="${4:?text-or-file}"
+    send_usage='dispatch-exec send <session> (-f <file> | -m <text>) [-d|--deliverable <glob>]'
+    [ "$#" -ge 4 ] || { echo "usage: $send_usage" >&2; exit 1; }
+    s="$2"; mode="$3"; arg="$4"; shift 4
+    [ -n "$s" ] && [ -n "$arg" ] || { echo "usage: $send_usage" >&2; exit 1; }
     case "$mode" in
       -f) f="$arg";;
       -m) f="";;
-      *) echo "usage: dispatch-exec send <session> -m <text> | -f <file>" >&2; exit 1;;
+      *) echo "usage: $send_usage" >&2; exit 1;;
     esac
+    replace_deliv=0; new_deliv=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -d|--deliverable)
+          [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "ERR: $1 requires a non-empty glob" >&2; exit 1; }
+          [ "$replace_deliv" = 0 ] || { echo "ERR: deliverable may be specified once" >&2; exit 1; }
+          replace_deliv=1; new_deliv="$2"; shift 2;;
+        *) echo "usage: $send_usage" >&2; exit 1;;
+      esac
+    done
     [ -f "$DIR/$s.exec.meta" ] || { echo "ERR: unknown session '$s' (no meta)" >&2; exit 1; }
     [ "$mode" != -f ] || [ -e "$f" ] || { echo "ERR: file not found: $f" >&2; exit 1; }
     take_round_lock "$s" || exit 1
     # Stop-loss must precede every send-side mutation, including creation of the -m temp file.
     check_round_budget "$s" || exit $?
+    if [ "$mode" = -f ]; then
+      INPUT_SNAPSHOT="$(mktemp "$DIR/$s.exec.input-XXXXXXXX")" || exit 1
+      if ! cat "$f" > "$INPUT_SNAPSHOT"; then
+        echo "ERR: could not snapshot round brief: $f" >&2; exit 1
+      fi
+      f="$INPUT_SNAPSHOT"; arg="$INPUT_SNAPSHOT"
+    fi
+    check_review_continuation_lease "$s" "$mode" "$arg" || exit 1
     if [ "$mode" = -m ]; then
       # No suffix after the X's: macOS mktemp leaves Xs LITERAL with a suffix (fixed name,
       # 2nd call = mkstemp failed) and GNU errors outright — the true root cause of the
@@ -219,7 +288,7 @@ case "${1:-}" in
       f="$(mktemp "$DIR/$s.exec.msg-XXXXXXXX")" || exit 1
       printf '%s\n' "$arg" > "$f"
     fi
-    start_round "$s" "$f" 1
+    start_round "$s" "$f" 1 "$replace_deliv" "$new_deliv"
     ;;
   status)
     s="${2:?dispatch-exec status <session>}"
@@ -283,7 +352,7 @@ case "${1:-}" in
     ;;
   *)
     echo "usage: dispatch-exec <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>] [--require-preflight] [--workflow review-loop --max-rounds N] [engine args...]" >&2
-    echo "       dispatch-exec send <session> (-f <file> | -m <text>) | status <session> | watch <session>" >&2
+    echo "       dispatch-exec send <session> (-f <file> | -m <text>) [-d|--deliverable <glob>] | status <session> | watch <session>" >&2
     exit 1
     ;;
 esac

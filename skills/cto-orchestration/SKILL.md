@@ -65,7 +65,7 @@ metadata:
 - 按风险定深度：低风险走轻量 review；鉴权、迁移、基建、大重构走 `references/review-dispatch.md` 的完整循环。
 - brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。
 - 先枚举执行分叉，并点名 `缺失消费者`、under-fire、并发 / 恢复等高风险轴；完整轴表留在 reference。
-- 只有 blocking 驱动续轮；advisory 转 follow-up，同一 finding 重复出现则收敛或升级人工，不无限对轰。
+- 只有 blocking 驱动续轮；第 3 轮起每轮续派须在 brief 写 `SHIP-BLOCKING: <依据>`；同一 finding 的修复连续 2 轮只新增 finding，则止损并转人工裁决或 accept-documented。
 - 多轮 headless review 显式传 `--workflow review-loop --max-rounds N`；轮数与 stop-loss 只认 runtime meta，主干不复制状态机。
 - 评审期间执行 agent 不写同一 worktree。
 
