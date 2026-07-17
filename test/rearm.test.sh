@@ -72,6 +72,27 @@ chk_not_contains "gap-detect not reported as empty" "nothing to re-arm" "$out"
 unset FAKE_TMUX_HASSESSION
 sandbox_clean
 
+# Terminal TUI state is not a watcher gap, even while the tmux session still exists.
+sandbox_new
+seed_events tui-done '2026-01-01T00:00:00Z WORKING t0\n2026-01-01T00:00:01Z DONE t1\n'
+export FAKE_TMUX_HASSESSION=0
+out="$(bash "$REARM" 2>&1)"
+chk_not_contains "terminal TUI session is not reported" "NO watcher" "$out"
+chk_contains "terminal TUI session leaves nothing to re-arm" "nothing to re-arm" "$out"
+unset FAKE_TMUX_HASSESSION
+sandbox_clean
+
+# A surviving dead TUI spec is abnormal-death evidence; DONE may be a transient turn boundary.
+sandbox_new
+seed_events spec-done '2026-01-01T00:00:00Z DONE t1\n'
+printf 'session=spec-done\npid=999999\ncmd=bash /x/watch spec-done\n' > "$WATCH_RUN_DIR/spec-done.watchspec"
+export FAKE_TMUX_HASSESSION=0
+out="$(bash "$REARM" 2>&1)"
+chk_contains "dead TUI spec is re-armed despite transient DONE" "bash /x/watch spec-done" "$out"
+chk_eq "dead TUI spec remains until watcher takes over" 1 "$([ -e "$WATCH_RUN_DIR/spec-done.watchspec" ] && echo 1 || echo 0)"
+unset FAKE_TMUX_HASSESSION
+sandbox_clean
+
 # Headless gap-detect: an exec sentinel with no watcher process must be reported.
 sandbox_new
 printf 'engine=codex\n' > "$WATCH_RUN_DIR/headless-missing.exec.meta"
@@ -85,6 +106,49 @@ out="$(bash "$REARM" 2>&1)"
 chk_contains "missing headless watcher is reported" "NO watcher" "$out"
 chk_contains "missing headless watcher gets re-arm command" "watch headless-missing" "$out"
 unset FAKE_TMUX_HASSESSION
+sandbox_clean
+
+# A terminal EXEC session is classified by dispatch-exec status, not tmux existence.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+printf 'engine=codex\ncwd=%s\nround=1\nargs=\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/headless-done.exec.meta"
+: > "$WATCH_RUN_DIR/headless-done.exec.out"; : > "$WATCH_RUN_DIR/headless-done.exec.round-started"
+printf '0\n' > "$WATCH_RUN_DIR/headless-done.exec.rc"
+cat > "$BIN/pgrep" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$BIN/pgrep"
+export FAKE_TMUX_HASSESSION=0
+out="$(bash "$REARM" 2>&1)"
+chk_not_contains "terminal headless session is not reported" "NO watcher" "$out"
+chk_contains "terminal headless session leaves nothing to re-arm" "nothing to re-arm" "$out"
+unset FAKE_TMUX_HASSESSION
+sandbox_clean
+
+# Historical EXEC state is filtered by its terminal rc before any process probe; a live
+# no-rc session in the same directory must still be found. Slow pgrep makes call count a
+# deterministic performance assertion instead of a wall-clock race.
+sandbox_new
+mkdir -p "$SANDBOX/wt"
+for i in $(seq 1 80); do
+  printf 'engine=codex\ncwd=%s\nround=1\nargs=\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/history-$i.exec.meta"
+  printf '0\n' > "$WATCH_RUN_DIR/history-$i.exec.rc"
+done
+printf 'engine=codex\ncwd=%s\nround=1\nargs=\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/current-run.exec.meta"
+cat > "$BIN/pgrep" <<'EOF'
+#!/usr/bin/env bash
+printf 'probe\n' >> "$FAKE_PGREP_LOG"
+/bin/sleep 0.02
+exit 1
+EOF
+chmod +x "$BIN/pgrep"
+export FAKE_PGREP_LOG="$SANDBOX/pgrep.log" FAKE_TMUX_HASSESSION=0
+out="$(bash "$REARM" 2>&1)"
+chk_contains "large history still finds live headless gap" "watch current-run" "$out"
+chk_eq "terminal EXEC history pays no process probes" 1 "$(wc -l < "$FAKE_PGREP_LOG" | tr -d ' ')"
+chk_not_contains "terminal EXEC history is not reported" "watch history-" "$out"
+unset FAKE_PGREP_LOG FAKE_TMUX_HASSESSION
 sandbox_clean
 
 # A healthy headless watcher must not be reported. The metacharacter-heavy session also proves

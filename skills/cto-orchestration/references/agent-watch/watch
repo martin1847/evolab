@@ -56,11 +56,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "=== [$SESSION] WATCH ARMED at $(date '+%H:%M:%S') pid $$ events=$EVENTS ==="
 
 # ── watchspec self-heal registry ──────────────────────────────────────────────
-# The harness can batch-SIGKILL background watchers (observed: context-compaction
-# boundaries reap background shells). SIGKILL skips the EXIT trap, so the spec file
-# SURVIVES an unnatural death; every natural exit removes it. `rearm` (sibling script)
-# lists dead-watcher specs so the orchestrator can re-arm mechanically instead of
-# remembering to.
+# A session-scoped background watcher may disappear after the main turn stops; the
+# observed field runs do not prove a specific signal or host cause. If termination
+# bypasses EXIT cleanup, the spec survives; every natural exit removes it. `rearm`
+# lists dead-watcher specs so the orchestrator can re-arm mechanically instead of remembering to.
 SPEC="$DIR/$SESSION.watchspec"
 # Deliverable freshness stamp: the gate must only accept files PRODUCED THIS ROUND. Existence
 # alone early-exits multi-round goals — round-1's file satisfies the glob, so round-2/3's
