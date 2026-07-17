@@ -1,27 +1,48 @@
 #!/usr/bin/env bash
-# rearm — list re-arm commands for watchers that died UNNATURALLY (harness SIGKILL).
+# rearm — list re-arm commands for watchers whose process vanished before EXIT cleanup.
 # Mechanism: `watch` writes $DIR/<session>.watchspec on arm and removes it via EXIT
-# trap on every natural exit; SIGKILL skips traps, so a surviving spec whose pid is
-# dead = a watcher that was reaped mid-flight. This script only PRINTS the re-arm
+# trap on every natural exit; a surviving spec whose pid is dead = a watcher that
+# ended abnormally mid-flight. This script only PRINTS the re-arm
 # commands (one per line) — the orchestrator launches each via its own tracked
 # background mechanism (run_in_background). It never backgrounds anything itself:
 # design, not laziness (orphaned shells are the exact failure mode this avoids).
 # It also scans .events/.exec.meta for live sessions missing a watcher; headless
-# liveness is determined by its watcher process. Stale specs are cleaned up here.
+# liveness is determined by typed runtime status. Stale specs are cleaned up here.
 set -u
 DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-found=0
+found=0; check_failed=0
 shopt -s nullglob
 regex_escape() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|]/\\&/g'; }
+exec_needs_watch() { # $1 session — RUNNING is the only in-flight EXEC status
+  # Exact fast-path parity with dispatch-exec classify(): rc10 requires BOTH no
+  # terminal rc file and a live tmux supervisor. Historical rc-bearing meta never
+  # pays for process/status probes.
+  [ ! -f "$DIR/$1.exec.rc" ] || return 1
+  tmux has-session -t "$1" 2>/dev/null
+}
+tui_needs_watch() { # $1 session — hooks make these the only positive active states
+  local events="$DIR/$1.events" state
+  [ -r "$events" ] || { echo "ERR: could not read TUI watcher state" >&2; check_failed=1; return 2; }
+  state="$(tail -1 "$events" 2>/dev/null | awk '{print $2}')"
+  [ "$state" = "WORKING" ] || [ "$state" = "LOADED" ]
+}
 for spec in "$DIR"/*.watchspec; do
   pid="$(sed -n 's/^pid=//p' "$spec")"
   sess="$(sed -n 's/^session=//p' "$spec")"
   cmd="$(sed -n 's/^cmd=//p' "$spec")"
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && continue     # watcher alive — leave it
-  if ! tmux has-session -t "$sess" 2>/dev/null; then
-    rm -f "$spec"; echo "# stale spec removed (tmux session gone): $sess"; continue
+  if [ -f "$DIR/$sess.exec.meta" ]; then
+    exec_needs_watch "$sess"; state_rc=$?
+  else
+    if ! tmux has-session -t "$sess" 2>/dev/null; then
+      rm -f "$spec"; echo "# stale spec removed (tmux session gone): $sess"; continue
+    fi
+    # A surviving dead spec is stronger evidence than TUI's turn-boundary state:
+    # DONE can be transient before an auto-continued turn, so preserve and re-arm it.
+    state_rc=0
   fi
+  [ "$state_rc" -eq 0 ] || { [ "$state_rc" -eq 1 ] && rm -f "$spec"; continue; }
   found=1
   echo "$cmd"
 done
@@ -42,15 +63,21 @@ for ev in "$DIR"/*.events "$DIR"/*.exec.meta; do
   esac
   case "$seen" in *" $sess "*) continue ;; esac                # same session via both sentinels
   seen="$seen$sess "
-  [ -e "$DIR/$sess.watchspec" ] && continue                    # TUI lane: covered by the spec pass above
-  # Headless watch execs into dispatch-exec and has no watchspec; match its process command.
-  # Session names are data, so escape ERE metacharacters and protect a leading dash with `--`.
-  escaped_sess="$(regex_escape "$sess")"
-  pgrep -f -- "dispatch-exec[[:space:]]+watch[[:space:]]+$escaped_sess\$" >/dev/null 2>&1 && continue
-  tmux has-session -t "$sess" 2>/dev/null || continue
+  [ -e "$DIR/$sess.watchspec" ] && continue                    # covered by the spec pass above
+  if [ -f "$DIR/$sess.exec.meta" ]; then
+    exec_needs_watch "$sess" || continue
+    # Headless watch execs into dispatch-exec and has no watchspec; match its process command.
+    # Session names are data, so escape ERE metacharacters and protect a leading dash with `--`.
+    escaped_sess="$(regex_escape "$sess")"
+    pgrep -f -- "dispatch-exec[[:space:]]+watch[[:space:]]+$escaped_sess\$" >/dev/null 2>&1 && continue
+  else
+    tmux has-session -t "$sess" 2>/dev/null || continue
+    tui_needs_watch "$sess" || continue
+  fi
   found=1
-  echo "# live session '$sess' has NO watcher (natural exit, never armed, or SIGTERM-reaped) — if a round is in flight, re-arm:"
+  echo "# active session '$sess' has NO watcher — re-arm:"
   echo "bash $HERE/watch $sess"
 done
+[ "$check_failed" -eq 0 ] || exit 1
 [ "$found" -eq 0 ] && echo "# nothing to re-arm"
 exit 0

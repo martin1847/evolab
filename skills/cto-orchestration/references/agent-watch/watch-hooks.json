@@ -1,0 +1,9 @@
+{
+  "//": "Claude Code only. Replace the command with this installed skill's absolute path, then merge these entries into .claude/settings.json. Do not add them to shared guard-hooks.json or Codex hooks.",
+  "SessionStart": [
+    { "command": "references/agent-watch/rearm-reminder.py" }
+  ],
+  "UserPromptSubmit": [
+    { "command": "references/agent-watch/rearm-reminder.py" }
+  ]
+}
