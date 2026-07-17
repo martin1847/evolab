@@ -57,18 +57,23 @@ out="$(bash "$DEXEC" claude exS "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
 chk_eq "duplicate session rc1" 1 "$rc"
 sandbox_clean
 
-# Prompt construction failure precedes any state mutation: previous round remains DONE.
+# File snapshot failure precedes any state mutation or launch: previous round remains DONE.
 sandbox_new; mkdir -p "$SANDBOX/wt" "$SANDBOX/not-a-prompt"
 mkmeta="$WATCH_RUN_DIR/bf.exec.meta"
 printf 'engine=claude\ncwd=%s\nround=1\nargs=\nsid=sid-bf\n' "$SANDBOX/wt" > "$mkmeta"
 : > "$WATCH_RUN_DIR/bf.exec.round-started"; printf '{"session_id":"sid-bf"}\n' > "$WATCH_RUN_DIR/bf.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/bf.exec.rc"
+before_meta="$(cat "$mkmeta")"; before_out="$(cat "$WATCH_RUN_DIR/bf.exec.out")"
+export FAKE_TMUX_LAUNCH_LOG="$SANDBOX/snapshot-failure-launch.log"; : > "$FAKE_TMUX_LAUNCH_LOG"
 out="$(bash "$DEXEC" send bf -f "$SANDBOX/not-a-prompt" 2>&1)"; rc=$?
-chk_eq "prompt build failure rc1" 1 "$rc"
-chk_eq "build failure preserves round" 1 "$(sed -n 's/^round=//p' "$mkmeta")"
-chk_eq "build failure preserves rc" 1 "$([ -f "$WATCH_RUN_DIR/bf.exec.rc" ] && echo 1 || echo 0)"
-chk_eq "build failure releases round lock" 0 "$([ -e "$WATCH_RUN_DIR/bf.exec.lock" ] && echo 1 || echo 0)"
+chk_eq "file snapshot failure rc1" 1 "$rc"
+chk_eq "snapshot failure preserves meta" "$before_meta" "$(cat "$mkmeta")"
+chk_eq "snapshot failure preserves output" "$before_out" "$(cat "$WATCH_RUN_DIR/bf.exec.out")"
+chk_eq "snapshot failure preserves rc" 1 "$([ -f "$WATCH_RUN_DIR/bf.exec.rc" ] && echo 1 || echo 0)"
+chk_eq "snapshot failure launches nothing" 0 "$(wc -l < "$FAKE_TMUX_LAUNCH_LOG" | tr -d ' ')"
+chk_eq "snapshot failure cleans temp" 0 "$(find "$WATCH_RUN_DIR" -name 'bf.exec.input-*' | wc -l | tr -d ' ')"
+chk_eq "snapshot failure releases round lock" 0 "$([ -e "$WATCH_RUN_DIR/bf.exec.lock" ] && echo 1 || echo 0)"
 out="$(bash "$DEXEC" status bf 2>&1)"; rc=$?
-chk_eq "build failure leaves prior status DONE" 0 "$rc"
+chk_eq "snapshot failure leaves prior status DONE" 0 "$rc"
 sandbox_clean
 
 # --goal required
@@ -147,6 +152,89 @@ chk_eq "budget refusal does not launch" "$before_launches" "$(wc -l < "$FAKE_TMU
 chk_eq "budget refusal leaves no prompt" 0 "$(find "$WATCH_RUN_DIR" -name 'reviewBudget.exec.prompt-r3-*' | wc -l | tr -d ' ')"
 chk_eq "budget refusal creates no message temp" "$before_msgs" "$(find "$WATCH_RUN_DIR" -name 'reviewBudget.exec.msg-*' | wc -l | tr -d ' ')"
 chk_eq "budget refusal releases lock" 0 "$([ -e "$WATCH_RUN_DIR/reviewBudget.exec.lock" ] && echo 1 || echo 0)"
+sandbox_clean
+
+# The hard cap remains authoritative; within a larger budget, round 3+ requires a
+# ship-blocking continuation lease from prompt content (never session/file naming).
+sandbox_new
+mkdir -p "$SANDBOX/wt"; printf 'review\n' > "$SANDBOX/goal.md"
+export FAKE_TMUX_LAUNCH_LOG="$SANDBOX/lease-launch.log"; : > "$FAKE_TMUX_LAUNCH_LOG"
+out="$(bash "$DEXEC" codex leaseLoop "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 4 2>&1)"; rc=$?
+chk_eq "lease loop launch rc0" 0 "$rc"
+printf '{"type":"thread.started","thread_id":"tid-lease"}\n' >> "$WATCH_RUN_DIR/leaseLoop.exec.out"
+printf '0\n' > "$WATCH_RUN_DIR/leaseLoop.exec.rc"
+out="$(bash "$DEXEC" send leaseLoop -m 'round two' 2>&1)"; rc=$?
+chk_eq "round 1 to 2 needs no lease" 0 "$rc"
+printf 'round two done\n' >> "$WATCH_RUN_DIR/leaseLoop.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/leaseLoop.exec.rc"
+
+before_meta="$(cat "$WATCH_RUN_DIR/leaseLoop.exec.meta")"; before_rc="$(cat "$WATCH_RUN_DIR/leaseLoop.exec.rc")"
+before_out="$(cat "$WATCH_RUN_DIR/leaseLoop.exec.out")"; before_launches="$(wc -l < "$FAKE_TMUX_LAUNCH_LOG" | tr -d ' ')"
+before_msgs="$(find "$WATCH_RUN_DIR" -name 'leaseLoop.exec.msg-*' | wc -l | tr -d ' ')"
+out="$(bash "$DEXEC" send leaseLoop -m 'round three' 2>&1)"; rc=$?
+chk_eq "round 3 without lease denied" 1 "$rc"
+chk_contains "missing lease denial is clear" "continuation lease" "$out"
+chk_eq "lease denial preserves meta" "$before_meta" "$(cat "$WATCH_RUN_DIR/leaseLoop.exec.meta")"
+chk_eq "lease denial preserves rc" "$before_rc" "$(cat "$WATCH_RUN_DIR/leaseLoop.exec.rc")"
+chk_eq "lease denial preserves out" "$before_out" "$(cat "$WATCH_RUN_DIR/leaseLoop.exec.out")"
+chk_eq "lease denial launches nothing" "$before_launches" "$(wc -l < "$FAKE_TMUX_LAUNCH_LOG" | tr -d ' ')"
+chk_eq "lease denial creates no message temp" "$before_msgs" "$(find "$WATCH_RUN_DIR" -name 'leaseLoop.exec.msg-*' | wc -l | tr -d ' ')"
+chk_eq "lease denial creates no prompt" 0 "$(find "$WATCH_RUN_DIR" -name 'leaseLoop.exec.prompt-r3-*' | wc -l | tr -d ' ')"
+chk_eq "lease denial creates no epoch" 0 "$(find "$WATCH_RUN_DIR" -name 'leaseLoop.exec.round-started.pending-*' | wc -l | tr -d ' ')"
+chk_eq "lease denial releases lock" 0 "$([ -e "$WATCH_RUN_DIR/leaseLoop.exec.lock" ] && echo 1 || echo 0)"
+
+out="$(bash -c '"$1" send leaseLoop -m "round three" # SHIP-BLOCKING: fake' _ "$DEXEC" 2>&1)"; rc=$?
+chk_eq "marker in command comment does not lease" 1 "$rc"
+
+out="$(bash "$DEXEC" send leaseLoop -m $'fix auth\nSHIP-BLOCKING: exploitable auth bypass remains' 2>&1)"; rc=$?
+chk_eq "inline complete lease allows round 3" 0 "$rc"
+printf 'round three done\n' >> "$WATCH_RUN_DIR/leaseLoop.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/leaseLoop.exec.rc"
+out="$(bash "$DEXEC" send leaseLoop -m 'SHIP-BLOCKING:' 2>&1)"; rc=$?
+chk_eq "bare lease marker denied" 1 "$rc"
+
+brief="$SANDBOX/SHIP-BLOCKING round 4 brief.md"
+printf 'filename is not evidence\n' > "$brief"
+out="$(bash "$DEXEC" send leaseLoop -f "$brief" 2>&1)"; rc=$?
+chk_eq "marker in filename does not lease" 1 "$rc"
+chk_eq "lease denial cleans file snapshot" 0 "$(find "$WATCH_RUN_DIR" -name 'leaseLoop.exec.input-*' | wc -l | tr -d ' ')"
+printf 'fix remaining issue\nSHIP-BLOCKING: data loss on retry remains\n' > "$brief"
+out="$(bash "$DEXEC" send leaseLoop -f "$brief" 2>&1)"; rc=$?
+chk_eq "spaced brief complete lease allows round 4" 0 "$rc"
+printf 'round four done\n' >> "$WATCH_RUN_DIR/leaseLoop.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/leaseLoop.exec.rc"
+out="$(bash "$DEXEC" send leaseLoop -m 'SHIP-BLOCKING: still severe' 2>&1)"; rc=$?
+chk_eq "marker cannot exceed hard max" 9 "$rc"
+chk_contains "hard max remains first" "BUDGET-EXHAUSTED" "$out"
+chk_not_contains "hard max does not report lease" "continuation lease" "$out"
+
+# A mutable -f source is consumed once: the lease validator and launched prompt must
+# see one frozen byte sequence even if the next read would return different content.
+printf 'engine=claude\ncwd=%s\nround=2\nworkflow=review-loop\nmax_rounds=4\nargs=\nsid=sid-snapshot\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/leaseSnapshot.exec.meta"
+: > "$WATCH_RUN_DIR/leaseSnapshot.exec.round-started"; : > "$WATCH_RUN_DIR/leaseSnapshot.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/leaseSnapshot.exec.rc"
+fifo_brief="$SANDBOX/mutable-review-brief"; mkfifo "$fifo_brief"
+export FAKE_TMUX_CMD_FILE="$SANDBOX/snapshot-tmux-cmd"
+send_out="$SANDBOX/snapshot-send.out"
+bash "$DEXEC" send leaseSnapshot -f "$fifo_brief" > "$send_out" 2>&1 & snapshot_send_pid=$!
+( /bin/sleep 5
+  if kill -0 "$snapshot_send_pid" 2>/dev/null; then
+    kill -TERM "$snapshot_send_pid" 2>/dev/null || true
+    [ ! -p "$fifo_brief" ] || cat "$fifo_brief" >/dev/null 2>&1 || true
+  fi
+) & snapshot_watchdog=$!
+printf 'fix auth\nSHIP-BLOCKING: validated snapshot rationale\n' > "$fifo_brief"; write_rc=$?
+rm -f "$fifo_brief"; printf 'replacement without marker\n' > "$fifo_brief"
+wait "$snapshot_send_pid"; rc=$?; out="$(cat "$send_out")"
+kill "$snapshot_watchdog" 2>/dev/null || true; wait "$snapshot_watchdog" 2>/dev/null || true
+chk_eq "mutable file initial write completes" 0 "$write_rc"
+chk_eq "mutable file snapshot send rc0" 0 "$rc"
+snapshot_prompt="$(ls "$WATCH_RUN_DIR"/leaseSnapshot.exec.prompt-r3-* | head -1)"
+chk_contains "round prompt keeps validated snapshot" "SHIP-BLOCKING: validated snapshot rationale" "$(cat "$snapshot_prompt")"
+chk_not_contains "round prompt ignores later source replacement" "replacement without marker" "$(cat "$snapshot_prompt")"
+chk_eq "normal send cleans file snapshot" 0 "$(find "$WATCH_RUN_DIR" -name 'leaseSnapshot.exec.input-*' | wc -l | tr -d ' ')"
+
+# A legacy/ordinary session named review is not a review-loop without workflow meta.
+printf 'engine=claude\ncwd=%s\nround=2\nargs=\nsid=sid-ordinary\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/reviewOrdinary.exec.meta"
+: > "$WATCH_RUN_DIR/reviewOrdinary.exec.round-started"; : > "$WATCH_RUN_DIR/reviewOrdinary.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/reviewOrdinary.exec.rc"
+out="$(bash "$DEXEC" send reviewOrdinary -m 'no lease, ordinary workflow' 2>&1)"; rc=$?
+chk_eq "session name alone does not trigger lease" 0 "$rc"
 sandbox_clean
 
 # codex/omp engine command shapes (claude covered above)
@@ -246,9 +334,8 @@ out="$(bash "$DEXEC" status r4 2>&1)"; rc=$?
 chk_eq "blocked exit4" 4 "$rc"; chk_contains "blocked marker" "BLOCKED.md" "$out"
 sandbox_clean
 
-# same-second cliff (review nit): BLOCKED.md written within the SAME second as the arm
-# stamp must still classify WAITING (>= stamp, not strictly-newer) — a fast round's
-# doubt-protocol must never read as DONE.
+# A BLOCKED.md written after the epoch within the same second remains detectable via
+# nanosecond-aware strict-newer comparison.
 sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate r4s "$SANDBOX/wt"
 printf 'doubt\n' > "$SANDBOX/wt/BLOCKED.md"   # stamp and file land in the same second
 printf '0\n' > "$WATCH_RUN_DIR/r4s.exec.rc"; : > "$WATCH_RUN_DIR/r4s.exec.out"
@@ -291,6 +378,68 @@ chk_eq "fresh deliverable exit0" 0 "$rc"
 sandbox_clean
 
 echo "== dispatch-exec: send (resume round) =="
+
+# A resume may replace the file gate for its new round; omission keeps the old gate.
+sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate rebind "$SANDBOX/wt"
+printf 'sid=sid-rebind\ndeliverable=%s\n' "$SANDBOX/wt/old-*.out" >> "$WATCH_RUN_DIR/rebind.exec.meta"
+: > "$WATCH_RUN_DIR/rebind.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/rebind.exec.rc"
+new_gate="$SANDBOX/wt/new-*.out"
+: > "$SANDBOX/wt/new-preexisting.out"
+export FAKE_TMUX_HOLD_FILE="$SANDBOX/rebind-hold"; : > "$FAKE_TMUX_HOLD_FILE"
+( for _ in $(seq 150); do [ -e "$FAKE_TMUX_HOLD_FILE.started" ] && break; /bin/sleep 0.01; done
+  pending="$(ls "$WATCH_RUN_DIR"/rebind.exec.round-started.pending-* | head -1)"
+  touch -r "$pending" "$SANDBOX/wt/new-preexisting.out"
+  rm -f "$FAKE_TMUX_HOLD_FILE"
+) & epoch_helper=$!
+out="$(bash "$DEXEC" send rebind -m next --deliverable "$new_gate" 2>&1)"; rc=$?
+wait "$epoch_helper"; unset FAKE_TMUX_HOLD_FILE
+chk_eq "long deliverable rebind rc0" 0 "$rc"
+chk_eq "long deliverable replaces gate" "$new_gate" "$(sed -n 's/^deliverable=//p' "$WATCH_RUN_DIR/rebind.exec.meta")"
+chk_eq "rebind commits round with gate" 2 "$(sed -n 's/^round=//p' "$WATCH_RUN_DIR/rebind.exec.meta")"
+printf '0\n' > "$WATCH_RUN_DIR/rebind.exec.rc"
+out="$(bash "$DEXEC" status rebind 2>&1)"; rc=$?
+chk_eq "same-epoch pre-existing deliverable stays closed" 6 "$rc"
+touch "$SANDBOX/wt/new-result.out"
+out="$(bash "$DEXEC" status rebind 2>&1)"; rc=$?
+chk_eq "fresh rebound deliverable opens gate" 0 "$rc"
+
+mkstate rebindShort "$SANDBOX/wt"
+printf 'sid=sid-short\ndeliverable=%s\n' "$SANDBOX/wt/old-short-*" >> "$WATCH_RUN_DIR/rebindShort.exec.meta"
+: > "$WATCH_RUN_DIR/rebindShort.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/rebindShort.exec.rc"
+short_gate="$SANDBOX/wt/short-*"
+out="$(bash "$DEXEC" send rebindShort -m next -d "$short_gate" 2>&1)"; rc=$?
+chk_eq "short deliverable rebind rc0" 0 "$rc"
+chk_eq "short deliverable replaces gate" "$short_gate" "$(sed -n 's/^deliverable=//p' "$WATCH_RUN_DIR/rebindShort.exec.meta")"
+
+# Output created inside tmux launch is newer than the pre-launch epoch even when launch
+# returns much later; a post-launch stamp would incorrectly make this stale.
+mkstate launchFast "$SANDBOX/wt"
+printf 'sid=sid-launch-fast\ndeliverable=%s\n' "$SANDBOX/wt/launch-fast-*" >> "$WATCH_RUN_DIR/launchFast.exec.meta"
+: > "$WATCH_RUN_DIR/launchFast.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/launchFast.exec.rc"
+export FAKE_TMUX_HOLD_FILE="$SANDBOX/launch-fast-hold"; : > "$FAKE_TMUX_HOLD_FILE"
+( for _ in $(seq 150); do [ -e "$FAKE_TMUX_HOLD_FILE.started" ] && break; /bin/sleep 0.01; done
+  : > "$SANDBOX/wt/launch-fast-result"
+  /bin/sleep 1.1
+  rm -f "$FAKE_TMUX_HOLD_FILE"
+) & launch_helper=$!
+out="$(bash "$DEXEC" send launchFast -m next 2>&1)"; rc=$?; wait "$launch_helper"; unset FAKE_TMUX_HOLD_FILE
+chk_eq "launch-time deliverable send rc0" 0 "$rc"
+printf '0\n' > "$WATCH_RUN_DIR/launchFast.exec.rc"
+out="$(bash "$DEXEC" status launchFast 2>&1)"; rc=$?
+chk_eq "launch-time deliverable opens gate" 0 "$rc"
+
+mkstate rebindBad "$SANDBOX/wt"
+printf 'sid=sid-bad\ndeliverable=%s\n' "$SANDBOX/wt/old-bad-*" >> "$WATCH_RUN_DIR/rebindBad.exec.meta"
+: > "$WATCH_RUN_DIR/rebindBad.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/rebindBad.exec.rc"
+before_meta="$(cat "$WATCH_RUN_DIR/rebindBad.exec.meta")"
+export FAKE_TMUX_LAUNCH_LOG="$SANDBOX/rebind-bad-launch.log"; : > "$FAKE_TMUX_LAUNCH_LOG"
+out="$(bash "$DEXEC" send rebindBad -m next --deliverable 2>&1)"; rc=$?
+chk_eq "deliverable missing value rejected" 1 "$rc"
+out="$(bash "$DEXEC" send rebindBad -m next -d '' 2>&1)"; rc=$?
+chk_eq "deliverable empty value rejected" 1 "$rc"
+chk_eq "invalid rebind preserves meta" "$before_meta" "$(cat "$WATCH_RUN_DIR/rebindBad.exec.meta")"
+chk_eq "invalid rebind launches nothing" 0 "$(wc -l < "$FAKE_TMUX_LAUNCH_LOG" | tr -d ' ')"
+sandbox_clean
 
 # Two simultaneous sends serialize before any state mutation: exactly one starts round 2.
 sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate conc "$SANDBOX/wt"
@@ -336,17 +485,24 @@ chk_eq "stale recovery starts round 2" 2 "$(sed -n 's/^round=//p' "$WATCH_RUN_DI
 chk_eq "stale lock removed after launch" 0 "$([ -e "$WATCH_RUN_DIR/stale.exec.lock" ] && echo 1 || echo 0)"
 sandbox_clean
 
-# Resume launch failure mutates nothing: prior DONE round/meta/rc/output remain authoritative.
+# Resume launch failure mutates nothing, including a requested deliverable replacement.
 sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate lf "$SANDBOX/wt"
-printf 'sid=sid-lf\n' >> "$WATCH_RUN_DIR/lf.exec.meta"; printf 'prior output\n' > "$WATCH_RUN_DIR/lf.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/lf.exec.rc"
+printf 'sid=sid-lf\ndeliverable=%s\n' "$SANDBOX/wt/old-*" >> "$WATCH_RUN_DIR/lf.exec.meta"; printf 'prior output\n' > "$WATCH_RUN_DIR/lf.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/lf.exec.rc"
+touch "$SANDBOX/wt/old-result"
 before_meta="$(cat "$WATCH_RUN_DIR/lf.exec.meta")"; before_out="$(cat "$WATCH_RUN_DIR/lf.exec.out")"
+before_stamp_inode="$(ls -i "$WATCH_RUN_DIR/lf.exec.round-started" | awk '{print $1}')"
+printf 'retry\n' > "$SANDBOX/launch-failure-brief.md"
 export FAKE_TMUX_NEWSESSION_FAIL=1
-out="$(bash "$DEXEC" send lf -m retry 2>&1)"; rc=$?
+out="$(bash "$DEXEC" send lf -f "$SANDBOX/launch-failure-brief.md" --deliverable "$SANDBOX/wt/new-*" 2>&1)"; rc=$?
 unset FAKE_TMUX_NEWSESSION_FAIL
 chk_eq "resume launch failure rc1" 1 "$rc"
 chk_eq "resume launch failure preserves meta" "$before_meta" "$(cat "$WATCH_RUN_DIR/lf.exec.meta")"
+chk_eq "resume launch failure preserves old deliverable" "$SANDBOX/wt/old-*" "$(sed -n 's/^deliverable=//p' "$WATCH_RUN_DIR/lf.exec.meta")"
 chk_eq "resume launch failure preserves rc" 0 "$(cat "$WATCH_RUN_DIR/lf.exec.rc")"
 chk_eq "resume launch failure preserves output" "$before_out" "$(cat "$WATCH_RUN_DIR/lf.exec.out")"
+chk_eq "resume launch failure preserves old epoch" "$before_stamp_inode" "$(ls -i "$WATCH_RUN_DIR/lf.exec.round-started" | awk '{print $1}')"
+chk_eq "resume launch failure cleans pending epoch" 0 "$(find "$WATCH_RUN_DIR" -name 'lf.exec.round-started.pending-*' | wc -l | tr -d ' ')"
+chk_eq "resume launch failure cleans file snapshot" 0 "$(find "$WATCH_RUN_DIR" -name 'lf.exec.input-*' | wc -l | tr -d ' ')"
 out="$(bash "$DEXEC" status lf 2>&1)"; rc=$?
 chk_eq "resume launch failure leaves prior DONE" 0 "$rc"
 chk_eq "resume launch failure cleans prepared files" 0 "$(find "$WATCH_RUN_DIR" -name 'lf.exec.prompt-*' | wc -l | tr -d ' ')"
@@ -355,12 +511,15 @@ sandbox_clean
 # SIGTERM during a held launch must run the lock cleanup trap.
 sandbox_new; mkdir -p "$SANDBOX/wt"; mkstate term "$SANDBOX/wt"
 printf 'sid=sid-term\n' >> "$WATCH_RUN_DIR/term.exec.meta"; : > "$WATCH_RUN_DIR/term.exec.out"; printf '0\n' > "$WATCH_RUN_DIR/term.exec.rc"
+printf 'stop-me\n' > "$SANDBOX/term-brief.md"
 export FAKE_TMUX_HOLD_FILE="$SANDBOX/term-hold"; : > "$FAKE_TMUX_HOLD_FILE"
-bash "$DEXEC" send term -m stop-me > "$SANDBOX/term.out" 2>&1 & term_pid=$!
+bash "$DEXEC" send term -f "$SANDBOX/term-brief.md" > "$SANDBOX/term.out" 2>&1 & term_pid=$!
 for _ in $(seq 150); do [ -e "$FAKE_TMUX_HOLD_FILE.started" ] && break; /bin/sleep 0.02; done
 kill -TERM "$term_pid" 2>/dev/null || true; rm -f "$FAKE_TMUX_HOLD_FILE"; wait "$term_pid" 2>/dev/null || true
 for _ in $(seq 150); do [ ! -e "$WATCH_RUN_DIR/term.exec.lock" ] && break; /bin/sleep 0.02; done
 chk_eq "SIGTERM leaves no round lock" 0 "$([ -e "$WATCH_RUN_DIR/term.exec.lock" ] && echo 1 || echo 0)"
+chk_eq "SIGTERM leaves no pending epoch" 0 "$(find "$WATCH_RUN_DIR" -name 'term.exec.round-started.pending-*' | wc -l | tr -d ' ')"
+chk_eq "SIGTERM leaves no file snapshot" 0 "$(find "$WATCH_RUN_DIR" -name 'term.exec.input-*' | wc -l | tr -d ' ')"
 sandbox_clean
 
 # A RUNNING headless round cannot accept steering; send is round-between resume only.
