@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# mail-guard — PreToolUse guard: deliver mail through `agentbus send`, never by direct file writes.
+# mail-guard — PreToolUse guard: deliver mail through `agentmail send`, never by direct file writes.
 # Wire in project settings (same way as mail-check.py; truth-source entry in sibling hooks.json):
 #   PreToolUse  matcher "Write|Edit|MultiEdit"  -> <abs>/mail-guard.py
 # Rationale (2026-07-10 live): an orchestrator wrote several letters straight into recipient inboxes
@@ -8,7 +8,7 @@
 # shipped with the wrong `from:`). Prose said "use the helper"; prose that doesn't reach the
 # decision point is net-negative -> promote to a tool-call hook (same conclusion as cto-guard).
 # Scope: DENY only <bus>/<id>/inbox/... file writes. tmp/ is the helper's own staging area,
-# archive/ moves go through `agentbus archive` (and this guard only sees Write/Edit, not mv),
+# archive/ moves go through `agentmail archive` (and this guard only sees Write/Edit, not mv),
 # registry.md sits at the bus root — none of those match. Reading anything stays free.
 # Deny/checker error = exit 2 + stderr (shown to the agent).
 import json
@@ -24,7 +24,7 @@ def checker_error(message):
 
 
 def bus_root():
-    # $AGENT_MAIL_DIR wins over the default, mirroring agentbus / mail-check.py.
+    # $AGENT_MAIL_DIR wins over the default, mirroring agentmail / mail-check.py.
     raw = os.environ.get("AGENT_MAIL_DIR") or "~/.agents/mail"
     return os.path.realpath(os.path.expanduser(raw))
 
@@ -67,11 +67,11 @@ def main():
         "gates — 8KB hard size cap, >2KB brevity warning, atomic tmp/->inbox delivery — and "
         "hand-rolled frontmatter gets fields wrong (2026-07-10: letters written via the Write "
         "tool shipped with a wrong `from:`). Deliver through the helper instead:\n"
-        "  agentbus send <from> <to> <slug> <subject> <<'EOF'\n"
+        "  agentmail send <from> <to> <slug> <subject> <<'EOF'\n"
         "  <body: conclusion first, action items, evidence as paths/URLs>\n"
         "  EOF\n"
         "Reading mail and the roster directly stays fine; only delivery must go through "
-        "`agentbus send`. Read: agent-mail/SKILL.md §agentbus helper.\n"
+        "`agentmail send`. Read: agent-mail/SKILL.md §agentmail helper.\n"
     )
     return 2
 
