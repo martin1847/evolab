@@ -127,6 +127,10 @@ review 标记）。agent 自起后台 job 会 yield＝呈 idle 但没完成（bg
   吞尾部 Enter；>2000 字符 paste 损坏。协议帧车道天然免疫——这正是 duplex 的立道理由之一。
 - omp rpc 面无版本稳定性文档：launch 的 ready 握手即 preflight，握手失败 = fail-fast 清场重来，
   不带病跑。
+- **claude queued steer 的 turn 归属无引擎关联面**（诚实边界）：turn A 运行中排队 steer B，
+  A 的 result 先落盘——`status` 单发可能把它读成终态；`watch` 的 2 连读稳定门 + deliverable
+  gate 是真消费路径（A 完成后引擎立即起 B，下一读即 RUNNING）。turn 级关联等 P2
+  （codex app-server 上车时统一按 id 解）。
 
 ## 强制层：两个单一职责 guard 脚本
 

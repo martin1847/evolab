@@ -89,7 +89,9 @@ PY
 chk_eq "fresh registry structurally valid" "valid" "$(reg_valid)"
 
 # send: id format + frontmatter shape
-bash "$BUSBIN" send alpha beta demo-topic "试一封" >/dev/null
+# stdin pinned: agentbus reads the letter body from stdin — an ambient never-closing
+# stdin (backgrounded runners) hung the whole suite here (self-caught 2026-07-19)
+bash "$BUSBIN" send alpha beta demo-topic "试一封" >/dev/null < /dev/null
 f="$(ls "$AGENT_MAIL_DIR/beta/inbox/"*.md | head -1)"
 chk_eq "letter delivered to recipient inbox" 1 "$([ -n "$f" ] && echo 1 || echo 0)"
 base="$(basename "$f" .md)"
@@ -173,8 +175,8 @@ bash "$BUSBIN" archive beta "$pcf" >/dev/null
 chk_eq "archive opportunistically prunes expired letter" 0 "$([ -e "$oldgz" ] && echo 1 || echo 0)"
 chk_eq "just-archived letter survives the sweep" 1 "$([ -e "$AGENT_MAIL_DIR/beta/archive/$pcf.md.gz" ] && echo 1 || echo 0)"
 
-# unregistered recipient: deliver anyway + warn
-out="$(bash "$BUSBIN" send alpha gamma hello "投递给未注册者")"
+# unregistered recipient: deliver anyway + warn (stdin pinned, see above)
+out="$(bash "$BUSBIN" send alpha gamma hello "投递给未注册者" < /dev/null)"
 chk_contains "warns not registered" "not registered" "$out"
 chk_eq "still delivered" 1 "$(ls "$AGENT_MAIL_DIR/gamma/inbox/"*.md >/dev/null 2>&1 && echo 1 || echo 0)"
 

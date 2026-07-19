@@ -222,11 +222,21 @@ done
 out="$(bash "$AGENTCTL" status rxG 2>&1)"; rc=$?
 chk_eq "post-steer turn 2 DONE" 0 "$rc"
 
-# claude --replace is refused with the honest path, never silently degraded
-out="$(bash "$AGENTCTL" steer rxG -m "start over" --replace 2>&1)"; rc=$?
+# claude --replace is refused with the honest path, never silently degraded —
+# and a refused steer must NOT touch the deliverable gate (R2 regression)
+out="$(bash "$AGENTCTL" steer rxG -m "start over" --replace -d "never-*.md" 2>&1)"; rc=$?
 chk_eq "claude replace refused" 1 "$rc"
 chk_contains "refusal routes to stop+resume" "resume" "$out"
+chk_eq "refused steer leaves the gate untouched" 0 "$(grep -c '^deliverable=never' "$WATCH_RUN_DIR/rxG.duplex.meta")"
+# torn-frame taint marker fails everything closed until stop (R2 regression)
+: > "$WATCH_RUN_DIR/rxG.duplex.write-intent"
+out="$(bash "$AGENTCTL" status rxG 2>&1)"; rc=$?
+chk_eq "write-intent residue → FAILED 2" 2 "$rc"
+chk_contains "taint verdict names the recovery" "stop" "$out"
+out="$(bash "$AGENTCTL" steer rxG -m "more" 2>&1)"; rc=$?
+chk_eq "steer refused on tainted stream" 2 "$rc"
 bash "$AGENTCTL" stop rxG >/dev/null 2>&1
+chk_eq "stop clears the taint marker" 0 "$([ -e "$WATCH_RUN_DIR/rxG.duplex.write-intent" ] && echo 1 || echo 0)"
 unset FAKE_PROVIDER_LOG FAKE_CLAUDE_GATE
 
 # gated engine: steer delivered but zero output → RUNNING (silent), NOT stale DONE
@@ -264,12 +274,15 @@ chk_contains "anomalous response surfaced" "anomalous" "$out"
 bash "$AGENTCTL" stop rxB >/dev/null 2>&1
 unset FAKE_OMP_BAD_STATE
 
-# crash-residue fifo blocks a new same-name start (mkfifo IS the claim)
+# crash-residue fifo blocks a new same-name start (mkfifo IS the claim), and the
+# ADVERTISED recovery path — agentctl stop — must actually clear it (R2 regression)
 mkfifo "$WATCH_RUN_DIR/rxF.duplex.in"
 out="$(bash "$AGENTCTL" start claude rxF "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
 chk_eq "stray fifo → start refused" 1 "$rc"
 chk_contains "refusal names the recovery path" "agentctl stop" "$out"
-rm -f "$WATCH_RUN_DIR/rxF.duplex.in"
+out="$(bash "$AGENTCTL" stop rxF 2>&1)"; rc=$?
+chk_eq "stop cleans orphan residue rc0" 0 "$rc"
+chk_eq "orphan fifo actually removed" 0 "$([ -e "$WATCH_RUN_DIR/rxF.duplex.in" ] && echo 1 || echo 0)"
 sweep_fakes; sandbox_clean
 
 echo "== agentctl verb surface (unknown verbs die clean — 2026-07-19 field report) =="

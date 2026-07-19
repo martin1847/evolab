@@ -16,7 +16,10 @@
 #   codex → ROUND: the battle-tested exec-resume machinery (dispatch-exec) — codex's
 #     duplex surface (app-server) is officially experimental; we hold until a real need.
 # tmux is a process SUPERVISOR only: the worker survives orchestrator restarts; nothing
-# ever reads or types into the pane. Typed exit vocabulary shared with the round lane:
+# ever reads or types into the pane. NOT a transaction system (same stance as the round
+# lane's pid lock): CONCURRENT same-name starts across lanes are an orchestrator-discipline
+# bug — sequential collisions and duplex↔duplex races are refused mechanically (lane check
+# + mkfifo claim); a cross-lane photo-finish is recovered by `agentctl stop`, not machinery. Typed exit vocabulary shared with the round lane:
 #   0 DONE / 1 SESSION-GONE / 2 FAILED|AGENT-DEAD / 3 send-unconfirmed / 4 WAITING-INPUT
 #   / 5 STALLED-EXTERNAL / 6 IDLE-NO-DELIVERABLE / 7 WATCH-TIMEOUT / 8 ENGINE-SILENT
 set -uo pipefail
@@ -145,12 +148,16 @@ cmd_steer() {
   case "$(lane_of "$S")" in
     duplex)
       [ "$MODE" = -f ] && { [ -e "$ARG" ] || { echo "ERR: file not found: $ARG" >&2; exit 1; }; }
-      if [ -n "$NEWDELIV" ]; then
+      if [ "$MODE" = -f ]; then "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --file "$ARG"
+      else "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --text "$ARG"; fi
+      src=$?
+      # gate replacement commits only after a successful delivery — a refused/failed
+      # steer must leave the old deliverable gate untouched (review R2 2026-07-19)
+      if [ "$src" -eq 0 ] && [ -n "$NEWDELIV" ]; then
         meta="$DIR/$S.duplex.meta"; tmp="$(mktemp "$meta.XXXXXXXX")"
         { grep -v '^deliverable=' "$meta"; printf 'deliverable=%s\n' "$NEWDELIV"; } > "$tmp" && mv "$tmp" "$meta"
       fi
-      if [ "$MODE" = -f ]; then "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --file "$ARG"
-      else "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --text "$ARG"; fi ;;
+      exit "$src" ;;
     round)
       [ "$VERB" = steer ] || echo "note: round lane has no mid-turn steer — delivering as a resume round" >&2
       exec "$HERE/dispatch-exec" send "$S" "$MODE" "$ARG" ${NEWDELIV:+-d "$NEWDELIV"} ;;
@@ -208,7 +215,8 @@ cmd_stop() {
     duplex)
       tmux kill-session -t "$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
       rm -f "$DIR/$S.duplex.in" "$DIR/$S.duplex.meta" "$DIR/$S.duplex.round-started" \
-            "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" 2>/dev/null
+            "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" \
+            "$DIR/$S.duplex.write-intent" 2>/dev/null
       echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc" ;;
     round)
       tmux kill-session -t "$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
@@ -216,11 +224,16 @@ cmd_stop() {
       rm -rf "$DIR/$S.omp-sessions" 2>/dev/null
       echo "removed round-lane state $DIR/$S.exec.*" ;;
     none)
-      # no lane state: still offer bare-tmux cleanup so a half-launched session isn't stranded
-      if tmux has-session -t "$S" 2>/dev/null; then
-        tmux kill-session -t "$S" 2>/dev/null
-        echo "killed bare tmux session $S (no lane state existed)"
-      else echo "ERR: unknown session '$S' (no duplex/round state, no tmux session)" >&2; exit 1; fi ;;
+      # no lane meta: clean bare tmux AND orphan duplex claims (crash residue like a
+      # stray fifo/write-intent) — this IS the recovery path the start error advertises
+      cleaned=0
+      tmux has-session -t "$S" 2>/dev/null && { tmux kill-session -t "$S" 2>/dev/null; echo "killed bare tmux session $S"; cleaned=1; }
+      for f in "$DIR/$S.duplex.in" "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" \
+               "$DIR/$S.duplex.sent-offset" "$DIR/$S.duplex.round-started" "$DIR/$S.duplex.write-intent"; do
+        [ -e "$f" ] && { rm -f "$f"; cleaned=1; }
+      done
+      if [ "$cleaned" = 1 ]; then echo "removed orphan session residue for '$S'"
+      else echo "ERR: unknown session '$S' (no lane state, no tmux session, no residue)" >&2; exit 1; fi ;;
   esac
 }
 
