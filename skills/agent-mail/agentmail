@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-mail agentbus helper — inter-orchestrator mailbox ops. Pure bash, no deps.
+# agent-mail agentmail helper — inter-orchestrator mailbox ops. Pure bash, no deps.
 # Bus root = $AGENT_MAIL_DIR (default ~/.agents/mail) — USER DATA, deliberately outside
 # this skill's directory so publishing/upgrading the skill never touches mail.
 set -euo pipefail
@@ -13,14 +13,14 @@ REG="$BUS/registry.md"
 
 usage() {
   cat <<'EOF'
-agentbus — agent-mail inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, default ~/.agents/mail)
-  agentbus register <agent-id> <workdir> <focus...>  add to roster + create mailbox
-  agentbus check <agent-id>                          list pending (inbox, oldest first)
-  agentbus send <from> <to> <slug> [subject...]      deliver a letter to recipient inbox (atomic;
+agentmail — agent-mail inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, default ~/.agents/mail)
+  agentmail register <agent-id> <workdir> <focus...>  add to roster + create mailbox
+  agentmail check <agent-id>                          list pending (inbox, oldest first)
+  agentmail send <from> <to> <slug> [subject...]      deliver a letter to recipient inbox (atomic;
                                                        body optional via stdin, empty if a tty)
-  agentbus archive <agent-id> <id>                   move a handled letter to archive (gzip'd)
-  agentbus prune <agent-id> [days]                   delete archive letters older than N days (default 60)
-  agentbus roster                                    print roster
+  agentmail archive <agent-id> <id>                   move a handled letter to archive (gzip'd)
+  agentmail prune <agent-id> [days]                   delete archive letters older than N days (default 60)
+  agentmail roster                                    print roster
 EOF
 }
 
@@ -82,7 +82,7 @@ case "$cmd" in
   send)
     from="${1:?from}"; to="${2:?to}"; slug="${3:?slug}"; shift 3; subject="${*:-<subject>}"
     base="$BUS/$to"; ib="$base/inbox"; tmpd="$base/tmp"
-    [ -d "$ib" ] || { mkdir -p "$ib" "$base/archive"; echo "note: $to not registered — mailbox created anyway (mail must not bounce); consider: agentbus register $to <workdir> <focus>"; }
+    [ -d "$ib" ] || { mkdir -p "$ib" "$base/archive"; echo "note: $to not registered — mailbox created anyway (mail must not bounce); consider: agentmail register $to <workdir> <focus>"; }
     mkdir -p "$tmpd"
     id="$(date +%Y%m%d-%H%M)-$from-$slug"; dest="$ib/$id.md"
     [ -e "$dest" ] && { echo "exists: $dest"; exit 1; }
@@ -143,7 +143,7 @@ EOF
     echo "pruned $n letter(s) older than $days days from $id archive"
     ;;
   roster)
-    [ -f "$REG" ] && cat "$REG" || echo "(no registry yet — agentbus register <agent-id> <workdir> <focus>)"
+    [ -f "$REG" ] && cat "$REG" || echo "(no registry yet — agentmail register <agent-id> <workdir> <focus>)"
     ;;
   *) usage; [ -z "$cmd" ] || exit 1;;
 esac

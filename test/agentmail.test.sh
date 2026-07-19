@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# agent-mail `agentbus` — hermetic test against a temp $AGENT_MAIL_DIR (user-data dir never touched).
+# agent-mail `agentmail` — hermetic test against a temp $AGENT_MAIL_DIR (user-data dir never touched).
 # Asserts: register (roster + mailbox), send (id format <YYYYMMDD-HHMM>-<from>-<slug>, frontmatter
 # has NO status/date — state is positional), check (oldest-first pending), archive (state move),
 # unregistered recipient still gets delivery (mail must not bounce).
 set -u
-# stdin pinned SUITE-WIDE: agentbus reads letter bodies from stdin; any bare `send`
+# stdin pinned SUITE-WIDE: agentmail reads letter bodies from stdin; any bare `send`
 # under a runner whose stdin never closes hangs the whole suite (two field hits
 # 2026-07-19 — per-call patches missed one, so kill the class here).
 exec < /dev/null
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
 
-BUSBIN="../skills/agent-mail/agentbus"
+BUSBIN="../skills/agent-mail/agentmail"
 export AGENT_MAIL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/am-test.XXXXXX")"
 export HOME="$AGENT_MAIL_DIR/home"
 mkdir -p "$HOME"
 trap 'rm -rf "$AGENT_MAIL_DIR"' EXIT
 
-echo "== agent-mail agentbus =="
+echo "== agent-mail agentmail =="
 
-chk_eq "agentbus is executable" 1 "$([ -x "$BUSBIN" ] && echo 1 || echo 0)"
+chk_eq "agentmail is executable" 1 "$([ -x "$BUSBIN" ] && echo 1 || echo 0)"
 
 # Shipped hooks.json is the canonical three-entry wiring contract; exact shapes prevent
 # an onboarding consumer from silently omitting incremental delivery or the write guard.
@@ -62,7 +62,7 @@ chk_eq "mailbox dirs created" 1 "$([ -d "$AGENT_MAIL_DIR/alpha/inbox" ] && [ -d 
 out="$(bash "$BUSBIN" register alpha /tmp/alpha2 dup)"
 chk_contains "re-register is idempotent" "already in roster" "$out"
 
-# owner-only perms (umask 077): mail is untrusted data on the fs trust boundary — agentbus-created
+# owner-only perms (umask 077): mail is untrusted data on the fs trust boundary — agentmail-created
 # dirs must be 700, files 600, so other local users can't read another seat's inbox.
 # GNU-first: BSD stat errors on -c (falls through); GNU stat treats -f as "filesystem info"
 # WITHOUT erroring (never falls through) — the reverse order silently breaks on Linux.
@@ -93,7 +93,7 @@ PY
 chk_eq "fresh registry structurally valid" "valid" "$(reg_valid)"
 
 # send: id format + frontmatter shape
-# stdin pinned: agentbus reads the letter body from stdin — an ambient never-closing
+# stdin pinned: agentmail reads the letter body from stdin — an ambient never-closing
 # stdin (backgrounded runners) hung the whole suite here (self-caught 2026-07-19)
 bash "$BUSBIN" send alpha beta demo-topic "试一封" >/dev/null < /dev/null
 f="$(ls "$AGENT_MAIL_DIR/beta/inbox/"*.md | head -1)"
@@ -198,7 +198,7 @@ chk_eq "check unknown agent exits nonzero" 1 "$rc"
 
 # ── mail-check.py (SessionStart pending-mail surfacing; identity: env > arg > registry-workdir) ──
 MAILCHECK="../skills/agent-mail/mail-check.py"
-AGENTBUS_ABS="$(cd ../skills/agent-mail && pwd)/agentbus"
+AGENTBUS_ABS="$(cd ../skills/agent-mail && pwd)/agentmail"
 chk_eq "mail-check is executable" 1 "$([ -x "$MAILCHECK" ] && echo 1 || echo 0)"
 bash "$BUSBIN" send alpha beta ping2 "再来一封" >/dev/null
 out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=beta "$MAILCHECK")"
@@ -208,13 +208,13 @@ chk_contains "surfacing carries untrusted-data warning" "不可信数据" "$out"
 chk_contains "SessionStart names gzip archive outcome" ".md.gz" "$out"
 chk_eq "SessionStart does not create ~/.local/bin" 0 "$([ -d "$HOME/.local/bin" ] && echo 1 || echo 0)"
 COLLIDE_HOME="$AGENT_MAIL_DIR/collide-home"; mkdir -p "$COLLIDE_HOME/.local/bin"
-printf keep > "$COLLIDE_HOME/.local/bin/agentbus"
+printf keep > "$COLLIDE_HOME/.local/bin/agentmail"
 out="$(env -u CLAUDE_PROJECT_DIR HOME="$COLLIDE_HOME" AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
-chk_eq "existing ~/.local/bin/agentbus is not overwritten" keep "$(cat "$COLLIDE_HOME/.local/bin/agentbus")"
+chk_eq "existing ~/.local/bin/agentmail is not overwritten" keep "$(cat "$COLLIDE_HOME/.local/bin/agentmail")"
 mkdir -p "$HOME/.local/bin"
 out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
-chk_eq "SessionStart links agentbus when ~/.local/bin exists" "$AGENTBUS_ABS" "$(readlink "$HOME/.local/bin/agentbus" 2>/dev/null || true)"
-chk_eq "linked agentbus is executable" 1 "$([ -x "$HOME/.local/bin/agentbus" ] && echo 1 || echo 0)"
+chk_eq "SessionStart links agentmail when ~/.local/bin exists" "$AGENTBUS_ABS" "$(readlink "$HOME/.local/bin/agentmail" 2>/dev/null || true)"
+chk_eq "linked agentmail is executable" 1 "$([ -x "$HOME/.local/bin/agentmail" ] && echo 1 || echo 0)"
 out="$(env -u CLAUDE_PROJECT_DIR AGENT_MAIL_SELF=alpha "$MAILCHECK")"; rc=$?
 chk_eq "empty inbox silent" "" "$out"; chk_eq "empty inbox exit 0" 0 "$rc"
 bash "$BUSBIN" send alpha delta hello-d "给 delta" >/dev/null

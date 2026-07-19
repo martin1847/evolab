@@ -1,5 +1,5 @@
 {
-  "//": "agent-mail wiring 真源（canonical entries）。接入=把 command 换成本 skill 安装根的绝对路径（hooks 不展开 ~、不加 python3 前缀——脚本自带 shebang 直接 exec），并进项目 settings（CC .claude/settings.json；Codex/omp 见 SKILL 接入节说明）。SessionStart=开场全量冒泡；UserPromptSubmit=长跑 session 的增量投递（只报新到、报过不复读、无新静默——不重启也能收到中途来信）；PreToolUse=mail-guard，拦 Write/Edit 直写收件人 inbox（绕过 size/精简/原子投递 gate，2026-07-10 实证）——发信必须走 agentbus send，接入方式同 mail-check。",
+  "//": "agent-mail wiring 真源（canonical entries）。接入=把 command 换成本 skill 安装根的绝对路径（hooks 不展开 ~、不加 python3 前缀——脚本自带 shebang 直接 exec），并进项目 settings（CC .claude/settings.json；Codex/omp 见 SKILL 接入节说明）。SessionStart=开场全量冒泡；UserPromptSubmit=长跑 session 的增量投递（只报新到、报过不复读、无新静默——不重启也能收到中途来信）；PreToolUse=mail-guard，拦 Write/Edit 直写收件人 inbox（绕过 size/精简/原子投递 gate，2026-07-10 实证）——发信必须走 agentmail send，接入方式同 mail-check。",
   "SessionStart": [
     { "command": "mail-check.py" }
   ],
