@@ -53,7 +53,7 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
   pass/fail 的形态（两个评审独立判得同一结论；harness 原生完成判定器如 Claude Code `/goal` 可直接消费这种条件）>
 - [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立，E2E 范围匹配声明范围。
 - 普通非 review-loop 长跑可按需写时长 / 成本预算；耗尽仍未达成 = 保持任务 active + STOP and report。
-  review-loop 的轮数预算只由 runtime `--max-rounds` / exec.meta 强制，本 GOAL 不复制轮数。
+  review-loop 的轮数预算只由 runtime `--max-rounds`（会话 meta）强制，本 GOAL 不复制轮数。
 - 鉴权/会话/用户数据相关改动：验证须覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 / 未登录），
   不得只测新鲜快乐态（见 frontend-verify「状态形状矩阵」）。
 
@@ -64,8 +64,7 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - 禁止删 / 改 / 跳过测试、断言或 grader，禁止压制错误顶替修 root cause——测试集对执行者只读
   （成功标准"红→绿"最易被 game）。
 - 旗标门控：<flag 名，默认 ON/OFF + 理由>。
-- **动手前理解门**：复述 / 立即开工 / BLOCKED 协议由 runtime 每轮（round）/每次 goal 投递（duplex）
-  固定追加，本 GOAL 不复制（高风险任务升级为先交 mini-plan：goal 里显式要求先产出 plan 文件再动手）。
+- **动手前理解门**：复述 / 立即开工 / BLOCKED 协议由 runtime 在每次 goal 投递时固定追加，本 GOAL 不复制（高风险任务升级为先交 mini-plan：goal 里显式要求先产出 plan 文件再动手）。
 - **存疑协议**：goal 没写明的事项标 `NEEDS-CLARIFICATION: <具体问题>` 停下问，**禁止合理化猜测**
   （猜而不问是 goal 执行最常见的静默失败）；需要超 scope 改动、或同一路径连败两次：STOP and
   report（blocked + 已试过什么），不自行扩权、别硬耕。

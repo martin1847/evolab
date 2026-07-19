@@ -4,6 +4,10 @@
 # has NO status/date — state is positional), check (oldest-first pending), archive (state move),
 # unregistered recipient still gets delivery (mail must not bounce).
 set -u
+# stdin pinned SUITE-WIDE: agentbus reads letter bodies from stdin; any bare `send`
+# under a runner whose stdin never closes hangs the whole suite (two field hits
+# 2026-07-19 — per-call patches missed one, so kill the class here).
+exec < /dev/null
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
 

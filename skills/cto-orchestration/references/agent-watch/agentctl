@@ -8,13 +8,13 @@
 #   agentctl watch  <session>            # block until terminal; typed exit 0-8
 #   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
 #
-# Lanes (per engine, chosen at start; later verbs self-route by session state):
-#   omp / claude → DUPLEX: one long-lived engine process per session speaks its native
-#     stdio protocol (omp --mode=rpc / claude stream-json) inside a tmux supervisor pane;
-#     steering is a native protocol frame written to the session fifo (duplexctl.py is the
-#     single flock-serialized writer). No send-keys, no pane scraping, no per-round spawn.
-#   codex → ROUND: the battle-tested exec-resume machinery (dispatch-exec) — codex's
-#     duplex surface (app-server) is officially experimental; we hold until a real need.
+# ONE lane, three engines (unified 2026-07-19 after a live spike): every engine runs its
+# native duplex stdio protocol long-lived inside a tmux supervisor pane — omp --mode=rpc,
+# claude stream-json, codex app-server (JSON-RPC; experimental upstream, error frames
+# self-describe drift). Steering is a protocol frame written to the session fifo
+# (duplexctl.py = single flock-serialized writer). Capability gaps REFUSE cleanly instead
+# of forking lanes: codex has no queue (busy steer → use --now or wait), claude has no
+# interrupt (--now degrades to queued, --replace refused → stop+resume).
 # tmux is a process SUPERVISOR only: the worker survives orchestrator restarts; nothing
 # ever reads or types into the pane. NOT a transaction system (same stance as the round
 # lane's pid lock): CONCURRENT same-name starts across lanes are an orchestrator-discipline
@@ -37,11 +37,9 @@ usage() {
   exit 1
 }
 
-# duplex sessions have .duplex.meta; round sessions .exec.meta; anything else = TUI legacy.
+# duplex sessions have .duplex.meta (the only lane since 2026-07-19 unification).
 lane_of() { # $1 session
-  if [ -f "$DIR/$1.duplex.meta" ]; then echo duplex
-  elif [ -f "$DIR/$1.exec.meta" ]; then echo round
-  else echo none; fi
+  if [ -f "$DIR/$1.duplex.meta" ]; then echo duplex; else echo none; fi
 }
 
 # The BLOCKED.md footer keeps the cross-engine ask-user protocol alive on the duplex lane:
@@ -56,17 +54,21 @@ append_footer() { # $1 out-file  $2 cwd
 cmd_start() {
   ENG="${1:?usage}" ; S="${2:?session}" ; CWD="${3:?cwd}"; shift 3
   case "$ENG" in omp|codex|claude) ;; *) echo "ERR: unknown engine '$ENG' (omp|codex|claude)" >&2; exit 1 ;; esac
-  GOAL=""; DELIV=""; PREFLIGHT=0; EXTRA=()
+  GOAL=""; DELIV=""; PREFLIGHT=0; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""
   while [ "$#" -gt 0 ]; do case "$1" in
     --goal) GOAL="${2:?--goal needs a file}"; shift 2;;
     --deliverable) DELIV="${2:?--deliverable needs a glob}"; shift 2;;
     --require-preflight) PREFLIGHT=1; shift;;
-    --workflow|--max-rounds)
-      # round-lane machinery: on the duplex lane these would leak to the ENGINE as argv
-      [ "$ENG" = codex ] || { echo "ERR: $1 is round-lane only (codex) — duplex sessions steer instead of budgeting rounds" >&2; exit 1; }
-      EXTRA[${#EXTRA[@]}]="$1"; shift;;
+    --workflow) WORKFLOW="${2:?--workflow needs a value}"; shift 2;;
+    --max-rounds) MAX_ROUNDS="${2:?--max-rounds needs N}"; shift 2;;
+    --resume-thread) RESUME_THREAD="${2:?--resume-thread needs an id}"; shift 2;;
+    --model) MODEL="${2:?--model needs an id}"; EXTRA[${#EXTRA[@]}]="$1"; EXTRA[${#EXTRA[@]}]="$2"; shift 2;;
     *) EXTRA[${#EXTRA[@]}]="$1"; shift;;
   esac; done
+  if [ -n "$WORKFLOW" ] || [ -n "$MAX_ROUNDS" ]; then
+    [ "$WORKFLOW" = "review-loop" ] && [ -n "$MAX_ROUNDS" ] || { echo "ERR: --workflow review-loop and --max-rounds N must be provided together" >&2; exit 1; }
+    case "$MAX_ROUNDS" in ''|*[!0-9]*) echo "ERR: --max-rounds must be a positive integer" >&2; exit 1;; esac
+  fi
   [ -n "$GOAL" ] && [ -e "$GOAL" ] || { echo "ERR: --goal <file> required and must exist" >&2; exit 1; }
   [ "$PREFLIGHT" = 0 ] || "$HERE/../goal-preflight.py" "$GOAL" || exit 1
   [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
@@ -79,12 +81,6 @@ cmd_start() {
   # S2 2026-07-19).
   [ "$(lane_of "$S")" = none ] || { echo "ERR: session '$S' already exists ($(lane_of "$S") lane) — agentctl stop $S or pick a new name" >&2; exit 1; }
   tmux has-session -t "$S" 2>/dev/null && { echo "ERR: tmux session '$S' already exists" >&2; exit 1; }
-
-  if [ "$ENG" = codex ]; then
-    # round lane, unchanged machinery; agentctl verbs self-route back to it afterwards
-    exec "$HERE/dispatch-exec" codex "$S" "$CWD" --goal "$GOAL" \
-      ${DELIV:+--deliverable "$DELIV"} ${EXTRA[@]+"${EXTRA[@]}"}
-  fi
 
   FIFO="$DIR/$S.duplex.in"; EV="$DIR/$S.duplex.events.jsonl"
   ERR="$DIR/$S.duplex.stderr.log"; RC="$DIR/$S.duplex.rc"
@@ -103,9 +99,17 @@ cmd_start() {
             ECMD="$(q "$BIN") --mode=rpc$EXTRA_Q" ;;
     claude) BIN="${AGENTCTL_BIN_CLAUDE:-claude}"
             ECMD="$(q "$BIN") -p --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions$EXTRA_Q" ;;
+    codex)  BIN="${AGENTCTL_BIN_CODEX:-codex}"
+            # engine args live at the protocol layer (thread/start), not argv — --model is
+            # captured into meta above; other EXTRA is refused to avoid silent no-ops
+            [ "${#EXTRA[@]}" -le 2 ] || { echo "ERR: codex duplex takes engine config via protocol (--model only) — got extra argv" >&2; rm -f "$FIFO" "$DIR/$S.duplex.meta"; exit 1; }
+            ECMD="$(q "$BIN") app-server" ;;
   esac
   { printf 'engine=%s\ncwd=%s\n' "$ENG" "$CWD"
-    [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"; } > "$DIR/$S.duplex.meta"
+    [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"
+    [ -n "$MODEL" ] && printf 'model=%s\n' "$MODEL"
+    [ -n "$RESUME_THREAD" ] && printf 'resume_thread=%s\n' "$RESUME_THREAD"
+    [ -n "$WORKFLOW" ] && printf 'workflow=%s\nmax_rounds=%s\n' "$WORKFLOW" "$MAX_ROUNDS"; } > "$DIR/$S.duplex.meta"
 
   # exec 3<> holds the fifo read-write so the engine's stdin NEVER sees EOF (both
   # engines exit on stdin close); engine runs as a child so the shell can record rc.
@@ -158,10 +162,7 @@ cmd_steer() {
         { grep -v '^deliverable=' "$meta"; printf 'deliverable=%s\n' "$NEWDELIV"; } > "$tmp" && mv "$tmp" "$meta"
       fi
       exit "$src" ;;
-    round)
-      [ "$VERB" = steer ] || echo "note: round lane has no mid-turn steer — delivering as a resume round" >&2
-      exec "$HERE/dispatch-exec" send "$S" "$MODE" "$ARG" ${NEWDELIV:+-d "$NEWDELIV"} ;;
-    none) echo "ERR: unknown session '$S' (no duplex/round state)" >&2; exit 1 ;;
+    none) echo "ERR: unknown session '$S' (no duplex state)" >&2; exit 1 ;;
   esac
 }
 
@@ -169,17 +170,13 @@ cmd_status() {
   S="${1:?usage: agentctl status <session>}"
   case "$(lane_of "$S")" in
     duplex) "$PY" "$CTL" --run-dir "$DIR" classify "$S" ;;
-    round)  exec "$HERE/dispatch-exec" status "$S" ;;
     none)   echo "ERR: unknown session '$S'" >&2; exit 1 ;;
   esac
 }
 
 cmd_watch() {
   S="${1:?usage: agentctl watch <session>}"
-  case "$(lane_of "$S")" in
-    round) exec "$HERE/dispatch-exec" watch "$S" ;;
-    none)  echo "ERR: unknown session '$S'" >&2; exit 1 ;;
-  esac
+  [ "$(lane_of "$S")" = duplex ] || { echo "ERR: unknown session '$S'" >&2; exit 1; }
   POLL="${AGENT_WATCH_POLL_SECS:-15}"; MAX="${AGENT_WATCH_MAX_POLLS:-240}"
   # ENGINE-SILENT bound: a steer was delivered but the engine produced zero output for
   # ~2min. The duplex analog of the old NO-HOOK exit 8 — report honestly, never guess.
@@ -218,11 +215,6 @@ cmd_stop() {
             "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" \
             "$DIR/$S.duplex.write-intent" 2>/dev/null
       echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc" ;;
-    round)
-      tmux kill-session -t "$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
-      rm -f "$DIR/$S".exec.* 2>/dev/null
-      rm -rf "$DIR/$S.omp-sessions" 2>/dev/null
-      echo "removed round-lane state $DIR/$S.exec.*" ;;
     none)
       # no lane meta: clean bare tmux AND orphan duplex claims (crash residue like a
       # stray fifo/write-intent) — this IS the recovery path the start error advertises

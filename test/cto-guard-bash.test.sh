@@ -105,8 +105,6 @@ run 'agentctl steer mysess -f /tmp/fix.md && bash references/agent-watch/agentct
 chk_eq "chained foreground watch denied (field case)" 2 "$RC"; chk_contains "foreground deny names 143" "143" "$ERR"
 run 'AGENT_WATCH_POLL_SECS=5 bash references/agent-watch/agentctl watch mysess'
 chk_eq "env-prefixed foreground watch denied" 2 "$RC"
-run 'bash references/agent-watch/dispatch-exec watch mysess'
-chk_eq "internal round watch foreground denied too" 2 "$RC"
 # explicit sync opt-out for shell orchestrators that run watch synchronously by design
 run 'AGENT_WATCH_SYNC=1 bash references/agent-watch/agentctl watch mysess; rc=$?'
 chk_eq "AGENT_WATCH_SYNC=1 foreground allowed" 0 "$RC"

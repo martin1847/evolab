@@ -13,7 +13,6 @@ cd "$(dirname "$0")"
 . ./lib-testkit.sh
 
 AGENTCTL="$AW_DIR/agentctl"
-DEXEC="$AW_DIR/dispatch-exec"
 GUARD="$AW_DIR/cto-guard-agent.py"
 FIX="$(pwd)/duplex-fixtures"
 
@@ -56,6 +55,7 @@ sweep_fakes() { # kill any engine/wrapper the fake tmux started (orphans hold th
   done
   pkill -f "duplex-fixtures/fake_omp_duplex" 2>/dev/null
   pkill -f "duplex-fixtures/fake_claude_duplex" 2>/dev/null
+  pkill -f "duplex-fixtures/fake_codex_duplex" 2>/dev/null
   return 0
 }
 
@@ -295,38 +295,106 @@ out="$(bash "$AGENTCTL" stop ghost-session 2>&1)"; rc=$?
 chk_eq "stop on unknown session → clean rc1" 1 "$rc"
 sandbox_clean
 
-echo "== agentctl stop cleans the round lane inline =="
-sandbox_new
-printf 'engine=codex\ncwd=/tmp\nround=1\nargs=\n' > "$WATCH_RUN_DIR/rnd.exec.meta"
-printf '0\n' > "$WATCH_RUN_DIR/rnd.exec.rc"
-mkdir -p "$WATCH_RUN_DIR/rnd.omp-sessions"
-out="$(bash "$AGENTCTL" stop rnd 2>&1)"; rc=$?
-chk_eq "round stop rc0" 0 "$rc"
-chk_eq "round meta removed" 0 "$([ -f "$WATCH_RUN_DIR/rnd.exec.meta" ] && echo 1 || echo 0)"
-chk_eq "pinned omp session dir removed" 0 "$([ -d "$WATCH_RUN_DIR/rnd.omp-sessions" ] && echo 1 || echo 0)"
-sandbox_clean
+echo "== codex duplex: handshake + steer semantics (unified lane) =="
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wtc"; mkdir -p "$WT"
+printf 'do the codex thing\n' > "$SANDBOX/goal.md"
+export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
+export FAKE_PROVIDER_LOG="$SANDBOX/codex.log"
+out="$(bash "$AGENTCTL" start codex cxA "$WT" --goal "$SANDBOX/goal.md" --model gpt-fake 2>&1)"; rc=$?
+chk_eq "codex start rc0" 0 "$rc"
+chk_contains "codex handshake announces thread" "thread thread-1" "$out"
+chk_eq "threadId persisted in meta" thread-1 "$(sed -n 's/^thread=//p' "$WATCH_RUN_DIR/cxA.duplex.meta")"
+chk_contains "thread/start carries pinned model" '"model":"gpt-fake"' "$(cat "$SANDBOX/codex.log")"
+chk_contains "goal delivered as turn/start" '"method":"turn/start"' "$(cat "$SANDBOX/codex.log")"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q 'turn/completed' "$WATCH_RUN_DIR/cxA.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status cxA 2>&1)"; rc=$?
+chk_eq "codex turn completed → DONE" 0 "$rc"
+chk_contains "DONE carries final answer summary" "turn-1 complete" "$out"
+# idle: default steer = next turn; --now refused (engine truth: no active turn)
+out="$(bash "$AGENTCTL" steer cxA -m "again" 2>&1)"; rc=$?
+chk_eq "idle steer starts next turn rc0" 0 "$rc"
+out="$(bash "$AGENTCTL" steer cxA -m "mid" --now 2>&1)"; rc=$?
+chk_eq "idle --now refused" 1 "$rc"
+chk_contains "refusal names default steer" "default steer" "$out"
+bash "$AGENTCTL" stop cxA >/dev/null 2>&1
 
-echo "== exec lane regressions (2026-07-19 field report) =="
-sandbox_new
-WT="$SANDBOX/wt2"; mkdir -p "$WT"
-# relative deliverable glob must resolve against the session cwd
-printf 'engine=claude\ncwd=%s\nround=1\nargs=\ndeliverable=out2-*.md\n' "$WT" > "$WATCH_RUN_DIR/rel.exec.meta"
-: > "$WATCH_RUN_DIR/rel.exec.round-started"
-/bin/sleep 0.05
-printf 'made it\n' > "$WT/out2-a.md"
-printf '{"result":"ok"}\n' > "$WATCH_RUN_DIR/rel.exec.out"
-printf '0\n' > "$WATCH_RUN_DIR/rel.exec.rc"
-out="$(bash "$DEXEC" status rel 2>&1)"; rc=$?
-chk_eq "relative glob + fresh file in cwd → DONE" 0 "$rc"
-# bounded watch tail: a single giant JSON line must not flood the verdict output
-printf 'engine=claude\ncwd=%s\nround=1\nargs=\n' "$WT" > "$WATCH_RUN_DIR/big.exec.meta"
-: > "$WATCH_RUN_DIR/big.exec.round-started"
-{ printf '{"type":"agent_end","transcript":"'; head -c 50000 /dev/zero | tr '\0' 'x'; printf '"}\n'; } > "$WATCH_RUN_DIR/big.exec.out"
-printf '0\n' > "$WATCH_RUN_DIR/big.exec.rc"
-out="$(bash "$DEXEC" watch big 2>&1)"; rc=$?
-chk_eq "watch verdict rc0 on big output" 0 "$rc"
-chk_eq "watch verdict output is bounded (<4KB)" 1 "$(( ${#out} < 4096 ? 1 : 0 ))"
-sandbox_clean
+# active-turn window: default steer refused (no queue), --now = native turn/steer
+export FAKE_CODEX_GATE="$SANDBOX/cx-gate"
+out="$(bash "$AGENTCTL" start codex cxB "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "gated codex start rc0" 0 "$rc"
+/bin/sleep 0.3
+out="$(bash "$AGENTCTL" status cxB 2>&1)"; rc=$?
+chk_eq "gated turn → RUNNING 10" 10 "$rc"
+out="$(bash "$AGENTCTL" steer cxB -m "queue me" 2>&1)"; rc=$?
+chk_eq "busy default steer refused (no queue)" 1 "$rc"
+chk_contains "refusal teaches --now" "use --now" "$out"
+out="$(bash "$AGENTCTL" steer cxB -m "adjust" --now 2>&1)"; rc=$?
+chk_eq "busy --now rc0 (native mid-turn steer)" 0 "$rc"
+chk_contains "turn/steer frame with expectedTurnId" '"expectedTurnId":"turn-1"' "$(cat "$SANDBOX/codex.log")"
+: > "$FAKE_CODEX_GATE"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q 'turn/completed' "$WATCH_RUN_DIR/cxB.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status cxB 2>&1)"; rc=$?
+chk_eq "gate released → DONE" 0 "$rc"
+bash "$AGENTCTL" stop cxB >/dev/null 2>&1
+unset FAKE_CODEX_GATE
+
+# failed turn is FAILED, never DONE (uniform S1 semantics)
+export FAKE_CODEX_ERROR_TURN=1
+bash "$AGENTCTL" start codex cxE "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q 'turn/completed' "$WATCH_RUN_DIR/cxE.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status cxE 2>&1)"; rc=$?
+chk_eq "failed turn → FAILED 2" 2 "$rc"
+bash "$AGENTCTL" stop cxE >/dev/null 2>&1
+unset FAKE_CODEX_ERROR_TURN
+
+echo "== review-loop budget rides the duplex lane (all engines) =="
+export FAKE_PROVIDER_LOG="$SANDBOX/budget.log"
+out="$(bash "$AGENTCTL" start codex cxR "$WT" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 2 2>&1)"; rc=$?
+chk_eq "review-loop start rc0 (round 1)" 0 "$rc"
+chk_eq "budget persisted in duplex meta" 2 "$(sed -n 's/^max_rounds=//p' "$WATCH_RUN_DIR/cxR.duplex.meta")"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q 'turn/completed' "$WATCH_RUN_DIR/cxR.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" steer cxR -m "round two please" 2>&1)"; rc=$?
+chk_eq "round 2 steer rc0" 0 "$rc"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(grep -c 'turn/completed' "$WATCH_RUN_DIR/cxR.duplex.events.jsonl" 2>/dev/null)" -ge 2 ] && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" steer cxR -m "SHIP-BLOCKING: real issue remains" 2>&1)"; rc=$?
+chk_eq "round 3 beyond budget → BUDGET-EXHAUSTED 9" 9 "$rc"
+chk_contains "budget verdict names max-rounds" "max-rounds=2" "$out"
+bash "$AGENTCTL" stop cxR >/dev/null 2>&1
+# lease: with budget 3, round 3 continuation demands SHIP-BLOCKING
+out="$(bash "$AGENTCTL" start codex cxL "$WT" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 3 2>&1)"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q 'turn/completed' "$WATCH_RUN_DIR/cxL.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+bash "$AGENTCTL" steer cxL -m "round two" >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(grep -c 'turn/completed' "$WATCH_RUN_DIR/cxL.duplex.events.jsonl" 2>/dev/null)" -ge 2 ] && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" steer cxL -m "no lease here" 2>&1)"; rc=$?
+chk_eq "round 3 without lease refused" 1 "$rc"
+chk_contains "lease error names SHIP-BLOCKING" "SHIP-BLOCKING" "$out"
+out="$(bash "$AGENTCTL" steer cxL -m "SHIP-BLOCKING: verified regression" 2>&1)"; rc=$?
+chk_eq "round 3 with lease rc0" 0 "$rc"
+bash "$AGENTCTL" stop cxL >/dev/null 2>&1
+unset FAKE_PROVIDER_LOG
+sweep_fakes; sandbox_clean
 
 echo "== guard: TaskStop deny covers wrong-premise motive =="
 TID="agdx$$"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agentctl-duplex.e2e.sh — LIVE closed-loop for the DUPLEX lane (omp + claude legs).
+# agentctl-duplex.e2e.sh — LIVE closed-loop for the unified duplex lane (omp + claude + codex).
 # The hermetic suite proves frames/projection/routing with fake engines; what ONLY this
 # gate proves, per engine, against the real binary under the real tmux supervisor:
 #   1. the long-lived native-protocol process comes up (omp rpc ready / claude stream-json)
@@ -10,7 +10,7 @@
 #      bare-CLI stream-json multi-turn injection (docs imply it; nothing e2e-proved it)
 #   5. `agentctl stop` leaves zero tmux residue (events kept for post-mortem, then removed)
 # Asserts on DURABLE artifacts (marker files + typed exits), never on model prose.
-# COST: 2 engines x 2 turns (~30-90s each, API tokens). Pre-release gate, not a dev loop.
+# COST: 3 engines x 2 turns (~30-90s each, API tokens). Pre-release gate, not a dev loop.
 set -u
 cd "$(dirname "$0")"
 . ../lib-testkit.sh   # assertion helpers only
@@ -76,5 +76,6 @@ EOF
 # fuzzy omp ids can open an interactive picker; this gate proves lane machinery, not models).
 run_leg claude --model haiku
 run_leg omp --auto-approve --model=anthropic/claude-opus-4-8
+run_leg codex
 
 summary
