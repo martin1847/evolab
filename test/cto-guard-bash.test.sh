@@ -129,14 +129,25 @@ run 'timeout 30 agentctl watch mysess'
 chk_eq "timeout-wrapper watch denied" 2 "$RC"
 run "bash -lc 'agentctl watch mysess'"
 chk_eq "bash -lc payload watch denied" 2 "$RC"
-# the sync marker only counts attached to the watch segment
+# R2 bypass census: path-qualified wrappers and quoted payloads are still command position
+run '/usr/bin/env FOO=1 agentctl watch mysess'
+chk_eq "path-qualified env wrapper denied" 2 "$RC"
+run "/bin/bash -lc 'agentctl watch mysess'"
+chk_eq "path-qualified bash -lc payload denied" 2 "$RC"
+run "bash -lc 'command agentctl watch mysess'"
+chk_eq "wrapper inside quoted payload denied" 2 "$RC"
+# the sync marker must be attached AND unquoted
 run 'echo AGENT_WATCH_SYNC=1; agentctl watch mysess'
 chk_eq "detached sync marker does not bypass" 2 "$RC"
-run "bash -lc 'AGENT_WATCH_SYNC=1 agentctl watch mysess'"
-chk_eq "attached sync marker inside payload allowed" 0 "$RC"
-# rule 3 pairing must be a real invocation, not prose
+run "echo 'AGENT_WATCH_SYNC=1 agentctl watch'; agentctl watch mysess"
+chk_eq "quoted-data forged marker does not bypass" 2 "$RC"
+run "AGENT_WATCH_SYNC=1 bash -lc 'agentctl watch mysess'"
+chk_eq "unquoted prefix marker on wrapped call allowed" 0 "$RC"
+# rule 3 pairing must be a command-position invocation, not prose/echo
 run 'bash references/agent-watch/agentctl start omp mysess /wt --goal /tmp/g.md; echo watch mysess'
 chk_contains "prose watch does not silence the reminder" "watcher" "$(ctx "$OUT")"
+run 'bash references/agent-watch/agentctl start omp mysess /wt --goal /tmp/g.md; echo agentctl watch mysess'
+chk_contains "echoed invocation text does not silence the reminder" "watcher" "$(ctx "$OUT")"
 # ── (6) live e2e gates: premium orchestrator must dispatch, runner declares E2E_ECONOMY=1 ──
 run 'bash test/e2e/guard-wire.e2e.sh'
 chk_eq "bare e2e gate run denied" 2 "$RC"; chk_contains "e2e deny teaches dispatch+marker" "E2E_ECONOMY=1" "$ERR"

@@ -50,6 +50,7 @@ class Session:
         self.epoch = os.path.join(run_dir, f"{name}.duplex.round-started")
         self.wlock = os.path.join(run_dir, f"{name}.duplex.wlock")
         self.sent_offset = os.path.join(run_dir, f"{name}.duplex.sent-offset")
+        self.intent = os.path.join(run_dir, f"{name}.duplex.write-intent")
         self.meta = {}
         if os.path.exists(self.meta_path):
             with open(self.meta_path, encoding="utf-8") as fh:
@@ -130,6 +131,12 @@ def write_frame(sess: Session, frame: str, on_ready=None) -> None:
         try:
             if on_ready is not None:
                 on_ready()
+            # durable write-intent: created before the first byte, removed only after
+            # the full frame (incl. newline) is out. A sender killed mid-write leaves
+            # it behind, and every later send/classify fails closed on it instead of
+            # stacking frames onto a torn protocol stream (review R2 2026-07-19).
+            with open(sess.intent, "w", encoding="utf-8") as fh:
+                fh.write(f"{len(payload)}\n")
             sent = 0
             write_deadline = time.monotonic() + 30.0
             while sent < len(payload):
@@ -141,12 +148,20 @@ def write_frame(sess: Session, frame: str, on_ready=None) -> None:
                         break
                     select.select([], [fd], [], min(remaining, 1.0))
                     continue
+                except (BrokenPipeError, OSError) as exc:
+                    if sent == 0:
+                        os.unlink(sess.intent)
+                        die(f"fifo write failed before any byte ({exc}) — engine died; see status")
+                    die(f"fifo write failed mid-frame ({exc}) after {sent}/{len(payload)} bytes "
+                        "— frame is TORN, input stream tainted: agentctl stop, then restart "
+                        "with the engine's resume args", 2)
                 if time.monotonic() >= write_deadline:
                     break
             if sent < len(payload):
                 die(f"engine stopped draining the fifo mid-frame ({sent}/{len(payload)} bytes in 30s) "
                     "— frame is TORN, session input stream is tainted: agentctl stop, then restart "
                     "with the engine's resume args", 2)
+            os.unlink(sess.intent)
         finally:
             os.close(fd)
 
@@ -338,10 +353,10 @@ def project_claude(sess: Session) -> tuple[str, str]:
     if last.get("type") == "result":
         summary = clip(str(last.get("result", "")))
         if last.get("is_error"):
-            # an error result is a FAILED turn, not an idle engine — projecting
-            # it to DONE manufactures false success (review S1, 2026-07-19)
-            if "permission" in summary.lower():
-                return "WAITING", summary
+            # ANY error result is a FAILED turn — projecting it to DONE manufactures
+            # false success (review S1), and a prose keyword like "permission" is NOT
+            # a structured ask frame ("Permission denied" on a file is an error, not a
+            # question — review R2). Interactive asks ride BLOCKED.md instead.
             return "ERROR", summary or "result is_error=true"
         return "IDLE", summary or last.get("subtype", "result")
     return "RUNNING", f"last frame type={last.get('type')}"
@@ -375,6 +390,11 @@ def classify(sess: Session) -> int:
     # 2. supervisor pane gone without an rc = killed mid-flight
     if not tmux_alive(sess.name):
         print("AGENT-DEAD: no rc and no tmux session — killed mid-flight; agentctl stop to clean, then restart")
+        return 2
+
+    # 2.5 torn input stream: a sender died mid-frame — nothing downstream is trustworthy
+    if os.path.exists(sess.intent):
+        print("FAILED: torn frame on the input stream (write-intent marker) — agentctl stop, then restart with resume args")
         return 2
 
     # 3. agent-declared blocker (cross-engine ask-user protocol)
@@ -424,6 +444,9 @@ def cmd_send(args: argparse.Namespace) -> int:
         die("empty message")
     if os.path.exists(sess.rc):
         die(f"engine already exited (rc file present) — agentctl status {sess.name}")
+    if os.path.exists(sess.intent):
+        die("a previous frame write died mid-stream (write-intent marker present) — the "
+            "engine's input stream is tainted: agentctl stop, then restart with resume args", 2)
     if engine == "claude" and args.verb == "replace":
         # degrading replace to a queued steer would silently keep the doomed turn
         # running — refuse and route the operator to the honest path instead
@@ -443,8 +466,12 @@ def cmd_send(args: argparse.Namespace) -> int:
             with open(sess.epoch, "a", encoding="utf-8"):
                 os.utime(sess.epoch, None)
             offset_box["v"] = events_size(sess)
-            with open(sess.sent_offset, "w", encoding="utf-8") as fh:
+            # atomic replace: an in-place truncate gave lock-free classify a window
+            # where the offset read as empty → 0 → an old result revived as DONE
+            tmp = sess.sent_offset + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(str(offset_box["v"]))
+            os.replace(tmp, sess.sent_offset)
 
     req_id = f"ctl-{uuid.uuid4().hex[:12]}"
     write_frame(sess, build_frame(engine, args.verb, text, req_id), on_ready=commit_round_state)

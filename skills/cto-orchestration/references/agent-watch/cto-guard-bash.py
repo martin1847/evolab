@@ -180,15 +180,22 @@ def main():
         # position too — a bare-prefix regex waved them through (review S2 2026-07-19). Shape:
         # [;|&(or start] [ENV=v …] [wrapper [opts/assignments/numeric-arg]…]* <token ending in
         # agentctl|dispatch-exec> watch.
-        _wrap = r"(?:(?:bash|sh|zsh|exec|nohup|time|command|env|timeout)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+|\w+=\S*\s+|\d+\s+)*)*"
+        # wrapper elements may be path-qualified (/usr/bin/env) and may open a quoted
+        # payload (bash -lc 'command agentctl watch …') — review R2 bypass census
+        _wrap = r"(?:[\"']?(?:\S*/)?(?:bash|sh|zsh|exec|nohup|time|command|env|timeout)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+|\w+=\S*\s+|\d+\s+)*)*"
         watchcall = re.search(
             r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _wrap +
             r"[\"']?\S*(?:agentctl|dispatch-exec)[\"']?\s+watch(?:[\"'\s]|$)",
             cmd,
         )
-        # the sync marker only counts when ATTACHED to the watch invocation's own segment —
-        # `echo AGENT_WATCH_SYNC=1; agentctl watch s` was a full bypass (review S2 2026-07-19)
-        sync_attached = re.search(
+        # the sync marker must be ATTACHED to the watch segment AND unquoted — quoted
+        # data (`echo 'AGENT_WATCH_SYNC=1 agentctl watch'`) forged attachment on the raw
+        # view (review R2). Legit form: prefix the whole command, outside quotes:
+        # `AGENT_WATCH_SYNC=1 bash …/agentctl watch s`.
+        # conjunction: the marker must exist UNQUOTED somewhere (quoted data can't forge
+        # it) AND sit in the same raw segment as the watch call (detached echo can't
+        # lend it) — the watch call itself may legitimately live inside a -c payload
+        sync_attached = ("AGENT_WATCH_SYNC=1" in unq) and re.search(
             r"AGENT_WATCH_SYNC=1[^;|&]*(?:agentctl|dispatch-exec)[\"'\s]+watch", cmd)
         if watchcall and not sync_attached:
             sys.stderr.write(
@@ -204,9 +211,15 @@ def main():
     m = re.search(r"\bagentctl[\"'\s]+start[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
     if m:
         session = m.group(2)
-        # pairing must be a real watch INVOCATION on the same session — `echo watch s1`
-        # or prose silenced the reminder (review S2 2026-07-19)
-        if not re.search(r"(?:agentctl|dispatch-exec)[\"'\s]+watch[\"'\s]+" + re.escape(session) + r"\b", cmd):
+        # pairing must be a COMMAND-POSITION watch invocation on the same session —
+        # `echo agentctl watch s1` and prose both silenced the reminder (review R2)
+        _wrap3 = r"(?:[\"']?(?:\S*/)?(?:bash|sh|zsh|exec|nohup|time|command|env|timeout)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+|\w+=\S*\s+|\d+\s+)*)*"
+        paired = re.search(
+            r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _wrap3 +
+            r"[\"']?\S*(?:agentctl|dispatch-exec)[\"']?\s+watch[\"'\s]+" + re.escape(session) + r"\b",
+            cmd,
+        )
+        if not paired:
             ctx = (
                 f"REMINDER (cto-guard): session '{session}' has no watcher. `agentctl start` returns "
                 f"after the goal frame is accepted — arm the PRIMARY signal right after it: run "

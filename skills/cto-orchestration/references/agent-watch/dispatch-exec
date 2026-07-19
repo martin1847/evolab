@@ -345,7 +345,7 @@ case "${1:-}" in
     [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
     CWD="$(cd "$CWD" && pwd -P)"
     mkdir -p "$DIR"
-    [ -f "$DIR/$S.exec.meta" ] && { echo "ERR: session '$S' already exists ($DIR/$S.exec.meta) — teardown or pick a new name" >&2; exit 1; }
+    [ -f "$DIR/$S.exec.meta" ] && { echo "ERR: session '$S' already exists ($DIR/$S.exec.meta) — agentctl stop it or pick a new name" >&2; exit 1; }
     # Collision check BEFORE writing meta: start_round's guard fires too late — a failed
     # launch would orphan the meta and permanently self-route that (TUI) session name into
     # the exec lane (P1, independent review 2026-07-11).
