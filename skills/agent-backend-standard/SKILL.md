@@ -1,7 +1,7 @@
 ---
 name: agent-backend-standard
-version: 1.0.7
-description: "生产级 agent 时代后端工程手册(hub)——建 / 评审 agent·LLM 后端、**任何碰 DB 的持久层后端**、或为任何后端建立 / 评审 repo 工程门禁时加载。覆盖:架构与控制流、上下文与 prompt 工程、工具设计(ACI)、记忆与状态、检索/RAG、韧性与幂等、人在环、安全护栏与生成操作的有界执行、评估、可观测与成本、代码/依赖生命周期与反死代码、**数据访问纪律(连接·读·写事务)**、Python/Go/Java/Rust 统一 `fix/check/test` 工程接口与门禁、规范治理。本文件是目录,深度按需读 references/。可观测性/Git/A2A 对外契约是独立 skill,本 hub 交叉引用不重复。Use when building or reviewing agent/LLM backend code, ANY backend touching a database, or establishing/reviewing repository engineering gates for a backend: architecture, prompts, tools, memory, RAG, resilience, HITL, safety and bounded execution, eval, cost, code/dependency lifecycle, data access, and the Python/Go/Java/Rust fix/check/test gate interface."
+version: 1.1.0
+description: "生产级 agent 时代后端工程手册(hub)——建 / 评审 agent·LLM 后端、**任何碰 DB 的持久层后端**、或为任何后端建立 / 评审 repo 工程门禁时加载。覆盖:架构与控制流、上下文与 prompt 工程、工具设计(ACI)、记忆与状态、检索/RAG、韧性与幂等、人在环、安全护栏与生成操作的有界执行、评估、可观测与成本、代码/依赖生命周期与反死代码、**数据访问纪律(连接·读·写事务)**、**缓存纪律(准入·失效治理)**、Python/Go/Java/Rust 统一 `fix/check/test` 工程接口与门禁、规范治理。本文件是目录,深度按需读 references/。可观测性/Git/A2A 对外契约是独立 skill,本 hub 交叉引用不重复。Use when building or reviewing agent/LLM backend code, ANY backend touching a database, or establishing/reviewing repository engineering gates for a backend: architecture, prompts, tools, memory, RAG, resilience, HITL, safety and bounded execution, eval, cost, code/dependency lifecycle, data access, and the Python/Go/Java/Rust fix/check/test gate interface."
 ---
 
 # Agent Backend — 后端工程手册（hub）
@@ -34,6 +34,7 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 - **A 代码 / 依赖生命周期 + 反死代码** → `references/code-dependency-lifecycle.md` —— 引入即退役(ADR-with-sunset)、stale-but-live(`EXPIRES`/`REVISIT-WHEN`)、**功能旗标生命周期(分类 + 毕业/退休 + 登记册)**、死代码检测 + 盲区、反 bloat、清扫。
 - **B 数据访问纪律(连接·读·写)** → `references/data-write-discipline.md` —— **读也占连接**(弱事务/autocommit 用完即释放;MANAGED+closeConnection=false 无事务读 = 泄漏);记账写移出主链路 / 不跨 LLM 持锁 / 服务端增量;**关键写保留原子性但同样不持锁跨 LLM/执行**(短原子写 + 锁外执行)。
 - **C Agent-friendly engineering interface** → `references/engineering-interface.md` §1–§6 —— Python / Go / Java / Rust 统一 repo-owned `fix/check/test` 接口；legacy ratchet 分 finding-aware hold gate + 单一 canonical close job，改善 durable 锁定后才放下一次集成、`check` 不改 baseline；另含初始化 forcing function 与失败自解释契约。边界类型规则只交叉引 observability §2,不复制。
+- **D 缓存纪律(准入·永不缓存·失效治理)** → `references/caching-discipline.md` —— 四轴准入(读写比>10:1 / 陈旧红线 / 所有权 / DB 实测不够快,任一不过即不缓存)+ 金钱/占位/鉴权永不缓存、per-user 键强制 userId 命名空间 + **agent 时代失效治理三件套**(缓存决策表 SoT / 失效键注册 enum / 写路径配对失效机检门,任何缓存必有 TTL 兜底)+ 由外向内引入路线(升级触发即 ADR;负缓存/jitter/singleflight 随第一个缓存点同车)。
 
 ## 关联(独立 skill,不在本 hub 重复)
 - 埋点 / telemetry → `observability-standard`;Git SOP → `git-workflow-standard`;A2A 对外契约 → A2A 对外契约规范。
