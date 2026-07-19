@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # mail-guard.py — PreToolUse guard: Write/Edit/MultiEdit into <bus>/<id>/inbox/ -> DENY (exit 2),
-# pointing at `agent-bus send` (direct writes bypass size/brevity/atomic gates; 2026-07-10 live).
+# pointing at `agentbus send` (direct writes bypass size/brevity/atomic gates; 2026-07-10 live).
 # tmp/, archive/, bus-root files, unrelated paths, other tools/events -> allow. Checker failures
 # are explicit exit 2. Hermetic: HOME and AGENT_MAIL_DIR point into a temp sandbox.
 set -u
@@ -32,7 +32,7 @@ run() { local tmpe; tmpe="$(mktemp)"; OUT="$(mkp "$1" "$2" "$3" | python3 "$GUAR
 # ── DENY: Write/Edit/MultiEdit into an inbox (default bus root ~/.agents/mail) ──
 run PreToolUse Write "$HOME/.agents/mail/beta/inbox/20260710-1200-alpha-x.md"
 chk_eq "Write to inbox denied (exit 2)" 2 "$RC"
-chk_contains "deny points to agent-bus send" "agent-bus send" "$ERR"
+chk_contains "deny points to agentbus send" "agentbus send" "$ERR"
 chk_contains "deny explains the bypassed gates" "atomic" "$ERR"
 run PreToolUse Edit "$HOME/.agents/mail/beta/inbox/20260710-1200-alpha-x.md"
 chk_eq "Edit to inbox denied (exit 2)" 2 "$RC"
