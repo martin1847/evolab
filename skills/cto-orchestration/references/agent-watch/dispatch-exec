@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dispatch-exec — headless dispatch (PROTOTYPE, exec lane twin of `dispatch`).
+# dispatch-exec — INTERNAL round-lane engine behind `agentctl` (codex default + recovery leg).
 # tmux is a process SUPERVISOR only (worker survives orchestrator restarts — tmux server
 # is its own daemon); the pane runs a NON-interactive engine. What that buys vs the TUI
 # lane: no trust dialogs, no send-keys/popups, no screen guessing. Terminal truth is only
@@ -46,7 +46,7 @@ take_round_lock() { # $1 session — thin double-send guard: holder alive → re
   LOCKFILE="$DIR/$1.exec.lock"
   local pid; pid="$(cat "$LOCKFILE" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    echo "ERR: round transition already in progress for '$1' (pid $pid) — wait, or teardown after verification" >&2
+    echo "ERR: round transition already in progress for '$1' (pid $pid) — wait, or \`agentctl stop\` after verification" >&2
     return 1
   fi
   printf '%s\n' "$$" > "$LOCKFILE"
@@ -138,7 +138,7 @@ start_round() { # $1 session  $2 prompt-file  $3 lock held  $4 replace deliverab
     [ -n "$sid" ] || { echo "ERR: no engine session id discovered yet — did round 1 finish?" >&2; exit 1; }
   fi
   if tmux has-session -t "$s" 2>/dev/null; then
-    echo "ERR: previous round of '$s' still running (tmux session exists) — wait or teardown" >&2; exit 1
+    echo "ERR: previous round of '$s' still running (tmux session exists) — wait, or \`agentctl stop\`" >&2; exit 1
   fi
   round=$((round+1))
   round_prompt="$(build_round_prompt "$s" "$round" "$cwd" "$f")" || {
@@ -175,7 +175,7 @@ start_round() { # $1 session  $2 prompt-file  $3 lock held  $4 replace deliverab
   printf '── round %s @ %s ──\n' "$round" "$(date '+%F %T')" >> "$DIR/$s.exec.out"
   echo "round $round started: $eng → tmux '$s' (supervisor only; engine is headless)"
   echo "out: $DIR/$s.exec.out"
-  echo "status: dispatch status $s"
+  echo "status: agentctl status $s"
 }
 
 # ── discover is pure-read (status/watch never mutate meta); harvest persists, writers only ──
@@ -246,7 +246,7 @@ classify() { # $1 session
     case "$g" in /*) ;; *) g="$cwd/$g" ;; esac
     while IFS= read -r f; do [ -n "$f" ] && strictly_newer "$f" "$stamp" && ok=0 && break
     done < <(compgen -G "$g" 2>/dev/null)
-    [ "$ok" = 0 ] || { echo "IDLE-NO-DELIVERABLE: rc=0 but '$deliv' not produced this round — read output, then dispatch send $s; do not teardown"; return 6; }
+    [ "$ok" = 0 ] || { echo "IDLE-NO-DELIVERABLE: rc=0 but '$deliv' not produced this round — read output, then agentctl steer $s; do not stop"; return 6; }
   fi
   echo "DONE: rc=0$([ -n "$deliv" ] && echo ", deliverable fresh")"; return 0
 }
@@ -356,7 +356,7 @@ case "${1:-}" in
       printf 'workflow=%s\nmax_rounds=%s\n' "$WORKFLOW" "$MAX_ROUNDS" >> "$DIR/$S.exec.meta"
     fi
     start_round "$S" "$GOAL"
-    echo "monitor: dispatch status $S   (typed one-shot)  |  watch $S  (blocking, run_in_background)"
+    echo "monitor: agentctl status $S   (typed one-shot)  |  agentctl watch $S  (blocking, run_in_background)"
     ;;
   *)
     echo "usage: dispatch-exec <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>] [--require-preflight] [--workflow review-loop --max-rounds N] [engine args...]" >&2

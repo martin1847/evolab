@@ -28,9 +28,11 @@ import fcntl
 import glob as globmod
 import json
 import os
+import select
 import subprocess
 import sys
 import time
+import uuid
 
 SUMMARY_CHARS = 600
 
@@ -104,9 +106,16 @@ def build_frame(engine: str, verb: str, text: str, req_id: str) -> str:
     raise AssertionError  # unreachable
 
 
-def write_frame(sess: Session, frame: str) -> None:
-    """flock-serialized fifo write. O_NONBLOCK open doubles as a liveness probe:
-    ENXIO = nothing holds the read end = supervisor pane is gone."""
+def write_frame(sess: Session, frame: str, on_ready=None) -> None:
+    """flock-serialized fifo write. O_NONBLOCK open doubles as a liveness probe
+    (ENXIO = nothing holds the read end = supervisor pane is gone) and STAYS on
+    for the write loop: a blocking write() of a large frame could hang forever on
+    an engine that stopped reading, and POSIX allows short writes above PIPE_BUF —
+    so we loop a memoryview with select() under one hard deadline instead.
+    `on_ready` runs after the reader is confirmed and BEFORE the first byte: the
+    round state (epoch/sent-offset) must not change when delivery cannot even
+    start, and must be committed once bytes begin to flow."""
+    payload = memoryview(frame.encode("utf-8") + b"\n")
     with open(sess.wlock, "a", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         fd = None
@@ -119,11 +128,25 @@ def write_frame(sess: Session, frame: str) -> None:
                     die(f"fifo has no reader ({exc.strerror}) — engine/pane dead? see status")
                 time.sleep(0.1)
         try:
-            # clear O_NONBLOCK: a frame larger than the pipe buffer must block
-            # until the engine drains it, not fail with EAGAIN.
-            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-            fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
-            os.write(fd, frame.encode("utf-8") + b"\n")
+            if on_ready is not None:
+                on_ready()
+            sent = 0
+            write_deadline = time.monotonic() + 30.0
+            while sent < len(payload):
+                try:
+                    sent += os.write(fd, payload[sent:sent + 65536])
+                except BlockingIOError:
+                    remaining = write_deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    select.select([], [fd], [], min(remaining, 1.0))
+                    continue
+                if time.monotonic() >= write_deadline:
+                    break
+            if sent < len(payload):
+                die(f"engine stopped draining the fifo mid-frame ({sent}/{len(payload)} bytes in 30s) "
+                    "— frame is TORN, session input stream is tainted: agentctl stop, then restart "
+                    "with the engine's resume args", 2)
         finally:
             os.close(fd)
 
@@ -163,7 +186,36 @@ def wait_for(sess: Session, offset: int, predicate, timeout: float):
     return None
 
 
-# ── tail window parsing (classify never reads the whole file) ─────────────────
+def complete_frames_from(sess: Session, offset: int) -> list[dict]:
+    """Frames from COMPLETE lines only, starting at a byte offset. A trailing
+    line without a newline is still being written — never consumed as state.
+    If the offset lands mid-line (engine was mid-write when the offset was
+    recorded), the partial head line is skipped."""
+    frames = []
+    try:
+        with open(sess.events, "rb") as fh:
+            if offset > 0:
+                fh.seek(offset - 1)
+                if fh.read(1) != b"\n":
+                    fh.readline()  # skip the partial line the offset landed in
+            blob = fh.read()
+    except OSError:
+        return []
+    body, nl, _tail = blob.rpartition(b"\n")
+    if not nl:
+        return []
+    for line in body.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            frames.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return frames
+
+
+# ── tail window parsing (pending-question scan only — NOT state truth) ────────
 def tail_frames(sess: Session, window: int = 262144) -> list[dict]:
     size = events_size(sess)
     if size == 0:
@@ -236,7 +288,7 @@ def project_omp(sess: Session) -> tuple[str, str]:
     get_state through the fifo (documented verb; request-response closes over
     the events file)."""
     offset = events_size(sess)
-    req_id = f"ctl-{int(time.time() * 1000)}"
+    req_id = f"ctl-{uuid.uuid4().hex[:12]}"
     write_frame(sess, build_frame("omp", "get-state", "", req_id))
     reply = wait_for(
         sess, offset,
@@ -244,7 +296,12 @@ def project_omp(sess: Session) -> tuple[str, str]:
         timeout=6.0)
     if reply is None:
         return "RUNNING", "get_state unanswered in 6s (engine busy or wedged; MAX_POLLS bounds this)"
-    data = reply.get("data") or {}
+    # a rejected/malformed response must stay NON-terminal — mapping it to idle
+    # would manufacture a false DONE out of an engine error
+    if reply.get("command") != "get_state" or reply.get("success") is not True \
+            or not isinstance(reply.get("data"), dict):
+        return "RUNNING", f"get_state anomalous response (kept non-terminal): {clip(json.dumps(reply, ensure_ascii=False), 200)}"
+    data = reply["data"]
     if data.get("isStreaming") or data.get("isCompacting"):
         return "RUNNING", f"streaming, queued={data.get('queuedMessageCount', 0)}"
     if data.get("queuedMessageCount"):
@@ -263,25 +320,30 @@ def project_omp(sess: Session) -> tuple[str, str]:
 
 
 def project_claude(sess: Session) -> tuple[str, str]:
-    # A queued steer consumed at the next turn boundary leaves the PREVIOUS
-    # turn's result frame as the tail — without this guard that reads as a
-    # false DONE the instant after a steer is delivered.
+    # State comes ONLY from complete frames that landed AFTER the last steer:
+    # a queued steer consumed at the next turn boundary leaves the PREVIOUS
+    # turn's result frame in the file — reading the raw tail turned that into a
+    # false DONE the instant after a steer was delivered, and a torn/oversized
+    # tail line could resurrect it even past a size guard.
     try:
         sent = int(open(sess.sent_offset, encoding="utf-8").read().strip())
     except (OSError, ValueError):
         sent = 0
-    if events_size(sess) <= sent:
-        return "RUNNING", "no output since last steer (engine silent so far)"
-    frames = tail_frames(sess)
+    frames = complete_frames_from(sess, sent)
     if not frames:
-        return "RUNNING", "no frames yet (starting)"
+        if events_size(sess) <= sent:
+            return "RUNNING", "no output since last steer (engine silent so far)"
+        return "RUNNING", "output started, no complete frame yet"
     last = frames[-1]
     if last.get("type") == "result":
         summary = clip(str(last.get("result", "")))
-        state = "IDLE"
         if last.get("is_error"):
-            state = "WAITING" if "permission" in summary.lower() else "IDLE"
-        return state, summary or last.get("subtype", "result")
+            # an error result is a FAILED turn, not an idle engine — projecting
+            # it to DONE manufactures false success (review S1, 2026-07-19)
+            if "permission" in summary.lower():
+                return "WAITING", summary
+            return "ERROR", summary or "result is_error=true"
+        return "IDLE", summary or last.get("subtype", "result")
     return "RUNNING", f"last frame type={last.get('type')}"
 
 
@@ -329,6 +391,12 @@ def classify(sess: Session) -> int:
     if state == "WAITING":
         print(f"WAITING-INPUT: {detail}")
         return 4
+    if state == "ERROR":
+        if scan_quota(sess):
+            print(f"STALLED-EXTERNAL: turn failed on backend quota/auth — fix credentials, then steer to retry. {detail}")
+            return 5
+        print(f"FAILED: engine reported an error result (turn failed, engine still alive) — {detail}")
+        return 2
     if state == "RUNNING":
         print(f"RUNNING: {detail}")
         return 10
@@ -356,19 +424,31 @@ def cmd_send(args: argparse.Namespace) -> int:
         die("empty message")
     if os.path.exists(sess.rc):
         die(f"engine already exited (rc file present) — agentctl status {sess.name}")
-    if engine == "claude" and args.verb in ("steer-now", "replace"):
+    if engine == "claude" and args.verb == "replace":
+        # degrading replace to a queued steer would silently keep the doomed turn
+        # running — refuse and route the operator to the honest path instead
+        die("claude has no interrupt/replace frame — `agentctl stop` the session, then "
+            "restart with `--resume <session_id>` (engine args) and the new goal")
+    if engine == "claude" and args.verb == "steer-now":
         print("note: claude has no public interrupt frame — delivering as queued steer (lands at the next turn boundary)")
         args.verb = "steer"
-    # a steer IS a new round: rotate the deliverable freshness epoch BEFORE delivery
-    if args.verb in ("prompt", "steer", "steer-now", "replace"):
-        with open(sess.epoch, "a", encoding="utf-8"):
-            os.utime(sess.epoch, None)
-    offset = events_size(sess)
-    if args.verb in ("prompt", "steer", "steer-now", "replace"):
-        with open(sess.sent_offset, "w", encoding="utf-8") as fh:
-            fh.write(str(offset))
-    req_id = f"ctl-{int(time.time() * 1000)}"
-    write_frame(sess, build_frame(engine, args.verb, text, req_id))
+    offset_box = {}
+
+    def commit_round_state():
+        # runs under the writer flock, after the reader is confirmed, before the
+        # first byte: a steer whose delivery cannot start must NOT rotate the
+        # deliverable epoch or move the sent-offset (stale-gate + phantom
+        # ENGINE-SILENT otherwise, review S2 2026-07-19)
+        if args.verb in ("prompt", "steer", "steer-now", "replace"):
+            with open(sess.epoch, "a", encoding="utf-8"):
+                os.utime(sess.epoch, None)
+            offset_box["v"] = events_size(sess)
+            with open(sess.sent_offset, "w", encoding="utf-8") as fh:
+                fh.write(str(offset_box["v"]))
+
+    req_id = f"ctl-{uuid.uuid4().hex[:12]}"
+    write_frame(sess, build_frame(engine, args.verb, text, req_id), on_ready=commit_round_state)
+    offset = offset_box.get("v", events_size(sess))
     if engine == "omp":
         reply = wait_for(
             sess, offset,
@@ -377,7 +457,7 @@ def cmd_send(args: argparse.Namespace) -> int:
         if reply is None:
             print(f"WARN: no response frame in {args.wait:.0f}s — frame delivered to fifo, engine may be mid-turn; verify with agentctl status")
             return 3
-        if not reply.get("success", False):
+        if reply.get("success") is not True:
             print(f"ERR: engine rejected the frame: {clip(json.dumps(reply, ensure_ascii=False), 300)}")
             return 2
         print(f"OK: {args.verb} accepted by engine (correlated response)")

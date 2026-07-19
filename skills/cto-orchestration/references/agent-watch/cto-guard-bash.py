@@ -172,17 +172,25 @@ def main():
     #     foreground). run_in_background:true is the documented path. Shell orchestrators that
     #     run watch synchronously BY DESIGN opt out explicitly by prefixing AGENT_WATCH_SYNC=1.
     #     `agentctl start` returns after the goal frame is accepted — foreground is fine there.
-    if not ti.get("run_in_background") and "AGENT_WATCH_SYNC=1" not in cmd:
+    if not ti.get("run_in_background"):
         # command-position only: `grep x …/agentctl` (path as an ARGUMENT) must not trip this,
         # and the interpreter itself must sit at command position too — an earlier `\bsh\s`
         # matched a ".sh" argument tail (two self-inflicted false positives within minutes of
-        # wiring, 2026-07-11). Shape: [;|&(or start] [ENV=v …] [bash|sh|exec|nohup|time]
-        # <token ending in agentctl or dispatch-exec> watch.
+        # wiring, 2026-07-11). Wrapper CHAINS (command/env/timeout/bash -lc …) are legal command
+        # position too — a bare-prefix regex waved them through (review S2 2026-07-19). Shape:
+        # [;|&(or start] [ENV=v …] [wrapper [opts/assignments/numeric-arg]…]* <token ending in
+        # agentctl|dispatch-exec> watch.
+        _wrap = r"(?:(?:bash|sh|zsh|exec|nohup|time|command|env|timeout)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+|\w+=\S*\s+|\d+\s+)*)*"
         watchcall = re.search(
-            r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*(?:(?:bash|sh|exec|nohup|time)\s+)?[\"']?\S*(?:agentctl|dispatch-exec)[\"']?\s+watch(?:[\"'\s]|$)",
+            r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _wrap +
+            r"[\"']?\S*(?:agentctl|dispatch-exec)[\"']?\s+watch(?:[\"'\s]|$)",
             cmd,
         )
-        if watchcall:
+        # the sync marker only counts when ATTACHED to the watch invocation's own segment —
+        # `echo AGENT_WATCH_SYNC=1; agentctl watch s` was a full bypass (review S2 2026-07-19)
+        sync_attached = re.search(
+            r"AGENT_WATCH_SYNC=1[^;|&]*(?:agentctl|dispatch-exec)[\"'\s]+watch", cmd)
+        if watchcall and not sync_attached:
             sys.stderr.write(
                 "DENY: blocking `agentctl watch` in the FOREGROUND — it blocks until the agent's "
                 "terminal state, so a foreground Bash timeout (default 2min) kills it mid-watch "
@@ -196,7 +204,9 @@ def main():
     m = re.search(r"\bagentctl[\"'\s]+start[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
     if m:
         session = m.group(2)
-        if not re.search(r"\bwatch[\"'\s]+" + re.escape(session) + r"\b", cmd):
+        # pairing must be a real watch INVOCATION on the same session — `echo watch s1`
+        # or prose silenced the reminder (review S2 2026-07-19)
+        if not re.search(r"(?:agentctl|dispatch-exec)[\"'\s]+watch[\"'\s]+" + re.escape(session) + r"\b", cmd):
             ctx = (
                 f"REMINDER (cto-guard): session '{session}' has no watcher. `agentctl start` returns "
                 f"after the goal frame is accepted — arm the PRIMARY signal right after it: run "
