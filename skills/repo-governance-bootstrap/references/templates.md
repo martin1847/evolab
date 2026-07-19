@@ -178,20 +178,26 @@ Last rewritten: YYYY-MM-DD
 - YYYY-MM-DD — <decision>
 ```
 
-## ACCESS.local.md 模板
+## ACCESS.local.md 模板（+ 值文件孪生 ACCESS.local.env）
 
-> **gitignored，永不提交/推送。** 含明文凭证，只在本机做快速反查。生成时字段留空待用户填，
-> stub 里绝不写真实 secret（vault/缓存关系模板正文自带）。
+> **两个文件都 gitignored，永不提交/推送。** 值/元数据物理分离（判据与金丝雀纪律见
+> agent-backend-standard 附录 E）：`.md` 只留元数据 + 秘密**名字** + gotcha（agent 可整读、
+> 零遮蔽工序）；**值**一律进纯 `KEY=VALUE` 的 `ACCESS.local.env`（`chmod 600`），用时
+> `set -a; source ACCESS.local.env; set +a; <cmd>` 注入子进程 env，不落 stdout/argv。
+> 命名刻意不入 `.env` 家族（防 dotenv 生态自动加载；同词干配对自明；deny 锚精确），
+> gitignore 同时盖 `ACCESS.local.*` 与 `.env*` 兜底。生成时两文件字段留空待用户填，
+> stub 里绝不写真实 secret。
 
 ```markdown
 # <项目> 接入与访问（仅本机 — 已 gitignore，永不提交/推送）
 
-> 此文件含凭证/环境/访问信息，供本机快速反查。**任何内容都不得**粘进 committed 文件、
-> 子仓库目录、traces、日志或对外消息。凭证 canonical home = 外部 vault；这里是本机缓存。
+> 本文件只放元数据/名字/gotcha；**值在同目录 ACCESS.local.env**（KEY=VALUE，chmod 600），
+> 用 `set -a; source ACCESS.local.env; set +a; <cmd>` 注入。任何内容都不得粘进 committed
+> 文件、traces、日志或对外消息。凭证 canonical home = 外部 vault；这里是本机缓存。
 
 ## ① 接入凭证
 - **<环境名>**：`<登录 URL>` → 登录 → 选 `<租户/项目>`。
-  - 账号：`<account>`；密码：`<password 或"见 vault">`。
+  - 账号 env 键：`<ACCOUNT_KEY 名>`；密码 env 键：`<PASSWORD_KEY 名，值在 ACCESS.local.env 或 vault>`。
   - token / cred 获取方式：`<如何拿到，例如 localStorage.token / vault 路径>`。
 
 ### 外部服务 / 模型 endpoint（每个被认证调用的依赖一条：LLM 网关 / DB / 第三方 API）
