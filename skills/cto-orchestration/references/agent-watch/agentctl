@@ -44,7 +44,8 @@ lane_of() { # $1 session
 # The BLOCKED.md footer keeps the cross-engine ask-user protocol alive on the duplex lane:
 # headless engines cannot prompt, so "on doubt, write BLOCKED.md and stop" maps to exit 4.
 append_footer() { # $1 out-file  $2 cwd
-  printf '\n\n---\nHEADLESS PROTOCOL\n%s\n%s\n' \
+  printf '\n\n---\nHEADLESS PROTOCOL\n%s\n%s\n%s\n' \
+    'Briefly restate the files/contracts, scope, and main risk, then start work immediately. Do not wait for approval or interaction.' \
     'This session is non-interactive. Work from this message and stop when done; further instructions may arrive as new messages.' \
     "If genuinely blocked, write the blocker to $2/BLOCKED.md and stop." >> "$1"
 }
@@ -69,20 +70,28 @@ cmd_start() {
   CWD="$(cd "$CWD" && pwd -P)"
   mkdir -p "$DIR"
 
+  # collisions: refuse ANY prior lane state or live tmux session BEFORE branching to an
+  # engine — the round engine only knows its own state, so a codex start over crashed
+  # duplex residue would create a second lane and mis-route every later verb (review
+  # S2 2026-07-19).
+  [ "$(lane_of "$S")" = none ] || { echo "ERR: session '$S' already exists ($(lane_of "$S") lane) — agentctl stop $S or pick a new name" >&2; exit 1; }
+  tmux has-session -t "$S" 2>/dev/null && { echo "ERR: tmux session '$S' already exists" >&2; exit 1; }
+
   if [ "$ENG" = codex ]; then
     # round lane, unchanged machinery; agentctl verbs self-route back to it afterwards
     exec "$HERE/dispatch-exec" codex "$S" "$CWD" --goal "$GOAL" \
       ${DELIV:+--deliverable "$DELIV"} ${EXTRA[@]+"${EXTRA[@]}"}
   fi
 
-  # collisions: any prior state under this name (either lane, or a live tmux session)
-  [ "$(lane_of "$S")" = none ] || { echo "ERR: session '$S' already exists ($(lane_of "$S") lane) — agentctl stop $S or pick a new name" >&2; exit 1; }
-  tmux has-session -t "$S" 2>/dev/null && { echo "ERR: tmux session '$S' already exists" >&2; exit 1; }
-
   FIFO="$DIR/$S.duplex.in"; EV="$DIR/$S.duplex.events.jsonl"
   ERR="$DIR/$S.duplex.stderr.log"; RC="$DIR/$S.duplex.rc"
-  rm -f "$FIFO" "$RC"; : > "$EV"; : > "$ERR"
-  mkfifo "$FIFO" || { echo "ERR: mkfifo failed: $FIFO" >&2; exit 1; }
+  # mkfifo IS the atomic claim (EEXIST = concurrent start or crash residue): no rm -f
+  # first — deleting the loser's view of the winner's fifo was a TOCTOU that could
+  # orphan a just-started engine (review S2 2026-07-19). stop removes the fifo.
+  if ! mkfifo "$FIFO" 2>/dev/null; then
+    echo "ERR: session '$S' fifo already exists ($FIFO) — concurrent start, or crash residue: agentctl stop $S first" >&2; exit 1
+  fi
+  rm -f "$RC"; : > "$EV"; : > "$ERR"
 
   EXTRA_Q=""  # zero args to `printf ' %q'` would still format once → a literal '' engine arg
   [ "${#EXTRA[@]}" -gt 0 ] && EXTRA_Q="$(printf ' %q' "${EXTRA[@]}")"
@@ -97,7 +106,9 @@ cmd_start() {
 
   # exec 3<> holds the fifo read-write so the engine's stdin NEVER sees EOF (both
   # engines exit on stdin close); engine runs as a child so the shell can record rc.
-  PANE="exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); echo \$? > $(q "$RC")"
+  # rc publishes via tmp+rename: `echo $? > rc` truncates first, and a classify racing
+  # that window read an EMPTY rc — misreporting a clean exit as FAILED (review S2 2026-07-19).
+  PANE="exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); e=\$?; echo \$e > $(q "$RC").tmp && mv $(q "$RC").tmp $(q "$RC")"
   if ! tmux new-session -d -s "$S" -c "$CWD" "$PANE"; then
     rm -f "$FIFO" "$DIR/$S.duplex.meta"
     echo "ERR: tmux new-session failed for '$S' (nothing started)" >&2; exit 1

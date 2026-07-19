@@ -48,6 +48,10 @@ for line in sys.stdin:
     command = message.get("type")
     request_id = message.get("id")
     if command == "get_state":
+        if os.environ.get("FAKE_OMP_BAD_STATE") == "1":
+            emit({"id": request_id, "type": "response", "command": "get_state",
+                  "success": False, "error": "internal state error"})
+            continue
         emit({"id": request_id, "type": "response", "command": "get_state",
               "success": True,
               "data": {"isStreaming": streaming(), "isCompacting": False,

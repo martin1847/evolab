@@ -172,6 +172,106 @@ bash "$AGENTCTL" stop dxK >/dev/null 2>&1
 
 sweep_fakes; sandbox_clean
 
+echo "== review-fix regressions (2026-07-19 cold review) =="
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wtr"; mkdir -p "$WT"
+printf 'do the thing\n' > "$SANDBOX/goal.md"
+export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
+export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
+
+# S1: an is_error result is a FAILED turn, never DONE (false-success killer)
+export FAKE_CLAUDE_ERROR_RESULT=1
+bash "$AGENTCTL" start claude rxE "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q '"is_error":true' "$WATCH_RUN_DIR/rxE.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status rxE 2>&1)"; rc=$?
+chk_eq "claude error result → FAILED 2, not DONE" 2 "$rc"
+chk_contains "error verdict names the failed turn" "error result" "$out"
+bash "$AGENTCTL" stop rxE >/dev/null 2>&1
+unset FAKE_CLAUDE_ERROR_RESULT
+
+# sent-offset window: old result must NOT read as DONE while the gated engine
+# has produced nothing for the new steer; delivery must be provably received
+export FAKE_PROVIDER_LOG="$SANDBOX/gate.log"
+bash "$AGENTCTL" start claude rxG "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q '"type":"result"' "$WATCH_RUN_DIR/rxG.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status rxG 2>&1)"; rc=$?
+chk_eq "turn 1 DONE before gated steer" 0 "$rc"
+export FAKE_CLAUDE_GATE="$SANDBOX/gate-open"   # takes effect via engine env? no — engine started earlier
+# engine was started WITHOUT the gate env, so gate the next turn differently:
+# use a big frame to prove >PIPE_BUF delivery instead, and assert the old result
+# does not leak through the sent-offset guard while the engine is still working.
+python3 -c "print('x' * 100000)" > "$SANDBOX/bigsteer.txt"
+out="$(bash "$AGENTCTL" steer rxG -f "$SANDBOX/bigsteer.txt" 2>&1)"; rc=$?
+chk_eq "big (>PIPE_BUF) steer rc0" 0 "$rc"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  [ "$(grep -c '"type":"user"' "$SANDBOX/gate.log" 2>/dev/null)" -ge 2 ] && break
+  /bin/sleep 0.2
+done
+chk_eq "second user frame provably received" 2 "$(grep -c '"type":"user"' "$SANDBOX/gate.log")"
+chk_eq "big frame arrived complete (no tear)" 1 "$(awk 'length($0) > 100000' "$SANDBOX/gate.log" | grep -c '"type":"user"')"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(grep -c '"type":"result"' "$WATCH_RUN_DIR/rxG.duplex.events.jsonl" 2>/dev/null)" -ge 2 ] && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status rxG 2>&1)"; rc=$?
+chk_eq "post-steer turn 2 DONE" 0 "$rc"
+
+# claude --replace is refused with the honest path, never silently degraded
+out="$(bash "$AGENTCTL" steer rxG -m "start over" --replace 2>&1)"; rc=$?
+chk_eq "claude replace refused" 1 "$rc"
+chk_contains "refusal routes to stop+resume" "resume" "$out"
+bash "$AGENTCTL" stop rxG >/dev/null 2>&1
+unset FAKE_PROVIDER_LOG FAKE_CLAUDE_GATE
+
+# gated engine: steer delivered but zero output → RUNNING (silent), NOT stale DONE
+export FAKE_CLAUDE_GATE="$SANDBOX/gate2-open"
+export FAKE_PROVIDER_LOG="$SANDBOX/gate2.log"
+: > "$FAKE_CLAUDE_GATE"   # gate open for turn 1
+bash "$AGENTCTL" start claude rxW "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q '"type":"result"' "$WATCH_RUN_DIR/rxW.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+rm -f "$FAKE_CLAUDE_GATE"   # close the gate: turn 2 will hang before ANY output
+out="$(bash "$AGENTCTL" steer rxW -m "turn two" 2>&1)"; rc=$?
+chk_eq "gated steer rc0" 0 "$rc"
+/bin/sleep 0.5
+out="$(bash "$AGENTCTL" status rxW 2>&1)"; rc=$?
+chk_eq "old result does not leak past sent-offset → RUNNING 10" 10 "$rc"
+chk_contains "silent detail names the guard" "no output since last steer" "$out"
+: > "$FAKE_CLAUDE_GATE"     # reopen: turn 2 completes
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(grep -c '"type":"result"' "$WATCH_RUN_DIR/rxW.duplex.events.jsonl" 2>/dev/null)" -ge 2 ] && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status rxW 2>&1)"; rc=$?
+chk_eq "gate reopened → DONE" 0 "$rc"
+bash "$AGENTCTL" stop rxW >/dev/null 2>&1
+unset FAKE_CLAUDE_GATE FAKE_PROVIDER_LOG
+
+# omp anomalous get_state response stays NON-terminal
+export FAKE_OMP_BAD_STATE=1
+bash "$AGENTCTL" start omp rxB "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+out="$(bash "$AGENTCTL" status rxB 2>&1)"; rc=$?
+chk_eq "rejected get_state → RUNNING 10, not DONE" 10 "$rc"
+chk_contains "anomalous response surfaced" "anomalous" "$out"
+bash "$AGENTCTL" stop rxB >/dev/null 2>&1
+unset FAKE_OMP_BAD_STATE
+
+# crash-residue fifo blocks a new same-name start (mkfifo IS the claim)
+mkfifo "$WATCH_RUN_DIR/rxF.duplex.in"
+out="$(bash "$AGENTCTL" start claude rxF "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "stray fifo → start refused" 1 "$rc"
+chk_contains "refusal names the recovery path" "agentctl stop" "$out"
+rm -f "$WATCH_RUN_DIR/rxF.duplex.in"
+sweep_fakes; sandbox_clean
+
 echo "== agentctl verb surface (unknown verbs die clean — 2026-07-19 field report) =="
 sandbox_new
 out="$(bash "$AGENTCTL" teardown someSess 2>&1)"; rc=$?

@@ -116,13 +116,6 @@ case "$sub" in
       while [ -e "$FAKE_TMUX_HOLD_FILE" ]; do /bin/sleep 0.02; done
     fi
     [ -n "${FAKE_TMUX_DELIV_FILE:-}" ] && printf '%s\n' "${AGENT_WATCH_DELIVERABLE:-}" > "$FAKE_TMUX_DELIV_FILE"
-    if [ -n "${FAKE_TMUX_EVENT_LINE:-}" ]; then
-      while [ "$#" -gt 0 ]; do
-        if [ "$1" = "-s" ]; then shift; session="$1"; break; fi
-        shift
-      done
-      [ -n "${session:-}" ] && printf '%s\n' "$FAKE_TMUX_EVENT_LINE" >> "$AGENT_WATCH_DIR/$session.events"
-    fi
     exit 0
     ;;
   send-keys|kill-session|set-option|select-pane)
@@ -145,6 +138,6 @@ sandbox_clean() {
   [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"
   unset SANDBOX WATCH_RUN_DIR BIN AGENT_WATCH_DIR
   unset FAKE_TMUX_DISPLAY_FAIL FAKE_TMUX_CAPTURE_FAIL FAKE_PANE_CMD FAKE_PANE_FILE FAKE_TMUX_HASSESSION FAKE_TMUX_NEWSESSION_FAIL
-  unset FAKE_TMUX_CMD_FILE FAKE_TMUX_DELIV_FILE FAKE_TMUX_EVENT_LINE
+  unset FAKE_TMUX_CMD_FILE FAKE_TMUX_DELIV_FILE
   unset FAKE_TMUX_LAUNCH_LOG FAKE_TMUX_HOLD_FILE
 }

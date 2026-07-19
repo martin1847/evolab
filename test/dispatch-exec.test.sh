@@ -37,7 +37,7 @@ chk_eq "round 1 preserves original prompt bytes as prefix" 0 "$(cmp -s "$SANDBOX
 chk_contains "round 1 appends headless footer" "HEADLESS ROUND PROTOCOL" "$(cat "$round1_prompt")"
 canonical_wt="$(sed -n 's/^cwd=//p' "$WATCH_RUN_DIR/exS.exec.meta")"
 chk_contains "footer carries absolute spaced cwd blocker path" "$canonical_wt/BLOCKED.md" "$(cat "$round1_prompt")"
-chk_contains "launch advertises stable typed status" "status: dispatch status exS" "$out"
+chk_contains "launch advertises stable typed status" "status: agentctl status exS" "$out"
 chk_not_contains "launch does not expose raw rc path" "rc-on-exit" "$out"
 
 # Every resume round gets a fresh combined prompt too; the caller's fix brief remains its prefix.
@@ -370,8 +370,8 @@ printf '0\n' > "$WATCH_RUN_DIR/r7.exec.rc"; : > "$WATCH_RUN_DIR/r7.exec.out"
 touch -t 202501010000 "$SANDBOX/wt/old.out.md"
 out="$(bash "$DEXEC" status r7 2>&1)"; rc=$?
 chk_eq "stale deliverable exit6" 6 "$rc"; chk_contains "nodeliv marker" "IDLE-NO-DELIVERABLE" "$out"
-chk_contains "exit6 directs a fix round via send" "dispatch send r7" "$out"
-chk_contains "exit6 forbids premature teardown" "do not teardown" "$out"
+chk_contains "exit6 directs a fix round via steer" "agentctl steer r7" "$out"
+chk_contains "exit6 forbids premature stop" "do not stop" "$out"
 touch "$SANDBOX/wt/new.out.md"
 out="$(bash "$DEXEC" status r7 2>&1)"; rc=$?
 chk_eq "fresh deliverable exit0" 0 "$rc"
