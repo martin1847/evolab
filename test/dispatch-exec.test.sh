@@ -574,59 +574,51 @@ chk_eq "old-round quota prose does not misclassify rc2" 2 "$rc"
 chk_contains "plain FAILED marker" "FAILED" "$out"
 sandbox_clean
 
-echo "== interface routing (dispatch/watch/teardown are the stable surface) =="
+echo "== interface routing (agentctl is the stable surface; dispatch-exec is internal) =="
 
-# DEFAULT lane = exec (2026-07-12 flip): a bare launch through `dispatch` routes headless.
+# agentctl start codex delegates to the round lane
 sandbox_new
 mkdir -p "$SANDBOX/wt"; printf 'go\n' > "$SANDBOX/goal.md"
 export FAKE_TMUX_CMD_FILE="$SANDBOX/tmux-cmd"
-out="$(bash "$DISPATCH" claude ifS "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
-chk_eq "default launch rc0" 0 "$rc"
-chk_contains "default launch routed to exec lane" "round 1 started" "$out"
-chk_not_contains "default launch is not TUI" "dispatched claude" "$out"
-# legacy DISPATCH_EXEC=1 is a harmless no-op (still exec)
-out="$(DISPATCH_EXEC=1 bash "$DISPATCH" claude ifL "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
-chk_contains "legacy DISPATCH_EXEC=1 still exec" "round 1 started" "$out"
-# escape hatch: DISPATCH_TUI=1 (canonical) and DISPATCH_EXEC=0 (muscle-memory) stay TUI
-out="$(DISPATCH_TUI=1 bash "$DISPATCH" claude ifT "$SANDBOX/wt" 2>&1)"; rc=$?
-chk_contains "DISPATCH_TUI=1 launch stays TUI" "dispatched claude" "$out"
-out="$(DISPATCH_EXEC=0 bash "$DISPATCH" claude ifT2 "$SANDBOX/wt" 2>&1)"; rc=$?
-chk_contains "legacy DISPATCH_EXEC=0 escape stays TUI" "dispatched claude" "$out"
-# TUI has no durable round counter: explicit review-loop flags must fail, not leak to the engine.
-out="$(DISPATCH_TUI=1 bash "$DISPATCH" codex ifTR "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 2 2>&1)"; rc=$?
-chk_eq "TUI review-loop rejected" 1 "$rc"
-chk_contains "TUI review-loop rejection is clear" "TUI review-loop is unsupported" "$out"
-chk_eq "TUI review-loop did not launch" 0 "$([ -e "$WATCH_RUN_DIR/ifTR.events" ] && echo 1 || echo 0)"
-# send self-routes by session state (exec.meta present), no switch needed
+AGENTCTL="$AW_DIR/agentctl"
+out="$(bash "$AGENTCTL" start codex ifS "$SANDBOX/wt" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "codex start rc0" 0 "$rc"
+chk_contains "codex start routed to round lane" "round 1 started" "$out"
+# review-loop budget flags pass through to the round lane
+out="$(bash "$AGENTCTL" start codex ifR "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 2 2>&1)"; rc=$?
+chk_eq "codex review-loop start rc0" 0 "$rc"
+chk_eq "review-loop budget persisted" review-loop "$(sed -n 's/^workflow=//p' "$WATCH_RUN_DIR/ifR.exec.meta")"
+# ...but are rejected on the duplex lane (they would leak to the engine as argv)
+out="$(bash "$AGENTCTL" start omp ifD "$SANDBOX/wt" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 2 2>&1)"; rc=$?
+chk_eq "duplex review-loop rejected" 1 "$rc"
+chk_contains "duplex rejection is clear" "round-lane only" "$out"
+# steer/status/watch self-route by session state (exec.meta present)
 printf 'sid=sid-xyz\n' >> "$WATCH_RUN_DIR/ifS.exec.meta"
 printf '0\n' > "$WATCH_RUN_DIR/ifS.exec.rc"; : > "$WATCH_RUN_DIR/ifS.exec.out"
-out="$(bash "$DISPATCH" send ifS -m 'round two' 2>&1)"; rc=$?
-chk_eq "send self-routes rc0" 0 "$rc"
-chk_contains "send self-routes to exec lane" "round 2 started" "$out"
-# watch delegates to the exec classify for exec-lane sessions
-# (send truncated rc; fake tmux has no session -> exec classify says AGENT-DEAD 2 —
-#  the point here is DELEGATION: the TUI watch would have said NO-HOOK 8 instead)
-out="$(bash "$WATCH" ifS 2>&1)"; rc=$?
+out="$(bash "$AGENTCTL" steer ifS -m 'round two' 2>&1)"; rc=$?
+chk_eq "steer self-routes rc0" 0 "$rc"
+chk_contains "steer self-routes to round lane" "round 2 started" "$out"
+# (send truncated rc; fake tmux has no session -> round classify says AGENT-DEAD 2)
+out="$(bash "$AGENTCTL" watch ifS 2>&1)"; rc=$?
 chk_eq "watch delegates typed exit" 2 "$rc"
-chk_contains "watch delegate speaks exec vocabulary" "AGENT-DEAD" "$out"
+chk_contains "watch delegate speaks round vocabulary" "AGENT-DEAD" "$out"
 sandbox_clean
 
-# watch delegation on a finished exec session -> DONE 0
+# watch delegation on a finished round session -> DONE 0; stop cleans round state inline
 sandbox_new
 mkdir -p "$SANDBOX/wt"
+AGENTCTL="$AW_DIR/agentctl"
 printf 'engine=claude\ncwd=%s\nround=1\nargs=\n' "$SANDBOX/wt" > "$WATCH_RUN_DIR/wd.exec.meta"
 : > "$WATCH_RUN_DIR/wd.exec.round-started"
 printf '{"result":"ok","session_id":"s"}\n' > "$WATCH_RUN_DIR/wd.exec.out"
 printf '0\n' > "$WATCH_RUN_DIR/wd.exec.rc"
-printf '99999999\n' > "$WATCH_RUN_DIR/wd.exec.lock"   # stale lock: watch/teardown must not care
-out="$(bash "$WATCH" wd 2>&1)"; rc=$?
+printf '99999999\n' > "$WATCH_RUN_DIR/wd.exec.lock"   # stale lock: watch/stop must not care
+out="$(bash "$AGENTCTL" watch wd 2>&1)"; rc=$?
 chk_eq "watch delegate DONE rc0" 0 "$rc"
 chk_contains "watch delegate DONE marker" "DONE" "$out"
-# teardown cleans exec-lane state
-out="$(bash "$TEARDOWN" wd 2>&1)"; rc=$?
-chk_eq "teardown exec rc0" 0 "$rc"
-chk_eq "teardown removed exec state" 0 "$(ls "$WATCH_RUN_DIR"/wd.exec.* 2>/dev/null | wc -l | tr -d ' ')"
-chk_eq "teardown removed exec lock" 0 "$([ -e "$WATCH_RUN_DIR/wd.exec.lock" ] && echo 1 || echo 0)"
+out="$(bash "$AGENTCTL" stop wd 2>&1)"; rc=$?
+chk_eq "stop round rc0" 0 "$rc"
+chk_eq "stop removed round state" 0 "$(ls "$WATCH_RUN_DIR"/wd.exec.* 2>/dev/null | wc -l | tr -d ' ')"
 sandbox_clean
 
 summary

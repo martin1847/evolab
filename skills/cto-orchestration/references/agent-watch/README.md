@@ -1,311 +1,171 @@
-# Agent-state watch — unified typed state, lane-aware
+# agentctl — headless worker 控制面（duplex / round 双车道）
 
-Detect a coding agent's state without guessing TUI glyphs. The default EXEC lane uses process exit + durable
-round metadata; the TUI escape uses the agent's lifecycle hooks. Supports **omp, codex, Claude Code**.
-**No screen-scrape fallback**：TUI silent hook exits **8 NO-HOOK**（诚实报"监控不可得"）。
+Detect and steer coding agents without ever reading a terminal pane. **Surface = `agentctl`**：
+omp/claude 走 **duplex** 车道（引擎原生 stdio 协议长驻，轮内协议帧 steer）；codex 走 **round**
+车道（exec-resume 逐轮）。tmux 只做进程保活（worker 独立于编排者进程树）；终态真相只来自
+typed exit code——协议帧、rc 文件与交付物，**永不抓屏**。
 
-> 目录：[Why](#why) · [Contract](#contract-all-three-agents-converge-here) · [Per-agent adapters](#per-agent-adapters-thin-map-native-events--state--emitsh) ·
-> [`watch`](#watch-the-monitor) · [Honest limits](#honest-limits) · [Launch](#launch) · [Validation status](#validation-status当前态快照过程史在-git-log) ·
-> [dispatch & watch discipline](#orchestrator-side-dispatch--watch-discipline-skill-1315-的展开)（派发 / typed 状态 / 正向证据 / 强制层）·
-> [headless 车道](#headless-车道默认2026-07-12-翻转tui-escape--dispatch_tui1) · [watchspec 自愈](#watchspec-自愈宿主批量回收后台-watcher-的对策)
+> 目录：[agentctl 命令面](#agentctl--当前命令面2026-07-19-起) · [Why](#why为什么是协议不是屏幕) ·
+> [duplex 机制](#duplex-车道机制) · [round 车道](#round-车道codex--恢复腿) · [Launch](#launch) ·
+> [typed 状态](#typed-状态编排者纪律) · [判完成要正向证据](#判完成要正向证据不凭-idle--watcher-裁决) ·
+> [引擎级注意](#引擎级注意) · [强制层 guard](#强制层两个单一职责-guard-脚本) · [Validation](#validation-status当前态快照过程史在-git-log)
 
-## Why
-Screen-scraping mis-detects WAITING (TUI renders nav hints as text vs glyphs, menu glyph outside the tail
-window → a still-waiting agent reads as idle/DONE) and is version/layout fragile. Every supported agent exposes
-deterministic lifecycle hooks that fire regardless of how the prompt renders — that's the ground truth.
-The v1 scrape engine survived for a while as a "graceful degradation" fallback and was removed 2026-07-11
-(-190 lines): three-agent hook chains are e2e-validated, bare launches are blocked by skill+guard, and every
-historical WAITING-as-DONE misjudgment lived in the scrape path — degraded guessing is worse than an honest error.
+## agentctl —— 当前命令面（2026-07-19 起）
 
-## Contract (all three agents converge here)
-- **Sentinel file**: `$AGENT_WATCH_DIR/<session>.events` (default `AGENT_WATCH_DIR=/tmp/agent-watch-run` —
-  deliberately under `/tmp`, NOT `$HOME`: codex's workspace-write sandbox blocks writes outside the
-  workspace but allows `/tmp`, so a `$HOME` default made codex hooks fail silently and degrade to scrape.
-  A fixed literal, not `$TMPDIR`: tmux freezes its env, so `$TMPDIR` can differ between the pane and the
-  orchestrator — sentinel written to one dir, watched in another).
-  `<session>` = the tmux session name, passed to the agent process via env `AGENT_WATCH_SESSION` at launch.
-- **Line format**: `<ISO8601-UTC> <STATE> [detail]`, one per event. `STATE ∈ {LOADED, WORKING, WAITING, DONE}`.
-- **omp load sentinel**: after its factory successfully registers every lifecycle callback it emits
-  `LOADED hook_loaded`. This proves module load + factory execution + registration only; it is not
-  WORKING or DONE, and `watch` keeps waiting for the first lifecycle event.
-- **Current state** = the LAST line's STATE. New turn → WORKING again; the watcher reacts to transitions.
-- **Shared emitter**: `emit.sh <STATE> [detail]` appends one line. Every per-agent hook calls ONLY this — state
-  semantics live in one place; adapters just map their native events to a STATE.
+```text
+agentctl start  <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--require-preflight] [engine args…]
+agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]
+agentctl status <session>      # one-shot typed verdict（exit code = 结论）
+agentctl watch  <session>      # 阻塞至终态；run_in_background 挂起
+agentctl stop   <session>      # 结束 + 清控制态（events/rc/stderr 留作尸检）
+```
 
-## Per-agent adapters (thin; map native events → STATE → emit.sh)
-| agent | WORKING | WAITING | DONE | load mechanism |
-|---|---|---|---|---|
-| omp | `pi.on("turn_start"\|"tool_call")` | `pi.on("waiting")` | `pi.on("turn_end"\|"idle")` | `omp --hook hooks/omp-watch.ts` (or `~/.omp/agent/hooks/`) |
-| codex | `PreToolUse` | `PermissionRequest` | `Stop` | `.codex/hooks.json` → calls `hooks/emit-from-stdin.sh` |
-| claude | `PostToolUse` | `Notification` matcher `permission_prompt` | `Stop` + `Notification` matcher `idle_prompt` | `.claude/settings.json` hooks → `hooks/emit-from-stdin.sh` |
+- **steer 语义**：默认排队（omp `follow_up` / claude 原生排队到下一 turn 边界）；`--now` 即时
+  （omp `steer`；claude 无公开中断帧→降级排队并明说）；`--replace` 弃当前重来（omp
+  `abort_and_prompt`；claude/codex 走 stop+restart）。投递成功 ≠ 模型照做，验收仍看交付物。
+- **typed exit 两车道同词汇**（全表见 [typed 状态](#typed-状态编排者纪律)）；duplex 专义：
+  **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
+- **deliverable gate**：相对 glob 一律按**会话 cwd** 解析（2026-07-19 现场假阴性收编）；freshness
+  用 mtime 对 epoch（每次 steer 即轮转）。文件产出必带 `--deliverable`；非文件结果不带。
+- **输出有界**：status/watch 只回 typed 一行 + ≤600 字符摘要；引擎 raw 全量只落
+  `$RUN/<s>.duplex.events.jsonl`（round 车道 verdict tail 同步收紧 800 字节——147KB 单行 transcript
+  回显曾炸编排者上下文 ~88k tokens，2026-07-19 现场）。
+- **后台任务 cwd 语义**（现场误杀教训）：宿主后台机制跑 `agentctl watch` 时，命令继承**发起时刻
+  编排者的 cwd**，与 worker 会话 cwd 无关；判断后台任务归属认 `$RUN/<session>.*` 文件名，别认 cwd。
+- TUI 车道已裁撤（本大版本）：需要人工现场 = `tmux attach -t <session>` 旁观 / `tmux capture-pane -p`
+  手动尸检；worker 控制始终走协议。
 
-Codex/Claude hooks pass JSON on stdin with `hook_event_name` (+ codex) / `notification_type` (Claude); the
-`emit-from-stdin.sh` shim reads it, maps to a STATE, calls `emit.sh`. omp's TS hook calls a tiny writer inline.
+## Why：为什么是协议、不是屏幕
 
-## `watch` (the monitor)
-1. **Primary**: tail `$AGENT_WATCH_DIR/<session>.events`. Last STATE: `DONE`→exit 0, `WAITING`→exit 4,
-   `LOADED`/`WORKING`→keep polling (only WORKING enters hang/provider-stall heuristics). Reacts to the
-   agent's real lifecycle, no glyph heuristics.
-2. **Backstop (kept from v1)**: liveness guard — `pane_current_command` back to a shell ⇒ AGENT-DEAD (exit 2),
-   for a hard crash where NO hook fires. Hang heuristic — STATE=WORKING + events file stale ~6min AND
-   the screen is genuinely frozen (two captures ~3s apart identical) ⇒ exit 3. The frozen-screen
-   re-check is load-bearing: event-staleness ALONE false-positives during a long recon/sub-agent phase
-   where the pane is alive and repainting (observed 2026-07-03) — such a case defers instead of firing.
-   Menu guard (B2) — before HANG ripens: stale ~1min + interactive-menu chrome in the pane tail
-   (`enter select` / `Type to search`; override `AGENT_WATCH_MENU_RE`) ⇒ WAITING (exit 4), because an
-   agent's ask-user menu may not fire its WAITING hook (实证 2026-07-02: omp clarify-menu emitted no
-   `waiting` event → stale-WORKING + frozen screen misread as HANG; real state = waiting on the orchestrator).
-   External-provider stall — STATE=WORKING but provider-error chrome (overload/rate-limit/5xx) repeats on screen
-   ⇒ STALLED-EXTERNAL (exit 5). Catches a hot-retry loop the hang heuristic misses: a retryable provider error
-   is auto-retried in place (omp `auto_retry_start` → backoff → `continue`, capped at `retry.maxRetries`≈10), so a
-   fresh `turn_start` (WORKING) fires each retry but a terminal `turn_end`/DONE never does (only a non-retryable
-   output-blocked error emits turn_end). The screen repaints each retry so the frozen-screen check never trips
-   either → silent wait. Pattern overridable via `AGENT_WATCH_EXT_ERR_RE`. On exit 5:
-   don't wait — kill the hot-retrying agent and re-dispatch a fresh session (no back-off state) once the provider recovers.
-3. **Silent hook = honest error, not degraded guessing**: sentinel absent/empty while the pane shows no busy
-   chrome for ~2min ⇒ exit **8 NO-HOOK** (hook unwired/untrusted — verify the agent manually or re-dispatch).
-   A busy pane keeps the wait alive (codex emits its first event on the first tool call), bounded by MAX_POLLS.
+抓屏猜状态是上代方案的最大误判源（WAITING 误读 DONE、glyph/布局随 CLI 版本漂移；claude ≥2.1.205 /
+omp 16.4.4 / codex 0.144.1 三连静默弄坏 TUI 链路），send-keys 注入实测仅 ~70-80% 送达（弹窗吃
+Enter、bracketed-paste 丢尾、长文本损坏）。三引擎如今都有官方 headless 双工/逐轮面——duplex 直接
+消费引擎自己的结构化事件流，round 消费进程退出 + 输出文件；两者的状态都**确定可判**，这正是
+2026-07-12「headless 默认」裁决的完成态：连 escape 车道也不再养屏幕税。
 
-## Honest limits
+## duplex 车道机制
 
-### 轮内插话：headless 车道结构上不支持
-`dispatch-exec` 的三个引擎都以一次性非交互模式运行（`omp -p` / `codex exec` / `claude -p`），不读取
-运行中的交互输入。因此：
-- `dispatch send` 在 round 运行中报 `ERR: previous round still running` **不只是串行化保护**——
-  即使绕过它、直接 `tmux send-keys` 也无效：那个进程根本不读 stdin。
-- **轮内要影响 worker，只有三条路**：① **TUI 车道**（`DISPATCH_TUI=1`，真交互会话，可即时 steering）
-  ② **文件通道**（goal 里约定 worker 周期性检查 `<cwd>/STEERING.md`，有内容即照做——headless 下的
-  唯一轮内通道，需 goal 显式契约）③ **teardown + 重派**（代价 = 丢弃本轮进度）。
-- 轮**间** steering 照常：`dispatch send`（resume 下一轮）。
+```text
+tmux pane 内：  exec 3<>$RUN/<s>.duplex.in            # fifo 读写打开：引擎 stdin 永不 EOF
+               <engine-cmd> <&3 >> events.jsonl 2>> stderr.log
+               echo $? > rc                            # 引擎退出（异常）才落 rc
+engine-cmd：   omp --mode=rpc …                        # JSON-line RPC（steer/follow_up/get_state）
+               claude -p --input-format stream-json --output-format stream-json \
+                      --verbose --permission-mode bypassPermissions …
+steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影读 events.jsonl 尾窗
+               （omp 状态 = 活体 get_state 往返；claude = result 帧 + sent-offset 防假 DONE）
+```
 
-### 其他
-- Hooks fire INSIDE the agent process → a hard crash (SIGKILL/segfault) emits nothing. The liveness guard, not
-  the hook, catches that. Two layers by design.
-- **codex** WAITING only covers `PermissionRequest` (tool-approval). A free-form "ask the user" menu may not fire
-  it (codex `notify` is turn-complete-only too). The menu guard (B2, stale-WORKING + menu chrome ⇒ exit 4)
-  covers that gap.
-- **Claude Code** `Notification` fires in INTERACTIVE mode only (not `claude -p`). We run interactive `claude` in
-  tmux for steering, so it applies; headless would need `Stop`/`PostToolBatch` instead.
-- **STALLED-EXTERNAL (exit 5) can false-positive**: the `EXT_ERR_RE` chrome (e.g. `Too Many Requests`,
-  `service unavailable`, `Overloaded`) is also plausible content an agent prints while editing retry/error-handling
-  code or reading logs. BUSY/WORKING + N-poll repetition + a wide tail narrow it, but don't eliminate it（exit 5
-  附屏尾，核证与处置协议见 typed 状态表 §5）。
-- **codex launch frictions (per-machine, not skill bugs)**: a malformed GLOBAL `~/.codex/hooks.json` makes codex
-  warn at every launch (`failed to parse hooks config … unknown field`) but does NOT block — the skill installs a
-  project-local `.codex/hooks.json`, unaffected. And codex prompts for directory-trust on first launch in a new cwd
-  (send `1`+Enter) — separate from any bypass flags. Both observed while driving codex as the orchestrator.
-- **omp `--model` fuzzy match opens an interactive picker** that eats a dispatched goal (session sits at the
-  launcher, no hooks fire). Pass an EXACT id (`--model=anthropic/claude-opus-4-8`) — goes straight to the TUI.
-- **引擎额度是编排级单点**：omp/codex 默认走 OpenAI 后端——执行席 + 异构评审席可能共享同一 quota 池，额度
-  耗尽两线同瘫（实证 2026-07-11：一夜高强度后 insufficient_quota 全线，编排者还以为 omp 是 Claude）。dispatch
-  启动时回显 engine 行；高强度批跑前确认各后端余额；应急 = 执行席换 Claude 顶上（评审同 lineage 会失异构价值，标注即可）。
+- goal 投递 = `prompt` 帧（正文 = goal 文件 + HEADLESS 协议 footer：立即开工、真阻塞写
+  `<cwd>/BLOCKED.md` 停下——fresh BLOCKED.md 映射 exit 4，两车道同协议）。
+- **崩溃恢复腿**：引擎死（rc 落盘）→ `agentctl stop` 清态，然后用引擎原生 resume 参数开新会话：
+  `agentctl start omp s2 <cwd> --goal followup.md -r <session-file>`（omp）/
+  `… claude … --resume <sid>`（claude，cwd 绑定）。上下文由引擎会话文件保住。
+- 单写者纪律：所有 fifo 写经 `duplexctl.py`（flock）；并发 steer 由锁串行。
+
+## round 车道（codex + 恢复腿）
+
+`agentctl start codex …` 委派给内部引擎 `dispatch-exec`（久经实战：`codex exec` 逐轮 + resume，
+`--workflow review-loop --max-rounds N` 轮数预算、`BUDGET-EXHAUSTED` exit 9 止损、SHIP-BLOCKING
+续轮租约）。单轮内引擎不读 stdin——轮内影响只有 goal 预先约定 `STEERING.md` 轮询，或
+`agentctl stop` 后重派；轮间 `agentctl steer` = resume 同一 engine session。codex 的 duplex 面
+（app-server）官方仍标 experimental，真需要 mid-turn steer 再上（届时用其 schema 生成器锁协议）。
+引擎级 resume 语义、退出码坑见 `dispatch-exec` 脚本头注——使用者不需要。
 
 ## Launch
-> **TUI CRITICAL (verified the hard way):** the `AGENT_WATCH_*` env MUST be set **INSIDE the command string**
-> tmux runs — NOT as a prefix before `tmux new-session` (a running tmux server has a frozen environment;
-> a client-side prefix never reaches the pane process → hook sees empty env → silent no-op). This rule —
-> plus per-agent hook file placement (omp `--hook`, codex `.codex/hooks.json`, claude settings merge) —
-> is baked into `dispatch`; read its source if you ever need to replicate a launch by hand.
-**Canonical commands:**
-- `dispatch <omp|codex|claude> <session> <cwd> --goal <file>` — stable launch interface. Default EXEC starts
-  one headless round and returns; TUI escape wires lifecycle hooks and watches in-process.
-- `watch <session> [busy-regex]` — lane-aware monitor. It BLOCKS until a terminal state, then exits a typed
-  code（EXEC 还会用 10 表示瞬时 RUNNING）。**Default (any shell orchestrator — codex etc.): run it synchronously and read
-  the code** — `AGENT_WATCH_SYNC=1 bash <dir>/watch <session>; rc=$?` then branch on `$rc`（前缀是对 guard ⑤
-  的显式同步声明）. A **background orchestrator (Claude Code)**
-  instead launches it via its background mechanism (NOT shell `&`, which orphans it) + reads the `WATCH ARMED`
-  line + completion notification. Either way, confirm with capture-pane — the code is a lead, not gospel.
-  (Validated: a codex shell-orchestrator independently built `…/watch <s>; rc=$?`, read `0=DONE`, then verified.)
-- `teardown <session> [cwd]` — kill the session + remove its sentinel + remove only the Codex/Claude hook config
-  this dispatch session created; an existing project config is never owned or removed.
+
+- `agentctl start … --goal <f>` 在 goal 帧被引擎接受后返回（omp 有 correlated response；claude 为
+  送达即返，无逐帧 ack——诚实边界）；**不会自动 watch**，紧接着用宿主受控后台能力挂
+  `agentctl watch <session>`（**NOT shell `&`**，会孤儿化；guard ⑤ 强制 run_in_background，
+  同步 shell 编排者前缀 `AGENT_WATCH_SYNC=1` 显式放行并自读 exit code）。
+- `--require-preflight` 是显式 opt-in：只给高不确定、即将进入昂贵设计/实现的方向；两车道都在启动
+  引擎前调 `../goal-preflight.py` 校验 `Preflight: <probe> => <observed result>` 已解占位。
+- 引擎二进制可用 env 覆盖（测试缝 + 自定装机位）：`AGENTCTL_BIN_OMP` / `AGENTCTL_BIN_CLAUDE`。
+- exit 6 `IDLE-NO-DELIVERABLE` 用 `agentctl steer` 补一刀，**不要 stop**；`stop` 只用于收工或明确放弃。
+
+## typed 状态（编排者纪律）
+
+| exit | 义 | 处置 |
+|---|---|---|
+| 0 DONE | 引擎 idle 且（如声明）交付物 fresh | 收货前仍做正向核证（下节） |
+| 2 FAILED / AGENT-DEAD | 引擎异常退出 / 无 rc 且 pane 亡 | 读 events/stderr 尾（有界），走恢复腿 |
+| 4 WAITING-INPUT | fresh `BLOCKED.md` / omp 真问题帧（setWidget 噪声已滤） | 读题，`agentctl steer` 作答 |
+| 5 STALLED-EXTERNAL | 引擎死于 quota/auth 错误 chrome | 修凭据/额度再重启；见引擎级注意 |
+| 6 IDLE-NO-DELIVERABLE | 终态样但声明的 glob 本轮没出现 | poke（steer），别信幻影 DONE、别 stop |
+| 7 WATCH-TIMEOUT | 有界轮询耗尽、引擎仍 active | 重挂或人工核证，绝不按 DONE 消费 |
+| 8 ENGINE-SILENT（duplex）| steer 已投递、引擎 ~2min 零输出 | 查 stderr.log；必要时 stop+resume |
+| 9 BUDGET-EXHAUSTED（round）| review-loop 轮数上限 | 转人工裁决 |
+| 10 RUNNING | 瞬时态（status 一次性查询用） | 继续等 |
+
+- **turn_end ≠ 任务终态**：多步 agent 每个 turn/阶段边界都呈 idle（实证 2026-07-05 单日 4 次假
+  DONE）——deliverable gate + watch 的 2 连稳定读正是为此；多轮 goal 靠 epoch 轮转防上一轮产物开门
+  （实证 2026-07-11 三任务全中）。
+- **纯事件驱动会盲等**：挂 watcher 同时按"任务预期时长 ×2"设 fallback 自检（CC `ScheduleWakeup`；
+  shell 编排者 cron/有界轮询）。
+- **Agent 工具异步 subagent 的完成通知有黑洞**：只在"停止且自身无存活后台子进程"时才发；子 agent 自起
+  后台 fork（E2E/monitor）→ 父 idle 而通知永不来（实证 2026-06-26，靠主动 SendMessage 才发现）。
+  对策：别只信完成通知（fallback 自检兜底）；派工要求验证同回合做完、不留孤儿 fork、里程碑 SendMessage 回 main。
+
+## 判完成要正向证据、不凭 idle / watcher 裁决
+
+watcher 裁决是线索不是判决：DONE 收货前自己核**正向交付物**（本地 commit / 产物计数达标 / 显式
+review 标记）。agent 自起后台 job 会 yield＝呈 idle 但没完成（bg 跑完自动续；实证按 idle 轮询屡误报，
+改判"出现本地 commit + idle 稳定"才准）——`沉默 ≠ 交付` 同族。
+
+## 引擎级注意
+
+- **引擎额度是编排级单点**：omp/codex 默认走 OpenAI 后端——执行席 + 异构评审席可能共享同一 quota
+  池，耗尽两线同瘫（实证 2026-07-11 一夜 insufficient_quota 全线，编排者还以为 omp 是 Claude）。
+  start 回显 engine 行；高强度批跑前确认各后端余额；应急 = 执行席换 Claude（评审同 lineage 失异构
+  价值，标注即可）。
+- **omp `--model` fuzzy match 会开交互 picker** 吃掉派发（会话卡在选择器）——引擎 args 只传 EXACT id
+  （`--model=anthropic/claude-opus-4-8`）。
+- **裸 send-keys 坑枚举**（guard ④ DENY 的实证依据，仅剩人工 attach 场景相关）：长中文/①②③/全角触发
+  omp skill 模糊搜索弹窗吃 Enter 且 Escape/Ctrl-C 关不掉（实证 2026-07-02，卡 24min）；bracketed-paste
+  吞尾部 Enter；>2000 字符 paste 损坏。协议帧车道天然免疫——这正是 duplex 的立道理由之一。
+- omp rpc 面无版本稳定性文档：launch 的 ready 握手即 preflight，握手失败 = fail-fast 清场重来，
+  不带病跑。
+
+## 强制层：两个单一职责 guard 脚本
+
+脆弱完成信号会骗编排者，光记规则没用 → 工具调用层兜底（[电在回路](../shock-in-the-loop.md)：DENY
+三件套 = why + 正路 + 本文档指针）。**entry 真源 = 本目录 `guard-hooks.json`**（唯一权威）：接入时把
+command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进项目 settings（CC
+`.claude/settings.json` / Codex `.codex/hooks.json` 同格式）。**直接 exec 别加 `python3 `/`bash `
+前缀**（脚本自带 shebang）；matcher 别手编（与实现同包维护，曾实证 README 抄本漂移丢 `KillShell`）。
+
+- **`cto-guard-bash.py`（PreToolUse·Bash）** — ① 拦背景 `&`（剥引号 span 后任意单 `&`；`&&`/重定向/
+  引号内放行）；② DENY 纯 idle-absence 裸轮询（带 git 交付物 / Verdict 正向 grep 才放行）；③
+  `agentctl start` 后同条没 arm watch → 提醒（omission 无法硬 deny）；④ 拦长/CJK 裸 `tmux send-keys`
+  （逼 `agentctl steer`）；⑤ 拦前台阻塞 `agentctl watch`（前台 Bash 超时 143 连 watcher 一起杀，实证
+  2026-07-11；`AGENT_WATCH_SYNC=1` 显式放行）；⑥ 拦编排者亲跑 live e2e（派便宜模型 runner，命令前缀
+  `E2E_ECONOMY=1` 自 declare）。①用剥引号视图，④用原始 cmd，⑤⑥只认命令位（路径当参数不拦——上线当天
+  两次自误伤修出的判据）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
+- **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：
+  browser/E2E 派发含 `mcp__chrome-devtools` → DENY（逼 Playwright，P0a）；派发未显式钉 `model` 档 →
+  DENY（P0c）；e2e-runner 派发 model 非便宜档 → DENY（P0d）；Pre·TaskStop|KillShell：目标 `.output`
+  120s 内还在长 = 活的 → DENY（**完成通知黑洞**与"零截图≠卡死"实证；override =
+  `touch /tmp/cto-allow-kill-<id>`，适用于**任何经核实的杀单动机**——含"派错前提"，P0b）；
+  Post·Agent：browser 派发注入 deadline-watch 提醒（必须 JSON `additionalContext`，纯 stdout 黑洞）。
+
+### Wiring（CC / Codex / omp 都能坐编排位）
+
+| | Claude Code | Codex | omp (oh-my-pi) |
+|---|---|---|---|
+| hook 形态 | command 脚本 + stdin JSON | 同 CC（契约对齐） | in-process TS/JS 模块 |
+| 两脚本直接挂 | ✓ | ✓（agent 脚本休眠） | ✗ 需 TS port（`{block:true,reason}`） |
+| wiring | `.claude/settings.json` | `.codex/hooks.json` | `.omp/hooks/pre/*.ts` |
+
+不另造 settings 脚手架——并进 `repo-governance-bootstrap` §11 已建的那份。**不靠 skill frontmatter
+`hooks:` 自注册**（实测 mid-session 经 Skill 工具激活不注册 → 显式 wiring 才可靠）。
 
 ## Validation status（当前态快照；过程史在 git log）
 
 | 面 | 状态 | 方式与要点 |
 |---|---|---|
-| omp adapter 全生命周期 | ✅ | 真 dispatch + hermetic：turn_start/tool_call→WORKING、turn_end→DONE，watch 走 sentinel 非 fallback |
-| claude adapter | ✅ | e2e dispatch-goal 门实测（PostToolUse→WORKING + Stop→DONE 落 sentinel；`Notification` 仅交互态 fire） |
-| codex adapter | ✅ | e2e 严格档。历史坑双记：① hooks 需 trust——dispatch 已带 `--dangerously-bypass-hook-trust`；② 曾因模板顶层 `_comment` 被 codex 严格解析**静默禁用整文件**、hook 自诞生零 emit——修复 = 模板顶层只许 `hooks` + polish 门焊死；存量项目旧毒版 `.codex/hooks.json` 删掉重派即再生。`PermissionRequest→WAITING` 只盖 tool-approval，自由文本提问靠 menu guard（B2）兜 |
-| emit / watch | ✅ | hermetic 套件（scrape fallback 已于 2026-07-11 摘除，哑 hook → exit 8 NO-HOOK） |
-| deliverable 门（exit 6） | ✅ | hermetic 对抗测试 |
-| WATCH-TIMEOUT（exit 7）/ NO-HOOK（exit 8） | ✅ | hermetic 钉显式非零终态；均不得冒充 DONE |
-| headless 车道（dispatch-exec，**默认**） | ✅ | claude/omp 双轮 live 绿 + codex exec 双评审全流程 live（派发→watch→resume 复审）+ hermetic 全分支 + e2e dispatch-goal 矩阵；未验：BLOCKED 真 fire。**「运行中插话」不是未验项——见下方 §轮内插话** |
-| TUI 车道（escape `DISPATCH_TUI=1`） | ⚠ best-effort | 2026-07-12 known-red：omp 16.4.4 `--hook` 静默不加载（v1.4.0 版 hook 同红=环境漂移）、codex 0.144.1 腿 goal 未执行；claude 腿绿。手动 `E2E_TUI=1 bash test/e2e/dispatch-goal-tui.e2e.sh` 验，修复属适配债、不挡发布 |
-| STALLED-EXTERNAL（exit 5）谓词 | ◑ | 离线 fixture 真/假例全过；**已知假阳**：agent 编辑错误处理代码/读 provider 日志时同 token 会命中——exit 5 是 advisory，先看屏尾再 kill。未 live 验：WORKING+N-poll 门与真 provider stall |
-
-- TUI `dispatch` 仅在目标不存在时写 `.codex/hooks.json` / `.claude/settings.json`，并以 session ownership marker
-  记录本次创建项；Codex 配置另加 `.git/info/exclude`（防 `git add -A` 夹带）。`teardown <session> <cwd>`
-  只清 marker 精确指向且内容指纹未变的本次创建项；已有或其后被替换的项目配置原样保留。
-
----
-
-## Orchestrator-side dispatch & watch discipline (SKILL §1.3–1.5 的展开)
-
-SKILL 主干只留 lane 选择、typed 状态、正向证据与 steering 边界。这里保存命令、坑枚举、状态全表和各失败态实证。
-
-### 派发（首轮统一 `--goal`；默认 EXEC 另挂 watch）
-
-```bash
-# 首轮派发，三引擎同构。默认 EXEC 启动 round 后立即返回；TUI escape 才在进程内验 hook + watch。
-references/agent-watch/dispatch <omp|codex|claude> <proj>-<task>-<agent> <worktree> --goal <abs-goal-or-brief-path> [--require-preflight]
-# 多轮评审显式 opt-in（仅默认 headless；初轮计 1，runtime meta 是 max-rounds 唯一真源）：
-references/agent-watch/dispatch codex <session> <worktree> --goal <abs-brief> --workflow review-loop --max-rounds <N>
-# 默认 EXEC：派发后立即另起受控后台 watch；同步 shell 编排者显式加 AGENT_WATCH_SYNC=1。
-references/agent-watch/watch <session>
-# TUI：融合 --goal 会在同一调用内完成送达确认并 watch；该阻塞调用必须交给宿主后台能力。
-
-# 后续 round：EXEC 只允许前一轮停止后 resume；TUI 可轮内送达。
-references/agent-watch/dispatch send <session> -f <fixround.md>
-# EXEC 的 rc0 只证明新 round 已启动；TUI 的 WORKING/busy 只证明指令 landed。两者都要再 watch 终态。
-```
-
-`--require-preflight` 是显式 opt-in：只给高不确定、即将进入昂贵设计/实现的方向使用。两条 lane 都会在启动 agent 前调用 `../goal-preflight.py`，校验 goal 中唯一的 `Preflight: <probe> => <observed result>` 已解占位；runtime 不猜任务类型，也不把字段存在冒充读数真实。
-
-review-loop 达到总轮数上限后，下一次 `dispatch send` 在任何 session 状态改动或 launch 前返回
-`BUDGET-EXHAUSTED`（exit 9）；上一轮 meta/rc/out 保持不变，转人工裁决。TUI lane 不维护持久轮数，显式
-`--workflow` / `--max-rounds` 会被拒绝。普通调用与旧 exec.meta 不受轮数门影响。
-
-裸 send-keys 是**逃生舱不是正路**（长/CJK 已被 guard DENY，逼 `dispatch send`），其坑照录在案：
-文本与 Enter 分开发；文本含 `@` 触发补全 → 先发 `Escape` 再 `Enter`；**长中文/特殊符号
-（①②③、全角冒号）指令会触发 omp 的 skill 模糊搜索弹窗吃掉 Enter，且 Escape/Ctrl-C 关不掉**（实证
-2026-07-02）→ `C-u` 清输入框 + 改发一行短 ASCII 引用指令文件（评审回修/多段指令一律写成
-`docs/orchestration/*_TASK|FIXROUND*.md` 再让 agent 读）；**弹窗事故后 TUI 输入层可能整体楔死**
-（多词 send-keys / paste-buffer 全被吞、C-u 无效，仅单 token 偶通）→ 别恋战，teardown + 重派新会话
-（状态都在 commit/goal 文件里，无损）；codex 启动更新提示——一次性在
-`~/.codex/config.toml` 设 `check_for_update_on_startup = false` 免掉（否则每次得先发 `2`+Enter）。
-
-**TUI 起后立刻验 hook**：Read dispatch 输出按三档判定——`WORKING ✓`（sentinel）或 `pane is BUSY`
-（codex 首个 tool 前正常）均可继续；`NO sentinel…pane not busy` = goal 没送达 → **停下重起、别带病跑**。
-默认 EXEC 不消费 hook sentinel；它用进程退出、round output 与 deliverable freshness 判状态，并要求另挂 `watch`
-（历史实证：裸起 session 靠抓屏猜状态，误报 DONE + 漏 WAITING、卡 21min 零 ping——正因此 2026-07-11 摘除
-抓屏 fallback，哑 hook 一律 exit 8 NO-HOOK，绝不带病监控）。
-
-**理解门按 lane**：TUI 第一轮复述"碰哪些文件/契约、有哪些风险"后等放行；headless 由 runtime footer
-要求简短复述后直接开工、不等待，真阻塞写 cwd 的 `BLOCKED.md` 并停止。
-
-### typed 状态（编排者纪律）
-
-- **typed 状态**：0 DONE / 1 SESSION-GONE / 2 AGENT-DEAD / 3 HANG / 4 WAITING-INPUT / 5 STALLED-EXTERNAL
-  / **6 IDLE-NO-DELIVERABLE**（终态样但声明的交付物 glob 始终没出现——**turn_end ≠ 任务终态**，多步 agent 每个
-  turn/阶段边界都发 DONE/呈 idle〔实证 2026-07-05 单日 4 次假 DONE〕。派"产出=文件"的任务设
-  `--deliverable <glob>`（dispatch 直传）或 env `AGENT_WATCH_DELIVERABLE`：DONE/idle 仅在 glob 命中**且
-  mtime 晚于本轮 arm stamp**（`<session>.watch-armed`）后 exit 0——只查存在会被上一轮产物开门、多轮 goal
-  第一轮后必早退〔实证 2026-07-11 三任务全中〕；超 `AGENT_WATCH_NODELIV_POLLS` 仍缺 → exit 6 = 去 poke
-  agent、别信幻影 DONE。spec 带 env、rearm 重挂不丢门、stamp 跨 SIGKILL 保原 arm 时刻）
-  / **7 WATCH-TIMEOUT**（有界轮询耗尽但 agent 仍 active；必须继续核证或重挂，绝不按 DONE 消费）
-  / **8 NO-HOOK**（sentinel 静默 ~2min 且 pane 空闲——hook 没接上/没 trust，监控不可得；人工核证或重派，
-  **不猜屏幕**——抓屏 fallback 已摘除）
-  （DEAD≠DONE、WAITING 要回输入、WATCH-TIMEOUT≠DONE、NO-HOOK≠任何终态）。长跑批触 HANG 上限 = "still busy" 重挂、非故障。
-- **TUI 融合 `--goal` 命令的 exit code = watch 裁决码，非派工成败**：默认 EXEC 的 launch rc 只表示 round 是否启动；TUI 后台通知把任意非零渲染成 "failed"，实战
-  3+ 次被误读为派工失败（实际 goal 已送达、agent 在跑）。判定认输出不认 rc：dispatch 末尾打印
-  `== watch verdict: exit N = <名称> — NOT a dispatch failure ==`，真派工失败在 handing-off 标记**之前**就退出了。
-- **5 STALLED-EXTERNAL = 外部 provider 错误热重试盲区**（overload/rate-limit/5xx；agent 活着 WORKING 却永不
-  DONE，机制见上文 `watch` backstop + Honest limits）。收到 5：**先核证再动手**——扫 exit 5 附带的屏尾，确是
-  provider chrome（非 agent 写错误处理代码刷屏误报）再 kill 热重试 agent、换新会话（不带退避状态）。实证盲等 ~13min。
-- **纯事件驱动会盲等：挂 watcher 时同时设上限**。除 watcher 外，按"任务预期时长 ×2"设个 fallback 自检
-  （定时兜底——CC:`ScheduleWakeup`；codex/shell 编排者:cron 或有界轮询），到点没终态就主动 capture-pane
-  ——"WORKING 但卡死/热重试"不发终态事件。
-- **Agent 工具异步 subagent 的完成通知有黑洞：只在"停止且自身无存活后台子进程"时才发**。子 agent 若自起后台
-  fork（如它派 Playwright E2E、或为保活起 monitor），这些子进程一直活着 → 父 agent idle 等待却**永不发完成
-  通知** → 编排者盲等到天荒地老（实证 2026-06-26：某 agent 自起 E2E fork + 保活 monitor，完成通知从不触发，
-  靠主动 SendMessage 才发现它早停那了）。对策：① **别只信完成通知**——长/浏览器异步 dispatch 按上条配
-  fallback 自检（`ScheduleWakeup`/cron）兜底；② 派工时要求 agent **验证在本回合内同步做完、不留孤儿后台
-  fork**，到里程碑 **SendMessage 回 main**，让父 agent 能干净收尾发通知。
-
-### 判完成要正向证据、不凭 idle / watcher 裁决
-
-tmux 链路无失败信号：session 在则 send/capture 都"成功"；watcher 裁决同样只是线索，后台型/阻塞型哪条
-消费路径（见 SKILL §0 + 上文 `watch`）都要自己 capture-pane 正向核证、不盲信。两个坑：
-- ① agent 死了退回 shell = 空屏+无忙碌 → 必须核 `pane_current_command` 仍是 agent 进程；
-- ② **agent 自起后台 job 会 yield=发 DONE 但没完成**（bg 跑完自动续）——凡这类相把完成信号绑**正向交付物**
-  （本地 commit／产物计数达标／显式 review 标记），别把"等自己 bg"误判成"等编排者"（实证：重批量抽取走
-  agent 自起 bg，按 idle 轮询屡误报，改判"出现本地 commit + idle 稳定"才准）。是 `沉默≠交付` 的同族。
-
-### 强制层：两个单一职责 guard 脚本
-
-脆弱完成信号会以三种方式骗编排者，光记规则没用（有规则照样违反）→ 工具调用层兜底。**两个 python3 脚本，按
-hook 拆开**（wiring 层本就按 event 分两条 entry，内部再分派是死重量；JSON 用 stdlib 解析/生成）：
-- **`cto-guard-bash.py`（PreToolUse·Bash；deny=exit 2+stderr，提醒=additionalContext）** — ① 拦背景 `&`（**剥引号 span 后
-  任意单 `&`**，含 `& <命令>`；`&&`/`2>&1`/`&>`/引号内 `&` 放行）；② DENY「纯 idle-absence、无正向 grep」的裸轮询
-  （idle≠done；带 git 交付物 / pane Verdict·prompt 才放行）；③ `dispatch` 后同条没 arm `watch` → 提醒（omission 无法硬 deny）；
-  ④ **拦长/CJK 裸 `tmux send-keys`**（omp 弹窗吃 Enter → 卡死 → 逼走 `dispatch send`）；⑤ **拦前台阻塞
-  watch / 融合 `dispatch --goal`**（前台 Bash 超时〔CC 默认 2min〕会把 watcher 连命令一起杀掉，exit 143，实证
-  2026-07-11——必须 run_in_background；同步型 shell 编排者按设计前台跑的，命令前缀 `AGENT_WATCH_SYNC=1` 显式放行）。
-  ⑥ **拦编排者亲跑 live e2e**（premium 会话干机械监督 = 烧钱——派便宜模型 worker 去跑，runner 命令
-  前缀 `E2E_ECONOMY=1` 自 declare；派发侧配套 P0d：brief 带该标记但 model 是 premium 同样 DENY）。
-  ① 用剥引号视图（`echo "a & b"` 不误报），④ 用原始 cmd（CJK 在引号内），⑤⑥ 只认**命令位**调用——路径当参数出现
-  （grep/cat 它）不拦，上线当天两次自误伤修出来的判据。**git-push 治理不在此**——归你的 Git 协作规范（evolab 公开镜像 `git-workflow-standard`）+ 服务端分支保护 ruleset。
-- **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task，按 `hook_event_name`+`tool_name` 分派）** — **Pre·Agent**:
-  browser/E2E 派发 prompt 含 `mcp__chrome-devtools` → DENY（逼 Playwright，防 CDP 争抢挂死，P0a）；派发未显式钉 `model`
-  档位 → DENY（防机械活静默继承 premium 模型，P0c）；**Pre·TaskStop|KillShell**: 杀的 agent
-  `.output` 120s 内还在长 = 活的 → DENY（"零截图"≠卡死，a11y agent 只产快照；override=`touch /tmp/cto-allow-kill-<id>`，P0b）；
-  **Post·Agent**: browser 派发注入黑洞 deadline-watch 提醒（提醒必须 JSON `additionalContext`，纯 stdout agent 看不到）。
-
-#### Wiring（§0：CC / Codex / omp 都能坐编排位；hook 模型各异，已对三家官方文档核实）
-
-| | Claude Code | Codex | omp (oh-my-pi) |
-|---|---|---|---|
-| hook 形态 | command 脚本 + stdin JSON | **同 CC**（契约对齐） | **in-process TS/JS 模块** |
-| 两脚本直接挂 | ✓ | ✓（bash 脚本；agent 脚本休眠） | ✗ 需 TS port |
-| 命令字段 | `tool_input.command` | `tool_input.command` | `event.input.command` |
-| deny 机制 | `exit 2 + stderr` | `exit 2 + stderr` | `return {block:true,reason}` |
-| 浏览器提醒 | ✓ `additionalContext` | 休眠（无 Agent/Task 工具） | `tool_result` 不能注入（需 `context` 事件） |
-| wiring | `.claude/settings.json` | `.codex/hooks.json`（嵌套 JSON） | `.omp/hooks/pre/*.ts` |
-
-**不另造 settings 脚手架——并进 `repo-governance-bootstrap` §11 已建的那份**。**entry 真源 = 本目录
-`guard-hooks.json`（唯一权威，别抄文档散文）**：接入时读它、把 command 换成安装根绝对路径（hooks 不展开 `~`）、
-按 event 并进项目 settings（CC `.claude/settings.json` / Codex `.codex/hooks.json` 同格式）。两条铁则：
-**直接 exec 别加 `python3 `/`bash ` 前缀**（脚本自带 shebang；前缀=押注 PATH 里的解释器，venv 一动全静默死）；
-matcher 别手编——它与脚本实现同包维护、发布门校验一致（曾实证漂移：README 抄本少了 `KillShell`）。
-
-> **不靠 skill frontmatter `hooks:` 自注册**：文档说 skill 可在 frontmatter 声明 hook、skill active 时生效，但
-> **实测 mid-session 经 Skill 工具激活并不注册**（cto 恰是按需 mid-session 激活，正是要 guard 的那刻拿不到）→ 显式 wiring 才可靠。
-
-- **CC / Codex**：上面同一 JSON（CC `.claude/settings.json`、Codex `.codex/hooks.json`；契约对齐 drop-in：
-  `hook_event_name`/`tool_name`/`tool_input.command`、`exit 2` deny、`additionalContext` 全同名）。Codex 无 Agent/Task
-  工具 → agent 脚本休眠（harmless）；codex 起需带 `--dangerously-bypass-hook-trust`（见 bootstrap §11 ⚠️）。
-- **omp**：hook 是 in-process TS 模块（默认导出 factory、`pi.on("tool_call", e => …)`、`e.input.command`、return
-  `{block:true,reason}`），**不吃 stdin-JSON 命令脚本** → python 脚本挂不上；把 bash 脚本判定写成 `.omp/hooks/pre/*.ts`
-  （或 TS shell-out + 字段映射 `event.input.command`→stdin-JSON + `exit 2`→`{block:true}`）。浏览器提醒在 omp 最难：
-  `tool_result` 只能改输出、不能给模型注入 context，要走单独 `context` 事件。
-
-## headless 车道（**默认**，2026-07-12 翻转；TUI escape = `DISPATCH_TUI=1`）
-
-**`dispatch` 命令面不变，默认即走 headless**（翻转动因：TUI 车道靠驱动交互界面反推状态，
-claude ≥2.1.205 / omp 16.4.4 / codex 0.144.1 三次 CLI 升级三次静默弄坏它——headless 终态 =
-进程退出 + 文件，没有这个税）。TUI 车道 escape：`DISPATCH_TUI=1`（legacy `DISPATCH_EXEC=0`
-同效；`DISPATCH_EXEC=1` 已是 no-op），维护 best-effort、只修真 bug：
-
-```bash
-dispatch <omp|codex|claude> <session> <cwd> --goal <f> [--deliverable <glob>]   # 默认 headless
-dispatch <agent> <session> <cwd> --goal <f> --workflow review-loop --max-rounds <N>
-dispatch send <session> -f <fixround.md> [--deliverable <glob>]   # EXEC 可为新 round 换产物门
-watch <session>                            # 同一入口，自动代理
-teardown <session>                         # 连 headless 状态一起清
-DISPATCH_TUI=1 dispatch <agent> <session> <cwd> --goal <f>   # 真需轮内交互/菜单才走 TUI
-```
-
-- 终态只读 `dispatch status <session>` / `watch <session>` 的 typed status；不要直接读取 `.exec.rc`。
-- `DONE` 只表示本轮结束；需要下一轮时继续 `dispatch send` resume 同一会话。
-- EXEC `send` 未传 `--deliverable` 则沿用旧门；传入则从新 round 起替换。
-- exit 6 `IDLE-NO-DELIVERABLE` 用 `dispatch send` 补一轮，不要 teardown；`teardown` 只用于收工或明确放弃。
-- 文件产出必须带 `--deliverable <glob>`；非文件结果不得带，不设该门。
-
-实现机制、引擎级事实（resume 语义、退出码坑）见 `dispatch-exec` 脚本头注——使用者不需要。
-
-## watchspec 自愈（session-scoped watcher 被回收后的查漏）
-
-实证：主 turn stop 后，仍在 RUNNING 的 session-scoped watcher 可能消失；现有证据不足以归因具体 signal、
-OS 或内存压力。"记得重挂"不能靠编排者记忆。机制：
-
-- `watch` 起时写 `$DIR/<session>.watchspec`（含 pid + 完整重挂命令），**EXIT trap 删除**——
-  自然退出（DONE/WAITING/HANG…）不留痕；异常终止未走清理时，幸存 spec 用于查漏。
-- **`rearm`**（本目录）：扫描 spec，并从 `.events` / `.exec.meta` 发现 active session 缺 watcher；EXEC
-  只认 typed `RUNNING`；TUI 无 spec 时只认 `WORKING/LOADED`，幸存 dead spec 则直接重挂（`DONE` 可能只是
-  turn boundary）。缺口 → 打印重挂命令。
-  **只打印不执行**——编排者用自己的受控后台机制（Bash 工具 run_in_background）逐条起，rearm 自己绝不
-  background（孤儿 shell 正是要避免的失败模式）。
-- **Claude Code only**：把 `watch-hooks.json` 的两条 entry 以绝对命令路径并进 `.claude/settings.json`；
-  `SessionStart` / `UserPromptSubmit` 只在下次生命周期点固定提醒运行 `rearm`。不要并入 shared
-  `guard-hooks.json` 或 Codex hooks。
-- 编排者纪律：收到 watcher "was stopped" 通知，跑一次 `rearm`，照单重挂。
+| duplex 产帧 / 投影 / 路由 / 死亡路径 | ✅ hermetic | `test/agentctl-duplex.test.sh`：进程级 fake tmux + scriptable fake 引擎驱动真 fifo/flock/events 管线（52 断言） |
+| duplex live（真 omp 17.0.5 / claude 2.1.215） | ⏳ 本分支 e2e | `test/e2e/agentctl-duplex.e2e.sh`：start→watch→steer→watch→stop 全链 + 零残留；**claude 裸 CLI stream-json 多轮注入的首个 live 实证**（文档推断，若不成立 claude 腿回退 round） |
+| round 车道（dispatch-exec 内部引擎） | ✅ | hermetic 全分支（195 断言）+ 既往 live 双轮绿；deliverable 相对 glob 修复带回归测例 |
+| deliverable 门（exit 6 / freshness / 相对 glob） | ✅ | hermetic 对抗测试，两车道 |
+| guard ①-⑥ / P0a-P0d | ✅ | hermetic + `hook-deny-pointer` 自指门（DENY 指针目标真实性）|
+| BLOCKED.md 协议真 fire | ◯ 未 live 验 | footer 结构化自带；hermetic 有测例，live 实证仍缺 |

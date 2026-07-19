@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# agentctl — unified control surface for headless worker agents (duplex-lane era).
+#
+#   agentctl start  <omp|codex|claude> <session> <cwd> --goal F [--deliverable G]
+#                   [--require-preflight] [engine args...]
+#   agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d|--deliverable G]
+#   agentctl status <session>            # one-shot typed state (exit = verdict)
+#   agentctl watch  <session>            # block until terminal; typed exit 0-8
+#   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
+#
+# Lanes (per engine, chosen at start; later verbs self-route by session state):
+#   omp / claude → DUPLEX: one long-lived engine process per session speaks its native
+#     stdio protocol (omp --mode=rpc / claude stream-json) inside a tmux supervisor pane;
+#     steering is a native protocol frame written to the session fifo (duplexctl.py is the
+#     single flock-serialized writer). No send-keys, no pane scraping, no per-round spawn.
+#   codex → ROUND: the battle-tested exec-resume machinery (dispatch-exec) — codex's
+#     duplex surface (app-server) is officially experimental; we hold until a real need.
+# tmux is a process SUPERVISOR only: the worker survives orchestrator restarts; nothing
+# ever reads or types into the pane. Typed exit vocabulary shared with the round lane:
+#   0 DONE / 1 SESSION-GONE / 2 FAILED|AGENT-DEAD / 3 send-unconfirmed / 4 WAITING-INPUT
+#   / 5 STALLED-EXTERNAL / 6 IDLE-NO-DELIVERABLE / 7 WATCH-TIMEOUT / 8 ENGINE-SILENT
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
+CTL="$HERE/duplexctl.py"
+PY="${AGENTCTL_PYTHON:-python3}"
+
+q() { printf %q "$1"; }
+meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
+usage() {
+  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--require-preflight] [engine args...]" >&2
+  echo "       agentctl steer <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]" >&2
+  echo "       agentctl status <session> | watch <session> | stop <session> [cwd]" >&2
+  exit 1
+}
+
+# duplex sessions have .duplex.meta; round sessions .exec.meta; anything else = TUI legacy.
+lane_of() { # $1 session
+  if [ -f "$DIR/$1.duplex.meta" ]; then echo duplex
+  elif [ -f "$DIR/$1.exec.meta" ]; then echo round
+  else echo none; fi
+}
+
+# The BLOCKED.md footer keeps the cross-engine ask-user protocol alive on the duplex lane:
+# headless engines cannot prompt, so "on doubt, write BLOCKED.md and stop" maps to exit 4.
+append_footer() { # $1 out-file  $2 cwd
+  printf '\n\n---\nHEADLESS PROTOCOL\n%s\n%s\n' \
+    'This session is non-interactive. Work from this message and stop when done; further instructions may arrive as new messages.' \
+    "If genuinely blocked, write the blocker to $2/BLOCKED.md and stop." >> "$1"
+}
+
+cmd_start() {
+  ENG="${1:?usage}" ; S="${2:?session}" ; CWD="${3:?cwd}"; shift 3
+  case "$ENG" in omp|codex|claude) ;; *) echo "ERR: unknown engine '$ENG' (omp|codex|claude)" >&2; exit 1 ;; esac
+  GOAL=""; DELIV=""; PREFLIGHT=0; EXTRA=()
+  while [ "$#" -gt 0 ]; do case "$1" in
+    --goal) GOAL="${2:?--goal needs a file}"; shift 2;;
+    --deliverable) DELIV="${2:?--deliverable needs a glob}"; shift 2;;
+    --require-preflight) PREFLIGHT=1; shift;;
+    --workflow|--max-rounds)
+      # round-lane machinery: on the duplex lane these would leak to the ENGINE as argv
+      [ "$ENG" = codex ] || { echo "ERR: $1 is round-lane only (codex) — duplex sessions steer instead of budgeting rounds" >&2; exit 1; }
+      EXTRA[${#EXTRA[@]}]="$1"; shift;;
+    *) EXTRA[${#EXTRA[@]}]="$1"; shift;;
+  esac; done
+  [ -n "$GOAL" ] && [ -e "$GOAL" ] || { echo "ERR: --goal <file> required and must exist" >&2; exit 1; }
+  [ "$PREFLIGHT" = 0 ] || "$HERE/../goal-preflight.py" "$GOAL" || exit 1
+  [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
+  CWD="$(cd "$CWD" && pwd -P)"
+  mkdir -p "$DIR"
+
+  if [ "$ENG" = codex ]; then
+    # round lane, unchanged machinery; agentctl verbs self-route back to it afterwards
+    exec "$HERE/dispatch-exec" codex "$S" "$CWD" --goal "$GOAL" \
+      ${DELIV:+--deliverable "$DELIV"} ${EXTRA[@]+"${EXTRA[@]}"}
+  fi
+
+  # collisions: any prior state under this name (either lane, or a live tmux session)
+  [ "$(lane_of "$S")" = none ] || { echo "ERR: session '$S' already exists ($(lane_of "$S") lane) — agentctl stop $S or pick a new name" >&2; exit 1; }
+  tmux has-session -t "$S" 2>/dev/null && { echo "ERR: tmux session '$S' already exists" >&2; exit 1; }
+
+  FIFO="$DIR/$S.duplex.in"; EV="$DIR/$S.duplex.events.jsonl"
+  ERR="$DIR/$S.duplex.stderr.log"; RC="$DIR/$S.duplex.rc"
+  rm -f "$FIFO" "$RC"; : > "$EV"; : > "$ERR"
+  mkfifo "$FIFO" || { echo "ERR: mkfifo failed: $FIFO" >&2; exit 1; }
+
+  EXTRA_Q=""  # zero args to `printf ' %q'` would still format once → a literal '' engine arg
+  [ "${#EXTRA[@]}" -gt 0 ] && EXTRA_Q="$(printf ' %q' "${EXTRA[@]}")"
+  case "$ENG" in
+    omp)    BIN="${AGENTCTL_BIN_OMP:-omp}"
+            ECMD="$(q "$BIN") --mode=rpc$EXTRA_Q" ;;
+    claude) BIN="${AGENTCTL_BIN_CLAUDE:-claude}"
+            ECMD="$(q "$BIN") -p --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions$EXTRA_Q" ;;
+  esac
+  { printf 'engine=%s\ncwd=%s\n' "$ENG" "$CWD"
+    [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"; } > "$DIR/$S.duplex.meta"
+
+  # exec 3<> holds the fifo read-write so the engine's stdin NEVER sees EOF (both
+  # engines exit on stdin close); engine runs as a child so the shell can record rc.
+  PANE="exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); echo \$? > $(q "$RC")"
+  if ! tmux new-session -d -s "$S" -c "$CWD" "$PANE"; then
+    rm -f "$FIFO" "$DIR/$S.duplex.meta"
+    echo "ERR: tmux new-session failed for '$S' (nothing started)" >&2; exit 1
+  fi
+
+  if ! "$PY" "$CTL" --run-dir "$DIR" wait-ready "$S" --wait 20; then
+    echo "ERR: engine handshake failed — cleaning up. stderr tail:" >&2
+    tail -c 800 "$ERR" >&2 2>/dev/null || true
+    tmux kill-session -t "$S" 2>/dev/null; rm -f "$FIFO" "$DIR/$S.duplex.meta"
+    exit 1
+  fi
+
+  PROMPT="$DIR/$S.duplex.prompt"
+  cat "$GOAL" > "$PROMPT"; append_footer "$PROMPT" "$CWD"
+  "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb prompt --file "$PROMPT" || {
+    echo "ERR: goal delivery failed — engine up but prompt not accepted; inspect then agentctl stop $S" >&2; exit 2; }
+  echo "started $ENG → duplex session '$S' (cwd $CWD; tmux supervises, protocol steers)"
+  echo "events : $EV (raw stays on disk; status/watch print bounded summaries only)"
+  echo "engine : $ENG — model/backend = engine default unless overridden in args:${EXTRA[*]:+ ${EXTRA[*]}}"
+  echo "next   : agentctl watch $S   (blocking, run_in_background)  |  agentctl status $S  (one-shot)"
+}
+
+cmd_steer() {
+  S="${1:?usage: agentctl steer <session> (-m TEXT | -f FILE) [--now|--replace] [-d G]}"; shift
+  MODE=""; ARG=""; VERB="steer"; NEWDELIV=""
+  while [ "$#" -gt 0 ]; do case "$1" in
+    -m|-f) MODE="$1"; ARG="${2:?$1 needs a value}"; shift 2;;
+    --now) VERB="steer-now"; shift;;
+    --replace) VERB="replace"; shift;;
+    -d|--deliverable) NEWDELIV="${2:?-d needs a glob}"; shift 2;;
+    *) echo "ERR: unknown steer option '$1'" >&2; usage;;
+  esac; done
+  [ -n "$MODE" ] || usage
+  case "$(lane_of "$S")" in
+    duplex)
+      [ "$MODE" = -f ] && { [ -e "$ARG" ] || { echo "ERR: file not found: $ARG" >&2; exit 1; }; }
+      if [ -n "$NEWDELIV" ]; then
+        meta="$DIR/$S.duplex.meta"; tmp="$(mktemp "$meta.XXXXXXXX")"
+        { grep -v '^deliverable=' "$meta"; printf 'deliverable=%s\n' "$NEWDELIV"; } > "$tmp" && mv "$tmp" "$meta"
+      fi
+      if [ "$MODE" = -f ]; then "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --file "$ARG"
+      else "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --text "$ARG"; fi ;;
+    round)
+      [ "$VERB" = steer ] || echo "note: round lane has no mid-turn steer — delivering as a resume round" >&2
+      exec "$HERE/dispatch-exec" send "$S" "$MODE" "$ARG" ${NEWDELIV:+-d "$NEWDELIV"} ;;
+    none) echo "ERR: unknown session '$S' (no duplex/round state)" >&2; exit 1 ;;
+  esac
+}
+
+cmd_status() {
+  S="${1:?usage: agentctl status <session>}"
+  case "$(lane_of "$S")" in
+    duplex) "$PY" "$CTL" --run-dir "$DIR" classify "$S" ;;
+    round)  exec "$HERE/dispatch-exec" status "$S" ;;
+    none)   echo "ERR: unknown session '$S'" >&2; exit 1 ;;
+  esac
+}
+
+cmd_watch() {
+  S="${1:?usage: agentctl watch <session>}"
+  case "$(lane_of "$S")" in
+    round) exec "$HERE/dispatch-exec" watch "$S" ;;
+    none)  echo "ERR: unknown session '$S'" >&2; exit 1 ;;
+  esac
+  POLL="${AGENT_WATCH_POLL_SECS:-15}"; MAX="${AGENT_WATCH_MAX_POLLS:-240}"
+  # ENGINE-SILENT bound: a steer was delivered but the engine produced zero output for
+  # ~2min. The duplex analog of the old NO-HOOK exit 8 — report honestly, never guess.
+  SILENT_MAX="${AGENT_WATCH_SILENT_POLLS:-8}"
+  echo "=== [$S] DUPLEX-WATCH ARMED at $(date '+%H:%M:%S') (stateless — safe to kill and re-run) ==="
+  idle=0; silent=0; i=1
+  while [ "$i" -le "$MAX" ]; do
+    msg="$("$PY" "$CTL" --run-dir "$DIR" classify "$S")"; rc=$?
+    case "$rc" in
+      10)
+        case "$msg" in *"no output since last steer"*) silent=$((silent+1));; *) silent=0;; esac
+        if [ "$silent" -ge "$SILENT_MAX" ]; then
+          echo "=== [$S] ENGINE-SILENT at $(date '+%H:%M:%S') — steer delivered but no engine output ~2min; inspect $DIR/$S.duplex.stderr.log ==="
+          exit 8
+        fi
+        idle=0 ;;
+      0|6)
+        # stability: require 2 consecutive terminal reads — a turn boundary right
+        # before an auto-consumed queued message must not read as terminal.
+        idle=$((idle+1)); silent=0
+        if [ "$idle" -ge 2 ]; then echo "=== [$S] $msg ==="; exit "$rc"; fi ;;
+      *) echo "=== [$S] $msg ==="; exit "$rc" ;;
+    esac
+    [ $((i % 12)) -eq 0 ] && echo "[$S] heartbeat iter $i $(date '+%H:%M:%S') — $msg"
+    i=$((i+1)); sleep "$POLL"
+  done
+  echo "=== [$S] WATCH TIMEOUT — engine still active; re-run watch or investigate ==="; exit 7
+}
+
+cmd_stop() {
+  S="${1:?usage: agentctl stop <session>}"
+  case "$(lane_of "$S")" in
+    duplex)
+      tmux kill-session -t "$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
+      rm -f "$DIR/$S.duplex.in" "$DIR/$S.duplex.meta" "$DIR/$S.duplex.round-started" \
+            "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" 2>/dev/null
+      echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc" ;;
+    round)
+      tmux kill-session -t "$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
+      rm -f "$DIR/$S".exec.* 2>/dev/null
+      rm -rf "$DIR/$S.omp-sessions" 2>/dev/null
+      echo "removed round-lane state $DIR/$S.exec.*" ;;
+    none)
+      # no lane state: still offer bare-tmux cleanup so a half-launched session isn't stranded
+      if tmux has-session -t "$S" 2>/dev/null; then
+        tmux kill-session -t "$S" 2>/dev/null
+        echo "killed bare tmux session $S (no lane state existed)"
+      else echo "ERR: unknown session '$S' (no duplex/round state, no tmux session)" >&2; exit 1; fi ;;
+  esac
+}
+
+case "${1:-}" in
+  start)  shift; cmd_start "$@" ;;
+  steer)  shift; cmd_steer "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  watch)  shift; cmd_watch "$@" ;;
+  stop)   shift; cmd_stop "$@" ;;
+  ""|-h|--help) usage ;;
+  *) echo "ERR: unknown subcommand '${1}'" >&2; usage ;;
+esac

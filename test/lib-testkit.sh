@@ -13,18 +13,13 @@ set -u
 # switch in ~/.zshenv re-routes every TUI-launch test and skips guard check (5) —
 # suite red on that box, green everywhere else (caught by independent review 2026-07-11).
 # Tests that assert exec routing set the switch INLINE per invocation.
-unset DISPATCH_EXEC DISPATCH_TUI AGENT_WATCH_SYNC 2>/dev/null || true
+unset AGENT_WATCH_SYNC 2>/dev/null || true
 
 # Resolve the agent-watch dir. test/ lives at the repo root; the scripts under
 # test live under skills/cto-orchestration/references/agent-watch/.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AW_DIR="$REPO_ROOT/skills/cto-orchestration/references/agent-watch"
-WATCH="$AW_DIR/watch"
-EMIT="$AW_DIR/emit.sh"
-EMIT_STDIN="$AW_DIR/hooks/emit-from-stdin.sh"
-DISPATCH="$AW_DIR/dispatch"
-TEARDOWN="$AW_DIR/teardown"
-OMP_TS="$AW_DIR/hooks/omp-watch.ts"
+AGENTCTL="$AW_DIR/agentctl"
 
 PASS=0
 FAIL=0
@@ -152,17 +147,4 @@ sandbox_clean() {
   unset FAKE_TMUX_DISPLAY_FAIL FAKE_TMUX_CAPTURE_FAIL FAKE_PANE_CMD FAKE_PANE_FILE FAKE_TMUX_HASSESSION FAKE_TMUX_NEWSESSION_FAIL
   unset FAKE_TMUX_CMD_FILE FAKE_TMUX_DELIV_FILE FAKE_TMUX_EVENT_LINE
   unset FAKE_TMUX_LAUNCH_LOG FAKE_TMUX_HOLD_FILE
-}
-
-# seed_events <session> <content...>  -- write the sentinel events file.
-seed_events() { # $1 session ; remaining = lines via printf %b
-  local sess="$1"; shift
-  printf '%b' "$*" > "$WATCH_RUN_DIR/$sess.events"
-}
-
-# pane_fixture <content...> -- write a capture-pane fixture file, export FAKE_PANE_FILE.
-pane_fixture() {
-  FAKE_PANE_FILE="$SANDBOX/pane.txt"
-  printf '%b' "$*" > "$FAKE_PANE_FILE"
-  export FAKE_PANE_FILE
 }

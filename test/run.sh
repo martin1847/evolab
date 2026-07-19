@@ -35,7 +35,7 @@ for tp in "$HERE"/*.test.sh; do
   run_one "$t" bash "$tp"
 done
 
-for bt in omp-watch.bun.ts memory-hook-omp.bun.ts; do
+for bt in memory-hook-omp.bun.ts; do
   echo
   echo "==== $bt ===="
   if command -v bun >/dev/null 2>&1; then
