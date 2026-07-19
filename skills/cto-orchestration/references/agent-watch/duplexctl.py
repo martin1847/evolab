@@ -12,14 +12,16 @@ Output is BOUNDED by design: raw engine output stays in EVENTS; classify prints
 one typed line + a <=600-char summary (the 147KB single-line agent_end replay
 going into the orchestrator context was a field-reported token bomb).
 
-Engines:
-  omp    : --mode=rpc JSON-lines. prompt/steer/follow_up/abort_and_prompt verbs,
-           get_state for live status (isStreaming / queuedMessageCount).
-  claude : -p --input-format stream-json. A user message injected mid-turn is
-           natively QUEUED to the next turn (official semantics); there is no
-           public interrupt frame, so steer --now degrades to queued (told to
-           the caller). State is projected from the event stream (result frame
-           = turn boundary / idle).
+Engines (one uniform surface; an impl that lacks a capability REFUSES cleanly —
+Java-interface style — instead of silently degrading):
+  omp    : --mode=rpc JSON-lines. prompt/steer(follow_up)/steer-now(steer)/
+           replace(abort_and_prompt); get_state for live status.
+  claude : -p --input-format stream-json. steer = natively queued to the next
+           turn; --now degrades to queued (told); --replace refused (stop+resume).
+  codex  : app-server JSON-RPC (spike-verified 2026-07-19 on 0.144.5, v1 param
+           shapes). steer default = NEXT turn only (no queue: busy → refuse,
+           idle → turn/start); --now = native mid-turn turn/steer{expectedTurnId};
+           --replace = turn/interrupt + turn/start. threadId persisted in meta.
 """
 from __future__ import annotations
 
@@ -64,6 +66,34 @@ class Session:
             die(f"unknown duplex session '{self.name}' (no {self.meta_path})")
 
 
+def meta_update(sess: Session, key: str, value: str) -> None:
+    lines = [ln for ln in open(sess.meta_path, encoding="utf-8")
+             if not ln.startswith(f"{key}=")] if os.path.exists(sess.meta_path) else []
+    lines.append(f"{key}={value}\n")
+    tmp = sess.meta_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.writelines(lines)
+    os.replace(tmp, sess.meta_path)
+    sess.meta[key] = value
+
+
+def check_review_budget(sess: Session, text: str) -> None:
+    """review-loop stop-loss, ported from the round lane: each prompt/steer is a
+    round; the budget and the SHIP-BLOCKING continuation lease live in meta."""
+    if sess.meta.get("workflow") != "review-loop":
+        return
+    round_n = int(sess.meta.get("round", "0"))
+    max_rounds = int(sess.meta.get("max_rounds", "0"))
+    if round_n >= max_rounds:
+        print(f"BUDGET-EXHAUSTED: review-loop '{sess.name}' reached max-rounds={max_rounds} (current round={round_n})",
+              file=sys.stderr)
+        sys.exit(9)
+    if round_n >= 2 and not any(l.startswith("SHIP-BLOCKING:") and l.split(":", 1)[1].strip()
+                                for l in text.splitlines()):
+        die(f"review-loop continuation lease missing for round {round_n + 1}; add an independent "
+            "'SHIP-BLOCKING: <non-empty rationale>' line to the message/brief")
+
+
 def die(msg: str, code: int = 1) -> None:
     print(f"ERR: {msg}", file=sys.stderr)
     sys.exit(code)
@@ -83,6 +113,46 @@ def clip(text: str, limit: int = SUMMARY_CHARS) -> str:
 
 
 # ── frames ────────────────────────────────────────────────────────────────────
+def jsonrpc(req_id, method: str, params=None) -> str:
+    frame = {"jsonrpc": "2.0", "method": method}
+    if req_id is not None:
+        frame["id"] = req_id
+    if params is not None:
+        frame["params"] = params
+    return json.dumps(frame, ensure_ascii=False)
+
+
+def codex_request(sess: Session, method: str, params, timeout: float = 20.0,
+                  on_ready=None):
+    """One correlated JSON-RPC round trip through the fifo/events pipeline."""
+    req_id = f"ctl-{uuid.uuid4().hex[:12]}"
+    offset = events_size(sess)
+    write_frame(sess, jsonrpc(req_id, method, params), on_ready=on_ready)
+    return wait_for(
+        sess, offset,
+        lambda f: f.get("id") == req_id and ("result" in f or "error" in f),
+        timeout)
+
+
+def codex_text_input(text: str) -> list:
+    return [{"type": "text", "text": text}]
+
+
+def codex_active_turn(sess: Session):
+    """Latest turn/started without a later matching turn/completed (whole file:
+    turn ids are engine truth, not steer-relative)."""
+    active = None
+    for frame in complete_frames_from(sess, 0):
+        method = frame.get("method")
+        turn = (frame.get("params") or {}).get("turn") or {}
+        if method == "turn/started":
+            active = turn.get("id")
+        elif method == "turn/completed" and turn.get("id") == active:
+            active = None
+    return active
+
+
+
 def build_frame(engine: str, verb: str, text: str, req_id: str) -> str:
     if engine == "omp":
         omp_type = {
@@ -362,6 +432,48 @@ def project_claude(sess: Session) -> tuple[str, str]:
     return "RUNNING", f"last frame type={last.get('type')}"
 
 
+CODEX_ASK_METHODS = ("requestApproval", "requestUserInput", "elicitation")
+
+
+def project_codex(sess: Session) -> tuple[str, str]:
+    try:
+        sent = int(open(sess.sent_offset, encoding="utf-8").read().strip())
+    except (OSError, ValueError):
+        sent = 0
+    frames = complete_frames_from(sess, sent)
+    if not frames:
+        if events_size(sess) <= sent:
+            return "RUNNING", "no output since last steer (engine silent so far)"
+        return "RUNNING", "output started, no complete frame yet"
+    last_completed = None
+    started_after_completed = False
+    pending_ask = None
+    answer_text = ""
+    for frame in frames:
+        method = frame.get("method", "")
+        params = frame.get("params") or {}
+        if method == "turn/started":
+            started_after_completed = True
+        elif method == "turn/completed":
+            last_completed = params.get("turn") or {}
+            started_after_completed = False
+        elif method == "item/completed":
+            item = params.get("item") or {}
+            if item.get("phase") == "final_answer" and item.get("text"):
+                answer_text = item["text"]
+        if frame.get("id") is not None and any(m in method for m in CODEX_ASK_METHODS):
+            pending_ask = frame
+    if pending_ask is not None:
+        return "WAITING", clip(json.dumps(pending_ask, ensure_ascii=False), 200)
+    if started_after_completed or last_completed is None:
+        return "RUNNING", "turn in progress"
+    status = last_completed.get("status")
+    err = last_completed.get("error")
+    if err or status not in ("completed",):
+        return "ERROR", clip(f"turn status={status} error={err}")
+    return "IDLE", clip(answer_text) or "turn completed"
+
+
 def classify(sess: Session) -> int:
     sess.require_meta()
     engine = sess.meta.get("engine", "")
@@ -407,7 +519,8 @@ def classify(sess: Session) -> int:
         pass
 
     # 4. live projection
-    state, detail = (project_omp if engine == "omp" else project_claude)(sess)
+    projector = {"omp": project_omp, "claude": project_claude, "codex": project_codex}[engine]
+    state, detail = projector(sess)
     if state == "WAITING":
         print(f"WAITING-INPUT: {detail}")
         return 4
@@ -447,6 +560,8 @@ def cmd_send(args: argparse.Namespace) -> int:
     if os.path.exists(sess.intent):
         die("a previous frame write died mid-stream (write-intent marker present) — the "
             "engine's input stream is tainted: agentctl stop, then restart with resume args", 2)
+    if args.verb in ("prompt", "steer", "steer-now", "replace"):
+        check_review_budget(sess, text)
     if engine == "claude" and args.verb == "replace":
         # degrading replace to a queued steer would silently keep the doomed turn
         # running — refuse and route the operator to the honest path instead
@@ -465,6 +580,7 @@ def cmd_send(args: argparse.Namespace) -> int:
         if args.verb in ("prompt", "steer", "steer-now", "replace"):
             with open(sess.epoch, "a", encoding="utf-8"):
                 os.utime(sess.epoch, None)
+            meta_update(sess, "round", str(int(sess.meta.get("round", "0")) + 1))
             offset_box["v"] = events_size(sess)
             # atomic replace: an in-place truncate gave lock-free classify a window
             # where the offset read as empty → 0 → an old result revived as DONE
@@ -472,6 +588,49 @@ def cmd_send(args: argparse.Namespace) -> int:
             with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(str(offset_box["v"]))
             os.replace(tmp, sess.sent_offset)
+
+    if engine == "codex":
+        thread = sess.meta.get("thread") or die("no threadId in meta — handshake incomplete")
+        active = codex_active_turn(sess)
+        if args.verb == "steer":
+            if active is not None:
+                die("codex has no queue — a turn is ACTIVE: use --now (native mid-turn "
+                    "turn/steer) or wait for DONE, then steer the next turn")
+            reply = codex_request(sess, "turn/start",
+                                  {"threadId": thread, "input": codex_text_input(text)},
+                                  on_ready=commit_round_state)
+        elif args.verb == "steer-now":
+            if active is None:
+                die("no active turn to steer — default steer starts the next turn instead")
+            reply = codex_request(sess, "turn/steer",
+                                  {"threadId": thread, "expectedTurnId": active,
+                                   "input": codex_text_input(text)},
+                                  on_ready=commit_round_state)
+        elif args.verb == "replace":
+            if active is not None:
+                intr = codex_request(sess, "turn/interrupt",
+                                     {"threadId": thread, "turnId": active})
+                if intr is None or "error" in intr:
+                    die(f"turn/interrupt not accepted: {clip(json.dumps(intr, ensure_ascii=False), 200)}", 2)
+                wait_for(sess, events_size(sess),
+                         lambda f: f.get("method") == "turn/completed", timeout=15.0)
+            reply = codex_request(sess, "turn/start",
+                                  {"threadId": thread, "input": codex_text_input(text)},
+                                  on_ready=commit_round_state)
+        elif args.verb == "prompt":
+            reply = codex_request(sess, "turn/start",
+                                  {"threadId": thread, "input": codex_text_input(text)},
+                                  on_ready=commit_round_state)
+        else:
+            die(f"unsupported codex verb: {args.verb}")
+        if reply is None:
+            print("WARN: no JSON-RPC response in 20s — frame delivered, engine may be busy; verify with agentctl status")
+            return 3
+        if "error" in reply:
+            print(f"ERR: engine rejected the frame: {clip(json.dumps(reply['error'], ensure_ascii=False), 300)}")
+            return 2
+        print(f"OK: {args.verb} accepted by engine (correlated JSON-RPC response)")
+        return 0
 
     req_id = f"ctl-{uuid.uuid4().hex[:12]}"
     write_frame(sess, build_frame(engine, args.verb, text, req_id), on_ready=commit_round_state)
@@ -496,13 +655,40 @@ def cmd_send(args: argparse.Namespace) -> int:
 def cmd_wait_ready(args: argparse.Namespace) -> int:
     sess = Session(args.run_dir, args.session)
     sess.require_meta()
-    if sess.meta["engine"] != "omp":
-        return 0  # claude has no handshake frame; first prompt just goes in
-    frame = wait_for(sess, 0, lambda f: f.get("type") == "ready", timeout=args.wait)
-    if frame is None:
-        print(f"ERR: no ready frame in {args.wait:.0f}s — engine failed to start rpc mode; tail {sess.stderr}", file=sys.stderr)
+    engine = sess.meta["engine"]
+    if engine == "claude":
+        return 0  # no handshake frame; first prompt just goes in
+    if engine == "omp":
+        frame = wait_for(sess, 0, lambda f: f.get("type") == "ready", timeout=args.wait)
+        if frame is None:
+            print(f"ERR: no ready frame in {args.wait:.0f}s — engine failed to start rpc mode; tail {sess.stderr}", file=sys.stderr)
+            return 1
+        print("ready: omp rpc handshake frame observed")
+        return 0
+    # codex: initialize → initialized → thread/start; persist threadId (v1 param
+    # shapes, spike-verified 2026-07-19 — the live server self-describes drift)
+    init = codex_request(sess, "initialize",
+                         {"clientInfo": {"name": "agentctl", "title": "agentctl duplex",
+                                         "version": "2.0"}}, timeout=args.wait)
+    if init is None or "error" in init:
+        print(f"ERR: codex initialize failed: {clip(json.dumps(init, ensure_ascii=False), 200)}", file=sys.stderr)
         return 1
-    print("ready: omp rpc handshake frame observed")
+    write_frame(sess, jsonrpc(None, "initialized"))
+    if sess.meta.get("resume_thread"):
+        started = codex_request(sess, "thread/resume",
+                                {"threadId": sess.meta["resume_thread"]}, timeout=args.wait)
+    else:
+        params = {"cwd": sess.meta.get("cwd"), "approvalPolicy": "never",
+                  "sandbox": "danger-full-access"}
+        if sess.meta.get("model"):
+            params["model"] = sess.meta["model"]
+        started = codex_request(sess, "thread/start", params, timeout=args.wait)
+    thread_id = (((started or {}).get("result") or {}).get("thread") or {}).get("id")
+    if not thread_id:
+        print(f"ERR: codex thread/start failed: {clip(json.dumps(started, ensure_ascii=False), 300)}", file=sys.stderr)
+        return 1
+    meta_update(sess, "thread", thread_id)
+    print(f"ready: codex app-server handshake complete (thread {thread_id})")
     return 0
 
 

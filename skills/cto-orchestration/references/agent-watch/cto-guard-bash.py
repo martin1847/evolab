@@ -185,7 +185,7 @@ def main():
         _wrap = r"(?:[\"']?(?:\S*/)?(?:bash|sh|zsh|exec|nohup|time|command|env|timeout)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+|\w+=\S*\s+|\d+\s+)*)*"
         watchcall = re.search(
             r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _wrap +
-            r"[\"']?\S*(?:agentctl|dispatch-exec)[\"']?\s+watch(?:[\"'\s]|$)",
+            r"[\"']?\S*agentctl[\"']?\s+watch(?:[\"'\s]|$)",
             cmd,
         )
         # the sync marker must be ATTACHED to the watch segment AND unquoted — quoted
@@ -196,7 +196,7 @@ def main():
         # it) AND sit in the same raw segment as the watch call (detached echo can't
         # lend it) — the watch call itself may legitimately live inside a -c payload
         sync_attached = ("AGENT_WATCH_SYNC=1" in unq) and re.search(
-            r"AGENT_WATCH_SYNC=1[^;|&]*(?:agentctl|dispatch-exec)[\"'\s]+watch", cmd)
+            r"AGENT_WATCH_SYNC=1[^;|&]*agentctl[\"'\s]+watch", cmd)
         if watchcall and not sync_attached:
             sys.stderr.write(
                 "DENY: blocking `agentctl watch` in the FOREGROUND — it blocks until the agent's "
@@ -216,7 +216,7 @@ def main():
         _wrap3 = r"(?:[\"']?(?:\S*/)?(?:bash|sh|zsh|exec|nohup|time|command|env|timeout)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+|\w+=\S*\s+|\d+\s+)*)*"
         paired = re.search(
             r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _wrap3 +
-            r"[\"']?\S*(?:agentctl|dispatch-exec)[\"']?\s+watch[\"'\s]+" + re.escape(session) + r"\b",
+            r"[\"']?\S*agentctl[\"']?\s+watch[\"'\s]+" + re.escape(session) + r"\b",
             cmd,
         )
         if not paired:

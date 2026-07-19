@@ -7,7 +7,7 @@
 > `agentctl start codex <proj>-<task>-codex <同一worktree> --goal <brief.md> --workflow review-loop
 > --max-rounds <N>`——与 omp 派发同构。start 返回后立即另挂 `agentctl watch`；复审轮同样是
 > `agentctl steer -f` + `watch`。裸 `tmux new-session` 绕过 durable state 与 lane routing，别用。
-> 初轮计入总轮数；stop-loss 只认 runtime exec.meta，GOAL/brief 不复制轮数。到限后 send 返回
+> 初轮计入总轮数；stop-loss 只认 runtime meta（duplex 会话档），GOAL/brief 不复制轮数。到限后 send 返回
 > `BUDGET-EXHAUSTED`（exit 9），不得绕过，转人工裁决。
 
 ## 首轮评审
