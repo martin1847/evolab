@@ -33,8 +33,9 @@
 
 `cto-orchestration` 把真实多 agent 项目打磨出的编排纪律沉淀成 skill——编排者绝不写产品代码，执行/评审异构分离，watcher 盯**存活信号**（agent 死了退回 shell ≠ 任务完成），行为变更藏旗标。它编码的是**派发链路里所有会骗你的静默失败**：假完成、假评审、假绿灯、孤儿进程空转。整体理念 **A²**（Agentic AI × Anything，一拖多）见[仓库根 README](../../README.md)。
 
-> **为什么默认是 headless EXEC？** 单轮自包含换来稳定的进程终态与可恢复 round；上一轮停止后用
-> `dispatch send` resume。只有任务必须轮内即时 steering / 菜单交互时，才用 `DISPATCH_TUI=1` 走 tmux TUI。
+> **为什么是 headless + 协议？** 抓屏/送按键随 CLI 版本漂移且实测仅七八成可靠。`agentctl` 让
+> omp/claude 走引擎原生双工协议长驻（duplex：`agentctl steer` 轮内可达），codex 走逐轮 resume
+> （round）；tmux 只做保活，状态永远是 typed exit code，不是屏幕。
 
 ## 效果示例
 

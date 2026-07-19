@@ -4,12 +4,12 @@
 # slips the orchestrator keeps making (prose decays → enforce at tool-call time):
 #   (1) trailing shell `&` -> ORPHAN (no completion callback; wrapper falsely reports done)  [DENY]
 #   (2) naive "idle==done" poller (loop + capture-pane + idle grep, no positive-evidence check) [DENY]
-#   (3) `dispatch <agent> <session>` WITHOUT later arming `watch <session>` -> reminder to arm the
+#   (3) `agentctl start <agent> <session>` WITHOUT later arming `watch <session>` -> reminder to arm the
 #       watcher (the PRIMARY signal). This is an OMISSION, not a bad action -> can't DENY (there is no
 #       tool call to intercept); inject salience at dispatch time instead, same doctrine as the
 #       PostToolUse·Agent browser reminder (sibling cto-guard-agent.py). [ALLOW + additionalContext]
-#   (4) raw `tmux send-keys` with long/CJK payload -> route through `dispatch send` [DENY]
-#   (5) blocking `watch`/fused `dispatch --goal` in the foreground -> run_in_background [DENY]
+#   (4) raw `tmux send-keys` with long/CJK payload -> route through `agentctl steer` [DENY]
+#   (5) blocking `agentctl watch` in the foreground -> run_in_background [DENY]
 #   (6) live e2e gate run without the E2E_ECONOMY=1 runner marker -> dispatch a cheap-model
 #       worker instead of burning the orchestrator's premium session on supervision [DENY]
 # Deny/checker error = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON
@@ -151,13 +151,12 @@ def main():
         long_quoted = any(len(q) > 120 for q in quoted)
         if has_cjk or long_quoted:
             sys.stderr.write(
-                "DENY: raw `tmux send-keys` with long/non-ASCII (中文/①②③/全角/长串) text -> the omp "
-                "skill-popup eats Enter, the message stalls in the input buffer, the session sits idle, "
-                "and the watcher can't tell 'waiting for release' from 'release didn't land' (self-inflicted "
-                "24-min stall, 2026-07-04). On TUI use `bash <agent-watch>/dispatch send <session> -m \"…\"` "
-                "(or -f <file>); its short ASCII reference verifies WORKING. EXEC does not read pane input: "
-                "wait for the round to stop, then use the same command to resume a new round. Control-key sends "
-                "(Enter/Escape/C-u/short ASCII menu picks) are fine and not blocked. "
+                "DENY: raw `tmux send-keys` text injection — pane keystrokes are the retired TUI "
+                "lane's failure mode (popup eats Enter, message stalls unseen; self-inflicted 24-min "
+                "stall 2026-07-04, industry-measured ~70-80% delivery). Workers are steered by "
+                "PROTOCOL, never by pane: `agentctl steer <session> -m \"…\"` (or -f <file>) — duplex "
+                "delivers a native frame mid-turn, round resumes the next round. Control-key sends "
+                "(Enter/Escape/C-u/short ASCII picks) on a manually attached session are fine. "
                 "Read: cto-orchestration/references/agent-watch/README.md (裸 send-keys 坑枚举).\n"
             )
             return 2
@@ -167,53 +166,43 @@ def main():
     # NOT here — cto-guard owns orchestration slips (backgrounding, idle-polling, dispatch, send-keys),
     # not git policy. Don't re-add push checks here.
 
-    # (5) BLOCKING watch — and, on the TUI lane, fused `dispatch --goal` — run in the FOREGROUND:
-    #     both block until the agent's terminal state — under a foreground Bash timeout (Claude
-    #     Code default 2min) the call is killed mid-watch (exit 143) and the watcher dies with it
-    #     (field hit: LH 2026-07-11, `send … && watch` chained foreground). run_in_background:true
-    #     is the documented path. Shell orchestrators that run watch synchronously BY DESIGN
-    #     (codex/shell — README "run it synchronously and read the code") opt out explicitly by
-    #     prefixing the command with AGENT_WATCH_SYNC=1.
-    # Since the 2026-07-12 default flip, a bare `dispatch --goal` rides the headless exec lane and
-    # RETURNS IMMEDIATELY — foreground is fine; only a TUI-escaped launch (DISPATCH_TUI=1 inline or
-    # in this hook's env, or legacy DISPATCH_EXEC=0) still blocks through its in-process watch.
-    # `watch <session>` blocks on BOTH lanes (exec watch is a poll loop too) — lane-independent deny.
+    # (5) BLOCKING `agentctl watch` in the FOREGROUND: it blocks until the agent's terminal
+    #     state — under a foreground Bash timeout (Claude Code default 2min) the call is killed
+    #     mid-watch (exit 143) and the watcher dies with it (field hit: 2026-07-11, chained
+    #     foreground). run_in_background:true is the documented path. Shell orchestrators that
+    #     run watch synchronously BY DESIGN opt out explicitly by prefixing AGENT_WATCH_SYNC=1.
+    #     `agentctl start` returns after the goal frame is accepted — foreground is fine there.
     if not ti.get("run_in_background") and "AGENT_WATCH_SYNC=1" not in cmd:
-        tui = ("DISPATCH_TUI=1" in cmd or os.environ.get("DISPATCH_TUI") == "1"
-               or "DISPATCH_EXEC=0" in cmd)
-        fused = tui and re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)\b", cmd) and "--goal" in cmd
-        # command-position only: `grep x …/agent-watch/watch` (path as an ARGUMENT) must not trip
-        # this, and the interpreter itself must sit at command position too — `emit.sh <path>` let
-        # `\bsh\s` match the ".sh" tail and re-flagged an argument. Both self-inflicted false
-        # positives within minutes of wiring, 2026-07-11. Shape: [;|&(or start] [ENV=v …]
-        # [bash|sh|exec|nohup|time] <token ending in agent-watch/watch>.
+        # command-position only: `grep x …/agentctl` (path as an ARGUMENT) must not trip this,
+        # and the interpreter itself must sit at command position too — an earlier `\bsh\s`
+        # matched a ".sh" argument tail (two self-inflicted false positives within minutes of
+        # wiring, 2026-07-11). Shape: [;|&(or start] [ENV=v …] [bash|sh|exec|nohup|time]
+        # <token ending in agentctl or dispatch-exec> watch.
         watchcall = re.search(
-            r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*(?:(?:bash|sh|exec|nohup|time)\s+)?[\"']?\S*agent-watch/watch[\"']?(?:\s|$)",
+            r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*(?:(?:bash|sh|exec|nohup|time)\s+)?[\"']?\S*(?:agentctl|dispatch-exec)[\"']?\s+watch(?:[\"'\s]|$)",
             cmd,
         )
-        if fused or watchcall:
+        if watchcall:
             sys.stderr.write(
-                "DENY: blocking watch (or TUI-lane fused `dispatch --goal`) in the FOREGROUND — it blocks "
-                "until the agent's terminal state, so a foreground Bash timeout (default 2min) kills it "
-                "mid-watch (exit 143) and the watcher dies with it. Re-run with run_in_background:true. "
-                "Synchronous shell orchestrators (codex): prefix the command with AGENT_WATCH_SYNC=1 to pass. "
+                "DENY: blocking `agentctl watch` in the FOREGROUND — it blocks until the agent's "
+                "terminal state, so a foreground Bash timeout (default 2min) kills it mid-watch "
+                "(exit 143) and the watcher dies with it (field hit 2026-07-11). Re-run with "
+                "run_in_background:true. Synchronous shell orchestrators (codex): prefix the command "
+                "with AGENT_WATCH_SYNC=1 to pass. "
                 "Read: cto-orchestration/references/agent-watch/README.md §Launch.\n"
             )
             return 2
 
-    m = re.search(r"\bdispatch[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
+    m = re.search(r"\bagentctl[\"'\s]+start[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
     if m:
         session = m.group(2)
-        tui = ("DISPATCH_TUI=1" in cmd or os.environ.get("DISPATCH_TUI") == "1"
-               or "DISPATCH_EXEC=0" in cmd)
-        fused_tui = tui and "--goal" in cmd
-        if not fused_tui and not re.search(r"\bwatch[\"'\s]+" + re.escape(session) + r"\b", cmd):
+        if not re.search(r"\bwatch[\"'\s]+" + re.escape(session) + r"\b", cmd):
             ctx = (
-                f"REMINDER (cto-guard): session '{session}' has no in-process watcher. Default EXEC "
-                f"returns after round launch; only TUI with fused --goal watches in-process. Arm the watcher "
-                f"as the PRIMARY signal right after it starts — run `bash <agent-watch>/watch {session}` "
-                f"via the Bash tool with run_in_background:true (NOT shell &, which orphans it). A "
-                f"ScheduleWakeup timer is only the BACKSTOP, not a substitute for the watcher."
+                f"REMINDER (cto-guard): session '{session}' has no watcher. `agentctl start` returns "
+                f"after the goal frame is accepted — arm the PRIMARY signal right after it: run "
+                f"`agentctl watch {session}` via the Bash tool with run_in_background:true (NOT "
+                f"shell &, which orphans it). A ScheduleWakeup timer is only the BACKSTOP, not a "
+                f"substitute for the watcher."
             )
             print(json.dumps({
                 "hookSpecificOutput": {

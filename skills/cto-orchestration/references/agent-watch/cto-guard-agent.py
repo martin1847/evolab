@@ -76,7 +76,9 @@ def main():
                 "not black-holed. Liveness = output-file freshness, NOT presence of a specific "
                 "artifact (a11y-driven browser agents write snapshots, not image screenshots — 'zero "
                 "screenshots' != stuck; killed real progress twice on 2026-07-04). POKE it first via "
-                "SendMessage and read its reply. Only if it CONFIRMS stuck / reports BROWSER-UNAVAILABLE: "
+                "SendMessage and read its reply. The override covers ANY verified kill motive — the "
+                "agent confirms stuck / BROWSER-UNAVAILABLE, or you hold positive evidence the dispatch "
+                "premise is wrong (bad cwd/goal) so its liveness is beside the point: "
                 f"`touch /tmp/cto-allow-kill-{tid}` then re-run TaskStop. "
                 "Read: cto-orchestration/references/agent-watch/README.md (完成通知黑洞).\n"
             )

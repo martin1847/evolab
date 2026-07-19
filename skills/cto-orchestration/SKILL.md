@@ -1,7 +1,7 @@
 ---
 name: cto-orchestration
 version: 1.5.2
-description: "CTO/orchestrator 模式管理多 agent 软件交付：默认 headless EXEC、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
+description: "CTO/orchestrator 模式管理多 agent 软件交付：agentctl 统一派工（duplex 车道原生轮内 steer / round 车道 resume）、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
 metadata:
   requires:
     bins: ["tmux", "omp", "codex"]
@@ -30,15 +30,17 @@ metadata:
 
 默认用 omp 执行、codex 评审，但**工具名不证明异构**；派工前看实际 model/backend，避免执行席与评审席落到同一 lineage 或 quota 池。
 
-三条派工 lane：
+派工统一走 `agentctl start|steer|status|watch|stop`，engine 决定 lane：
 
 | lane | 何时选 | 交互边界 |
 |---|---|---|
-| **headless EXEC（默认）** | 单轮目标可自包含；优先稳定终态 | 单轮不交互；当前轮结束后才可 `dispatch send` resume 下一轮 |
-| **tmux TUI** | 必须轮内实时 steering、菜单或 pane 现场 | 启动时设 `DISPATCH_TUI=1`；维护 best-effort |
+| **duplex（默认：omp / claude）** | 长会话、需轮内 steering | 引擎原生协议长驻；`agentctl steer` 随时可达（omp 真 mid-turn，claude 排队到 turn 边界） |
+| **round（默认：codex；亦是全引擎崩溃恢复腿）** | 单轮目标可自包含 | 单轮不交互；轮间 `agentctl steer` resume 下一轮 |
 | **Agent subagent** | 浏览器 / MCP / 隔离主上下文的读密集工作 | 在独立上下文完成，只回蒸馏结论；显式按任务分档 model |
 
-文件任务必须声明 `--deliverable <glob>`，让 runtime 做 freshness gate；非文件结果不带。lane 的完整限制、状态与命令见 `references/agent-watch/README.md`。
+TUI 车道已于本大版本裁撤（送 pane 按键实测仅七八成可靠且维护税高）；需要人工现场时直接 `tmux attach` 旁观，worker 控制始终走协议。
+
+文件任务必须声明 `--deliverable <glob>`（相对 glob 按会话 cwd 解析），让 runtime 做 freshness gate；非文件结果不带。lane 的完整限制、状态与命令见 `references/agent-watch/README.md`。
 
 ## 1. 每次派工闭环
 
@@ -47,17 +49,17 @@ metadata:
 3. **派发并挂 watcher**：
 
    ```bash
-   references/agent-watch/dispatch <omp|codex|claude> <session> <cwd> --goal <abs-goal-or-brief> [--deliverable <glob>]
+   references/agent-watch/agentctl start <omp|codex|claude> <session> <cwd> --goal <abs-goal-or-brief> [--deliverable <glob>]
    ```
 
-   默认 EXEC 在 round 启动后立即返回，**不会自动 watch**；紧接着用宿主的受控后台能力运行 `references/agent-watch/watch <session>`。同步 shell 编排者可显式设 `AGENT_WATCH_SYNC=1`。TUI 的融合 `--goal` 才在进程内 watch。先接线 `references/agent-watch/guard-hooks.json`；guard 负责高频机械失误，主干不复制其规则表。
+   `start` 在 goal 帧被接受后立即返回，**不会自动 watch**；紧接着用宿主的受控后台能力运行 `agentctl watch <session>`。先接线 `references/agent-watch/guard-hooks.json`；guard 负责高频机械失误，主干不复制其规则表。
 
-   理解门按 lane：TUI 先复述再等放行；EXEC 的 runtime footer 要求简短复述后立即开工，真阻塞写 `<cwd>/BLOCKED.md` 并停止。
-4. **只消费 typed status**：EXEC 可用 `dispatch status` 或 `watch`；TUI 只用 `watch`。不直接读私有 rc，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；完整状态表与 `rearm` 见 agent-watch README。
-5. **按 lane steering**：
-   - EXEC：RUNNING 轮不读 stdin，`dispatch send` 会拒绝；等本轮停止后再 `send`，它会 resume 同一 engine session 并开下一轮。需要轮内影响，只能预先在 goal 约定 `STEERING.md` 轮询，或 teardown 后重派。
-   - TUI：`dispatch send` 的 WORKING/busy 确认环只证明“指令开始被处理”，不证明完成或正确。
-   - 真需要即时纠偏的任务，从一开始选 TUI；现有 EXEC session 不能原地切 lane。每个后续 round 都重新挂 `watch`。
+   理解门：runtime footer 要求简短复述后立即开工，真阻塞写 `<cwd>/BLOCKED.md` 并停止（两车道同协议）。
+4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；完整状态表见 agent-watch README。
+5. **steering 走 `agentctl steer`**：
+   - duplex（omp/claude）：轮内随时可达——默认排队（claude 落在下一 turn 边界），`--now` 即时（omp），`--replace` 弃当前重来（omp）。投递成功 ≠ 模型照做，验收仍看交付物。
+   - round（codex）：RUNNING 轮不读 stdin，steer 会拒绝；本轮停止后 steer = resume 同一 engine session 开下一轮。轮内影响只能预先在 goal 约定 `STEERING.md` 轮询，或 `agentctl stop` 后重派。
+   - 每个后续 round/turn 都重新挂 `agentctl watch`。
 6. **Implemented → Verified**：必须同时有 fresh 正向交付证据、不同 lineage 的独立评审、真实用户路径 E2E。先本机真路径，再部署，再部署环境 E2E，最后才关单；git 集成与 push 门禁归 Git workflow 标准。
 
 ## 2. 对抗式评审循环
@@ -66,7 +68,7 @@ metadata:
 - brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。
 - 先枚举执行分叉，并点名 `缺失消费者`、under-fire、并发 / 恢复等高风险轴；完整轴表留在 reference。
 - 只有 blocking 驱动续轮；第 3 轮起每轮续派须在 brief 写 `SHIP-BLOCKING: <依据>`；同一 finding 的修复连续 2 轮只新增 finding，则止损并转人工裁决或 accept-documented。
-- 多轮 headless review 显式传 `--workflow review-loop --max-rounds N`；轮数与 stop-loss 只认 runtime meta，主干不复制状态机。
+- 多轮 headless review 显式传 `--workflow review-loop --max-rounds N`（round 车道专属，即默认的 codex 评审席）；轮数与 stop-loss 只认 runtime meta，主干不复制状态机。
 - 评审期间执行 agent 不写同一 worktree。
 
 ## 3. 实现与验证判据
@@ -98,7 +100,8 @@ metadata:
 | 前端真实验证、状态形状矩阵、浏览器委派 | `references/frontend-verify.md` |
 | 评审 brief、ledger、收敛 | `references/review-dispatch.md` |
 | 基线与收工四件套 | `references/dispatch-baseline.md` |
-| watcher、EXEC/TUI、steering、guard wiring | `references/agent-watch/README.md` |
+| agentctl 命令面、duplex/round 车道、steering、guard wiring | `references/agent-watch/README.md` |
+| 电在回路：承重规则下沉强制层、DENY 三件套、下沉判据 | `references/shock-in-the-loop.md` |
 | 主理人决策队列 | `references/decision-queue.md` |
 | 项目 AGENTS.md 编排增量 | `references/agents-md-orchestration-section.md` |
 

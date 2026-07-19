@@ -239,9 +239,13 @@ classify() { # $1 session
     echo "FAILED: engine rc=$rc (or turn.failed event) — read $DIR/$s.exec.out tail"; return 2
   fi
   if [ -n "$deliv" ]; then
-    local f ok=1
+    # Resolve a RELATIVE glob against the session cwd, not whatever cwd this classify
+    # runs in — evaluated elsewhere it silently never matched and reported a false
+    # IDLE-NO-DELIVERABLE on a real, present deliverable (field report 2026-07-19).
+    local f ok=1 g="$deliv"
+    case "$g" in /*) ;; *) g="$cwd/$g" ;; esac
     while IFS= read -r f; do [ -n "$f" ] && strictly_newer "$f" "$stamp" && ok=0 && break
-    done < <(compgen -G "$deliv" 2>/dev/null)
+    done < <(compgen -G "$g" 2>/dev/null)
     [ "$ok" = 0 ] || { echo "IDLE-NO-DELIVERABLE: rc=0 but '$deliv' not produced this round — read output, then dispatch send $s; do not teardown"; return 6; }
   fi
   echo "DONE: rc=0$([ -n "$deliv" ] && echo ", deliverable fresh")"; return 0
@@ -305,7 +309,11 @@ case "${1:-}" in
     while [ "$i" -le "$MAX" ]; do
       msg="$(classify "$s")"; rc=$?
       if [ "$rc" != 10 ]; then
-        echo "=== [$s] $msg ==="; tail -3 "$DIR/$s.exec.out" 2>/dev/null; exit "$rc"
+        echo "=== [$s] $msg ==="
+        # BOUNDED tail: one engine JSON line can be >100KB (agent_end replays the full
+        # transcript) — `tail -3` token-bombed the orchestrator with ~88k tokens (field
+        # report 2026-07-19). Raw stays in $s.exec.out; read it there when needed.
+        tail -c 800 "$DIR/$s.exec.out" 2>/dev/null; echo; exit "$rc"
       fi
       [ $((i % 12)) -eq 0 ] && echo "[$s] heartbeat iter $i still running $(date '+%H:%M:%S')"
       i=$((i+1)); sleep "$POLL"

@@ -54,13 +54,13 @@ chk_eq "background-then-chain denied" 2 "$RC"
 
 # (4) raw tmux send-keys with CJK / long payload -> DENY (popup eats Enter); safe path passes
 run 'tmux send-keys -t s1 "请把理解门复述发我，确认后开工①②③" Enter'
-chk_eq "send-keys CJK denied (exit 2)" 2 "$RC"; chk_contains "send-keys deny points to dispatch send" "dispatch send" "$ERR"
+chk_eq "send-keys CJK denied (exit 2)" 2 "$RC"; chk_contains "send-keys deny points to agentctl steer" "agentctl steer" "$ERR"
 run 'tmux send-keys -t s1 Escape'
 chk_eq "send-keys control key allowed" 0 "$RC"
 run 'tmux send-keys -t s1 "read /tmp/goal.md" Enter'
 chk_eq "send-keys short ASCII allowed" 0 "$RC"
-run 'bash references/agent-watch/dispatch send s1 -m "长中文放行指令：按评审意见回修①②"'
-chk_eq "dispatch send safe path allowed" 0 "$RC"
+run 'bash references/agent-watch/agentctl steer s1 -m "长中文放行指令：按评审意见回修①②"'
+chk_eq "agentctl steer safe path allowed" 0 "$RC"
 
 # Heredoc bodies are safe to ignore only when Bash disables expansion by quoting the delimiter.
 quoted_heredoc="$(printf '%s\n' "cat <<'EOF'" 'tmux send-keys -t s1 "这只是文档里的提及①②③" Enter' 'EOF')"
@@ -87,65 +87,51 @@ chk_eq "poller + Verdict positive allowed" 0 "$RC"
 run 'tmux capture-pane -p | grep Working'
 chk_eq "single capture (no loop) allowed" 0 "$RC"
 
-# (3) launch without a watcher -> ALLOW + JSON reminder. Default EXEC never auto-watches;
-#     only a TUI launch fused with --goal owns an in-process watch.
+# (3) launch without a watcher -> ALLOW + JSON reminder (`agentctl start` never auto-watches).
 ctx() { printf '%s' "$1" | python3 -c 'import sys,json
 try: d=json.load(sys.stdin)
 except Exception: print(""); sys.exit()
 print(d.get("hookSpecificOutput",{}).get("additionalContext",""))'; }
-run 'bash references/agent-watch/dispatch omp mysess /wt'
-chk_eq "dispatch w/o watch exit 0" 0 "$RC"
-chk_contains "dispatch w/o watch reminds arm watcher" "watcher" "$(ctx "$OUT")"
+run 'bash references/agent-watch/agentctl start omp mysess /wt --goal /tmp/g.md'
+chk_eq "start w/o watch exit 0" 0 "$RC"
+chk_contains "start w/o watch reminds arm watcher" "watcher" "$(ctx "$OUT")"
 chk_contains "reminder names the session" "mysess" "$(ctx "$OUT")"
-# dispatch WITH watch on the same session, BACKGROUNDED -> silent (no double-nag)
-run 'dispatch omp mysess /wt && bash references/agent-watch/watch mysess' 1
-chk_eq "dispatch + watch same cmd (bg) exit 0" 0 "$RC"; chk_eq "dispatch + watch silent" "" "$OUT"
-# default EXEC with fused --goal still returns immediately -> reminder
-run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' 1
-chk_eq "exec fused --goal (bg) exit 0" 0 "$RC"
-chk_contains "exec fused --goal reminds separate watch" "has no in-process watcher" "$(ctx "$OUT")"
-# TUI fused --goal owns its in-process watcher -> silent
-run 'DISPATCH_TUI=1 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' 1
-chk_eq "TUI fused --goal (bg) exit 0" 0 "$RC"; chk_eq "TUI fused --goal silent" "" "$OUT"
+# start WITH watch on the same session, BACKGROUNDED -> silent (no double-nag)
+run 'agentctl start omp mysess /wt --goal /tmp/g.md && bash references/agent-watch/agentctl watch mysess' 1
+chk_eq "start + watch same cmd (bg) exit 0" 0 "$RC"; chk_eq "start + watch silent" "" "$OUT"
 
-# (5) blocking watch in the FOREGROUND (any lane) -> DENY (killed at Bash timeout, exit 143);
-#     fused --goal is DEFAULT-exec since the 2026-07-12 flip -> foreground fine unless TUI-escaped
-run 'dispatch send mysess -f /tmp/fix.md && bash references/agent-watch/watch mysess'
-chk_eq "chained foreground watch denied (LH field case)" 2 "$RC"; chk_contains "foreground deny names 143" "143" "$ERR"
-run 'AGENT_WATCH_DELIVERABLE=/tmp/out/*.md bash references/agent-watch/watch mysess'
+# (5) blocking `agentctl watch` in the FOREGROUND -> DENY (killed at Bash timeout, exit 143)
+run 'agentctl steer mysess -f /tmp/fix.md && bash references/agent-watch/agentctl watch mysess'
+chk_eq "chained foreground watch denied (field case)" 2 "$RC"; chk_contains "foreground deny names 143" "143" "$ERR"
+run 'AGENT_WATCH_POLL_SECS=5 bash references/agent-watch/agentctl watch mysess'
 chk_eq "env-prefixed foreground watch denied" 2 "$RC"
+run 'bash references/agent-watch/dispatch-exec watch mysess'
+chk_eq "internal round watch foreground denied too" 2 "$RC"
 # explicit sync opt-out for shell orchestrators that run watch synchronously by design
-run 'AGENT_WATCH_SYNC=1 bash references/agent-watch/watch mysess; rc=$?'
+run 'AGENT_WATCH_SYNC=1 bash references/agent-watch/agentctl watch mysess; rc=$?'
 chk_eq "AGENT_WATCH_SYNC=1 foreground allowed" 0 "$RC"
-# default lane = exec, launch returns immediately -> bare fused --goal foreground is fine
-run 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
-chk_eq "fused --goal foreground allowed (default exec lane)" 0 "$RC"
-run 'DISPATCH_EXEC=1 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
-chk_eq "DISPATCH_EXEC=1 (legacy no-op) foreground allowed" 0 "$RC"
-# TUI-escaped fused launch blocks through its in-process watch -> foreground denied
-run 'DISPATCH_TUI=1 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
-chk_eq "DISPATCH_TUI=1 fused foreground denied" 2 "$RC"
-run 'DISPATCH_EXEC=0 bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md'
-chk_eq "legacy DISPATCH_EXEC=0 escape also denied foreground" 2 "$RC"
-OUT="$(mkcmd 'bash references/agent-watch/dispatch omp mysess /wt --goal /tmp/g.md' | DISPATCH_TUI=1 python3 "$GUARD" 2>/dev/null)"; RC=$?
-chk_eq "global DISPATCH_TUI env also denies fused foreground" 2 "$RC"
+# start returns after the goal frame is accepted -> foreground is fine
+run 'bash references/agent-watch/agentctl start omp mysess /wt --goal /tmp/g.md'
+chk_eq "start --goal foreground allowed (returns immediately)" 0 "$RC"
 # path as an ARGUMENT is not an invocation (self-inflicted false positives, 2026-07-11)
-run 'grep -n foo references/agent-watch/watch references/agent-watch/dispatch'
-chk_eq "watch path as grep arg allowed" 0 "$RC"
-run 'grep -n x agent-watch/emit.sh agent-watch/watch'
-chk_eq "arg after .sh arg allowed (sh-suffix trap)" 0 "$RC"
+run 'grep -n foo references/agent-watch/agentctl references/agent-watch/duplexctl.py'
+chk_eq "agentctl path as grep arg allowed" 0 "$RC"
+run 'grep -n x agent-watch/duplexctl.py agent-watch/agentctl'
+chk_eq "arg after .py arg allowed (suffix trap)" 0 "$RC"
+run 'agentctl status mysess'
+chk_eq "one-shot status foreground allowed" 0 "$RC"
 # ── (6) live e2e gates: premium orchestrator must dispatch, runner declares E2E_ECONOMY=1 ──
 run 'bash test/e2e/guard-wire.e2e.sh'
 chk_eq "bare e2e gate run denied" 2 "$RC"; chk_contains "e2e deny teaches dispatch+marker" "E2E_ECONOMY=1" "$ERR"
 chk_contains "e2e deny carries doc pointer" "SKILL.md" "$ERR"
-run "zsh -lc 'cd /repo/test/e2e && DISPATCH_EXEC=0 bash onboard.e2e.sh; echo RC=\$?'"
+run "zsh -lc 'cd /repo/test/e2e && bash onboard.e2e.sh; echo RC=\$?'"
 chk_eq "wrapped e2e gate run denied" 2 "$RC"
 run './test/e2e/run.sh'
 chk_eq "e2e run.sh denied" 2 "$RC"
 run "zsh -lc 'cd /repo/test/e2e && E2E_ECONOMY=1 bash onboard.e2e.sh; echo RC=\$?'"
 chk_eq "declared economy runner allowed" 0 "$RC"
 # path as ARGUMENT (reading/grepping the script) is not an invocation
-run 'grep -n model test/e2e/dispatch-goal.e2e.sh'
+run 'grep -n model test/e2e/round-lane.e2e.sh'
 chk_eq "e2e path as grep arg allowed" 0 "$RC"
 run 'head -25 test/e2e/guard-wire.e2e.sh'
 chk_eq "e2e path as head arg allowed" 0 "$RC"
