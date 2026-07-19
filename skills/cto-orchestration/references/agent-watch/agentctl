@@ -54,7 +54,7 @@ append_footer() { # $1 out-file  $2 cwd
 cmd_start() {
   ENG="${1:?usage}" ; S="${2:?session}" ; CWD="${3:?cwd}"; shift 3
   case "$ENG" in omp|codex|claude) ;; *) echo "ERR: unknown engine '$ENG' (omp|codex|claude)" >&2; exit 1 ;; esac
-  GOAL=""; DELIV=""; PREFLIGHT=0; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""
+  GOAL=""; DELIV=""; PREFLIGHT=0; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""; MODEL_TOKENS=0
   while [ "$#" -gt 0 ]; do case "$1" in
     --goal) GOAL="${2:?--goal needs a file}"; shift 2;;
     --deliverable) DELIV="${2:?--deliverable needs a glob}"; shift 2;;
@@ -62,14 +62,19 @@ cmd_start() {
     --workflow) WORKFLOW="${2:?--workflow needs a value}"; shift 2;;
     --max-rounds) MAX_ROUNDS="${2:?--max-rounds needs N}"; shift 2;;
     --resume-thread) RESUME_THREAD="${2:?--resume-thread needs an id}"; shift 2;;
-    --model) MODEL="${2:?--model needs an id}"; EXTRA[${#EXTRA[@]}]="$1"; EXTRA[${#EXTRA[@]}]="$2"; shift 2;;
+    --model) MODEL="${2:?--model needs an id}"; EXTRA[${#EXTRA[@]}]="$1"; EXTRA[${#EXTRA[@]}]="$2"; MODEL_TOKENS=$((MODEL_TOKENS+2)); shift 2;;
+    --model=*) MODEL="${1#*=}"; EXTRA[${#EXTRA[@]}]="$1"; MODEL_TOKENS=$((MODEL_TOKENS+1)); shift;;
     *) EXTRA[${#EXTRA[@]}]="$1"; shift;;
   esac; done
   if [ -n "$WORKFLOW" ] || [ -n "$MAX_ROUNDS" ]; then
     [ "$WORKFLOW" = "review-loop" ] && [ -n "$MAX_ROUNDS" ] || { echo "ERR: --workflow review-loop and --max-rounds N must be provided together" >&2; exit 1; }
     case "$MAX_ROUNDS" in ''|*[!0-9]*) echo "ERR: --max-rounds must be a positive integer" >&2; exit 1;; esac
+    [ "$MAX_ROUNDS" -gt 0 ] || { echo "ERR: --max-rounds must be a positive integer" >&2; exit 1; }
   fi
   [ -n "$GOAL" ] && [ -e "$GOAL" ] || { echo "ERR: --goal <file> required and must exist" >&2; exit 1; }
+  if [ -n "$RESUME_THREAD" ] && [ "$ENG" != codex ]; then
+    echo "ERR: --resume-thread is codex-only — omp resumes via '-r <session-file>', claude via '--resume <sid>' (engine args)" >&2; exit 1
+  fi
   [ "$PREFLIGHT" = 0 ] || "$HERE/../goal-preflight.py" "$GOAL" || exit 1
   [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
   CWD="$(cd "$CWD" && pwd -P)"
@@ -100,9 +105,9 @@ cmd_start() {
     claude) BIN="${AGENTCTL_BIN_CLAUDE:-claude}"
             ECMD="$(q "$BIN") -p --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions$EXTRA_Q" ;;
     codex)  BIN="${AGENTCTL_BIN_CODEX:-codex}"
-            # engine args live at the protocol layer (thread/start), not argv — --model is
-            # captured into meta above; other EXTRA is refused to avoid silent no-ops
-            [ "${#EXTRA[@]}" -le 2 ] || { echo "ERR: codex duplex takes engine config via protocol (--model only) — got extra argv" >&2; rm -f "$FIFO" "$DIR/$S.duplex.meta"; exit 1; }
+            # engine config lives at the protocol layer (thread/start), not argv — --model
+            # is captured into meta; ANY other argv is refused, never silently dropped
+            [ "${#EXTRA[@]}" -eq "$MODEL_TOKENS" ] || { echo "ERR: codex duplex takes engine config via protocol (--model/--resume-thread only) — unrecognized argv: ${EXTRA[*]}" >&2; rm -f "$FIFO" "$DIR/$S.duplex.meta"; exit 1; }
             ECMD="$(q "$BIN") app-server" ;;
   esac
   { printf 'engine=%s\ncwd=%s\n' "$ENG" "$CWD"
@@ -152,16 +157,11 @@ cmd_steer() {
   case "$(lane_of "$S")" in
     duplex)
       [ "$MODE" = -f ] && { [ -e "$ARG" ] || { echo "ERR: file not found: $ARG" >&2; exit 1; }; }
-      if [ "$MODE" = -f ]; then "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --file "$ARG"
-      else "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --text "$ARG"; fi
-      src=$?
-      # gate replacement commits only after a successful delivery — a refused/failed
-      # steer must leave the old deliverable gate untouched (review R2 2026-07-19)
-      if [ "$src" -eq 0 ] && [ -n "$NEWDELIV" ]; then
-        meta="$DIR/$S.duplex.meta"; tmp="$(mktemp "$meta.XXXXXXXX")"
-        { grep -v '^deliverable=' "$meta"; printf 'deliverable=%s\n' "$NEWDELIV"; } > "$tmp" && mv "$tmp" "$meta"
-      fi
-      exit "$src" ;;
+      # -d rides duplexctl: applied atomically (key-scoped meta_update) only after a
+      # successful delivery — the shell grep+mv snapshot could roll back a concurrent
+      # sender's round counter (review S2 2026-07-19)
+      if [ "$MODE" = -f ]; then exec "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --file "$ARG" ${NEWDELIV:+--deliverable "$NEWDELIV"}
+      else exec "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --text "$ARG" ${NEWDELIV:+--deliverable "$NEWDELIV"}; fi ;;
     none) echo "ERR: unknown session '$S' (no duplex state)" >&2; exit 1 ;;
   esac
 }

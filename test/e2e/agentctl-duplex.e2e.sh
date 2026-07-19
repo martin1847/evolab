@@ -72,8 +72,8 @@ EOF
     -name "*$(basename "$WT" | tr '.' '-')*" -exec rm -rf {} + 2>/dev/null || true
 }
 
-# economy models where the id is known-safe (same pinning rationale as round-lane.e2e:
-# fuzzy omp ids can open an interactive picker; this gate proves lane machinery, not models).
+# economy models where the id is known-safe (fuzzy omp ids can open an interactive
+# picker; this gate proves lane machinery, not models).
 run_leg claude --model haiku
 run_leg omp --auto-approve --model=anthropic/claude-opus-4-8
 run_leg codex
