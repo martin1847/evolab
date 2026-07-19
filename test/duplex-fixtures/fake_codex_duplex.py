@@ -16,7 +16,7 @@ import threading
 import time
 
 emit_lock = threading.Lock()
-state = {"active": None, "turns": 0}
+state = {"active": None, "turns": 0, "cancelled": set()}
 
 
 def emit(value: dict) -> None:
@@ -29,7 +29,11 @@ def complete_turn(tid: str, interrupted: bool = False) -> None:
     gate = os.environ.get("FAKE_CODEX_GATE")
     if gate and not interrupted:
         while not os.path.exists(gate):
+            if tid in state["cancelled"]:
+                return  # interrupt already emitted this turn's single terminal
             time.sleep(0.1)
+    if tid in state["cancelled"] and not interrupted:
+        return
     deliverable = os.environ.get("FAKE_CODEX_DELIVERABLE")
     if deliverable and not interrupted:
         with open(deliverable, "a", encoding="utf-8") as fh:
@@ -79,6 +83,13 @@ for line in sys.stdin:
         emit({"id": req_id, "result": {"turn": {"id": tid}}})
         emit({"method": "turn/started",
               "params": {"threadId": "thread-1", "turn": {"id": tid, "status": "inProgress"}}})
+        if os.environ.get("FAKE_CODEX_SUBTHREAD_NOISE") == "1":
+            # engine-internal sub-agent traffic multiplexed onto the same stream
+            emit({"method": "turn/started",
+                  "params": {"threadId": "thread-sub", "turn": {"id": "sub-1", "status": "inProgress"}}})
+            emit({"method": "turn/completed",
+                  "params": {"threadId": "thread-sub",
+                             "turn": {"id": "sub-1", "status": "completed", "error": None}}})
         threading.Thread(target=complete_turn, args=(tid,), daemon=True).start()
     elif method == "turn/steer":
         expected = message["params"].get("expectedTurnId")
@@ -91,6 +102,7 @@ for line in sys.stdin:
         if state["active"] is None:
             emit({"id": req_id, "error": {"code": -32600, "message": "no active turn"}})
         else:
+            state["cancelled"].add(tid)
             emit({"id": req_id, "result": {}})
             complete_turn(tid, interrupted=True)
     else:

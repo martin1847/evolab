@@ -139,13 +139,25 @@ def codex_text_input(text: str) -> list:
 
 
 def codex_active_turn(sess: Session):
-    """Latest turn/started without a later matching turn/completed (whole file:
-    turn ids are engine truth, not steer-relative)."""
+    """Latest turn/started without a later matching turn/completed, ON OUR THREAD
+    only — the engine multiplexes sub-threads (its own sub-agents) onto the same
+    app-server stream, and an unfiltered read let a sub-thread's turn/completed
+    masquerade as our turn boundary (caught live by the first dogfood review
+    session, 2026-07-19)."""
+    ours = sess.meta.get("thread")
     active = None
     for frame in complete_frames_from(sess, 0):
         method = frame.get("method")
-        turn = (frame.get("params") or {}).get("turn") or {}
-        if method == "turn/started":
+        params = frame.get("params") or {}
+        if ours and params.get("threadId") not in (None, ours):
+            continue
+        turn = params.get("turn") or {}
+        result_turn = ((frame.get("result") or {}).get("turn") or {}) if "result" in frame else {}
+        if result_turn.get("id"):
+            # our correlated turn/start response can precede the async started
+            # notification — treat it as the active marker too (review S2 2026-07-19)
+            active = result_turn["id"]
+        elif method == "turn/started":
             active = turn.get("id")
         elif method == "turn/completed" and turn.get("id") == active:
             active = None
@@ -449,9 +461,14 @@ def project_codex(sess: Session) -> tuple[str, str]:
     started_after_completed = False
     pending_ask = None
     answer_text = ""
+    ours = sess.meta.get("thread")
     for frame in frames:
         method = frame.get("method", "")
         params = frame.get("params") or {}
+        # sub-thread traffic (engine-internal sub-agents share the stream) must
+        # never read as OUR turn lifecycle (live dogfood catch, 2026-07-19)
+        if ours and params.get("threadId") not in (None, ours):
+            continue
         if method == "turn/started":
             started_after_completed = True
         elif method == "turn/completed":
@@ -463,8 +480,15 @@ def project_codex(sess: Session) -> tuple[str, str]:
                 answer_text = item["text"]
         if frame.get("id") is not None and any(m in method for m in CODEX_ASK_METHODS):
             pending_ask = frame
+        elif pending_ask is not None and (
+                (not method and frame.get("id") == pending_ask.get("id"))
+                or method == "turn/completed"):
+            pending_ask = None  # answered elsewhere / turn ended — not pending anymore
     if pending_ask is not None:
-        return "WAITING", clip(json.dumps(pending_ask, ensure_ascii=False), 200)
+        return "WAITING", clip(
+            "native engine ask (agentctl has no reply verb — approvalPolicy=never should "
+            "prevent these; answer manually via the raw protocol or stop+resume): "
+            + json.dumps(pending_ask, ensure_ascii=False), 300)
     if started_after_completed or last_completed is None:
         return "RUNNING", "turn in progress"
     status = last_completed.get("status")
@@ -578,9 +602,14 @@ def cmd_send(args: argparse.Namespace) -> int:
         # deliverable epoch or move the sent-offset (stale-gate + phantom
         # ENGINE-SILENT otherwise, review S2 2026-07-19)
         if args.verb in ("prompt", "steer", "steer-now", "replace"):
+            # AUTHORITATIVE budget/lease check on FRESH meta, under the writer flock —
+            # the pre-flight check outside the lock is only a fast-fail; two concurrent
+            # senders could both pass it and overrun the hard cap (review S1 2026-07-19)
+            fresh = Session(args.run_dir, args.session)
+            check_review_budget(fresh, text)
             with open(sess.epoch, "a", encoding="utf-8"):
                 os.utime(sess.epoch, None)
-            meta_update(sess, "round", str(int(sess.meta.get("round", "0")) + 1))
+            meta_update(fresh, "round", str(int(fresh.meta.get("round", "0")) + 1))
             offset_box["v"] = events_size(sess)
             # atomic replace: an in-place truncate gave lock-free classify a window
             # where the offset read as empty → 0 → an old result revived as DONE
@@ -608,12 +637,22 @@ def cmd_send(args: argparse.Namespace) -> int:
                                   on_ready=commit_round_state)
         elif args.verb == "replace":
             if active is not None:
+                pre_offset = events_size(sess)
                 intr = codex_request(sess, "turn/interrupt",
                                      {"threadId": thread, "turnId": active})
                 if intr is None or "error" in intr:
                     die(f"turn/interrupt not accepted: {clip(json.dumps(intr, ensure_ascii=False), 200)}", 2)
-                wait_for(sess, events_size(sess),
-                         lambda f: f.get("method") == "turn/completed", timeout=15.0)
+                # only OUR turn's terminal frame opens the replacement; a stray
+                # completion or a timeout must refuse (review S2 2026-07-19)
+                done = wait_for(
+                    sess, pre_offset,
+                    lambda f: f.get("method") == "turn/completed"
+                    and (f.get("params") or {}).get("threadId") in (None, thread)
+                    and ((f.get("params") or {}).get("turn") or {}).get("id") == active,
+                    timeout=15.0)
+                if done is None:
+                    die("interrupted turn did not reach a terminal state in 15s — NOT starting "
+                        "the replacement; check status, then retry or stop+resume", 2)
             reply = codex_request(sess, "turn/start",
                                   {"threadId": thread, "input": codex_text_input(text)},
                                   on_ready=commit_round_state)
@@ -630,6 +669,8 @@ def cmd_send(args: argparse.Namespace) -> int:
             print(f"ERR: engine rejected the frame: {clip(json.dumps(reply['error'], ensure_ascii=False), 300)}")
             return 2
         print(f"OK: {args.verb} accepted by engine (correlated JSON-RPC response)")
+        if args.deliverable:
+            meta_update(Session(args.run_dir, args.session), "deliverable", args.deliverable)
         return 0
 
     req_id = f"ctl-{uuid.uuid4().hex[:12]}"
@@ -647,8 +688,12 @@ def cmd_send(args: argparse.Namespace) -> int:
             print(f"ERR: engine rejected the frame: {clip(json.dumps(reply, ensure_ascii=False), 300)}")
             return 2
         print(f"OK: {args.verb} accepted by engine (correlated response)")
+        if args.deliverable:
+            meta_update(Session(args.run_dir, args.session), "deliverable", args.deliverable)
         return 0
     print(f"OK: {args.verb} delivered to engine stdin (claude queues it natively; no per-frame ack exists)")
+    if args.deliverable:
+        meta_update(Session(args.run_dir, args.session), "deliverable", args.deliverable)
     return 0
 
 
@@ -708,6 +753,7 @@ def main() -> None:
     p_send.add_argument("--text")
     p_send.add_argument("--file")
     p_send.add_argument("--wait", type=float, default=10.0)
+    p_send.add_argument("--deliverable")
     p_send.set_defaults(func=cmd_send)
 
     p_ready = sub.add_parser("wait-ready", help="block until the engine handshake frame")

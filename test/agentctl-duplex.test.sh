@@ -317,10 +317,25 @@ chk_contains "DONE carries final answer summary" "turn-1 complete" "$out"
 # idle: default steer = next turn; --now refused (engine truth: no active turn)
 out="$(bash "$AGENTCTL" steer cxA -m "again" 2>&1)"; rc=$?
 chk_eq "idle steer starts next turn rc0" 0 "$rc"
+# wait for turn 2's terminal before asserting idle refusal — asserting while turn 2 is
+# still active would make --now legitimately succeed (review S3 race, 2026-07-19)
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(grep -c 'turn/completed' "$WATCH_RUN_DIR/cxA.duplex.events.jsonl" 2>/dev/null)" -ge 2 ] && break
+  /bin/sleep 0.2
+done
 out="$(bash "$AGENTCTL" steer cxA -m "mid" --now 2>&1)"; rc=$?
 chk_eq "idle --now refused" 1 "$rc"
 chk_contains "refusal names default steer" "default steer" "$out"
 bash "$AGENTCTL" stop cxA >/dev/null 2>&1
+# resume leg: handshake uses thread/resume with the given id
+out="$(bash "$AGENTCTL" start codex cxV "$WT" --goal "$SANDBOX/goal.md" --resume-thread old-thread-9 2>&1)"; rc=$?
+chk_eq "resume-thread start rc0" 0 "$rc"
+chk_eq "resumed threadId persisted" old-thread-9 "$(sed -n 's/^thread=//p' "$WATCH_RUN_DIR/cxV.duplex.meta")"
+chk_contains "handshake used thread/resume" '"method":"thread/resume"' "$(cat "$SANDBOX/codex.log")"
+bash "$AGENTCTL" stop cxV >/dev/null 2>&1
+# --resume-thread is codex-only
+out="$(bash "$AGENTCTL" start omp cxW "$WT" --goal "$SANDBOX/goal.md" --resume-thread x 2>&1)"; rc=$?
+chk_eq "resume-thread on omp refused" 1 "$rc"
 
 # active-turn window: default steer refused (no queue), --now = native turn/steer
 export FAKE_CODEX_GATE="$SANDBOX/cx-gate"
@@ -335,15 +350,39 @@ chk_contains "refusal teaches --now" "use --now" "$out"
 out="$(bash "$AGENTCTL" steer cxB -m "adjust" --now 2>&1)"; rc=$?
 chk_eq "busy --now rc0 (native mid-turn steer)" 0 "$rc"
 chk_contains "turn/steer frame with expectedTurnId" '"expectedTurnId":"turn-1"' "$(cat "$SANDBOX/codex.log")"
+# --replace on the ACTIVE turn: interrupt (single terminal) + fresh turn
+out="$(bash "$AGENTCTL" steer cxB -m "start over" --replace 2>&1)"; rc=$?
+chk_eq "active replace rc0 (interrupt+start)" 0 "$rc"
+chk_contains "interrupt frame sent" '"method":"turn/interrupt"' "$(cat "$SANDBOX/codex.log")"
+chk_eq "interrupted turn has exactly one terminal" 1 "$(grep -c '"id":"turn-1","status":"interrupted"' "$WATCH_RUN_DIR/cxB.duplex.events.jsonl")"
 : > "$FAKE_CODEX_GATE"
+# count>=2: turn-1's interrupted terminal must not satisfy the wait for turn-2
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  grep -q 'turn/completed' "$WATCH_RUN_DIR/cxB.duplex.events.jsonl" 2>/dev/null && break
+  [ "$(grep -c 'turn/completed' "$WATCH_RUN_DIR/cxB.duplex.events.jsonl" 2>/dev/null)" -ge 2 ] && break
   /bin/sleep 0.2
 done
 out="$(bash "$AGENTCTL" status cxB 2>&1)"; rc=$?
 chk_eq "gate released → DONE" 0 "$rc"
 bash "$AGENTCTL" stop cxB >/dev/null 2>&1
 unset FAKE_CODEX_GATE
+
+# sub-thread noise must not read as OUR turn boundary (live dogfood catch 2026-07-19:
+# the first codex review session spawned sub-threads whose turn/completed projected as
+# a false idle — deliverable gate held, but watch bailed early)
+export FAKE_CODEX_GATE="$SANDBOX/cx-noise-gate" FAKE_CODEX_SUBTHREAD_NOISE=1
+bash "$AGENTCTL" start codex cxN "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+/bin/sleep 0.5
+out="$(bash "$AGENTCTL" status cxN 2>&1)"; rc=$?
+chk_eq "sub-thread completion does not fake our idle → 10" 10 "$rc"
+: > "$FAKE_CODEX_GATE"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q '"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"' "$WATCH_RUN_DIR/cxN.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status cxN 2>&1)"; rc=$?
+chk_eq "our own completion still reads DONE" 0 "$rc"
+bash "$AGENTCTL" stop cxN >/dev/null 2>&1
+unset FAKE_CODEX_GATE FAKE_CODEX_SUBTHREAD_NOISE
 
 # failed turn is FAILED, never DONE (uniform S1 semantics)
 export FAKE_CODEX_ERROR_TURN=1
