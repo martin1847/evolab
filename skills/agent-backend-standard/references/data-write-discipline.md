@@ -25,6 +25,20 @@
 
 **诊断技巧(通用,接口疑挂死/空 → 先绕前端直打)**:`curl` 类客户端 + `timeout` 直打 RPC/HTTP —— **exit=timeout** 是真 hang;**返 error** 看 message(此例 `acquisition timeout`)+ 上游耗时;**多服务抽测**判全局(PG 满)vs 单服务(该服务连接/查询)。**acquisition timeout + 低流量 = 连接泄漏,非并发打满。**
 
+## P. PostgreSQL runtime / migrator 身份隔离 —— MUST
+
+应用 runtime login 与 schema migrator(如 Flyway)login **必须分离**。runtime 不是 schema / table / sequence owner,只授予业务所需的数据库 `CONNECT`、schema `USAGE`、table `SELECT/INSERT/UPDATE/DELETE` 与序列必要权限;不得拥有 schema/object DDL、`CREATEROLE`、`SUPERUSER` 或 `BYPASSRLS`。migrator 独占 schema 演进与对象 owner 能力,不得被应用请求路径使用。
+
+group role 不是前置条件:小团队可以直接向独立 login grant,但**每个应用 / schema 的身份边界不能因此合并**。无论采用 group role 还是直接 grant,新对象都必须由 owner/migrator 配置 `ALTER DEFAULT PRIVILEGES` 或等价的可审计机制;只给现存对象授权会在下一次迁移后让 runtime 断权。
+
+凭据与 Secret 对象也必须分离:runtime 与 migrator 不得共用 login 或 Secret;应用 runtime Secret 的 rollout 不得修改 migrator/Flyway Secret。切换前须用候选 runtime 身份完成以下证据,不能只看 grant 声明:
+
+1. 权限 readback 与预期一致,且 runtime 不是对象 owner、无高权限属性。
+2. 在事务内实际执行代表性的 DML 后 `ROLLBACK`,证明操作成功且前后数据不变。
+3. 实际 schema/object DDL 以权限错误被拒绝。
+
+证据通过后,先把 runtime Secret / 引用以仓库既定加密机制(如 SOPS)写入 Git,再由 reconciler 切换应用并滚动验证健康;旧 runtime 引用保留一个有界的短期 rollback 窗口。不得先手工改 live Secret、再追补 Git。
+
 ## 1. 记账型写(best-effort / 可丢 / 无强一致)—— MUST
 
 1. **移出用户请求主链路** —— 异步 / fire-and-forget,用户响应不等它。(fire-and-forget 必须:持 task 强引用防 GC、错误记日志不静默吞、失败不影响主响应。)
