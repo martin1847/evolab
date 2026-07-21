@@ -11,7 +11,7 @@
       "skills": [
         "."
       ],
-      "description": "CTO/编排者模式管理多 agent 软件交付：默认 headless EXEC 派工、goal 合同驱动、typed watcher、异构对抗评审循环、真路径验收与主理人减负。"
+      "description": "CTO/编排者模式管理多 agent 软件交付：agentctl 统一派工（一条 duplex lane、三引擎原生协议，轮内 steer）、goal 合同驱动、typed watcher、异构对抗评审循环、真路径验收与主理人减负。"
     },
     {
       "name": "repo-governance-bootstrap",
