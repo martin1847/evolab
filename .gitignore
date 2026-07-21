@@ -18,3 +18,4 @@ security
 # local creds (ACCESS.local twin) — never commit
 ACCESS.local.*
 .env*
+meta/draft/
