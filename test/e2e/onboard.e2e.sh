@@ -108,16 +108,43 @@ chk_eq "docs/orchestration/ exists" 1 "$([ -d "$WT/docs/orchestration" ] && echo
 chk_eq "DECISION_QUEUE.md exists" 1 "$([ -f "$WT/docs/DECISION_QUEUE.md" ] && echo 1 || echo 0)"
 
 # ⑤ agent-mail onboarding (only asserted when the optional skill is installed):
-#    checklist step 3 must register a seat + wire every canonical agent-mail entry exactly once.
+#    checklist step 3 must register a seat, and each canonical agent-mail entry must be
+#    EFFECTIVE exactly once ACROSS levels (the skill's 接入层级判据): a maintainer machine
+#    with user-level entries wired → project adds nothing (a project duplicate would
+#    double-fire the injection hooks); a fresh machine → project wires each exactly once.
+#    Field-proved 2026-07-21: asserting project-level unconditionally went red twice — the
+#    live agent correctly took the user-level branch.
+usr_count() { # command-basename in ~/.claude/settings.json, any event/matcher
+  [ -f "$HOME/.claude/settings.json" ] || { echo 0; return; }
+  python3 - "$HOME/.claude/settings.json" "$1" <<'PY'
+import json, os, sys
+path, command = sys.argv[1:]
+d = json.load(open(path, encoding="utf-8"))
+print(sum(os.path.basename(h.get("command", "")) == command
+          for arr in d.get("hooks", {}).values() for group in arr for h in group.get("hooks", [])))
+PY
+}
 if [ -e "$HOME/.claude/skills/agent-mail" ]; then
   # needle = the unique tmpdir basename: survives path normalization (/var vs /private/var, //)
   chk_contains "mail: seat registered (roster row has project workdir)" "$WTBASE" "$(cat "$TMPMAIL/registry.md" 2>/dev/null)"
-  chk_eq "mail: SessionStart mail-check wired exactly once" 1 "$(hook_count SessionStart '' mail-check.py)"
-  chk_eq "mail: SessionStart has no wrong-matcher duplicate" 1 "$(hook_command_count SessionStart mail-check.py)"
-  chk_eq "mail: UserPromptSubmit mail-check wired exactly once" 1 "$(hook_count UserPromptSubmit '' mail-check.py)"
-  chk_eq "mail: UserPromptSubmit has no wrong-matcher duplicate" 1 "$(hook_command_count UserPromptSubmit mail-check.py)"
-  chk_eq "mail: PreToolUse write guard wired exactly once" 1 "$(hook_count PreToolUse 'Write|Edit|MultiEdit' mail-guard.py)"
-  chk_eq "mail: PreToolUse has no wrong-matcher duplicate" 1 "$(hook_command_count PreToolUse mail-guard.py)"
+  U_CHECK="$([ "$(usr_count mail-check.py)" -gt 0 ] && echo 1 || echo 0)"
+  U_GUARD="$([ "$(usr_count mail-guard.py)" -gt 0 ] && echo 1 || echo 0)"
+  if [ "$U_CHECK" = 1 ]; then
+    chk_eq "mail: user-level covers SessionStart — project adds no duplicate" 0 "$(hook_command_count SessionStart mail-check.py)"
+    chk_eq "mail: user-level covers UserPromptSubmit — project adds no duplicate" 0 "$(hook_command_count UserPromptSubmit mail-check.py)"
+  else
+    chk_eq "mail: SessionStart mail-check wired exactly once" 1 "$(hook_count SessionStart '' mail-check.py)"
+    chk_eq "mail: SessionStart has no wrong-matcher duplicate" 1 "$(hook_command_count SessionStart mail-check.py)"
+    chk_eq "mail: UserPromptSubmit mail-check wired exactly once" 1 "$(hook_count UserPromptSubmit '' mail-check.py)"
+    chk_eq "mail: UserPromptSubmit has no wrong-matcher duplicate" 1 "$(hook_command_count UserPromptSubmit mail-check.py)"
+  fi
+  if [ "$U_GUARD" = 1 ]; then
+    chk_eq "mail: user-level covers write guard — project duplicate ≤1 tolerated as harmless deny" 1 \
+      "$([ "$(hook_command_count PreToolUse mail-guard.py)" -le 1 ] && echo 1 || echo 0)"
+  else
+    chk_eq "mail: PreToolUse write guard wired exactly once" 1 "$(hook_count PreToolUse 'Write|Edit|MultiEdit' mail-guard.py)"
+    chk_eq "mail: PreToolUse has no wrong-matcher duplicate" 1 "$(hook_command_count PreToolUse mail-guard.py)"
+  fi
 else
   echo "  [skip] agent-mail not installed — ⑤ skipped"
 fi
