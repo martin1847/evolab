@@ -162,6 +162,31 @@ chk_eq "e2e path as grep arg allowed" 0 "$RC"
 run 'head -25 test/e2e/guard-wire.e2e.sh'
 chk_eq "e2e path as head arg allowed" 0 "$RC"
 
+# ── (7) worktree lifecycle: non-force standing grant; force/prune deny + one-shot override ──
+rm -f /tmp/cto-allow-worktree-destroy
+run 'git worktree remove /tmp/wt-x'
+chk_eq "non-force remove auto-allowed" 0 "$RC"; chk_contains "standing grant reason" "standing grant" "$OUT"
+run 'git worktree remove --force /tmp/wt-x'
+chk_eq "force remove denied" 2 "$RC"; chk_contains "force deny names override marker" "cto-allow-worktree-destroy" "$ERR"
+run 'git worktree remove -f /tmp/wt-x'
+chk_eq "-f remove denied" 2 "$RC"
+run 'git worktree prune'
+chk_eq "prune denied" 2 "$RC"
+run 'cd /x && git worktree remove --force wt'
+chk_eq "chained force denied (hidden at tail)" 2 "$RC"
+run 'git -C /repo worktree prune'
+chk_eq "-C form prune denied" 2 "$RC"
+run 'echo "git worktree prune"'
+chk_eq "quoted prune as data allowed" 0 "$RC"; chk_eq "quoted prune no auto-allow" "" "$OUT"
+run 'git worktree remove /tmp/a && rm -rf /tmp/b'
+chk_eq "mixed non-benign chain falls to classifier" 0 "$RC"; chk_eq "mixed chain gets no auto-allow" "" "$OUT"
+touch /tmp/cto-allow-worktree-destroy
+run 'git worktree prune'
+chk_eq "override marker lifts deny" 0 "$RC"; chk_eq "override gives no auto-allow (permission flow applies)" "" "$OUT"
+chk_eq "override marker consumed (one-shot)" 0 "$([ -e /tmp/cto-allow-worktree-destroy ] && echo 1 || echo 0)"
+run 'git worktree prune'
+chk_eq "second run denies again (no standing bypass)" 2 "$RC"
+
 # non-dispatch command -> silent
 run 'git status'
 chk_eq "non-dispatch silent" "" "$OUT"
