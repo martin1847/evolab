@@ -2,7 +2,7 @@
 # agentctl — unified control surface for headless worker agents (duplex-lane era).
 #
 #   agentctl start  <omp|codex|claude> <session> <cwd> --goal F [--deliverable G]
-#                   [--require-preflight] [engine args...]
+#                   [--no-preflight] [engine args...]
 #   agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d|--deliverable G]
 #   agentctl status <session>            # one-shot typed state (exit = verdict)
 #   agentctl watch  <session>            # block until terminal; typed exit 0-8
@@ -31,7 +31,7 @@ PY="${AGENTCTL_PYTHON:-python3}"
 q() { printf %q "$1"; }
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
-  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--require-preflight] [engine args...]" >&2
+  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [engine args...]" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]" >&2
   echo "       agentctl status <session> | watch <session> | stop <session> [cwd]" >&2
   exit 1
@@ -40,6 +40,15 @@ usage() {
 # duplex sessions have .duplex.meta (the only lane since 2026-07-19 unification).
 lane_of() { # $1 session
   if [ -f "$DIR/$1.duplex.meta" ]; then echo duplex; else echo none; fi
+}
+
+# A live `agentctl watch` publishes its own pid; a stale file (watcher crashed or was
+# killed with the orchestrator's shell) reads as ABSENT — over-reminding is cheap,
+# a RUNNING session nobody watches is not.
+watcher_alive() { # $1 session
+  local pid
+  pid="$(cat "$DIR/$1.duplex.watch.pid" 2>/dev/null)" || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
 # The BLOCKED.md footer keeps the cross-engine ask-user protocol alive on the duplex lane:
@@ -54,11 +63,14 @@ append_footer() { # $1 out-file  $2 cwd
 cmd_start() {
   ENG="${1:?usage}" ; S="${2:?session}" ; CWD="${3:?cwd}"; shift 3
   case "$ENG" in omp|codex|claude) ;; *) echo "ERR: unknown engine '$ENG' (omp|codex|claude)" >&2; exit 1 ;; esac
-  GOAL=""; DELIV=""; PREFLIGHT=0; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""; MODEL_TOKENS=0
+  GOAL=""; DELIV=""; PREFLIGHT=1; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""; MODEL_TOKENS=0
   while [ "$#" -gt 0 ]; do case "$1" in
     --goal) GOAL="${2:?--goal needs a file}"; shift 2;;
     --deliverable) DELIV="${2:?--deliverable needs a glob}"; shift 2;;
-    --require-preflight) PREFLIGHT=1; shift;;
+    --no-preflight) PREFLIGHT=0; shift;;
+    # pre-1.6.0 opt-in spelling; the gate is the default now, so it is accepted as a
+    # no-op for one version (remembering a flag was the thing that kept failing).
+    --require-preflight) shift;;
     --workflow) WORKFLOW="${2:?--workflow needs a value}"; shift 2;;
     --max-rounds) MAX_ROUNDS="${2:?--max-rounds needs N}"; shift 2;;
     --resume-thread) RESUME_THREAD="${2:?--resume-thread needs an id}"; shift 2;;
@@ -75,7 +87,11 @@ cmd_start() {
   if [ -n "$RESUME_THREAD" ] && [ "$ENG" != codex ]; then
     echo "ERR: --resume-thread is codex-only — omp resumes via '-r <session-file>', claude via '--resume <sid>' (engine args)" >&2; exit 1
   fi
-  [ "$PREFLIGHT" = 0 ] || "$HERE/../goal-preflight.py" "$GOAL" || exit 1
+  if [ "$PREFLIGHT" = 1 ]; then
+    "$HERE/../goal-preflight.py" "$GOAL" || {
+      echo "HINT: mechanical / forensic / pure-research goals opt out explicitly — re-run with --no-preflight" >&2
+      exit 1; }
+  fi
   [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
   CWD="$(cd "$CWD" && pwd -P)"
   mkdir -p "$DIR"
@@ -169,14 +185,31 @@ cmd_steer() {
 cmd_status() {
   S="${1:?usage: agentctl status <session>}"
   case "$(lane_of "$S")" in
-    duplex) "$PY" "$CTL" --run-dir "$DIR" classify "$S" ;;
+    duplex)
+      msg="$("$PY" "$CTL" --run-dir "$DIR" classify "$S")"; rc=$?
+      [ -n "$msg" ] && printf '%s\n' "$msg"   # a died classify says it all on stderr
+      # RUNNING with nobody watching is the field's most expensive omission (start,
+      # then forget to arm the watcher — 4 catches in one production day). Advisory
+      # only: the typed line and the exit code are untouched.
+      [ "$rc" = 10 ] && ! watcher_alive "$S" \
+        && echo "note: no watcher armed — arm: agentctl watch $S (run_in_background)"
+      exit "$rc" ;;
     none)   echo "ERR: unknown session '$S'" >&2; exit 1 ;;
   esac
+}
+
+# every watch exit prints the verdict twice: the typed `=== … ===` line for humans and
+# a final `EXIT=<n>` for pipes — a wrapper (tee / subshell / background harness) that
+# swallows the process exit code can still parse the verdict off the last line.
+watch_exit() { # $1 rc
+  echo "EXIT=$1"; exit "$1"
 }
 
 cmd_watch() {
   S="${1:?usage: agentctl watch <session>}"
   [ "$(lane_of "$S")" = duplex ] || { echo "ERR: unknown session '$S'" >&2; exit 1; }
+  WPID="$DIR/$S.duplex.watch.pid"
+  echo $$ > "$WPID"; trap 'rm -f "$WPID"' EXIT
   POLL="${AGENT_WATCH_POLL_SECS:-15}"; MAX="${AGENT_WATCH_MAX_POLLS:-240}"
   # ENGINE-SILENT bound: a steer was delivered but the engine produced zero output for
   # ~2min. The duplex analog of the old NO-HOOK exit 8 — report honestly, never guess.
@@ -190,20 +223,20 @@ cmd_watch() {
         case "$msg" in *"no output since last steer"*) silent=$((silent+1));; *) silent=0;; esac
         if [ "$silent" -ge "$SILENT_MAX" ]; then
           echo "=== [$S] ENGINE-SILENT at $(date '+%H:%M:%S') — steer delivered but no engine output ~2min; inspect $DIR/$S.duplex.stderr.log ==="
-          exit 8
+          watch_exit 8
         fi
         idle=0 ;;
       0|6)
         # stability: require 2 consecutive terminal reads — a turn boundary right
         # before an auto-consumed queued message must not read as terminal.
         idle=$((idle+1)); silent=0
-        if [ "$idle" -ge 2 ]; then echo "=== [$S] $msg ==="; exit "$rc"; fi ;;
-      *) echo "=== [$S] $msg ==="; exit "$rc" ;;
+        if [ "$idle" -ge 2 ]; then echo "=== [$S] $msg ==="; watch_exit "$rc"; fi ;;
+      *) echo "=== [$S] $msg ==="; watch_exit "$rc" ;;
     esac
     [ $((i % 12)) -eq 0 ] && echo "[$S] heartbeat iter $i $(date '+%H:%M:%S') — $msg"
     i=$((i+1)); sleep "$POLL"
   done
-  echo "=== [$S] WATCH TIMEOUT — engine still active; re-run watch or investigate ==="; exit 7
+  echo "=== [$S] WATCH TIMEOUT — engine still active; re-run watch or investigate ==="; watch_exit 7
 }
 
 cmd_stop() {
@@ -213,7 +246,7 @@ cmd_stop() {
       tmux kill-session -t "$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
       rm -f "$DIR/$S.duplex.in" "$DIR/$S.duplex.meta" "$DIR/$S.duplex.round-started" \
             "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" \
-            "$DIR/$S.duplex.write-intent" 2>/dev/null
+            "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" 2>/dev/null
       echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc" ;;
     none)
       # no lane meta: clean bare tmux AND orphan duplex claims (crash residue like a
@@ -221,7 +254,8 @@ cmd_stop() {
       cleaned=0
       tmux has-session -t "$S" 2>/dev/null && { tmux kill-session -t "$S" 2>/dev/null; echo "killed bare tmux session $S"; cleaned=1; }
       for f in "$DIR/$S.duplex.in" "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" \
-               "$DIR/$S.duplex.sent-offset" "$DIR/$S.duplex.round-started" "$DIR/$S.duplex.write-intent"; do
+               "$DIR/$S.duplex.sent-offset" "$DIR/$S.duplex.round-started" \
+               "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid"; do
         [ -e "$f" ] && { rm -f "$f"; cleaned=1; }
       done
       if [ "$cleaned" = 1 ]; then echo "removed orphan session residue for '$S'"

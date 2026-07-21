@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Validate the opt-in cheapest-refutation contract before dispatch.
+"""Validate the cheapest-refutation contract before dispatch.
 
-This is deliberately a shape/evidence-presence gate, not a truth oracle. The orchestrator
-explicitly selects it with --require-preflight for uncertain, expensive directions; the
-runtime refuses missing, duplicate, placeholder, or unresolved declarations before launch.
+This is deliberately a shape/evidence-presence gate, not a truth oracle. The gate is on
+by default (mechanical/forensic goals opt out with --no-preflight); the runtime refuses
+missing, duplicate, placeholder, or unresolved declarations before launch.
 """
 import re
 import sys
