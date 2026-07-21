@@ -13,7 +13,7 @@
 <凭据/环境入口给**绝对路径**（如 `ACCESS.local.md`——worker cwd 在 worktree，相对搜找不到，实证）；
 build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 
-> 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行并用 `--require-preflight` 派发；普通 bugfix、机械改动和纯研究删除它。
+> 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行（preflight 门默认校验）；普通 bugfix、机械改动和纯研究删除它、派发加 `--no-preflight`。
 Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only falsifier actually run> => <observed result>
 Optional absence-evidence gate (delete unless the decision relies on not observing X): known-positive probe: <how the detector proves it can see X>; otherwise report UNKNOWN.
 
