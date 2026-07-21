@@ -44,7 +44,7 @@ Then stop. Do not do anything else.
 EOF
   echo "  -- leg: $engine (start + watch + steer + watch, cap ~8min) --"
   out="$(AGENT_WATCH_DIR="$TMPRUN" bash "$AGENTCTL" start "$engine" "$SESSION" "$WT" \
-        --goal "$WT/E2E_GOAL.md" --deliverable "GOAL_DONE.marker" "$@" 2>&1)"; rc=$?
+        --goal "$WT/E2E_GOAL.md" --deliverable "GOAL_DONE.marker" --no-preflight "$@" 2>&1)"; rc=$?
   chk_eq "$engine: start rc0 (returns after goal frame accepted)" 0 "$rc"
   chk_contains "$engine: duplex lane announced" "duplex session" "$out"
   wout="$(wait_done "$SESSION" "$TMPRUN")"; wrc=$?

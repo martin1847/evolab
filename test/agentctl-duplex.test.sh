@@ -62,7 +62,9 @@ sweep_fakes() { # kill any engine/wrapper the fake tmux started (orphans hold th
 echo "== duplex: omp lifecycle (frames + projection) =="
 sandbox_new; install_running_tmux
 WT="$SANDBOX/wt"; mkdir -p "$WT"
-printf 'investigate the thing\n' > "$SANDBOX/goal.md"
+# goals carry a resolved Preflight declaration: the gate is ON by default since
+# 1.6.0, so every start below exercises the default path (not an exempted one).
+printf 'investigate the thing\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$SANDBOX/goal.md"
 export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
 export FAKE_PROVIDER_LOG="$SANDBOX/omp.log"
 out="$(bash "$AGENTCTL" start omp dxA "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
@@ -136,6 +138,8 @@ chk_eq "claude result frame → DONE" 0 "$rc"
 chk_contains "DONE carries bounded last summary" "turn 1 complete" "$out"
 out="$(AGENT_WATCH_MAX_POLLS=6 bash "$AGENTCTL" watch dxC 2>&1)"; rc=$?
 chk_eq "duplex watch confirms stable DONE" 0 "$rc"
+chk_eq "watch DONE ends with a machine-readable tail" "EXIT=0" "$(printf '%s\n' "$out" | tail -1)"
+chk_contains "typed DONE line survives beside the tail" "=== [dxC] DONE" "$out"
 out="$(bash "$AGENTCTL" steer dxC -m "one more thing" --now 2>&1)"
 chk_contains "claude --now degrades to queued, said out loud" "no public interrupt frame" "$out"
 bash "$AGENTCTL" stop dxC >/dev/null 2>&1
@@ -148,6 +152,8 @@ chk_eq "mute start rc0" 0 "$rc"
 out="$(AGENT_WATCH_SILENT_POLLS=2 AGENT_WATCH_MAX_POLLS=6 bash "$AGENTCTL" watch dxM 2>&1)"; rc=$?
 chk_eq "no output after steer → exit 8" 8 "$rc"
 chk_contains "silent verdict names stderr log" "stderr.log" "$out"
+chk_eq "watch ENGINE-SILENT ends with a machine-readable tail" "EXIT=8" "$(printf '%s\n' "$out" | tail -1)"
+chk_contains "typed ENGINE-SILENT line survives beside the tail" "=== [dxM] ENGINE-SILENT" "$out"
 bash "$AGENTCTL" stop dxM >/dev/null 2>&1
 unset FAKE_CLAUDE_MUTE
 
@@ -175,7 +181,7 @@ sweep_fakes; sandbox_clean
 echo "== review-fix regressions (2026-07-19 cold review) =="
 sandbox_new; install_running_tmux
 WT="$SANDBOX/wtr"; mkdir -p "$WT"
-printf 'do the thing\n' > "$SANDBOX/goal.md"
+printf 'do the thing\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$SANDBOX/goal.md"
 export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
 export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
 
@@ -298,7 +304,7 @@ sandbox_clean
 echo "== codex duplex: handshake + steer semantics (unified lane) =="
 sandbox_new; install_running_tmux
 WT="$SANDBOX/wtc"; mkdir -p "$WT"
-printf 'do the codex thing\n' > "$SANDBOX/goal.md"
+printf 'do the codex thing\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$SANDBOX/goal.md"
 export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
 export FAKE_PROVIDER_LOG="$SANDBOX/codex.log"
 out="$(bash "$AGENTCTL" start codex cxA "$WT" --goal "$SANDBOX/goal.md" --model gpt-fake 2>&1)"; rc=$?
@@ -433,6 +439,74 @@ out="$(bash "$AGENTCTL" steer cxL -m "SHIP-BLOCKING: verified regression" 2>&1)"
 chk_eq "round 3 with lease rc0" 0 "$rc"
 bash "$AGENTCTL" stop cxL >/dev/null 2>&1
 unset FAKE_PROVIDER_LOG
+sweep_fakes; sandbox_clean
+
+echo "== 1.6.0 runtime: preflight default / EXIT tail / watcher-absence note =="
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wtn"; mkdir -p "$WT"
+export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
+export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
+bare="$SANDBOX/bare.md"; printf 'mechanical rename, nothing to falsify\n' > "$bare"
+declared="$SANDBOX/declared.md"
+printf 'risky direction\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$declared"
+
+# preflight is ON by default (1.6.0 flip): opt-in-by-memory is what kept failing
+out="$(bash "$AGENTCTL" start claude pfA "$WT" --goal "$bare" 2>&1)"; rc=$?
+chk_eq "undeclared goal refused by default" 1 "$rc"
+chk_contains "refusal names the preflight contract" "preflight gate" "$out"
+chk_contains "refusal points at the explicit exemption" "--no-preflight" "$out"
+chk_eq "refused start launched no engine" 0 "$([ -e "$FAKE_TMUX_STATE/pfA.pid" ] && echo 1 || echo 0)"
+chk_eq "refused start left no lane state" 0 "$([ -e "$WATCH_RUN_DIR/pfA.duplex.meta" ] && echo 1 || echo 0)"
+out="$(bash "$AGENTCTL" start claude pfB "$WT" --goal "$bare" --no-preflight 2>&1)"; rc=$?
+chk_eq "--no-preflight exempts the same goal" 0 "$rc"
+bash "$AGENTCTL" stop pfB >/dev/null 2>&1
+out="$(bash "$AGENTCTL" start claude pfC "$WT" --goal "$declared" 2>&1)"; rc=$?
+chk_eq "resolved declaration passes the default gate" 0 "$rc"
+bash "$AGENTCTL" stop pfC >/dev/null 2>&1
+# legacy spelling stays accepted as a no-op — codex REFUSES unrecognized argv, so rc0
+# proves the parser consumed the flag instead of leaking it into engine args
+out="$(bash "$AGENTCTL" start codex pfL "$WT" --goal "$declared" --require-preflight 2>&1)"; rc=$?
+chk_eq "legacy --require-preflight accepted, never leaked to engine argv" 0 "$rc"
+bash "$AGENTCTL" stop pfL >/dev/null 2>&1
+
+# gate never opens: turn 1 hangs before ANY output → a durably RUNNING session
+export FAKE_CLAUDE_GATE="$SANDBOX/nw-gate"
+bash "$AGENTCTL" start claude nwR "$WT" --goal "$declared" >/dev/null 2>&1
+/bin/sleep 0.3
+out="$(bash "$AGENTCTL" status nwR 2>&1)"; rc=$?
+chk_eq "gated engine → RUNNING 10" 10 "$rc"
+out="$(AGENT_WATCH_MAX_POLLS=2 AGENT_WATCH_SILENT_POLLS=99 bash "$AGENTCTL" watch nwR 2>&1)"; rc=$?
+chk_eq "bounded poll exhausted → exit 7" 7 "$rc"
+chk_eq "watch TIMEOUT ends with a machine-readable tail" "EXIT=7" "$(printf '%s\n' "$out" | tail -1)"
+chk_contains "typed TIMEOUT line survives beside the tail" "=== [nwR] WATCH TIMEOUT" "$out"
+chk_eq "watch removes its own pid file on exit" 0 "$([ -e "$WATCH_RUN_DIR/nwR.duplex.watch.pid" ] && echo 1 || echo 0)"
+
+# RUNNING + nobody watching = the omission a guard reminder caught 4x in one day
+out="$(bash "$AGENTCTL" status nwR 2>&1)"; rc=$?
+chk_eq "no-watcher note leaves the verdict at RUNNING 10" 10 "$rc"
+chk_contains "typed RUNNING line still printed" "RUNNING:" "$out"
+chk_contains "absent watcher → note prompts to arm one" "no watcher armed" "$out"
+chk_contains "note carries the ready-to-run command" "agentctl watch nwR" "$out"
+printf '%s\n' "$$" > "$WATCH_RUN_DIR/nwR.duplex.watch.pid"   # live pid = this test shell
+out="$(bash "$AGENTCTL" status nwR 2>&1)"; rc=$?
+chk_eq "live watcher: verdict still RUNNING 10" 10 "$rc"
+chk_not_contains "live watcher silences the note" "no watcher armed" "$out"
+/bin/sleep 5 & dead=$!; kill -9 "$dead" 2>/dev/null; wait "$dead" 2>/dev/null
+printf '%s\n' "$dead" > "$WATCH_RUN_DIR/nwR.duplex.watch.pid"   # stale: file in, process gone
+out="$(bash "$AGENTCTL" status nwR 2>&1)"; rc=$?
+chk_eq "stale watcher pid: verdict still RUNNING 10" 10 "$rc"
+chk_contains "stale watcher pid still warns (noisy beats missed)" "no watcher armed" "$out"
+: > "$FAKE_CLAUDE_GATE"   # release the turn: terminal states carry no note
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q '"type":"result"' "$WATCH_RUN_DIR/nwR.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" status nwR 2>&1)"; rc=$?
+chk_eq "released gate → DONE 0" 0 "$rc"
+chk_not_contains "terminal verdict carries no watcher note" "no watcher armed" "$out"
+bash "$AGENTCTL" stop nwR >/dev/null 2>&1
+chk_eq "stop removes the watcher pid file" 0 "$([ -e "$WATCH_RUN_DIR/nwR.duplex.watch.pid" ] && echo 1 || echo 0)"
+unset FAKE_CLAUDE_GATE
 sweep_fakes; sandbox_clean
 
 echo "== guard: TaskStop deny covers wrong-premise motive =="
