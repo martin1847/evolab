@@ -16,7 +16,7 @@
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
 # extraction would be fragile in a guard.
-import sys, json, re, os
+import sys, json, re
 
 
 def checker_error(message):
@@ -165,6 +165,45 @@ def main():
     # the Git-workflow standard skill + a server-side branch-protection ruleset,
     # NOT here — cto-guard owns orchestration slips (backgrounding, idle-polling, dispatch, send-keys),
     # not git policy. Don't re-add push checks here.
+
+    # (7) worktree lifecycle (principal ruling 2026-07-19): non-force `git worktree remove` is a
+    #     STANDING GRANT for close/retro cleanup — git itself refuses a tree with modified or
+    #     untracked files, the branch ref survives, so the non-force form is reversible by
+    #     construction → auto-allow (no per-cleanup ask). The dangerous forms stay hard-gated:
+    #     `--force`/`-f` bulldozes untracked files (field loss 2026-07-19: probe scripts died in
+    #     a chained force-remove whose salvage cp had silently aborted on a bad glob) and `prune`
+    #     mass-deletes on staleness guesses. Those need the principal's explicit fresh turn AND a
+    #     salvage of untracked files VERIFIED IN A SEPARATE command first — never chain
+    #     verify+destroy in one command line.
+    wts = list(re.finditer(r"git\s+(?:-C\s+\S+\s+)?worktree\s+(remove|prune)\b([^;|&]*)", unq))
+    if wts:
+        for w in wts:
+            if w.group(1) == "prune" or re.search(r"(?:^|\s)(?:--force|-f)\b", w.group(2)):
+                sys.stderr.write(
+                    "DENY: `git worktree remove --force` / `git worktree prune` needs the principal's "
+                    "explicit fresh-turn approval — force bulldozes untracked files (2026-07-19: "
+                    "probe scripts lost when a chained salvage-cp silently aborted before a force "
+                    "remove) and prune mass-deletes by staleness guess. First inspect `git -C <wt> "
+                    "status --porcelain`, salvage untracked files, VERIFY the salvage in its own "
+                    "command, then ask. Non-force `git worktree remove` of a clean tree needs no ask "
+                    "(standing grant). "
+                    "Read: cto-orchestration/references/agent-watch/README.md §强制层 ⑦.\n"
+                )
+                return 2
+        segs = [s.strip() for s in re.split(r"&&|;", unq) if s.strip()]
+        benign = re.compile(r"^(git\s+(-C\s+\S+\s+)?worktree\s+(remove|list)\b|echo\b|cd\s)")
+        if all(benign.match(s) for s in segs):
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": (
+                        "cto-guard: non-force `git worktree remove` = standing grant (principal "
+                        "2026-07-19). git refuses dirty trees; branch ref survives — reversible."
+                    ),
+                }
+            }))
+            return 0
 
     # (5) BLOCKING `agentctl watch` in the FOREGROUND: it blocks until the agent's terminal
     #     state — under a foreground Bash timeout (Claude Code default 2min) the call is killed
