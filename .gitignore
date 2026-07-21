@@ -14,3 +14,7 @@ security/
 security
 .evolab
 .claude
+
+# local creds (ACCESS.local twin) — never commit
+ACCESS.local.*
+.env*
