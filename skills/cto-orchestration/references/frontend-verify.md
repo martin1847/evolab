@@ -19,6 +19,12 @@ MCP 驱动登录+渲染验证+网络诊断，CLI 抓 SSE/API ground-truth。
 > **Playwright 优先已是 hook 硬规则**（P0a：浏览器派发载用户日常浏览器控制 token 即被 `cto-guard-agent.py` DENY）。
 > why：用户日常浏览器与多 agent 争控制面、断连坑两次；仅当 Playwright 登录态不可解决且用户单独授权时才考虑。
 
+## 重复型 E2E：交付物 = 无头 playwright 脚本
+
+交互式 browser-MCP 每驱动一次 E2E 烧一个量级 token——同一验收第二次起走脚本：node 无头 playwright，
+参数化、可独立重跑，负对照内建（如 `--expect-absent <假id>` 必红），输出机器可读 `RESULT` 尾行
+（消费者只认尾行）；脚本随项目入库、路径进该项目 AGENTS.md。browser-MCP 只用于首次 selector 探路。
+
 ## 状态形状矩阵（E2E 只测新鲜快乐态 = 结构性漏测）<!-- trunk:状态形状矩阵 -->
 
 实证（2026-07-05，同日两个 P1 同根）：全部 E2E 用"刚登录的黄金账号"→ ① access token 过期后
