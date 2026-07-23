@@ -175,7 +175,13 @@ def main():
     #     mass-deletes on staleness guesses. Those need the principal's explicit fresh turn AND a
     #     salvage of untracked files VERIFIED IN A SEPARATE command first — never chain
     #     verify+destroy in one command line.
-    wts = list(re.finditer(r"git\s+(?:-C\s+\S+\s+)?worktree\s+(remove|prune)\b([^;|&]*)", unq))
+    # Global-option prefix: repeated `-C <arg>` / `-c <arg>` / `--long[=val]` before the
+    # subcommand. A quoted `-C '/path with space'` argument VANISHES from the unquoted view,
+    # leaving `-C` directly before `worktree` — the lookahead keeps \S+ from eating the
+    # subcommand itself (review probe 2026-07-24: quoted/-c forms slipped past the old regex).
+    wts = list(re.finditer(
+        r"git\s+(?:-[cC]\s+(?:(?!worktree\s)[^\s;|&]+\s+)?|--?[A-Za-z][^\s;|&]*\s+)*"
+        r"worktree\s+(remove|prune)\b([^;|&]*)", unq))
     if wts:
         destroy = [w for w in wts
                    if w.group(1) == "prune" or re.search(r"(?:^|\s)(?:--force|-f)\b", w.group(2))]
@@ -184,13 +190,17 @@ def main():
             # 2026-07-21: an already-approved prune had no path through this DENY). The marker
             # is consumed on use so it can never linger as a standing bypass; it lifts the DENY
             # only — no auto-allow, the normal permission flow still applies.
+            # CONSUMPTION IS THE APPROVAL: allow only if the marker was actually removed —
+            # a directory / unremovable object at this path must DENY, not become a standing
+            # bypass (review probe 2026-07-24: mkdir'd marker allowed forever); and of two
+            # concurrent guards only the one whose remove succeeds is lifted.
             marker = "/tmp/cto-allow-worktree-destroy"
-            if os.path.exists(marker):
-                try:
-                    os.remove(marker)
-                except OSError:
-                    pass
-            else:
+            try:
+                os.remove(marker)
+                consumed = True
+            except OSError:
+                consumed = False
+            if not consumed:
                 sys.stderr.write(
                     "DENY: `git worktree remove --force` / `git worktree prune` needs the principal's "
                     "explicit fresh-turn approval — force bulldozes untracked files (2026-07-19: "
