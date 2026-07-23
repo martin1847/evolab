@@ -509,6 +509,35 @@ chk_eq "stop removes the watcher pid file" 0 "$([ -e "$WATCH_RUN_DIR/nwR.duplex.
 unset FAKE_CLAUDE_GATE
 sweep_fakes; sandbox_clean
 
+echo "== watcher tombstone: external TERM is attributable, trap is prompt =="
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wtt"; mkdir -p "$WT"
+export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
+tgoal="$SANDBOX/tg.md"; printf 'g\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$tgoal"
+export FAKE_CLAUDE_GATE="$SANDBOX/tw-gate"     # never released: durably RUNNING session
+bash "$AGENTCTL" start claude twR "$WT" --goal "$tgoal" >/dev/null 2>&1
+AGENT_WATCH_POLL_SECS=15 bash "$AGENTCTL" watch twR > "$SANDBOX/tw.log" 2>&1 &
+WP=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$WATCH_RUN_DIR/twR.duplex.watch.pid" ] && break; /bin/sleep 0.2; done
+kill -TERM "$WP"
+# promptness IS the contract: bare foreground sleep defers the trap up to POLL seconds
+# (probed 14s) and the tombstone loses the race against a TERM→KILL grace window
+tries=0
+while kill -0 "$WP" 2>/dev/null; do
+  tries=$((tries+1)); [ "$tries" -ge 30 ] && break; /bin/sleep 0.1
+done
+chk_eq "TERM'd watcher exits within ~3s (interruptible wait)" 0 "$(kill -0 "$WP" 2>/dev/null && echo 1 || echo 0)"
+wait "$WP" 2>/dev/null; rc=$?
+chk_eq "TERM'd watcher exit code 143" 143 "$rc"
+TS="$WATCH_RUN_DIR/twR.watch.tombstone.jsonl"
+chk_eq "tombstone file written" 1 "$([ -s "$TS" ] && echo 1 || echo 0)"
+chk_contains "tombstone records the signal" '"signal":"TERM"' "$(cat "$TS" 2>/dev/null)"
+chk_contains "tombstone records the arming parent" '"ppid":' "$(cat "$TS" 2>/dev/null)"
+chk_eq "pid file cleaned on TERM (no stale window)" 0 "$([ -e "$WATCH_RUN_DIR/twR.duplex.watch.pid" ] && echo 1 || echo 0)"
+bash "$AGENTCTL" stop twR >/dev/null 2>&1
+unset FAKE_CLAUDE_GATE
+sweep_fakes; sandbox_clean
+
 echo "== guard: TaskStop deny covers wrong-premise motive =="
 TID="agdx$$"
 TDIR="/tmp/claude-agdxtest/$$/x/tasks"; mkdir -p "$TDIR"; printf 'alive\n' > "$TDIR/$TID.output"
