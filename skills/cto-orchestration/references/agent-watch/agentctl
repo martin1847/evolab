@@ -210,6 +210,16 @@ cmd_watch() {
   [ "$(lane_of "$S")" = duplex ] || { echo "ERR: unknown session '$S'" >&2; exit 1; }
   WPID="$DIR/$S.duplex.watch.pid"
   echo $$ > "$WPID"; trap 'rm -f "$WPID"' EXIT
+  # External kills are non-deterministic and the sender is invisible from inside the
+  # sandbox (field report 2026-07-23: TERM ~3-5min in, other watchers untouched). Leave
+  # an attributable tombstone and clean the pid file so the death is diagnosable and
+  # never lingers as a live-looking watcher.
+  on_sig() { # $1 signal-name  $2 exit-code
+    printf '{"ts":"%s","event":"watcher-killed","signal":"%s","ppid":%s,"uptime_s":%s}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" "$PPID" "$SECONDS" >> "$DIR/$S.watch.tombstone.jsonl"
+    rm -f "$WPID"; exit "$2"
+  }
+  trap 'on_sig TERM 143' TERM; trap 'on_sig INT 130' INT
   POLL="${AGENT_WATCH_POLL_SECS:-15}"; MAX="${AGENT_WATCH_MAX_POLLS:-240}"
   # ENGINE-SILENT bound: a steer was delivered but the engine produced zero output for
   # ~2min. The duplex analog of the old NO-HOOK exit 8 — report honestly, never guess.
@@ -234,7 +244,10 @@ cmd_watch() {
       *) echo "=== [$S] $msg ==="; watch_exit "$rc" ;;
     esac
     [ $((i % 12)) -eq 0 ] && echo "[$S] heartbeat iter $i $(date '+%H:%M:%S') — $msg"
-    i=$((i+1)); sleep "$POLL"
+    # sleep backgrounded + wait: `wait` is signal-interruptible; a bare foreground sleep
+    # defers a trapped TERM until it finishes (probed 2026-07-23: 14s) — the tombstone
+    # would lose the race against a TERM→KILL grace window.
+    i=$((i+1)); sleep "$POLL" & wait $!
   done
   echo "=== [$S] WATCH TIMEOUT — engine still active; re-run watch or investigate ==="; watch_exit 7
 }
