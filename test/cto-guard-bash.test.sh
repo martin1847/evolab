@@ -186,6 +186,22 @@ chk_eq "override marker lifts deny" 0 "$RC"; chk_eq "override gives no auto-allo
 chk_eq "override marker consumed (one-shot)" 0 "$([ -e /tmp/cto-allow-worktree-destroy ] && echo 1 || echo 0)"
 run 'git worktree prune'
 chk_eq "second run denies again (no standing bypass)" 2 "$RC"
+# review 2026-07-24 regressions: consumption IS the approval — an unremovable object at the
+# marker path must deny (a mkdir'd marker was a permanent standing bypass), and git
+# global-option forms (quoted -C path vanishes from the unquoted view / -c key=val) must
+# still hit the destroy DENY
+mkdir /tmp/cto-allow-worktree-destroy
+run 'git worktree prune'
+chk_eq "dir at marker path still denied (consumption failed)" 2 "$RC"
+run 'git worktree prune'
+chk_eq "dir marker denies repeatably (no standing bypass)" 2 "$RC"
+rmdir /tmp/cto-allow-worktree-destroy
+run "git -C '/repo with space' worktree prune"
+chk_eq "quoted -C path prune denied" 2 "$RC"
+run 'git -C "/repo with space" worktree remove --force wt'
+chk_eq "quoted -C path force remove denied" 2 "$RC"
+run 'git -c core.quotePath=false worktree prune'
+chk_eq "-c global-option prune denied" 2 "$RC"
 
 # non-dispatch command -> silent
 run 'git status'
