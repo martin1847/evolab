@@ -191,8 +191,27 @@ cmd_status() {
       # RUNNING with nobody watching is the field's most expensive omission (start,
       # then forget to arm the watcher — 4 catches in one production day). Advisory
       # only: the typed line and the exit code are untouched.
-      [ "$rc" = 10 ] && ! watcher_alive "$S" \
-        && echo "note: no watcher armed — arm: agentctl watch $S (run_in_background)"
+      if [ "$rc" = 10 ] && ! watcher_alive "$S"; then
+        echo "note: no watcher armed — arm: agentctl watch $S (run_in_background)"
+        # The killed-notification can die with the host session; status is the verb the
+        # orchestrator re-checks with, so the unresolved death is surfaced here.
+        TOMB="$DIR/$S.watch.tombstone.jsonl"
+        if [ -f "$TOMB" ]; then
+          echo "note: previous watcher killed externally — $(tail -1 "$TOMB") — killed ≠ worker dead"
+          # The host reaps background tasks in batches (same-second double-kill, field
+          # 2026-07-25): name every session felled by the same event so one status call
+          # re-arms them all, not only the one whose notification arrived.
+          peers=""
+          for t in "$DIR"/*.watch.tombstone.jsonl; do
+            [ -f "$t" ] && [ "$t" != "$TOMB" ] || continue
+            p="${t##*/}"; p="${p%.watch.tombstone.jsonl}"
+            watcher_alive "$p" && continue
+            "$PY" -c 'import os,sys;sys.exit(0 if abs(os.path.getmtime(sys.argv[1])-os.path.getmtime(sys.argv[2]))<=120 else 1)' \
+              "$t" "$TOMB" 2>/dev/null && peers="$peers $p"
+          done
+          [ -n "$peers" ] && echo "note: same reap event also killed watchers of:$peers — re-arm each"
+        fi
+      fi
       exit "$rc" ;;
     none)   echo "ERR: unknown session '$S'" >&2; exit 1 ;;
   esac
