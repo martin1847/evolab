@@ -170,9 +170,18 @@ bash scripts/engineering-gate.sh test
 - 提 PR 前过一遍 `docs/PR_SELF_CHECK.md`（人和 agent 同一份清单）。
 - 清单条目只准来自真实评审 finding / 事故（禁理论条目）；可机检条目下沉
   `.githooks/pre-push`（纯 git+grep 毫秒级、diff-scoped），每关带负探针登记进
-  本文件的验证配方节。
+  下面的验证配方节。
 - hook 可被 `--no-verify` 绕过：CI 以 `--range` 复跑同一脚本才是硬门。
 - 供给与演化规范：`agent-backend-standard/references/selfcheck-gates.md`（附录 F）。
+
+#### 验证配方（负探针台账）
+
+<!-- 每个 pre-push 关卡落地时登记一行：关卡函数名 | 源 finding（PR#/事故一句话）|
+     负探针（怎么让它红的命令）| 恢复方式。没有实测过 exit 1 的关卡不算存在
+     （selfcheck-gates 附录 F）。清单为空 = 尚无关卡，正常，勿预填理论条目。 -->
+
+| 关卡 | 源 finding | 负探针 | 恢复 |
+| --- | --- | --- | --- |
 
 ---
 

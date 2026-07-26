@@ -240,6 +240,41 @@ run 'gh api repos/o/r/pulls'
 chk_eq "gh api self-anchored allowed" 0 "$RC"
 run 'echo git status'
 chk_eq "git as quoted-free argument allowed" 0 "$RC"
+# review round 2026-07-26: every probe below was a live bypass (rc=0) or false deny (rc=2)
+run 'cd /definitely-missing || git status'
+chk_eq "cd-or-else chain denied (cd may fail)" 2 "$RC"
+run 'cd /definitely-missing; git status'
+chk_eq "cd semicolon chain denied (cd may fail)" 2 "$RC"
+run 'cd /definitely-missing | git status'
+chk_eq "cd in pipeline denied (no cwd effect)" 2 "$RC"
+run 'cd relative/dir && git status'
+chk_eq "relative cd is not an anchor" 2 "$RC"
+run 'command git status'
+chk_eq "command-wrapper bare git denied" 2 "$RC"
+run 'env FOO=1 git status'
+chk_eq "env-wrapper bare git denied" 2 "$RC"
+run "bash -lc 'git status'"
+chk_eq "interpreter payload bare git denied" 2 "$RC"
+run '"git" status'
+chk_eq "quoted command token denied" 2 "$RC"
+run 'g\it status'
+chk_eq "backslash-escaped git denied" 2 "$RC"
+run "bash -lc 'git -C /x status'"
+chk_eq "interpreter payload anchored git allowed" 0 "$RC"
+run 'git --version'
+chk_eq "repo-insensitive git --version allowed" 0 "$RC"
+run 'gh auth status'
+chk_eq "repo-insensitive gh auth allowed" 0 "$RC"
+run 'git -c color.ui=false -C /repo status'
+chk_eq "global options before -C still anchored" 0 "$RC"
+mkdir -p "$UMB_ROOT/a/d1/d2/d3/d4"
+GUARD_CWD="$UMB_ROOT/a/d1/d2/d3/d4"
+run 'git status'
+chk_eq "umbrella as 5th ancestor still fires" 2 "$RC"
+ln -s "$UMB_ROOT/a" "$G8ROOT/link-a"
+GUARD_CWD="$G8ROOT/link-a"
+run 'git status'
+chk_eq "symlinked cwd resolves into umbrella" 2 "$RC"
 GUARD_CWD="/nonexistent-cto-guard-g8"
 run 'git status'
 chk_eq "unreadable cwd fails open" 0 "$RC"

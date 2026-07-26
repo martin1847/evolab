@@ -166,14 +166,15 @@ def main():
     #     call's cwd) — in an umbrella of sibling git repos a bare `git`/`gh` then acts on the WRONG
     #     repo (field hits: 3 bites in one wave 2026-07-24; PR opened in the wrong repo 2026-07-26).
     #     This is an orchestration slip (cwd discipline), not git policy — see NOTE below.
-    #     Scope gate: only fires when cwd or a near ancestor is an umbrella root (>=2 immediate
-    #     children with .git); single-repo projects never see it.
+    #     Scope gate: only fires when the REAL cwd (symlinks resolved — a symlinked cwd hid the
+    #     umbrella, review probe 2026-07-26) or an ancestor within 5 levels is an umbrella root
+    #     (>=2 immediate children with .git); single-repo projects never see it.
     def _umbrella_near(path):
         try:
-            p = os.path.abspath(path)
+            p = os.path.realpath(path)
         except Exception:
             return False
-        for _ in range(5):
+        for _ in range(6):  # cwd + 5 ancestors (range(5) undershot the documented contract)
             try:
                 kids = os.listdir(p)
             except OSError:
@@ -190,37 +191,92 @@ def main():
             p = parent
         return False
 
-    gitgh = re.search(r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*(?:\S*/)?(?:git|gh)\b", unq)
-    if gitgh and _umbrella_near(data.get("cwd") or os.getcwd()):
-        cd_anchor = re.search(r"(?:^|[;|&(]\s*)cd\s+\S+", unq)
-        if not (cd_anchor and cd_anchor.start() < gitgh.start()):
-            # no leading cd — every git/gh segment must self-anchor (-C / -R|--repo / gh api).
-            # Split on the SAME boundary class the detector uses ([;|&(]) — `(git push)` slipped
-            # a &&/;/| -only split (detected by the outer regex, skipped per-segment).
-            unanchored = False
-            for seg in re.split(r"[;|&(]", unq):
-                m8 = re.match(r"\s*(?:\w+=\S*\s+)*(?:\S*/)?(git|gh)\b(.*)$", seg)
-                if not m8:
-                    continue
-                tool8, rest = m8.group(1), m8.group(2)
-                if tool8 == "git" and re.match(r"\s+-C\s+\S+", rest):
-                    continue
-                if tool8 == "gh" and (re.search(r"\s(?:-R|--repo)\s+\S+", rest)
-                                      or re.match(r"\s+api\b", rest)):
-                    continue
-                unanchored = True
-                break
-            if unanchored:
-                sys.stderr.write(
-                    "DENY: unanchored git/gh in a multi-repo umbrella workspace — shell cwd drifts "
-                    "across tool calls (a denied command's cd never ran; parallel calls leave the "
-                    "last call's cwd), so a bare git/gh acts on the WRONG repo (2026-07-26: PR "
-                    "opened in the wrong repo; 2026-07-24: 3 bites in one wave). Anchor it: lead "
-                    "with `cd /abs/<repo> && …`, or self-anchor every call (`git -C <path>` / "
-                    "`gh -R <owner>/<repo>` / `gh api repos/...`). "
-                    "Read: cto-orchestration/references/agent-watch/README.md §cwd 锚定.\n"
-                )
-                return 2
+    # Anchor semantics (review round hardened all of these with live probes 2026-07-26):
+    # - leading `cd <ABS> && …` anchors the whole line; `cd X; git`, `cd X || git` and
+    #   `cd X | git` do NOT (git runs even when cd failed / in its own pipeline process).
+    # - otherwise EVERY git/gh segment self-anchors: git via -C / --git-dir / --work-tree
+    #   scanned through global options (`git -c a=b -C /x …` was falsely denied), gh via
+    #   -R/--repo or a repo-insensitive subcommand. Repo-insensitive forms
+    #   (git --version/help, gh auth/config/api/version) need no anchor.
+    # - wrapper chains (command/env/exec/nohup/time/timeout), quoted ("git") and
+    #   backslash-escaped (g\it) command tokens, and `bash|sh|zsh -c '<payload>'`
+    #   payloads are all real execution forms — each was a working bypass.
+    def _git_anchored(rest):
+        toks = rest.split()
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if t == "-C":
+                return True
+            if t.startswith("--git-dir") or t.startswith("--work-tree"):
+                return True
+            if t == "-c":
+                i += 2
+                continue
+            if t.startswith("-"):
+                i += 1
+                continue
+            return t in ("version", "help")  # subcommand reached
+        return True  # global flags only (--version / --help): no repo action
+
+    def _gh_anchored(rest):
+        if re.search(r"(?:^|\s)(?:-R|--repo)\s+\S+", rest):
+            return True
+        for t in rest.split():
+            if t.startswith("-"):
+                continue
+            return t in ("auth", "config", "api", "version", "help")
+        return True  # e.g. bare `gh --version`
+
+    _WRAP8 = r"(?:(?:\S*/)?(?:command|env|exec|nohup|time|timeout)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+|\w+=\S*\s+|\d+\s+)*)*"
+
+    def _unanchored(full, stripped):
+        # full keeps quoted spans (a quoted absolute cd path must stay visible);
+        # stripped has data quotes removed (so quoted DATA can't look like a command).
+        m8cd = re.match(r"\s*(?:\w+=\S*\s+)*cd\s+(\"[^\"]*\"|'[^']*'|[^\s;|&]+)\s*&&", full)
+        if m8cd and m8cd.group(1).strip("\"'").startswith("/"):
+            return False
+        for seg in re.split(r"[;|&(]", stripped):
+            m8 = re.match(r"\s*(?:\w+=\S*\s+)*" + _WRAP8 + r"(?:\S*/)?(git|gh)\b(.*)$", seg)
+            if not m8:
+                continue
+            tool8, rest = m8.group(1), m8.group(2)
+            if tool8 == "git" and _git_anchored(rest):
+                continue
+            if tool8 == "gh" and _gh_anchored(rest):
+                continue
+            return True
+        return False
+
+    # detection view: unwrap single-token quotes ("git" -> git), drop backslash escapes
+    # (g\it -> git); multi-word quoted spans stay intact in v8 (cd "/abs path") and are
+    # stripped as data in unq8.
+    v8 = re.sub(r"([\"'])([^\s\"']*)\1", r"\2", cmd).replace("\\", "")
+    unq8 = re.sub(r"\"[^\"]*\"|'[^']*'|`[^`]*`", "", v8)
+    if re.search(r"\b(?:git|gh)\b", v8) and _umbrella_near(data.get("cwd") or os.getcwd()):
+        bad8 = _unanchored(v8, unq8)
+        if not bad8:
+            # interpreter payloads execute too: bash -lc 'git status' hid git in a quoted span
+            for mi in re.finditer(
+                    r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _WRAP8 +
+                    r"(?:\S*/)?(?:bash|sh|zsh)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+)*([\"'])(.*?)\1", cmd):
+                payload = mi.group(2)
+                pv = re.sub(r"([\"'])([^\s\"']*)\1", r"\2", payload).replace("\\", "")
+                if _unanchored(pv, re.sub(r"\"[^\"]*\"|'[^']*'|`[^`]*`", "", pv)):
+                    bad8 = True
+                    break
+        if bad8:
+            sys.stderr.write(
+                "DENY: unanchored git/gh in a multi-repo umbrella workspace — shell cwd drifts "
+                "across tool calls (a denied command's cd never ran; parallel calls leave the "
+                "last call's cwd), so a bare git/gh acts on the WRONG repo (2026-07-26: PR "
+                "opened in the wrong repo; 2026-07-24: 3 bites in one wave). Anchor it: lead "
+                "with `cd /abs/<repo> && …` (&&-joined, absolute), or self-anchor every call "
+                "(`git -C <path>` / `gh -R <owner>/<repo>`); repo-insensitive forms "
+                "(git --version, gh auth/api …) pass unanchored. "
+                "Read: cto-orchestration/references/agent-watch/README.md §cwd 锚定.\n"
+            )
+            return 2
 
     # NOTE: git-push governance (local-E2E-before-push, base-branch protection) intentionally lives in
     # the Git-workflow standard skill + a server-side branch-protection ruleset,
