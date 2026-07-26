@@ -267,6 +267,47 @@ run 'gh auth status'
 chk_eq "repo-insensitive gh auth allowed" 0 "$RC"
 run 'git -c color.ui=false -C /repo status'
 chk_eq "global options before -C still anchored" 0 "$RC"
+# review round 2 2026-07-26: multiline / wrapper-args / ANSI-C / shell-consumer / relative anchors
+run "$(printf 'echo ready\ngit status')"
+chk_eq "multiline second-line git denied" 2 "$RC"
+run "$(printf 'cd /abs && git status\ngit push')"
+chk_eq "git beyond cd anchor via newline denied" 2 "$RC"
+run 'cd /abs && git status; git push'
+chk_eq "git beyond cd anchor via semicolon denied" 2 "$RC"
+run 'cd /abs && git status || git push'
+chk_eq "git beyond cd anchor via or-else denied" 2 "$RC"
+run 'cd /abs && git status | grep clean'
+chk_eq "pipe inside cd-anchored chain allowed" 0 "$RC"
+run 'timeout -s KILL 30 git status'
+chk_eq "wrapper with option argument denied" 2 "$RC"
+run 'nice git status'
+chk_eq "nice-wrapped bare git denied" 2 "$RC"
+run "\$'git' status"
+chk_eq "ANSI-C quoted command token denied" 2 "$RC"
+run "$(printf "bash <<'EOF'\ngit status\nEOF")"
+chk_eq "quoted-heredoc shell consumer denied" 2 "$RC"
+run "$(printf 'bash <<EOF\ngit status\nEOF')"
+chk_eq "unquoted-heredoc shell consumer denied" 2 "$RC"
+run "printf 'git status\n' | bash"
+chk_eq "pipe-to-shell script body denied" 2 "$RC"
+run 'git -C . status'
+chk_eq "relative -C is not an anchor" 2 "$RC"
+run 'git -C ../a status'
+chk_eq "parent-relative -C is not an anchor" 2 "$RC"
+run 'git --git-dir=.git status'
+chk_eq "relative --git-dir is not an anchor" 2 "$RC"
+run 'git --work-tree=/tmp status'
+chk_eq "--work-tree alone is not a repo anchor" 2 "$RC"
+run 'git --git-dir=/abs/repo/.git status'
+chk_eq "absolute --git-dir anchors" 0 "$RC"
+run "git -C '/repo with space' status"
+chk_eq "quoted absolute -C anchors" 0 "$RC"
+run 'git config --global --get user.name'
+chk_eq "git config --global is repo-insensitive" 0 "$RC"
+run 'git config user.name'
+chk_eq "repo-local git config still needs anchor" 2 "$RC"
+run 'gh extension list'
+chk_eq "gh extension is repo-insensitive" 0 "$RC"
 mkdir -p "$UMB_ROOT/a/d1/d2/d3/d4"
 GUARD_CWD="$UMB_ROOT/a/d1/d2/d3/d4"
 run 'git status'

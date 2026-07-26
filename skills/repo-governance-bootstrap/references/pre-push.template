@@ -51,7 +51,14 @@ baseline_range() { # $1 local_sha -> stdout base..sha；解析失败即 fail
 }
 
 if [ "${1:-}" = "--range" ]; then
-  [ -n "${2:-}" ] || { echo "usage: pre-push --range <base>..<head>" >&2; exit 2; }
+  # 只收显式 <base>..<head>：单 rev / --all 也能被 rev-list 接受，但 git diff 语义完全不同
+  # ——CI 误传单 commit 时关卡会对着干净工作树扫、静默放行（冷评审 R2 实抓）。
+  [ $# -eq 2 ] || { echo "usage: pre-push --range <base>..<head>" >&2; exit 2; }
+  case "$2" in
+    -*) echo "pre-push: bad --range value '$2'" >&2; exit 2 ;;
+    *..*) ;;
+    *) echo "pre-push: --range needs an explicit <base>..<head> range, got '$2'" >&2; exit 2 ;;
+  esac
   range_ok "$2" || { echo "pre-push: unresolvable range '$2'" >&2; exit 2; }
   check_range "$2" ""
 else

@@ -41,6 +41,14 @@ run_tpl --range < /dev/null
 chk_eq "--range without value usage-fails" 2 "$RC"; chk_contains "usage message" "usage" "$ERR"
 run_tpl --range "no-such-ref..$C2" < /dev/null
 chk_eq "unresolvable --range fails closed" 2 "$RC"; chk_contains "names the bad range" "no-such-ref" "$ERR"
+run_tpl --range HEAD < /dev/null
+chk_eq "single-rev --range rejected (diff shape)" 2 "$RC"
+run_tpl --range --all < /dev/null
+chk_eq "option-like --range value rejected" 2 "$RC"
+run_tpl --range "$C1..$C2" extra < /dev/null
+chk_eq "extra args after --range rejected" 2 "$RC"
+run_tpl --range "$C1...$C2" < /dev/null
+chk_eq "symmetric three-dot range accepted" 0 "$RC"
 
 # hook (stdin) mode
 run_tpl_stdin() { # $1 stdin line -> OUT ERR RC

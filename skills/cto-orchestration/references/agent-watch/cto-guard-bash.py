@@ -191,33 +191,51 @@ def main():
             p = parent
         return False
 
-    # Anchor semantics (review round hardened all of these with live probes 2026-07-26):
+    # Anchor semantics (two cold-review rounds hardened all of these with live probes 2026-07-26):
     # - leading `cd <ABS> && …` anchors the whole line; `cd X; git`, `cd X || git` and
     #   `cd X | git` do NOT (git runs even when cd failed / in its own pipeline process).
-    # - otherwise EVERY git/gh segment self-anchors: git via -C / --git-dir / --work-tree
-    #   scanned through global options (`git -c a=b -C /x …` was falsely denied), gh via
-    #   -R/--repo or a repo-insensitive subcommand. Repo-insensitive forms
-    #   (git --version/help, gh auth/config/api/version) need no anchor.
-    # - wrapper chains (command/env/exec/nohup/time/timeout), quoted ("git") and
-    #   backslash-escaped (g\it) command tokens, and `bash|sh|zsh -c '<payload>'`
-    #   payloads are all real execution forms — each was a working bypass.
+    # - otherwise EVERY git/gh segment self-anchors, and the anchor must be cwd-INDEPENDENT:
+    #   `-C <abs>` / `--git-dir(=| )<abs>` only — relative `-C .` still rides the drifted cwd,
+    #   and `--work-tree` selects a work tree, NOT the repository (rev-parse proves the repo
+    #   still comes from cwd). gh anchors via -R/--repo. Repo-insensitive forms pass:
+    #   git --version/help, git config --global/--system, gh auth/config/api/extension/version.
+    # - real execution forms that hid the command token, each a working bypass in review:
+    #   wrapper chains incl. option args (timeout -s KILL 30 git), nice, quoted ("git") /
+    #   ANSI-C ($'git') / backslash-escaped (g\it) tokens, `bash -c '<payload>'` payloads,
+    #   MULTILINE commands (newline is a `;` boundary, not a space), and shell-consumer
+    #   stdin (`bash <<EOF`, `… | bash`) whose body executes as script.
     def _git_anchored(rest):
         toks = rest.split()
         i = 0
+        sub = None
         while i < len(toks):
             t = toks[i]
             if t == "-C":
-                return True
-            if t.startswith("--git-dir") or t.startswith("--work-tree"):
-                return True
+                if i + 1 < len(toks) and toks[i + 1].startswith("/"):
+                    return True
+                i += 2
+                continue
+            if t.startswith("--git-dir"):
+                val = t.split("=", 1)[1] if "=" in t else (toks[i + 1] if i + 1 < len(toks) else "")
+                if val.startswith("/"):
+                    return True
+                i += 1 if "=" in t else 2
+                continue
             if t == "-c":
                 i += 2
                 continue
             if t.startswith("-"):
                 i += 1
                 continue
-            return t in ("version", "help")  # subcommand reached
-        return True  # global flags only (--version / --help): no repo action
+            sub = t
+            break
+        if sub is None:
+            return True  # global flags only (--version / --help): no repo action
+        if sub in ("version", "help"):
+            return True
+        if sub == "config" and ("--global" in toks or "--system" in toks):
+            return True
+        return False
 
     def _gh_anchored(rest):
         if re.search(r"(?:^|\s)(?:-R|--repo)\s+\S+", rest):
@@ -225,17 +243,18 @@ def main():
         for t in rest.split():
             if t.startswith("-"):
                 continue
-            return t in ("auth", "config", "api", "version", "help")
+            return t in ("auth", "config", "api", "extension", "version", "help")
         return True  # e.g. bare `gh --version`
 
-    _WRAP8 = r"(?:(?:\S*/)?(?:command|env|exec|nohup|time|timeout)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+|\w+=\S*\s+|\d+\s+)*)*"
+    _WRAP8 = (r"(?:(?:\S*/)?(?:command|env|exec|nohup|time|timeout|nice)\s+"
+              r"(?:-{1,2}[\w-]+(?:=\S*)?(?:\s+[^\s;|&-][^\s;|&]*)?\s+|\w+=\S*\s+|\d+\s+)*)*")
 
-    def _unanchored(full, stripped):
-        # full keeps quoted spans (a quoted absolute cd path must stay visible);
-        # stripped has data quotes removed (so quoted DATA can't look like a command).
+    def _cd_anchor(full):
+        # full keeps quoted spans (a quoted absolute cd path must stay visible)
         m8cd = re.match(r"\s*(?:\w+=\S*\s+)*cd\s+(\"[^\"]*\"|'[^']*'|[^\s;|&]+)\s*&&", full)
-        if m8cd and m8cd.group(1).strip("\"'").startswith("/"):
-            return False
+        return m8cd if (m8cd and m8cd.group(1).strip("\"'").startswith("/")) else None
+
+    def _unanchored_segs(stripped):
         for seg in re.split(r"[;|&(]", stripped):
             m8 = re.match(r"\s*(?:\w+=\S*\s+)*" + _WRAP8 + r"(?:\S*/)?(git|gh)\b(.*)$", seg)
             if not m8:
@@ -248,23 +267,46 @@ def main():
             return True
         return False
 
-    # detection view: unwrap single-token quotes ("git" -> git), drop backslash escapes
-    # (g\it -> git); multi-word quoted spans stay intact in v8 (cd "/abs path") and are
-    # stripped as data in unq8.
-    v8 = re.sub(r"([\"'])([^\s\"']*)\1", r"\2", cmd).replace("\\", "")
-    unq8 = re.sub(r"\"[^\"]*\"|'[^']*'|`[^`]*`", "", v8)
-    if re.search(r"\b(?:git|gh)\b", v8) and _umbrella_near(data.get("cwd") or os.getcwd()):
-        bad8 = _unanchored(v8, unq8)
+    def _strip_spans(s):
+        # multi-word quoted spans are data — but keep a leading slash so a quoted
+        # ABSOLUTE path ('-C "/repo with space"') still reads as absolute
+        return re.sub(r"\"([^\"]*)\"|'([^']*)'|`([^`]*)`",
+                      lambda m: "/QSPAN" if (m.group(1) or m.group(2) or m.group(3) or "")
+                      .startswith("/") else "QSPAN", s)
+
+    def _text_unanchored(full):
+        # a leading `cd /abs &&` guarantees cwd ONLY along the &&-chain: after the first
+        # `;` or `||` the shell runs the rest even when cd failed — those segments must
+        # self-anchor again (self-caught variant of the R1 `cd ||` hole)
+        mcd = _cd_anchor(full)
+        if mcd:
+            parts = re.split(r";|\|\|", full[mcd.end():], 1)
+            return len(parts) > 1 and _unanchored_segs(_strip_spans(parts[1]))
+        return _unanchored_segs(_strip_spans(full))
+
+    # rule-8 views: newline = `;` (a second line is a NEW command — flattening to a space
+    # made `echo ready\ngit status` invisible, review R2); unwrap single-token quotes
+    # ("git", $'git'), drop backslash escapes (g\it)
+    cmd8 = raw.replace("\n", ";")
+    v8 = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", cmd8).replace("\\", "")
+    orig8 = ti["command"]  # pre-heredoc-strip: quoted heredoc bodies are data EXCEPT to a shell consumer
+    if ((re.search(r"\b(?:git|gh)\b", v8) or re.search(r"\b(?:git|gh)\b", orig8))
+            and _umbrella_near(data.get("cwd") or os.getcwd())):
+        bad8 = _text_unanchored(v8)
         if not bad8:
             # interpreter payloads execute too: bash -lc 'git status' hid git in a quoted span
             for mi in re.finditer(
                     r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _WRAP8 +
-                    r"(?:\S*/)?(?:bash|sh|zsh)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+)*([\"'])(.*?)\1", cmd):
-                payload = mi.group(2)
-                pv = re.sub(r"([\"'])([^\s\"']*)\1", r"\2", payload).replace("\\", "")
-                if _unanchored(pv, re.sub(r"\"[^\"]*\"|'[^']*'|`[^`]*`", "", pv)):
+                    r"(?:\S*/)?(?:bash|sh|zsh)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+)*([\"'])(.*?)\1", cmd8):
+                pv = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", mi.group(2)).replace("\\", "")
+                if _text_unanchored(pv):
                     bad8 = True
                     break
+        if not bad8 and not _cd_anchor(v8) and re.search(
+                r"(?:\S*/)?(?:bash|sh|zsh)\b[^|;&]*<<|\|\s*(?:\S*/)?(?:bash|sh|zsh)\b", orig8):
+            # heredoc / pipe INTO a shell runs its body as script; the body may be
+            # quote-stripped above, so judge on the original text (conservative)
+            bad8 = bool(re.search(r"\bgit\b|\bgh\b", orig8))
         if bad8:
             sys.stderr.write(
                 "DENY: unanchored git/gh in a multi-repo umbrella workspace — shell cwd drifts "
