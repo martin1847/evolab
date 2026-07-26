@@ -161,6 +161,67 @@ def main():
             )
             return 2
 
+    # (8) cwd anchoring in multi-repo umbrella workspaces (principal ruling 2026-07-26). Shell cwd
+    #     drifts across tool calls (a denied command's cd never ran; parallel calls leave the last
+    #     call's cwd) — in an umbrella of sibling git repos a bare `git`/`gh` then acts on the WRONG
+    #     repo (field hits: 3 bites in one wave 2026-07-24; PR opened in the wrong repo 2026-07-26).
+    #     This is an orchestration slip (cwd discipline), not git policy — see NOTE below.
+    #     Scope gate: only fires when cwd or a near ancestor is an umbrella root (>=2 immediate
+    #     children with .git); single-repo projects never see it.
+    def _umbrella_near(path):
+        try:
+            p = os.path.abspath(path)
+        except Exception:
+            return False
+        for _ in range(5):
+            try:
+                kids = os.listdir(p)
+            except OSError:
+                return False
+            n = 0
+            for k in kids:
+                if os.path.exists(os.path.join(p, k, ".git")):
+                    n += 1
+                    if n >= 2:
+                        return True
+            parent = os.path.dirname(p)
+            if parent == p:
+                return False
+            p = parent
+        return False
+
+    gitgh = re.search(r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*(?:\S*/)?(?:git|gh)\b", unq)
+    if gitgh and _umbrella_near(data.get("cwd") or os.getcwd()):
+        cd_anchor = re.search(r"(?:^|[;|&(]\s*)cd\s+\S+", unq)
+        if not (cd_anchor and cd_anchor.start() < gitgh.start()):
+            # no leading cd — every git/gh segment must self-anchor (-C / -R|--repo / gh api).
+            # Split on the SAME boundary class the detector uses ([;|&(]) — `(git push)` slipped
+            # a &&/;/| -only split (detected by the outer regex, skipped per-segment).
+            unanchored = False
+            for seg in re.split(r"[;|&(]", unq):
+                m8 = re.match(r"\s*(?:\w+=\S*\s+)*(?:\S*/)?(git|gh)\b(.*)$", seg)
+                if not m8:
+                    continue
+                tool8, rest = m8.group(1), m8.group(2)
+                if tool8 == "git" and re.match(r"\s+-C\s+\S+", rest):
+                    continue
+                if tool8 == "gh" and (re.search(r"\s(?:-R|--repo)\s+\S+", rest)
+                                      or re.match(r"\s+api\b", rest)):
+                    continue
+                unanchored = True
+                break
+            if unanchored:
+                sys.stderr.write(
+                    "DENY: unanchored git/gh in a multi-repo umbrella workspace — shell cwd drifts "
+                    "across tool calls (a denied command's cd never ran; parallel calls leave the "
+                    "last call's cwd), so a bare git/gh acts on the WRONG repo (2026-07-26: PR "
+                    "opened in the wrong repo; 2026-07-24: 3 bites in one wave). Anchor it: lead "
+                    "with `cd /abs/<repo> && …`, or self-anchor every call (`git -C <path>` / "
+                    "`gh -R <owner>/<repo>` / `gh api repos/...`). "
+                    "Read: cto-orchestration/references/agent-watch/README.md §cwd 锚定.\n"
+                )
+                return 2
+
     # NOTE: git-push governance (local-E2E-before-push, base-branch protection) intentionally lives in
     # the Git-workflow standard skill + a server-side branch-protection ruleset,
     # NOT here — cto-guard owns orchestration slips (backgrounding, idle-polling, dispatch, send-keys),

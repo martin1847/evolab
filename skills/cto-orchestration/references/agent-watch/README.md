@@ -159,7 +159,8 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   --porcelain` 独立命令抢救并验证 untracked，再向主理人请示，验证与销毁绝不同一命令行；已获批准的销毁
   走一次性 override：`touch /tmp/cto-allow-worktree-destroy` 后重跑（用后即焚不留 standing bypass，
   只解 DENY 不代 allow；任何经核实的正当动机可用——2026-07-21 实证补此通道）；含其他动作的
-  mixed 命令不 auto-allow、落回分类器（保守面）。①用剥引号视图，④用原始 cmd，⑤⑥只认命令位（路径当参数
+  mixed 命令不 auto-allow、落回分类器（保守面）。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
+  判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）。①用剥引号视图，④用原始 cmd，⑤⑥⑧只认命令位（路径当参数
   不拦——上线当天两次自误伤修出的判据）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：
   browser/E2E 派发含 `mcp__chrome-devtools` → DENY（逼 Playwright，P0a）；派发未显式钉 `model` 档 →
@@ -186,5 +187,14 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 | duplex 产帧 / 投影 / 路由 / 死亡路径 | ✅ hermetic | `test/agentctl-duplex.test.sh`：进程级 fake tmux + scriptable fake 引擎驱动真 fifo/flock/events 管线 |
 | duplex live | ✅ 生产实测（2026-07-19~21） | omp + codex：两日重载 11 会话 / 20+ steer 零丢帧 / 并发 2-3 无冲突 / watcher 外杀 2 次 stateless re-arm 零损失；claude：生产首单全链（preflight 门→start→watch DONE→deliverable fresh，1.6.0 runtime 工单自举交付）。`test/e2e/agentctl-duplex.e2e.sh` 仍为 pre-release 门（start→watch→steer→watch→stop + 零残留） |
 | deliverable 门（exit 6 / freshness / 相对 glob） | ✅ | hermetic 对抗测试，两车道 |
-| guard ①-⑦ / P0a-P0d | ✅ | hermetic + `hook-deny-pointer` 自指门（DENY 指针目标真实性）；③ 与 status no-watcher 提示均有生产 fire 实证 |
+| guard ①-⑧ / P0a-P0d | ✅ | hermetic + `hook-deny-pointer` 自指门（DENY 指针目标真实性）；③ 与 status no-watcher 提示均有生产 fire 实证；⑧ 上线当日即生产 fire（含正路 `git -C` 放行）+ hermetic 对抗电池（payload 钉 cwd、伞形/单仓双景） |
 | BLOCKED.md 协议真 fire | ◯ 未 live 验 | footer 结构化自带；hermetic 有测例，live 实证仍缺 |
+
+## cwd 锚定（多仓工作区）
+
+Shell cwd 跨工具调用漂移：上一条命令的 cd 残留、被拦命令的 cd 根本没执行、并行调用留下
+最后一条的 cwd。单仓项目无感；伞形多仓工作区里 = git/gh 打错仓（实证：2026-07-24 一轮
+三咬；2026-07-26 PR 开进错误仓库）。纪律：**每段含 git/gh 的命令自带锚**——行首
+`cd /abs/<repo> && …`，或每次调用自锚 `git -C <path>` / `gh -R <owner>/<repo>` / `gh api`。
+guard (8) 检测到伞形根（cwd 或近祖先目录含 ≥2 个子 .git）时硬拦无锚 git/gh；
+单仓环境该规则永不触发。

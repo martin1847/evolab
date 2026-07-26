@@ -1,6 +1,6 @@
 ---
 name: repo-governance-bootstrap
-version: 1.3.0
+version: 1.4.0
 description: 一次性初始化适合 AI 协作开发的轻量工程治理骨架（docs/INDEX、ADR、module、roadmap、ACTIVE_CONTEXT、AGENTS.md / CLAUDE.md）。新仓库 / 文档结构混乱 / 项目内文档治理初始化时调用。【定位】独立可用、不需要多 agent 编排；也是 cto-orchestration 新项目接入的第一步，但小项目只做文档治理时单独用即可。一次性建结构，区别于循环跑的 cto-orchestration。
 ---
 
@@ -146,6 +146,12 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
       AGENTS 明示的 deterministic focused suite；CI 仍跑附录 C 全量收口。
     - 复制 `references/pre-commit.sh` → `.githooks/pre-commit` 并赋可执行权限。顺序固定为
       `docs-check → engineering check → engineering test`；**hook 不跑 fix**，避免 staged index 仍含旧内容。
+    - 复制 `references/pre-push.template` → `.githooks/pre-push`（可执行）、
+      `references/PR_SELF_CHECK.skeleton.md` → `docs/PR_SELF_CHECK.md`（评审蒸馏层）。
+      **清单与关卡从空开始**——条目只准来自真实评审 finding / 事故（铁律与下沉判据见
+      `agent-backend-standard` 附录 F `selfcheck-gates.md`），可机检条目落 pre-push 关卡函数、
+      每关带负探针登记 AGENTS.md；CI 以 `--range` 复跑同一脚本。基线分支非 main 时
+      `git config hooks.baseline origin/<trunk>`。
     - `core.hooksPath` 为空时设 `.githooks`；已存在 hooksPath、`.git/hooks/pre-commit` 或 pre-commit
       framework 时合并调用，**绝不覆盖**。CI 已存在时同步调用同一 wrapper；本地 hook 可被
       `--no-verify` 绕过，不能冒充 required CI。
@@ -171,6 +177,8 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
 生成物模板（ADR / 组件引入 ADR lifecycle 变体 / 模块 / roadmap 条目 / deferred 条目 /
 deferred 索引 / ACTIVE_CONTEXT / ACCESS.local / INDEX / **NORTH_STAR** / **AGENTS.md minimal
 变体**）→ `references/templates.md`（顶部有目录）。
+评审蒸馏门禁骨架另立两件：`references/pre-push.template` + `references/PR_SELF_CHECK.skeleton.md`
+（步骤 12 取用；方法论 canonical = `agent-backend-standard` 附录 F）。
 两条主干级判据：
 - **引入重依赖/重组件的 ADR 用 lifecycle 变体**——增 `Owner` / `Sunset Criteria` / `Review-by` 三段，
   防引入后无人清理沦为死基础设施（更细的 lifecycle 规则见 `agent-backend-standard` 附录 A，本骨架只建槽）。

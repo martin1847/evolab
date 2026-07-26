@@ -14,11 +14,22 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "    python3 not on PATH — guard test skipped"; exit 0
 fi
 
+# Hermetic cwd: guard (8) scope-gates on the REAL filesystem around payload cwd (umbrella =
+# >=2 sibling .git children within 5 ancestor levels). A dev machine's ~ is often itself an
+# umbrella, so every payload pins an explicit cwd — a deep single-repo dir by default (rules
+# 1-7 unaffected), a constructed umbrella root only in the rule-8 battery.
+G8ROOT="$(mktemp -d)"
+trap 'rm -rf "$G8ROOT"' EXIT
+mkdir -p "$G8ROOT/iso/l1/l2/l3/l4/repo/.git" "$G8ROOT/umb/a/.git" "$G8ROOT/umb/b/.git"
+ISO_REPO="$G8ROOT/iso/l1/l2/l3/l4/repo"
+UMB_ROOT="$G8ROOT/umb"
+GUARD_CWD="$ISO_REPO"; export GUARD_CWD
+
 mkcmd() { # $1 command, $2 run_in_background (optional "1")
-  python3 -c 'import json,sys
+  python3 -c 'import json,os,sys
 ti={"command":sys.argv[1]}
 if len(sys.argv)>2 and sys.argv[2]=="1": ti["run_in_background"]=True
-print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":ti}))' "$@"; }
+print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":ti,"cwd":os.environ["GUARD_CWD"]}))' "$@"; }
 run() { # $1 command [$2 run_in_background] -> OUT(stdout) ERR(stderr) RC
   local tmpe; tmpe="$(mktemp)"
   OUT="$(mkcmd "$@" | python3 "$GUARD" 2>"$tmpe")"; RC=$?
@@ -202,6 +213,39 @@ run 'git -C "/repo with space" worktree remove --force wt'
 chk_eq "quoted -C path force remove denied" 2 "$RC"
 run 'git -c core.quotePath=false worktree prune'
 chk_eq "-c global-option prune denied" 2 "$RC"
+
+# ── (8) cwd anchoring: umbrella workspaces deny unanchored git/gh; single-repo never fires ──
+GUARD_CWD="$UMB_ROOT"
+run 'git status'
+chk_eq "umbrella bare git denied" 2 "$RC"; chk_contains "umbrella deny pointer" "cwd" "$ERR"
+run 'gh pr list'
+chk_eq "umbrella bare gh denied" 2 "$RC"
+run 'FOO=1 git status'
+chk_eq "umbrella env-prefixed git denied" 2 "$RC"
+run '/opt/homebrew/bin/git status'
+chk_eq "umbrella path-qualified git denied" 2 "$RC"
+run 'git -C /x status && git push'
+chk_eq "one unanchored segment in a chain denied" 2 "$RC"
+run 'echo hi; (git push)'
+chk_eq "subshell-paren bare git denied" 2 "$RC"
+run 'cd /abs/repo && git status && git push'
+chk_eq "leading cd anchors the whole chain" 0 "$RC"
+run 'git -C /abs/repo status'
+chk_eq "git -C self-anchor allowed" 0 "$RC"
+run 'gh -R owner/repo pr list'
+chk_eq "gh -R self-anchor allowed" 0 "$RC"
+run 'gh --repo owner/repo pr view 1'
+chk_eq "gh --repo self-anchor allowed" 0 "$RC"
+run 'gh api repos/o/r/pulls'
+chk_eq "gh api self-anchored allowed" 0 "$RC"
+run 'echo git status'
+chk_eq "git as quoted-free argument allowed" 0 "$RC"
+GUARD_CWD="/nonexistent-cto-guard-g8"
+run 'git status'
+chk_eq "unreadable cwd fails open" 0 "$RC"
+GUARD_CWD="$ISO_REPO"
+run 'git status'
+chk_eq "single-repo scope gate never fires" 0 "$RC"
 
 # non-dispatch command -> silent
 run 'git status'

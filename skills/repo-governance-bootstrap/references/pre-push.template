@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# pre-push — diff-scoped 评审蒸馏门禁（骨架模板，bootstrap 步骤 12 用）。
+# 铁律：每一关必须指到一次真实事故 / 评审 finding（清单见 docs/PR_SELF_CHECK.md）；禁理论关卡。
+# 下沉判据：可机械判定 · 纯 git+grep 毫秒级 · diff-scoped（构建级检查归 engineering-gate / CI）。
+# 供给与演化规范：agent-backend-standard/references/selfcheck-gates.md（附录 F）。
+#
+# Install (once): git config core.hooksPath .githooks
+# 基线分支可配：git config hooks.baseline origin/<trunk>（默认 origin/main）
+# CI / 本地复跑：pre-push --range origin/main..HEAD
+#   （hook 可被 --no-verify 绕过，CI 复跑同一脚本才是硬门。）
+set -u
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$ROOT" || exit 1
+BASELINE="$(git config --get hooks.baseline 2>/dev/null || echo origin/main)"
+FAIL=0
+
+# all-zero OID = delete / no remote ref (works for SHA-1 and SHA-256 repos)
+is_zero_oid() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
+
+# ---- 关卡函数区 ----
+# 每关一个函数；头部注释必须写明：源 finding（PR#/事故一句话）+ 负探针配方（怎么让它红）。
+# 示例形状（真 finding 蒸馏后替换，勿保留示例上线）：
+# check_example() {
+#   local range="$1" remote_ref="$2"
+#   if git diff --name-only "$range" -- 'some/path/*' 2>/dev/null | grep -q .; then
+#     printf 'pre-push: BLOCKED — <为什么 + 怎么修>\n' >&2
+#     FAIL=1
+#   fi
+# }
+
+check_range() {
+  local range="$1" remote_ref="${2:-}"
+  # 在此逐关调用：
+  # check_example "$range" "$remote_ref"
+  :
+}
+
+# ---- driver：hook 模式（stdin ranges）或 --range 模式（CI / 本地复跑）----
+if [ "${1:-}" = "--range" ] && [ -n "${2:-}" ]; then
+  check_range "$2" ""
+else
+  while read -r _local_ref local_sha remote_ref remote_sha; do
+    is_zero_oid "$local_sha" && continue
+    if is_zero_oid "$remote_sha"; then
+      base=$(git merge-base "$BASELINE" "$local_sha" 2>/dev/null || true)
+      [ -n "$base" ] || continue
+      check_range "$base..$local_sha" "$remote_ref"
+    else
+      check_range "$remote_sha..$local_sha" "$remote_ref"
+    fi
+  done
+fi
+
+exit "$FAIL"

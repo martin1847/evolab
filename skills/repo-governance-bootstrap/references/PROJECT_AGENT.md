@@ -165,6 +165,15 @@ bash scripts/engineering-gate.sh test
   `agent-backend-standard/references/engineering-interface.md`，边界类型细则只见
   `observability-standard/references/standard.md §2`。
 
+### PR 自检与 push 门禁（电在回路 · 评审蒸馏层）
+
+- 提 PR 前过一遍 `docs/PR_SELF_CHECK.md`（人和 agent 同一份清单）。
+- 清单条目只准来自真实评审 finding / 事故（禁理论条目）；可机检条目下沉
+  `.githooks/pre-push`（纯 git+grep 毫秒级、diff-scoped），每关带负探针登记进
+  本文件的验证配方节。
+- hook 可被 `--no-verify` 绕过：CI 以 `--range` 复跑同一脚本才是硬门。
+- 供给与演化规范：`agent-backend-standard/references/selfcheck-gates.md`（附录 F）。
+
 ---
 
 ## 9. 完成标准（项目级补充）
