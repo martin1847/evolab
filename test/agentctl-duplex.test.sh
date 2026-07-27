@@ -559,7 +559,21 @@ touch -t 202601010000 "$WATCH_RUN_DIR/twS.watch.tombstone.jsonl"   # distant dea
 out="$(bash "$AGENTCTL" status twR 2>&1)"
 chk_not_contains "old tombstone is not this reap event" "re-arm each" "$out"
 chk_contains "own-death attribution survives without peers" "previous watcher killed externally" "$out"
+
+# arming supersedes the prior death: watch rotates the tombstone into .consumed
+AGENT_WATCH_POLL_SECS=15 bash "$AGENTCTL" watch twR > "$SANDBOX/tw2.log" 2>&1 &
+WP3=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$WATCH_RUN_DIR/twR.duplex.watch.pid" ] && break; /bin/sleep 0.2; done
+chk_eq "arming rotates the tombstone away" 0 "$([ -e "$WATCH_RUN_DIR/twR.watch.tombstone.jsonl" ] && echo 1 || echo 0)"
+chk_eq "consumed forensics preserved" 1 "$([ -s "$WATCH_RUN_DIR/twR.watch.tombstone.jsonl.consumed" ] && echo 1 || echo 0)"
+kill -9 "$WP3" 2>/dev/null; wait "$WP3" 2>/dev/null   # KILL: untrappable — no fresh tombstone
+rm -f "$WATCH_RUN_DIR/twR.duplex.watch.pid"           # KILL also skips the EXIT trap
+out="$(bash "$AGENTCTL" status twR 2>&1)"
+chk_contains "no active tombstone → plain no-watcher note" "no watcher armed" "$out"
+chk_not_contains "consumed death is never re-reported" "previous watcher killed externally" "$out"
+
 bash "$AGENTCTL" stop twS >/dev/null 2>&1
+chk_eq "stop consumes the tombstone (same-name restart safe)" 0 "$([ -e "$WATCH_RUN_DIR/twS.watch.tombstone.jsonl" ] && echo 1 || echo 0)"
 bash "$AGENTCTL" stop twR >/dev/null 2>&1
 unset FAKE_CLAUDE_GATE
 sweep_fakes; sandbox_clean

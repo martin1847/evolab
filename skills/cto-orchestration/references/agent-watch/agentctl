@@ -51,6 +51,15 @@ watcher_alive() { # $1 session
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+# Arming a new watcher or stopping the session resolves any prior death: rotate the
+# tombstone into .consumed (forensics kept) so status never re-reports a death across
+# re-arms, restarts of the same name, or long-dead history (cold-review F-01).
+consume_tombstone() { # $1 session
+  local t="$DIR/$1.watch.tombstone.jsonl"
+  [ -f "$t" ] || return 0
+  cat "$t" >> "$t.consumed" 2>/dev/null; rm -f "$t"
+}
+
 # The BLOCKED.md footer keeps the cross-engine ask-user protocol alive on the duplex lane:
 # headless engines cannot prompt, so "on doubt, write BLOCKED.md and stop" maps to exit 4.
 append_footer() { # $1 out-file  $2 cwd
@@ -196,11 +205,13 @@ cmd_status() {
         # The killed-notification can die with the host session; status is the verb the
         # orchestrator re-checks with, so the unresolved death is surfaced here.
         TOMB="$DIR/$S.watch.tombstone.jsonl"
-        if [ -f "$TOMB" ]; then
+        # Second liveness check right at the emit point: a re-arm racing this call has
+        # already consumed the tombstone AND flipped liveness (cold-review F-01).
+        if [ -f "$TOMB" ] && ! watcher_alive "$S"; then
           echo "note: previous watcher killed externally — $(tail -1 "$TOMB") — killed ≠ worker dead"
           # The host reaps background tasks in batches (same-second double-kill, field
-          # 2026-07-25): name every session felled by the same event so one status call
-          # re-arms them all, not only the one whose notification arrived.
+          # 2026-07-25). Correlation here is tombstone-mtime proximity only — honest
+          # wording, no causality claim (cold-review F-02).
           peers=""
           for t in "$DIR"/*.watch.tombstone.jsonl; do
             [ -f "$t" ] && [ "$t" != "$TOMB" ] || continue
@@ -209,7 +220,7 @@ cmd_status() {
             "$PY" -c 'import os,sys;sys.exit(0 if abs(os.path.getmtime(sys.argv[1])-os.path.getmtime(sys.argv[2]))<=120 else 1)' \
               "$t" "$TOMB" 2>/dev/null && peers="$peers $p"
           done
-          [ -n "$peers" ] && echo "note: same reap event also killed watchers of:$peers — re-arm each"
+          [ -n "$peers" ] && echo "note: watchers of:$peers also died within ±120s (likely one reap) — re-arm each"
         fi
       fi
       exit "$rc" ;;
@@ -229,6 +240,7 @@ cmd_watch() {
   [ "$(lane_of "$S")" = duplex ] || { echo "ERR: unknown session '$S'" >&2; exit 1; }
   WPID="$DIR/$S.duplex.watch.pid"
   echo $$ > "$WPID"; trap 'rm -f "$WPID"' EXIT
+  consume_tombstone "$S"
   # External kills are non-deterministic and the sender is invisible from inside the
   # sandbox (field report 2026-07-23: TERM ~3-5min in, other watchers untouched). Leave
   # an attributable tombstone and clean the pid file so the death is diagnosable and
@@ -279,6 +291,7 @@ cmd_stop() {
       rm -f "$DIR/$S.duplex.in" "$DIR/$S.duplex.meta" "$DIR/$S.duplex.round-started" \
             "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" \
             "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" 2>/dev/null
+      consume_tombstone "$S"
       echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc" ;;
     none)
       # no lane meta: clean bare tmux AND orphan duplex claims (crash residue like a

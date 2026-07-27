@@ -84,8 +84,9 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   实证）。归因看 tombstone：trap 在退出前落 `$RUN/<s>.watch.tombstone.jsonl`（ts / signal / ppid /
   uptime——发送方沙箱内不可见，事后只有这一行可查，实证 2026-07-23）。宿主一次事件会成批收割全部
   后台 watcher（外杀 5 例 tombstone 归因实证、含同秒双杀一起，2026-07-25）且 killed 通知本身可能随
-  会话一起丢——`status` 对 RUNNING+无 watcher 的会话自动打死亡归因行、并点名同事件死掉的其他
-  watcher，照单逐个重挂。
+  会话一起丢——`status` 对 RUNNING+无 watcher 的会话自动打死亡归因行、并点名 ±120s 邻近窗口内
+  一同死亡的其他 watcher（邻近 ≠ 因果实证），照单逐个重挂；重挂或 `stop` 即消费 tombstone
+  （转 `.consumed` 留取证），已消解的死亡不复报。
 - 引擎二进制可用 env 覆盖（测试缝 + 自定装机位）：`AGENTCTL_BIN_OMP` / `AGENTCTL_BIN_CLAUDE` / `AGENTCTL_BIN_CODEX`。
 - exit 6 `IDLE-NO-DELIVERABLE` 用 `agentctl steer` 补一刀，**不要 stop**；`stop` 只用于收工或明确放弃。
 
