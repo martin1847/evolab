@@ -68,7 +68,8 @@ TUI 车道已于本大版本裁撤（送 pane 按键实测仅七八成可靠且�
 - 按风险定深度：低风险走轻量 review；鉴权、迁移、基建、大重构走 `references/review-dispatch.md` 的完整循环。
 - **goal 评审动态触发，不全量**：goal 定义新仪器（验收判据 / 门 / 指标 / 停止规则 / error 分型）→ 派发前加 1 轮冷上下文 goal-review（四问见 `references/review-dispatch.md` §goal-review）；取证 / 机械类 goal 免评，由前提 CONFIRMED/REFUTED 表兜底。实证：贵的 goal 错误集中于仪器定义类，取证类零事故。
 - brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。
-- 先枚举执行分叉，并点名 `缺失消费者`、under-fire、并发 / 恢复等高风险轴；完整轴表留在 reference。
+- 先枚举执行分叉；轴装配先查 path→轴映射表（表命中必进 brief，判断只增补），再点名 `缺失消费者`、
+  under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。
 - 只有 blocking 驱动续轮；第 3 轮起每轮续派须在 brief 写 `SHIP-BLOCKING: <依据>`；同一 finding 的修复连续 2 轮只新增 finding，则止损并转人工裁决或 accept-documented。
 - 多轮 headless review 显式传 `--workflow review-loop --max-rounds N`（三引擎通用：每次 goal/steer 投递计一轮）；轮数与 stop-loss 只认 runtime meta，主干不复制状态机。
 - 评审期间执行 agent 不写同一 worktree。
