@@ -1,6 +1,6 @@
 # 新项目接入清单
 
-> SKILL.md §8（新项目接入）的展开 = 整段操作清单。主干只留一行指针。
+> SKILL.md §6 路由表「新项目接入」行的展开 = 整段操作清单。主干只留一行指针。
 
 1. 项目无治理结构 → 先跑 `/repo-governance-bootstrap` 生成 docs/AGENTS.md 骨架。
    **已有骨架的存量仓不短路**：对照 bootstrap 目标结构逐项核缺（伞仓 NORTH_STAR / docs-check·

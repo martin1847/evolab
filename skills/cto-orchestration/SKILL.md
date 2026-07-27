@@ -40,7 +40,7 @@ duplex 协议（omp rpc / claude stream-json / codex app-server），能力差�
 | codex | idle 时开下一 turn；**codex 无排队**，忙时拒绝并指路 `--now` | `turn/steer` 原生（带并发守卫） | interrupt+start |
 
 另有 **Agent subagent**（浏览器 / MCP / 隔离主上下文的读密集工作：独立上下文、只回蒸馏结论、显式按任务分档 model）。
-TUI 车道已于本大版本裁撤（送 pane 按键实测仅七八成可靠且维护税高）；需要人工现场时直接 `tmux attach` 旁观，worker 控制始终走协议。
+TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 控制始终走协议。
 
 文件任务必须声明 `--deliverable <glob>`（相对 glob 按会话 cwd 解析），让 runtime 做 freshness gate；非文件结果不带。lane 的完整限制、状态与命令见 `references/agent-watch/README.md`。
 
@@ -66,7 +66,7 @@ TUI 车道已于本大版本裁撤（送 pane 按键实测仅七八成可靠且�
 ## 2. 对抗式评审循环
 
 - 按风险定深度：低风险走轻量 review；鉴权、迁移、基建、大重构走 `references/review-dispatch.md` 的完整循环。
-- **goal 评审动态触发，不全量**：goal 定义新仪器（验收判据 / 门 / 指标 / 停止规则 / error 分型）→ 派发前加 1 轮冷上下文 goal-review（四问见 `references/review-dispatch.md` §goal-review）；取证 / 机械类 goal 免评，由前提 CONFIRMED/REFUTED 表兜底。实证：贵的 goal 错误集中于仪器定义类，取证类零事故。
+- **goal 评审动态触发，不全量**：goal 定义新仪器（验收判据 / 门 / 指标 / 停止规则 / error 分型）→ 派发前加 1 轮冷上下文 goal-review（四问见 `references/review-dispatch.md` §goal-review）；取证 / 机械类 goal 免评，由前提 CONFIRMED/REFUTED 表兜底（实证见同节）。
 - brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。
 - 先枚举执行分叉；轴装配先查 path→轴映射表（表命中必进 brief，判断只增补），再点名 `缺失消费者`、
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。

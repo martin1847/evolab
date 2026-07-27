@@ -20,15 +20,13 @@ agentctl watch  <session>      # 阻塞至终态；run_in_background 挂起
 agentctl stop   <session>      # 结束 + 清控制态（events/rc/stderr 留作尸检）
 ```
 
-- **steer 语义**（能力差异拒绝制，不分叉车道）：默认=排队/下一轮（omp `follow_up`、claude 原生
-  排队；codex 无排队——idle 开下一 turn、忙时拒绝并指路 `--now`）；`--now`=mid-turn（omp `steer`、
-  codex `turn/steer` 带并发守卫；claude 无公开中断帧→降级排队并明说）；`--replace`=弃当前重来
-  （omp `abort_and_prompt`、codex interrupt+start；claude 拒绝→`stop` + `--resume <sid>` 重启）。
-  投递成功 ≠ 模型照做，验收仍看交付物。
+- **steer 语义**（能力差异拒绝制，不分叉车道）：默认排队 / `--now` / `--replace` × 三引擎的语义
+  矩阵（含原生动词）见 SKILL.md §0 表；runtime 对不支持组合当场拒绝并指正路（claude `--replace`
+  拒绝 → `stop` + `--resume <sid>` 重启）。投递成功 ≠ 模型照做，验收仍看交付物。
 - **typed exit 三引擎同词汇**（全表见 [typed 状态](#typed-状态编排者纪律)）；
   **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
-- **deliverable gate**：相对 glob 一律按**会话 cwd** 解析（2026-07-19 现场假阴性收编）；freshness
-  用 mtime 对 epoch（每次 steer 即轮转）。文件产出必带 `--deliverable`；非文件结果不带。
+- **deliverable gate**：相对 glob 一律按**会话 cwd** 解析（现场假阴性收编）；freshness
+  用 mtime 对 epoch（每次 steer 即轮转）；必带/不带的判据归 SKILL.md §0。
 - **尾行机器可读**（1.6.0）：`watch` 四类出口（终态 / 非终态 / ENGINE-SILENT / TIMEOUT）都在 typed
   `=== … ===` 行之后追加最后一行 `EXIT=<n>`——包装层（管道 / 后台 harness）吞掉进程退出码时仍可解析；
   文案与 exit code 均不变。`status` 读到 RUNNING 而**无存活 watcher**（pid 文件缺失、或进程已亡）追加
@@ -38,16 +36,14 @@ agentctl stop   <session>      # 结束 + 清控制态（events/rc/stderr 留作
   2026-07-19 现场——摘要有界是本控制面的硬设计）。
 - **后台任务 cwd 语义**（现场误杀教训）：宿主后台机制跑 `agentctl watch` 时，命令继承**发起时刻
   编排者的 cwd**，与 worker 会话 cwd 无关；判断后台任务归属认 `$RUN/<session>.*` 文件名，别认 cwd。
-- TUI 车道已裁撤（本大版本）：需要人工现场 = `tmux attach -t <session>` 旁观 / `tmux capture-pane -p`
+- TUI 车道已裁撤：需要人工现场 = `tmux attach -t <session>` 旁观 / `tmux capture-pane -p`
   手动尸检；worker 控制始终走协议。
 
 ## Why：为什么是协议、不是屏幕
 
-抓屏猜状态是上代方案的最大误判源（WAITING 误读 DONE、glyph/布局随 CLI 版本漂移；claude ≥2.1.205 /
-omp 16.4.4 / codex 0.144.1 三连静默弄坏 TUI 链路），send-keys 注入实测仅 ~70-80% 送达（弹窗吃
-Enter、bracketed-paste 丢尾、长文本损坏）。三引擎如今都有官方 headless 双工面——直接
-消费引擎自己的结构化事件流 + 进程退出与文件，状态**确定可判**，这正是 2026-07-12
-「headless 默认」裁决的完成态：连 escape 车道也不再养屏幕税。
+抓屏猜状态与 send-keys 注入是上代方案的最大误判源（WAITING 误读 DONE、注入实测仅 ~70-80% 送达）；
+三引擎都有官方 headless 双工面——直接消费结构化事件流 + 进程退出与文件，状态**确定可判**。
+完整数据与论证见 meta 文《protocol-not-screen》。
 
 ## duplex 车道机制
 
@@ -70,9 +66,8 @@ steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影�
   codex `agentctl start codex s2 <cwd> --goal f --resume-thread <threadId>`（meta `thread=` 里有）。
 - 单写者纪律：所有 fifo 写经 `duplexctl.py`（flock）；并发 steer 由锁串行。
 
-codex 引擎注（2026-07-19 live spike 后统一入 duplex，round 车道/dispatch-exec 已整体退役）：
-app-server 官方标 experimental，但错误帧自描述（参数漂移当场报全量合法值）、握手/turn/steer
-全链 spike 实证；协议假设由 fake 引擎钉进 hermetic 门。`--workflow review-loop --max-rounds N`
+codex 引擎注：app-server 官方标 experimental，但错误帧自描述（参数漂移当场报全量合法值）、
+握手/turn/steer 全链实证；协议假设由 fake 引擎钉进 hermetic 门。`--workflow review-loop --max-rounds N`
 预算与 SHIP-BLOCKING 续轮租约已移植进 duplex meta，三引擎通用（每次 goal/steer 投递计一轮，
 超限 `BUDGET-EXHAUSTED` exit 9）。
 
@@ -82,10 +77,9 @@ app-server 官方标 experimental，但错误帧自描述（参数漂移当场�
   送达即返，无逐帧 ack——诚实边界）；**不会自动 watch**，紧接着用宿主受控后台能力挂
   `agentctl watch <session>`（**NOT shell `&`**，会孤儿化；guard ⑤ 强制 run_in_background，
   同步 shell 编排者前缀 `AGENT_WATCH_SYNC=1` 显式放行并自读 exit code）。
-- **preflight 门默认开**（1.6.0 翻转，靠人肉记 opt-in 就是漏的那一环）：启动引擎前调
-  `../goal-preflight.py` 校验 goal 里 `Preflight: <probe> => <observed result>` 存在且已解占位，
-  未过即拒发、不起引擎；机械 / 取证 / 纯研究类 goal 用 `--no-preflight` 显式豁免
-  （旧 `--require-preflight` 保留接受、no-op 一个版本）。
+- **preflight 门默认开**：启动引擎前调 `../goal-preflight.py` 校验 goal 里
+  `Preflight: <probe> => <observed result>` 存在且已解占位，未过即拒发、不起引擎；
+  `--no-preflight` 显式豁免（豁免类别的判据归 SKILL.md §1）。
 - **watcher 被外部杀（TERM）= 预期可恢复态**：收到 killed 通知即重挂，stateless 零状态损失（生产 ×2
   实证）。归因看 tombstone：trap 在退出前落 `$RUN/<s>.watch.tombstone.jsonl`（ts / signal / ppid /
   uptime——发送方沙箱内不可见，事后只有这一行可查，实证 2026-07-23）。宿主一次事件会成批收割全部
@@ -155,14 +149,11 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   `agentctl start` 后同条没 arm watch → 提醒（omission 无法硬 deny）；④ 拦长/CJK 裸 `tmux send-keys`
   （逼 `agentctl steer`）；⑤ 拦前台阻塞 `agentctl watch`（前台 Bash 超时 143 连 watcher 一起杀，实证
   2026-07-11；`AGENT_WATCH_SYNC=1` 显式放行）；⑥ 拦编排者亲跑 live e2e（派便宜模型 runner，命令前缀
-  `E2E_ECONOMY=1` 自 declare）；⑦ worktree 生命周期（主理人 2026-07-19 裁决）：非 force
-  `git worktree remove` = 常设放行——git 自拒脏树、分支 ref 留存、构造上可逆，收工/复盘清理免逐次请示；
-  `--force`/`-f`/`prune` DENY——force 会碾掉 untracked（2026-07-19 实证：链式 force-remove 前的抢救 cp
-  因坏 glob 静默中止，取证脚本尽失）、prune 按 staleness 猜测批删；正路 = 先 `git -C <wt> status
-  --porcelain` 独立命令抢救并验证 untracked，再向主理人请示，验证与销毁绝不同一命令行；已获批准的销毁
-  走一次性 override：`touch /tmp/cto-allow-worktree-destroy` 后重跑（用后即焚不留 standing bypass，
-  只解 DENY 不代 allow；任何经核实的正当动机可用——2026-07-21 实证补此通道）；含其他动作的
-  mixed 命令不 auto-allow、落回分类器（保守面）。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
+  `E2E_ECONOMY=1` 自 declare）；⑦ worktree 生命周期：非 force `git worktree remove`
+  常设放行（git 自拒脏树、可逆）；`--force`/`-f`/`prune` DENY（force 碾 untracked、prune 按
+  staleness 猜删，均有实证）——正路 = 先 `git -C <wt> status --porcelain` 独立命令抢救核证再请示，
+  验证与销毁绝不同一命令行；已批销毁走一次性 override `touch /tmp/cto-allow-worktree-destroy`
+  （消费即授权、用后即焚）；mixed 命令不 auto-allow、落回分类器。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
   判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）。①用剥引号视图，④用原始 cmd，⑤⑥⑧只认命令位（路径当参数
   不拦——上线当天两次自误伤修出的判据）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：

@@ -25,7 +25,7 @@ git worktree add ../wt-<name> -b feat/<name> origin/<base>
   **显式指到新 worktree**，可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。
   实证：审计跑在落后 70 commit 的主 checkout、把已被某 PR 删净的子系统报成"待删"，靠对 origin 重核才在派删除前抓出。
 
-## 收工核证四件套（判据与定义见 SKILL §1.6，此处只留每件的操作细节与实证）
+## 收工核证四件套（SKILL §1.6 验收原则的操作化；四件套定义与实证在此）
 
 1. `git status -s` 干净（实证：执行 agent 屡次"声称完成没 commit"）。
 2. `git log origin/<base>..HEAD` 与声明一致（多了 = 夹带，少了 = 没交）。

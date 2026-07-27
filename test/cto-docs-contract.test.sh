@@ -28,7 +28,7 @@ chk_contains "engine capability table present" "steer 默认（排队/下一轮�
 chk_contains "single lane three engines" "一条 lane、三引擎" "$skill_body"
 chk_contains "codex mid-turn steer is native" "turn/steer\` 原生" "$skill_body"
 chk_contains "codex has no queue, refuses cleanly" "codex 无排队" "$skill_body"
-chk_contains "TUI lane is retired" "TUI 车道已于本大版本裁撤" "$skill_body"
+chk_contains "TUI lane is retired" "TUI 车道已裁撤" "$skill_body"
 chk_contains "file deliverables require the gate" '文件任务必须声明 `--deliverable <glob>`' "$skill_body"
 chk_contains "deliverable glob is session-cwd relative" "相对 glob 按会话 cwd 解析" "$skill_body"
 chk_contains "non-file results omit the gate" "非文件结果不带" "$skill_body"
