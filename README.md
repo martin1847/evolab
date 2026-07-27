@@ -57,8 +57,8 @@ skill 本质是 markdown + 几个脚本——**AI-native 装法：把下面这�
 > 与 rules 形态二选一，勿同装）。
 > 注 1：`cto-orchestration` 是**工具无关的方法论**，frontmatter 里 `tmux/omp/codex` 是参考栈、按你的栈替换，**不是硬依赖**。
 > 注 2：带 hook 的 skill（`cto-orchestration` / `repo-governance-bootstrap`）**复制 ≠ 生效**——hook 需按各自 `SKILL.md` 的说明 wiring 激活。
-> 注 3：装完后的第一步——到你的项目里跑 `repo-governance-bootstrap` 建治理骨架，再按 `cto-orchestration` §8
-> 新项目接入清单完成编排接入（AGENTS.md 编排两节 + hook wiring 都在那 7 步里）。
+> 注 3：装完后的第一步——到你的项目里跑 `repo-governance-bootstrap` 建治理骨架，再按 `cto-orchestration`
+> 的 `references/onboarding-checklist.md` 完成编排接入（AGENTS.md 编排两节 + hook wiring 都在那 7 步里）。
 
 ## 脱敏说明
 
