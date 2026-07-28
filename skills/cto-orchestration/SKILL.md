@@ -93,7 +93,7 @@ TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 
 - `docs/orchestration/` 是共享 SoT：live 只留在跑/在等事项，完结物归档；memory 只存编排者私有教训和入口，不替代共享 docs。
 - runtime evidence 推翻 audit/scout 时，同轮回写源文档 `REFUTED CLAIMS`（claim / evidence / pointer），不只记在摘要。
 - 外部任务系统存在时，它是状态 SoT；roadmap 只做映射，不养第二套账。
-- **复盘仪式**（触发词：复盘 / 收口 / retro；事件点：收口 / 压缩前 / ReOpen 后）：读
+- **复盘仪式**（触发词：复盘 / 收口 / retro；事件点：收口 / 压缩前 / 已关单被打回〔ReOpen〕后）：读
   `references/retrospective.md` 七步逐条勾，再跑 `references/retro-check.sh`；不即兴发挥。脚本只覆盖
   机械代理与 warning，不能替代语义复盘；同时清理已完成会话和孤儿进程。压缩点自动提醒 wiring 真源 =
   `references/retro-hooks.json`（可选接入，schema 限制与形态见该文件）。
