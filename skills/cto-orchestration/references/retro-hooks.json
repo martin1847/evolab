@@ -1,0 +1,9 @@
+{
+  "//": "复盘仪式压缩点提醒 wiring 真源（可选——编排位席位建议接入；提醒不阻断）。接入=command 前缀替换为本 skill 安装根绝对路径（hooks 不展开 ~、不加解释器前缀——脚本自带 shebang），并进项目 settings。PreCompact 只能给用户可见 systemMessage（harness schema 不收 additionalContext，错误形态会被整体拒收、静默失败——2026-07-28 实证）；模型上下文注入靠压缩后 SessionStart，脚本自判 source=compact、其余静默。",
+  "PreCompact": [
+    { "matcher": "", "command": "references/retro-reminder.sh" }
+  ],
+  "SessionStart": [
+    { "matcher": "", "command": "references/retro-reminder.sh" }
+  ]
+}

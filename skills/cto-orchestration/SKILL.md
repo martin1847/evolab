@@ -1,7 +1,7 @@
 ---
 name: cto-orchestration
 version: 1.6.2
-description: "CTO/orchestrator 模式管理多 agent 软件交付：agentctl 统一派工（一条 duplex lane、三引擎原生协议，轮内 steer）、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
+description: "CTO/orchestrator 模式管理多 agent 软件交付：agentctl 统一派工（一条 duplex lane、三引擎原生协议，轮内 steer）、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目；用户说'复盘 / 复盘仪式 / 收口 / retro / retrospective'时也必须触发——复盘一律走本 skill 的七步仪式 + retro-check 硬门，不即兴发挥。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
 metadata:
   requires:
     bins: ["tmux", "omp", "codex"]
@@ -93,7 +93,10 @@ TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 
 - `docs/orchestration/` 是共享 SoT：live 只留在跑/在等事项，完结物归档；memory 只存编排者私有教训和入口，不替代共享 docs。
 - runtime evidence 推翻 audit/scout 时，同轮回写源文档 `REFUTED CLAIMS`（claim / evidence / pointer），不只记在摘要。
 - 外部任务系统存在时，它是状态 SoT；roadmap 只做映射，不养第二套账。
-- 收口 / 压缩前 / ReOpen 后读 `references/retrospective.md`，再跑 `references/retro-check.sh`。脚本只覆盖机械代理与 warning，不能替代语义复盘；同时清理已完成会话和孤儿进程。
+- **复盘仪式**（触发词：复盘 / 收口 / retro；事件点：收口 / 压缩前 / ReOpen 后）：读
+  `references/retrospective.md` 七步逐条勾，再跑 `references/retro-check.sh`；不即兴发挥。脚本只覆盖
+  机械代理与 warning，不能替代语义复盘；同时清理已完成会话和孤儿进程。压缩点自动提醒 wiring 真源 =
+  `references/retro-hooks.json`（可选接入，schema 限制与形态见该文件）。
 - 主理人只决战略、不可逆、钱与价值。决策队列、T0/T1/T2 语义和静默默认见 `references/decision-queue.md`；队列只存活跃项，已清残留由 hook 提醒 + retro 硬失败，新鲜度仍是软告警。
 
 ## 6. 专项路由（用到才读）
