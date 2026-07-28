@@ -109,6 +109,10 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   （实证 2026-07-11 三任务全中）。
 - **纯事件驱动会盲等**：挂 watcher 同时按"任务预期时长 ×2"设 fallback 自检（CC `ScheduleWakeup`；
   shell 编排者 cron/有界轮询）。
+- **可用性排序（实测，2026-07-27 收割夜）**：watcher 活到终态 > watcher 被外部收割（宿主把后台任务
+  死亡也当完成事件推送——仍唤醒编排者，status 复核 + re-arm 零信息丢失）> 自研轮询卡死但活着
+  （零通知，沉默与"还在跑"同形 = 编排者失明）。判据不是"会不会失败"，而是**失败时响不响**——会被
+  收割的 watcher 比会卡死的轮询器可靠；自研通知通道投产前先拿已知阳性证明它会响。
 - **Agent 工具异步 subagent 的完成通知有黑洞**：只在"停止且自身无存活后台子进程"时才发；子 agent 自起
   后台 fork（E2E/monitor）→ 父 idle 而通知永不来（实证 2026-06-26，靠主动 SendMessage 才发现）。
   对策：别只信完成通知（fallback 自检兜底）；派工要求验证同回合做完、不留孤儿 fork、里程碑 SendMessage 回 main。
