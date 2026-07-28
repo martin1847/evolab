@@ -266,6 +266,59 @@ chk_contains "EPIPE falls the verdict back to stderr" "ENGINE-SILENT" "$(cat "$S
 chk_not_contains "EPIPE raises no traceback" "Traceback" "$(cat "$SANDBOX/e2.log")"
 kill -9 "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
 
+echo "== wait-ready is bounded too: the codex handshake hits the flock 4x (N1) =="
+seed_session wrA codex "$WT"
+python3 - "$WATCH_RUN_DIR/wrA.duplex.wlock" "$SANDBOX/held4" <<'EOF' &
+import fcntl, sys, time
+with open(sys.argv[1], "a") as fh:
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    open(sys.argv[2], "w").close()
+    time.sleep(60)
+EOF
+HOLDER=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$SANDBOX/held4" ] && break; /bin/sleep 0.2; done
+start=$(date +%s)
+out="$(AGENT_WATCH_SEND_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" \
+       wait-ready wrA --wait 2 2>&1)"; rc=$?
+elapsed=$(( $(date +%s) - start ))
+chk_eq "wedged lock → wait-ready returns, exit 8 (was an infinite hang)" 8 "$rc"
+chk_eq "wait-ready returns inside its bound (<=5s)" 1 "$([ "$elapsed" -le 5 ] && echo 1 || echo 0)"
+chk_contains "wait-ready verdict names its own verb" "wait-ready timeout" "$out"
+chk_contains "wait-ready verdict names the handshake" "handshake never completed" "$out"
+chk_contains "wait-ready verdict names the lock candidate" "writer lock is held" "$out"
+kill -9 "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+
+# and the whole-verb bound must NOT preempt the honest inner diagnostics at its
+# default size (the finding-6 mistake): no holder, nobody on the fifo read end →
+# the 5s fifo-open bound still gets to speak, rc=1, not a timeout verdict
+seed_session wrB codex "$WT"
+out="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" wait-ready wrB --wait 2 2>&1)"; rc=$?
+chk_eq "default bound leaves the inner fifo diagnostic reachable" 1 "$rc"
+chk_contains "…and it is the honest one" "fifo has no reader" "$out"
+chk_not_contains "…not a watchdog verdict" "wait-ready timeout" "$out"
+
+rprobe() { PYTHONDONTWRITEBYTECODE=1 python3 -c \
+  "import importlib.util as u; \
+s=u.spec_from_file_location('dctl', '$DUPLEXCTL'); m=u.module_from_spec(s); s.loader.exec_module(m); \
+print(m.ready_timeout($1))"; }
+chk_eq "sized for the whole verb, floor covers 3 default round trips" 60 "$(rprobe 15)"
+chk_eq "short --wait does not shrink below the floor" 60 "$(rprobe 3)"
+chk_eq "long --wait scales the bound (3*wait+15)" 195 "$(rprobe 60)"
+chk_eq "absurd --wait still clamps at the ceiling" 3600 "$(rprobe 100000)"
+chk_eq "the send knob overrides it outright" 3 "$(AGENT_WATCH_SEND_TIMEOUT=3 rprobe 60)"
+
+# N2 ordering: the strand window between publishing _INFLIGHT and creating the
+# marker file is ~2 bytecodes — not observably testable, so assert the ORDER in
+# the code path itself (the handler's unlink already swallows the ENOENT).
+order="$(PYTHONDONTWRITEBYTECODE=1 python3 -c "
+import importlib.util as u, inspect
+s=u.spec_from_file_location('dctl', '$DUPLEXCTL'); m=u.module_from_spec(s); s.loader.exec_module(m)
+src = inspect.getsource(m.write_frame).splitlines()
+pub = next(i for i, l in enumerate(src) if '_INFLIGHT[\"intent\"], _INFLIGHT[\"sent\"]' in l)
+mk = next(i for i, l in enumerate(src) if 'open(sess.intent,' in l)
+print('1' if pub < mk else '0')")"
+chk_eq "write-intent is published BEFORE the marker file is created" 1 "$order"
+
 unset FAKE_TMUX_HASSESSION
 sandbox_clean
 

@@ -198,11 +198,12 @@ def acquire_writer_lock(lock) -> None:
     blocking) and can reach its own 40s bound, printing "another sender is wedged
     … stop + restart" at a lane that is perfectly fine — and inside classify the
     30s alarm preempted it anyway, so the diagnostic was unreachable.
-    The wedged-holder case is bounded ONE LEVEL UP instead: every verb that can
-    reach this call arms the per-command SIGALRM watchdog (see arm_watchdog), so a
-    stuck holder yields a typed exit 8 with an honest both-candidates message
-    instead of an infinite wait. A permanent flock errno (EBADF …) also surfaces
-    immediately again rather than being retried into a 40s stall."""
+    The wedged-holder case is bounded ONE LEVEL UP instead: all three verbs that can
+    reach this call — classify, send and wait-ready — arm the per-command SIGALRM
+    watchdog at entry (see arm_watchdog), so a stuck holder yields a typed exit 8
+    with an honest both-candidates message instead of an infinite wait. A permanent
+    flock errno (EBADF …) also surfaces immediately again rather than being retried
+    into a 40s stall."""
     fcntl.flock(lock, fcntl.LOCK_EX)
 
 
@@ -242,16 +243,20 @@ def write_frame(sess: Session, frame: str, on_ready=None) -> None:
             # the full frame (incl. newline) is out. A sender killed mid-write leaves
             # it behind, and every later send/classify fails closed on it instead of
             # stacking frames onto a torn protocol stream (review R2 2026-07-19).
+            # PUBLISHED BEFORE THE FILE EXISTS: a signal landing between the two would
+            # otherwise strand exactly the 0-byte marker S2-2 removes (N2). The
+            # handler's unlink swallows the ENOENT of the not-yet-created file.
+            _INFLIGHT["intent"], _INFLIGHT["sent"] = sess.intent, 0
             with open(sess.intent, "w", encoding="utf-8") as fh:
                 fh.write(f"{len(payload)}\n")
-            # from here the marker is durable state a SIGALRM _exit() would strand
-            _INFLIGHT["intent"], _INFLIGHT["sent"] = sess.intent, 0
             sent = 0
             write_deadline = time.monotonic() + 30.0
             while sent < len(payload):
                 try:
-                    # one store, published right after the write returns: the
-                    # handler must never see sent == 0 while bytes are on the wire
+                    # published as soon as the write returns. Residual, unclosable in
+                    # pure Python (N3, ~1e-7/call): a signal in the ~2-bytecode window
+                    # between the syscall returning and this store lets the handler
+                    # read sent == 0 with bytes already on the wire and drop the taint.
                     _INFLIGHT["sent"] = sent = sent + os.write(fd, payload[sent:sent + 65536])
                 except BlockingIOError:
                     remaining = write_deadline - time.monotonic()
@@ -740,6 +745,21 @@ def send_frame(args: argparse.Namespace) -> int:
 
 
 def cmd_wait_ready(args: argparse.Namespace) -> int:
+    """Whole-verb watchdog, armed before Session() like the other two verbs. The
+    codex handshake reaches the blocking writer flock FOUR times — three
+    codex_request() round trips (initialize / thread/{start,resume}) plus the bare
+    initialized frame — so bounding only one of them left `agentctl start` able to
+    hang forever on a wedged lock holder (review N1 2026-07-28). Sized for the whole
+    verb, not per call: three legitimate --wait round trips can exceed the send
+    bound (see ready_timeout)."""
+    arm_watchdog(args.run_dir, args.session, ready_timeout(args.wait), "wait-ready")
+    try:
+        return handshake(args)
+    finally:
+        signal.alarm(0)
+
+
+def handshake(args: argparse.Namespace) -> int:
     sess = Session(args.run_dir, args.session)
     sess.require_meta()
     engine = sess.meta["engine"]
@@ -760,13 +780,7 @@ def cmd_wait_ready(args: argparse.Namespace) -> int:
     if init is None or "error" in init:
         print(f"ERR: codex initialize failed: {clip(json.dumps(init, ensure_ascii=False), 200)}", file=sys.stderr)
         return 1
-    # same bound as send: this is the one write_frame outside cmd_send, and the
-    # rest of wait-ready is already bounded by its own --wait timeouts
-    arm_watchdog(args.run_dir, args.session, send_timeout(), "send")
-    try:
-        write_frame(sess, jsonrpc(None, "initialized"))
-    finally:
-        signal.alarm(0)
+    write_frame(sess, jsonrpc(None, "initialized"))
     if sess.meta.get("resume_thread"):
         started = codex_request(sess, "thread/resume",
                                 {"threadId": sess.meta["resume_thread"]}, timeout=args.wait)
@@ -818,9 +832,24 @@ def send_timeout() -> int:
     return env_timeout("AGENT_WATCH_SEND_TIMEOUT", SEND_TIMEOUT_DEFAULT)
 
 
+READY_TIMEOUT_FLOOR = 60    # three default --wait round trips (15s each) + slack
+
+
+def ready_timeout(wait: float) -> int:
+    """Hard deadline for ONE wait-ready. Sized for the WHOLE verb: the codex
+    handshake makes three --wait-bounded round trips, so a flat SEND_TIMEOUT_DEFAULT
+    would cut a legitimate slow handshake short. AGENT_WATCH_SEND_TIMEOUT overrides
+    it outright when set — same knob, same 'the frame could not go out' bound —
+    which is also how a test/operator shortens it."""
+    if os.environ.get("AGENT_WATCH_SEND_TIMEOUT", "").strip():
+        return send_timeout()
+    return min(max(READY_TIMEOUT_FLOOR, int(3 * wait) + 15), TIMEOUT_MAX)
+
+
 def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
     """SIGALRM hard stop for ONE command: a status query is a CONTROL-PLANE read and
-    must always answer, and a send must never wait forever on the writer lock. Every
+    must always answer, and neither a send nor a handshake may wait forever on the
+    writer lock — ALL THREE verbs (classify / send / wait-ready) arm this. Every
     blocking call underneath is nominally bounded (wait_for / the 5s+30s fifo
     deadlines) except the kernel-fair LOCK_EX, and bounds can be defeated by a wedged
     host — field hit: one `agentctl status` hung and pinned an orchestrator's whole
@@ -839,6 +868,13 @@ def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
             f"ENGINE-SILENT: classify timeout after {secs}s — the control-plane query never "
             f"came back (engine or writer lock unresponsive); inspect {stderr_log}, then "
             "agentctl stop + restart with the engine's resume args if it stays stuck\n"
+        ).encode("utf-8")
+    elif verb == "wait-ready":
+        msg = (
+            f"ENGINE-SILENT: wait-ready timeout after {secs}s — the engine handshake never "
+            f"completed: the writer lock is held by another sender, or the engine never answered; "
+            f"inspect {stderr_log} and agentctl status, then agentctl stop + restart with the "
+            "engine's resume args if it stays stuck\n"
         ).encode("utf-8")
     else:
         msg = (
