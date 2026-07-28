@@ -62,6 +62,48 @@ consume_tombstone() { # $1 session
   cat "$t" >> "$t.consumed" 2>/dev/null && rm -f "$t"
 }
 
+# tmux kill-session only signals the pane leader: engine children that outlive it (LSP
+# servers, browsers, linters) get adopted by PID 1 and leak — field evidence 2026-07-28:
+# 43 leaked sessions left 8 adopted workers + 16 grandchildren after a naive stop. The
+# pane is spawned as its own session+group leader (pane_pid == pgid, probed on macOS),
+# and POSIX keeps a pgid reserved while ANY member lives — so the process group is the
+# ownership boundary: TERM the group, bounded grace, KILL, verify zero residue. Scope is
+# always one pgid we own — never a name-based or global kill.
+reap_tree() { # $1 pane_pid (== pgid)  $2 expected leader lstart ("" = pid read live, skip check)
+  local pg="$1" want="$2" have i tries
+  case "$pg" in ''|*[!0-9]*) return 0;; esac
+  # lower bounds are load-bearing: on Linux procps `pgrep -g 0` is OUR OWN group
+  # (macOS returns empty), and reaping our own pgid is suicide on any platform.
+  [ "$pg" -gt 1 ] || return 0
+  [ "$pg" = "$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" ] && return 0
+  pgrep -g "$pg" >/dev/null 2>&1 || return 0
+  if [ -n "$want" ]; then
+    # stale-meta path: this pgid is a stranger's only if the LEADER pid was recycled
+    # after our whole tree died, so the leader's start time is the ownership fingerprint.
+    # A dead leader with live members needs no check — the pgid stays ours while they live.
+    have="$(ps -p "$pg" -o lstart= 2>/dev/null | sed 's/ *$//')"
+    if [ -n "$have" ] && [ "$have" != "$want" ]; then
+      echo "WARN: pgid $pg leader started '$have' ≠ recorded '$want' (pid recycled) — not ours, not reaping" >&2
+      return 0
+    fi
+  fi
+  kill -TERM -- "-$pg" 2>/dev/null
+  # non-numeric falls back to the 5s default; an explicit 0 means NO grace (straight
+  # to KILL) — that's the caller's call, not a parse accident.
+  case "${AGENTCTL_REAP_GRACE:-}" in ''|*[!0-9]*) tries=25;; *) tries=$(( AGENTCTL_REAP_GRACE * 5 ));; esac
+  i=0
+  while [ "$i" -lt "$tries" ]; do
+    pgrep -g "$pg" >/dev/null 2>&1 || { echo "reaped process group $pg (TERM)"; return 0; }
+    sleep 0.2; i=$((i+1))
+  done
+  kill -KILL -- "-$pg" 2>/dev/null; sleep 0.2
+  if pgrep -g "$pg" >/dev/null 2>&1; then
+    echo "WARN: survivors in process group $pg after KILL: $(pgrep -g "$pg" 2>/dev/null | tr '\n' ' ')" >&2
+    return 1
+  fi
+  echo "reaped process group $pg (KILL)"
+}
+
 # DONE persists as a filesystem fact: whichever observer (watch or status) first computes
 # a terminal DONE drops this marker, so pure-file waiters and post-mortems recover the
 # truth even if every notifying process was reaped (field-proposed 2026-07-28 — a stalled
@@ -128,7 +170,7 @@ cmd_start() {
   # duplex residue would create a second lane and mis-route every later verb (review
   # S2 2026-07-19).
   [ "$(lane_of "$S")" = none ] || { echo "ERR: session '$S' already exists ($(lane_of "$S") lane) — agentctl stop $S or pick a new name" >&2; exit 1; }
-  tmux has-session -t "$S" 2>/dev/null && { echo "ERR: tmux session '$S' already exists" >&2; exit 1; }
+  tmux has-session -t "=$S" 2>/dev/null && { echo "ERR: tmux session '$S' already exists" >&2; exit 1; }
 
   FIFO="$DIR/$S.duplex.in"; EV="$DIR/$S.duplex.events.jsonl"
   ERR="$DIR/$S.duplex.stderr.log"; RC="$DIR/$S.duplex.rc"
@@ -169,10 +211,23 @@ cmd_start() {
     echo "ERR: tmux new-session failed for '$S' (nothing started)" >&2; exit 1
   fi
 
+  # record the pane's process-group identity for reap-at-stop: pid alone is recyclable,
+  # so pair it with the leader's start time; store neither if either read fails (a stop
+  # with no fingerprint refuses stale-meta reaping rather than guessing).
+  PANE_PID="$(tmux display-message -p -t "=$S:" '#{pane_pid}' 2>/dev/null)"
+  PANE_LSTART="$(ps -p "${PANE_PID:-0}" -o lstart= 2>/dev/null | sed 's/ *$//')"
+  [ -n "$PANE_PID" ] && [ -n "$PANE_LSTART" ] \
+    && printf 'pane_pid=%s\npane_lstart=%s\n' "$PANE_PID" "$PANE_LSTART" >> "$DIR/$S.duplex.meta"
+  # pin remain-on-exit off: inherited "on" keeps the session alive around a DEAD pane,
+  # and stop's live #{pane_pid} read would hand reap an exited, recyclable pid while
+  # the fingerprinted meta identity gets ignored (review S1). Our session, our option.
+  tmux set-option -w -t "=$S:" remain-on-exit off 2>/dev/null || true
+
   if ! "$PY" "$CTL" --run-dir "$DIR" wait-ready "$S" --wait 20; then
     echo "ERR: engine handshake failed — cleaning up. stderr tail:" >&2
     tail -c 800 "$ERR" >&2 2>/dev/null || true
-    tmux kill-session -t "$S" 2>/dev/null; rm -f "$FIFO" "$DIR/$S.duplex.meta"
+    tmux kill-session -t "=$S" 2>/dev/null; reap_tree "$PANE_PID" ""
+    rm -f "$FIFO" "$DIR/$S.duplex.meta"
     exit 1
   fi
 
@@ -326,25 +381,49 @@ cmd_stop() {
   S="${1:?usage: agentctl stop <session>}"
   case "$(lane_of "$S")" in
     duplex)
-      tmux kill-session -t "$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
+      # reap identity BEFORE the kill and the cleanup: the live pane pid is only
+      # trustworthy while the pane is ALIVE — with remain-on-exit the session outlives
+      # a dead pane and #{pane_pid} reports an exited, recyclable pid (review S1); dead
+      # or no pane falls back to the recorded pid+lstart fingerprint (workers adopted
+      # by PID 1 keep the pgid — the leak class).
+      live="$(tmux display-message -p -t "=$S:" '#{pane_dead} #{pane_pid}' 2>/dev/null)"
+      live_pg=""; case "$live" in "0 "*) live_pg="${live#0 }";; esac
+      meta_pg="$(meta_get "$S" pane_pid)"; meta_ls="$(meta_get "$S" pane_lstart)"
+      tmux kill-session -t "=$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
+      # control state goes down BEFORE the reap: the terminal-marker guard (meta
+      # re-check right before publish) prices in a µs kill→cleanup gap, and a
+      # grace-long reap in between would stretch it to seconds (review S3). Trade-off:
+      # a same-name start may now begin while the old tree is still being reaped —
+      # disjoint pgids plus the self-group refusal keep the kills from crossing.
       rm -f "$DIR/$S.duplex.in" "$DIR/$S.duplex.meta" "$DIR/$S.duplex.round-started" \
             "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" \
             "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" \
             "$DIR/$S.terminal.json" 2>/dev/null
       consume_tombstone "$S"
-      echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc" ;;
+      echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc"
+      if [ -n "$live_pg" ]; then reap_tree "$live_pg" ""
+      else reap_tree "$meta_pg" "$meta_ls"; fi
+      exit $? ;;
     none)
       # no lane meta: clean bare tmux AND orphan duplex claims (crash residue like a
       # stray fifo/write-intent) — this IS the recovery path the start error advertises
-      cleaned=0
-      tmux has-session -t "$S" 2>/dev/null && { tmux kill-session -t "$S" 2>/dev/null; echo "killed bare tmux session $S"; cleaned=1; }
+      cleaned=0; reap_rc=0
+      if tmux has-session -t "=$S" 2>/dev/null; then
+        live="$(tmux display-message -p -t "=$S:" '#{pane_dead} #{pane_pid}' 2>/dev/null)"
+        live_pg=""; case "$live" in "0 "*) live_pg="${live#0 }";; esac
+        tmux kill-session -t "=$S" 2>/dev/null; reap_tree "$live_pg" "" || reap_rc=1
+        echo "killed bare tmux session $S"; cleaned=1
+      fi
       for f in "$DIR/$S.duplex.in" "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" \
                "$DIR/$S.duplex.sent-offset" "$DIR/$S.duplex.round-started" \
                "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" \
                "$DIR/$S.terminal.json"; do
         [ -e "$f" ] && { rm -f "$f"; cleaned=1; }
       done
-      if [ "$cleaned" = 1 ]; then echo "removed orphan session residue for '$S'"
+      if [ "$cleaned" = 1 ]; then echo "removed orphan session residue for '$S'"; exit "$reap_rc"
+      elif [ -e "$DIR/$S.duplex.events.jsonl" ] || [ -e "$DIR/$S.duplex.rc" ]; then
+        # idempotent re-stop: session already cleaned, only post-mortem artifacts remain
+        echo "already stopped: only post-mortem artifacts remain for '$S'"
       else echo "ERR: unknown session '$S' (no lane state, no tmux session, no residue)" >&2; exit 1; fi ;;
   esac
 }

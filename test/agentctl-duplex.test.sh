@@ -7,7 +7,9 @@
 # new-session actually runs the pane command in the background, has-session reflects
 # wrapper liveness, kill-session kills wrapper+engine. That exercises the REAL
 # fifo/flock/events pipeline end to end with scriptable fake engines — no real tmux,
-# no real engines, no tokens.
+# no real engines, no tokens. NOTE: this fake's display-message prints nothing, so
+# PANE_PID stays empty and the stop process-tree reap is NOT exercised here — that
+# coverage (real setsid trees) lives in agentctl-reap.test.sh.
 set -u
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
@@ -29,6 +31,9 @@ while [ "$#" -gt 0 ]; do case "$1" in
   -d|-p) shift;;
   *) cmd="$1"; shift;;
 esac; done
+# agentctl targets sessions with tmux exact-match syntax ("=name" / "=name:"); state
+# files are keyed by the bare name, so normalize like real tmux resolves it.
+name="${name#=}"; name="${name%:}"
 case "$sub" in
   new-session)
     ( cd "${cwd:-/}" && exec bash -c "$cmd" ) >/dev/null 2>&1 &

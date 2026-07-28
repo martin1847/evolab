@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # retro-check.sh — deterministic mechanical check for cto-orchestration 复盘 (SKILL.md §5).
-# Verifies mechanical proxies only, not semantic quality. Worktree and ACTIVE_CONTEXT failures
-# return non-zero; roadmap, decision-queue, and memory findings are warnings and do not block.
+# Verifies mechanical proxies only, not semantic quality. Worktree, ACTIVE_CONTEXT and
+# dead-agent-session failures return non-zero; roadmap, decision-queue, memory and
+# live-session findings are warnings and do not block.
 #
 # Usage:
 #   bash retro-check.sh --base <branch> --docs <docs-dir> [--memory <MEMORY.md>] [--memory-cap N] [--repo <git-dir>]
@@ -96,6 +97,40 @@ if [ -n "$MEMORY" ] && [ -f "$MEMORY" ]; then
   n="$(wc -l < "$MEMORY" | tr -d ' ')"
   if [ "$n" -le "$MEMCAP" ]; then ok "MEMORY.md $n lines (≤$MEMCAP)"; else warn "MEMORY.md $n lines > $MEMCAP — trim/group COMPLETED"; fi
 elif [ -n "$MEMORY" ]; then warn "$MEMORY not found — skip"; else echo "  [skip] no --memory given"; fi
+
+# 6) agent sessions of THIS repo left uncleaned — backstop for "terminal state ⇒
+# agentctl stop" discipline (field 2026-07-28: 43 unstopped sessions leaked engines).
+# FAIL = round believed over (terminal marker / rc recorded / wrapper dead) but control
+# state remains; live mid-work sessions only warn (long-runners are legitimate).
+echo "6) agent 会话收口 (本仓 duplex 会话: 终态必已 stop):"
+AWDIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
+TOP="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)"
+if [ -d "$AWDIR" ] && [ -n "$TOP" ]; then
+  dead=0; live=0; livenames=""
+  for m in "$AWDIR"/*.duplex.meta; do
+    [ -e "$m" ] || continue
+    mcwd="$(sed -n 's/^cwd=//p' "$m" | head -1)"
+    # physical-path normalize: /tmp and /var are symlinks on macOS, and git toplevel
+    # is already physical — a raw prefix match would silently skip those sessions
+    mcwd="$(cd "$mcwd" 2>/dev/null && pwd -P || echo "$mcwd")"
+    case "$mcwd" in "$TOP"|"$TOP"/*) ;; *) continue;; esac
+    s="$(basename "$m" .duplex.meta)"
+    # terminal evidence needs no tmux (marker / recorded rc); a dead wrapper only
+    # counts when tmux is around to probe — without it, liveness is UNKNOWN, not dead.
+    over=0
+    { [ -e "$AWDIR/$s.terminal.json" ] || [ -e "$AWDIR/$s.duplex.rc" ]; } && over=1
+    [ "$over" = 0 ] && command -v tmux >/dev/null 2>&1 \
+      && ! tmux has-session -t "=$s" 2>/dev/null && over=1
+    if [ "$over" = 1 ]; then
+      echo "  [FAIL] session '$s' round is over but not stopped → agentctl stop $s"; dead=$((dead+1))
+    else
+      live=$((live+1)); livenames="$livenames $s"
+    fi
+  done
+  if [ "$dead" -gt 0 ]; then fail "$dead 本仓终态会话未清 — agentctl stop 收口（引擎进程与控制态在泄漏）"
+  else ok "no terminal-but-uncleaned session for this repo"; fi
+  [ "$live" -gt 0 ] && warn "$live live/unknown session(s) of this repo still registered:$livenames — 逐个确认是有意长跑，其余 stop"
+else echo "  [skip] no agent-watch run dir / not a git repo"; fi
 
 echo "== result: $fails FAIL, $warns warn =="
 [ "$fails" -eq 0 ]

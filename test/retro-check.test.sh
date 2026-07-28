@@ -29,7 +29,9 @@ mkrepo(){
   )
   echo "$work"
 }
-run(){ ( cd "$1" && bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 ); }
+# AGENT_WATCH_DIR points at a nonexistent dir so check 6 skips — cases that exercise
+# it seed their own dir (the real /tmp run dir would leak machine state into cases).
+run(){ ( cd "$1" && AGENT_WATCH_DIR="$1/.no-agent-watch" bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 ); }
 
 echo "== retro-check.test =="
 
@@ -92,6 +94,43 @@ r="$(mkrepo)"; printf '# queue\n## ✅ CLEARED（保持为空）\n' > "$r/docs/D
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "I/empty-cleared rc"
 assert_has "$out" "active/parked items only" "I/empty-cleared clean"
+
+# --- check 6: 本仓 duplex 会话收口 (fake tmux on PATH keeps liveness deterministic) --
+mkaw(){ mktemp -d; }
+mkfaketmux(){ # $1 exit code for has-session → echoes bin dir
+  local b; b="$(mktemp -d)"
+  printf '#!/bin/sh\nexit %s\n' "$1" > "$b/tmux"; chmod +x "$b/tmux"; echo "$b"
+}
+runaw(){ ( cd "$1" && PATH="$3:$PATH" AGENT_WATCH_DIR="$2" bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 ); }
+
+# Case J — this-repo session with terminal marker → blocking FAIL (tmux liveness moot)
+r="$(mkrepo)"; aw="$(mkaw)"; ft="$(mkfaketmux 0)"
+printf 'engine=omp\ncwd=%s\n' "$r" > "$aw/j1.duplex.meta"; : > "$aw/j1.terminal.json"
+out="$(runaw "$r" "$aw" "$ft")"; rc=$?
+assert_rc "$rc" 1 "J/terminal-uncleaned rc"
+assert_has "$out" "round is over but not stopped" "J/terminal-uncleaned flagged"
+assert_has "$out" "agentctl stop j1" "J names the session"
+
+# Case K — dead wrapper (tmux says gone), no marker → still FAIL
+r="$(mkrepo)"; aw="$(mkaw)"; ft="$(mkfaketmux 1)"
+printf 'engine=omp\ncwd=%s\n' "$r" > "$aw/k1.duplex.meta"
+out="$(runaw "$r" "$aw" "$ft")"; rc=$?
+assert_rc "$rc" 1 "K/dead-wrapper rc"
+assert_has "$out" "agentctl stop k1" "K/dead-wrapper flagged"
+
+# Case L — live session, no terminal evidence → warn only, exit 0
+r="$(mkrepo)"; aw="$(mkaw)"; ft="$(mkfaketmux 0)"
+printf 'engine=omp\ncwd=%s\n' "$r" > "$aw/l1.duplex.meta"
+out="$(runaw "$r" "$aw" "$ft")"; rc=$?
+assert_rc "$rc" 0 "L/live-session rc (warn≠fail)"
+assert_has "$out" "live/unknown session" "L/live-session warns"
+
+# Case M — other repo's session is out of scope, stays green
+r="$(mkrepo)"; aw="$(mkaw)"; ft="$(mkfaketmux 1)"
+printf 'engine=omp\ncwd=/somewhere/else\n' > "$aw/m1.duplex.meta"; : > "$aw/m1.terminal.json"
+out="$(runaw "$r" "$aw" "$ft")"; rc=$?
+assert_rc "$rc" 0 "M/other-repo rc"
+assert_has "$out" "no terminal-but-uncleaned session" "M/other-repo filtered"
 
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

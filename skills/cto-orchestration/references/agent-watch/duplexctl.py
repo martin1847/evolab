@@ -102,8 +102,10 @@ def die(msg: str, code: int = 1) -> NoReturn:
 
 
 def tmux_alive(name: str) -> bool:
+    # "=" pins exact-name resolution: a bare name falls through to PREFIX match on
+    # miss, so a dead "rev" with a live "rev2" neighbor would probe alive (tmux 3.6b).
     probe = subprocess.run(
-        ["tmux", "has-session", "-t", name],
+        ["tmux", "has-session", "-t", f"={name}"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return probe.returncode == 0

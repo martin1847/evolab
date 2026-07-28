@@ -17,7 +17,7 @@ agentctl start  <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [-
 agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]
 agentctl status <session>      # one-shot typed verdict（exit code = 结论）
 agentctl watch  <session>      # 阻塞至终态；run_in_background 挂起
-agentctl stop   <session>      # 结束 + 清控制态（events/rc/stderr 留作尸检）
+agentctl stop   <session>      # 结束 + 按进程组收割整棵树 + 清控制态（events/rc/stderr 留作尸检）
 ```
 
 - **steer 语义**（能力差异拒绝制，不分叉车道）：默认排队 / `--now` / `--replace` × 三引擎的语义
@@ -89,6 +89,11 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   （转 `.consumed` 留取证），已消解的死亡不复报。
 - 引擎二进制可用 env 覆盖（测试缝 + 自定装机位）：`AGENTCTL_BIN_OMP` / `AGENTCTL_BIN_CLAUDE` / `AGENTCTL_BIN_CODEX`。
 - exit 6 `IDLE-NO-DELIVERABLE` 用 `agentctl steer` 补一刀，**不要 stop**；`stop` 只用于收工或明确放弃。
+- **stop = 进程组收割**（tmux kill 只碰 pane leader，引擎子孙会被 PID 1 收养泄漏——2026-07-28 实证
+  43 会话漏 8 worker + 16 孙进程）：pane 起在自有 session+group（pane_pid == pgid），stop 对该组
+  TERM → 有界宽限（`AGENTCTL_REAP_GRACE`，默认 5s）→ KILL → pgrep 复核零残留；陈旧 meta 走
+  leader lstart 指纹防 pid 复用误杀，永不按名字/全局杀。终态后**立即 stop 是编排者纪律**，
+  retro-check 第 6 检对"本仓终态未清会话"blocking FAIL 兜底。
 
 ## typed 状态（编排者纪律）
 
