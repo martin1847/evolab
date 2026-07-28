@@ -34,6 +34,7 @@ import select
 import signal
 import subprocess
 import sys
+from typing import NoReturn
 import time
 import uuid
 
@@ -95,7 +96,7 @@ def check_review_budget(sess: Session, text: str) -> None:
             "'SHIP-BLOCKING: <non-empty rationale>' line to the message/brief")
 
 
-def die(msg: str, code: int = 1) -> None:
+def die(msg: str, code: int = 1) -> NoReturn:
     print(f"ERR: {msg}", file=sys.stderr)
     sys.exit(code)
 
@@ -560,7 +561,7 @@ def classify(sess: Session) -> int:
     blocked = os.path.join(cwd, "BLOCKED.md")
     try:
         if os.path.getmtime(blocked) >= os.path.getmtime(sess.epoch):
-            print(f"WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via agentctl steer")
+            print("WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via agentctl steer")
             return 4
     except OSError:
         pass

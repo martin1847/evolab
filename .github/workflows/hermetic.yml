@@ -15,5 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2   # two *.bun.ts suites; run.sh SKIPs them if bun is absent
+      - name: python correctness (ruff, narrow select)
+        # explicit --select: correctness + exec-bit only — style rules deliberately
+        # excluded (hooks use intentional fail-safe patterns a broad set would flag)
+        run: pipx run ruff check --select F,E9,EXE,PLE skills/
       - name: run hermetic suite
         run: bash test/run.sh
