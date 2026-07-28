@@ -616,6 +616,31 @@ bash "$AGENTCTL" stop twR >/dev/null 2>&1
 unset FAKE_CLAUDE_GATE
 sweep_fakes; sandbox_clean
 
+echo "== watch vs classify timeout: single 8 does not fell the watcher =="
+sandbox_new; install_running_tmux
+WT8="$SANDBOX/wt8"; mkdir -p "$WT8" "$SANDBOX/bin8"
+ln -s /usr/bin/true "$SANDBOX/bin8/tmux"   # hand-built session: liveness probe must pass so classify reaches the lock
+printf 'engine=omp\ncwd=%s\n' "$WT8" > "$WATCH_RUN_DIR/tmoS.duplex.meta"
+: > "$WATCH_RUN_DIR/tmoS.duplex.events.jsonl"; : > "$WATCH_RUN_DIR/tmoS.duplex.stderr.log"
+python3 - "$WATCH_RUN_DIR/tmoS.duplex.wlock" "$SANDBOX/held8" <<'EOF' &
+import fcntl, sys, time
+with open(sys.argv[1], "a") as fh:
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    open(sys.argv[2], "w").close()
+    time.sleep(30)
+EOF
+H8=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$SANDBOX/held8" ] && break; /bin/sleep 0.2; done
+t0=$(date +%s)
+out="$(PATH="$SANDBOX/bin8:$PATH" AGENT_WATCH_STATUS_TIMEOUT=1 AGENT_WATCH_POLL_SECS=1 AGENT_WATCH_MAX_POLLS=5 bash "$AGENTCTL" watch tmoS 2>&1)"; rc=$?
+el=$(( $(date +%s) - t0 ))
+chk_eq "two consecutive classify timeouts → watch exits 8" 8 "$rc"
+chk_eq "machine tail is EXIT=8" "EXIT=8" "$(printf '%s\n' "$out" | tail -1)"
+chk_eq "did not fall on the first 8 (>=2 polls elapsed)" 1 "$([ "$el" -ge 2 ] && echo 1 || echo 0)"
+kill "$H8" 2>/dev/null; wait "$H8" 2>/dev/null
+bash "$AGENTCTL" stop tmoS >/dev/null 2>&1
+sweep_fakes; sandbox_clean
+
 echo "== guard: TaskStop deny covers wrong-premise motive =="
 TID="agdx$$"
 TDIR="/tmp/claude-agdxtest/$$/x/tasks"; mkdir -p "$TDIR"; printf 'alive\n' > "$TDIR/$TID.output"

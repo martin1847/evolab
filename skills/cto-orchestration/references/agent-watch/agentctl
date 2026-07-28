@@ -285,7 +285,7 @@ cmd_watch() {
   # ~2min. The duplex analog of the old NO-HOOK exit 8 — report honestly, never guess.
   SILENT_MAX="${AGENT_WATCH_SILENT_POLLS:-8}"
   echo "=== [$S] DUPLEX-WATCH ARMED at $(date '+%H:%M:%S') (stateless — safe to kill and re-run) ==="
-  idle=0; silent=0; i=1
+  idle=0; silent=0; tmo=0; i=1
   while [ "$i" -le "$MAX" ]; do
     msg="$("$PY" "$CTL" --run-dir "$DIR" classify "$S")"; rc=$?
     case "$rc" in
@@ -295,15 +295,22 @@ cmd_watch() {
           echo "=== [$S] ENGINE-SILENT at $(date '+%H:%M:%S') — steer delivered but no engine output ~2min; inspect $DIR/$S.duplex.stderr.log ==="
           watch_exit 8
         fi
-        idle=0 ;;
+        idle=0; tmo=0 ;;
       0|6)
         # stability: require 2 consecutive terminal reads — a turn boundary right
         # before an auto-consumed queued message must not read as terminal.
-        idle=$((idle+1)); silent=0
+        idle=$((idle+1)); silent=0; tmo=0
         if [ "$idle" -ge 2 ]; then
           [ "$rc" = 0 ] && write_terminal_marker "$S"
           echo "=== [$S] $msg ==="; watch_exit "$rc"
         fi ;;
+      8)
+        # classify's own control-plane timeout — transient lock/engine contention is
+        # possible, so require 2 consecutive reads before killing the watch (mirrors
+        # the idle stability rule; review: a single 8 must not fell the watcher when
+        # watch's own ENGINE-SILENT needs 8 consecutive silent polls).
+        tmo=$((tmo+1)); idle=0; silent=0
+        if [ "$tmo" -ge 2 ]; then echo "=== [$S] $msg ==="; watch_exit 8; fi ;;
       *) echo "=== [$S] $msg ==="; watch_exit "$rc" ;;
     esac
     [ $((i % 12)) -eq 0 ] && echo "[$S] heartbeat iter $i $(date '+%H:%M:%S') — $msg"
