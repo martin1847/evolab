@@ -107,6 +107,165 @@ out="$(AGENT_WATCH_STATUS_TIMEOUT=bogus python3 "$DUPLEXCTL" --run-dir "$WATCH_R
 chk_eq "illegal knob still classifies normally" 0 "$rc"
 chk_contains "illegal knob prints the real verdict" "DONE: engine idle" "$out"
 
+echo "== send is bounded by the SAME whole-verb alarm (S2-1: blocking LOCK_EX) =="
+# the writer flock is a plain kernel-fair LOCK_EX again; the bound moved one level
+# up, so a verb that reaches write_frame without a classify watchdog arms its own.
+seed_session sndA omp "$WT"
+python3 - "$WATCH_RUN_DIR/sndA.duplex.wlock" "$SANDBOX/held2" <<'EOF' &
+import fcntl, sys, time
+with open(sys.argv[1], "a") as fh:
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    open(sys.argv[2], "w").close()
+    time.sleep(60)
+EOF
+HOLDER=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$SANDBOX/held2" ] && break; /bin/sleep 0.2; done
+start=$(date +%s)
+out="$(AGENT_WATCH_SEND_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" \
+       send sndA --verb steer --text hi 2>&1)"; rc=$?
+elapsed=$(( $(date +%s) - start ))
+chk_eq "wedged lock → send returns, exit 8" 8 "$rc"
+chk_eq "send returns inside its own deadline (<=5s)" 1 "$([ "$elapsed" -le 5 ] && echo 1 || echo 0)"
+chk_contains "send verdict names the timeout" "send timeout" "$out"
+chk_contains "send verdict names candidate 1: the writer lock" "writer lock" "$out"
+chk_contains "send verdict names candidate 2: the fifo" "fifo" "$out"
+chk_contains "send verdict routes through status first" "agentctl status" "$out"
+chk_not_contains "no destructive 'another sender is wedged' claim" "wedged holding it" "$out"
+chk_eq "a timed-out send strands no write-intent" 0 \
+  "$([ -e "$WATCH_RUN_DIR/sndA.duplex.write-intent" ] && echo 1 || echo 0)"
+kill -9 "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+
+# fairness: against a HEALTHY churning writer the wait must stay at ~one hold. The
+# reverted LOCK_NB + 0.1s poll measured 11.3s max on this exact churn (0.5s holds)
+# and could reach its own 40s die() — a false wedged-holder verdict on a fine lane.
+fair="$(PYTHONDONTWRITEBYTECODE=1 python3 - "$DUPLEXCTL" "$SANDBOX/fair.lock" <<'PYEOF'
+import fcntl, importlib.util as u, subprocess, sys, time
+ctl, lock = sys.argv[1], sys.argv[2]
+open(lock, "w").close()
+churn = ("import fcntl,sys,time\n"
+         "end=time.monotonic()+20\n"
+         "while time.monotonic()<end:\n"
+         "    fh=open(sys.argv[1],'a')\n"
+         "    fcntl.flock(fh,fcntl.LOCK_EX); time.sleep(0.5)\n"
+         "    fcntl.flock(fh,fcntl.LOCK_UN); fh.close(); time.sleep(0.005)\n")
+c = subprocess.Popen([sys.executable, "-c", churn, lock])
+time.sleep(0.3)
+spec = u.spec_from_file_location("dctl", ctl); m = u.module_from_spec(spec)
+spec.loader.exec_module(m)
+waits = []
+for _ in range(5):
+    fh = open(lock, "a"); t0 = time.monotonic()
+    m.acquire_writer_lock(fh)
+    waits.append(time.monotonic() - t0)
+    fcntl.flock(fh, fcntl.LOCK_UN); fh.close(); time.sleep(0.01)
+c.kill(); c.wait()
+print("1" if max(waits) <= 1.5 else "0 (max=%.2fs)" % max(waits))
+print("1" if not hasattr(m, "LOCK_WAIT_SECS") else "0")
+PYEOF
+)"
+chk_eq "healthy churner: max wait stays at the kernel-fair hold (<=1.5s)" 1 \
+  "$(printf '%s\n' "$fair" | sed -n 1p)"
+chk_eq "the poll loop's own 40s bound is gone (no LOCK_WAIT_SECS)" 1 \
+  "$(printf '%s\n' "$fair" | sed -n 2p)"
+
+echo "== a fired watchdog never strands a 0-byte write-intent (S2-2) =="
+seed_session e9 omp "$WT"
+python3 - "$WATCH_RUN_DIR/e9.duplex.in" "$SANDBOX/rdr" <<'EOF' &
+import os, sys, time
+os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK)   # holds the read end, never drains
+open(sys.argv[2], "w").close()
+time.sleep(60)
+EOF
+RDR=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$SANDBOX/rdr" ] && break; /bin/sleep 0.2; done
+python3 - "$WATCH_RUN_DIR/e9.duplex.in" "$SANDBOX/fill" <<'EOF' &
+import os, sys, time
+fd = os.open(sys.argv[1], os.O_WRONLY)
+open(sys.argv[2], "w").close()
+try:
+    os.write(fd, b"x" * (1 << 20))   # fill the pipe buffer: the next writer blocks
+except Exception:
+    pass
+time.sleep(60)
+EOF
+FILL=$!
+/bin/sleep 1.5
+out="$(AGENT_WATCH_STATUS_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" classify e9 2>&1)"; rc=$?
+chk_eq "alarm during a blocked fifo write → exit 8" 8 "$rc"
+chk_eq "zero bytes out → write-intent marker NOT stranded" 0 \
+  "$([ -e "$WATCH_RUN_DIR/e9.duplex.write-intent" ] && echo 1 || echo 0)"
+out2="$(AGENT_WATCH_STATUS_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" classify e9 2>&1)"; rc2=$?
+chk_eq "next classify is not torn-poisoned (still 8, not 2)" 8 "$rc2"
+chk_not_contains "no phantom torn-frame verdict" "torn frame" "$out2"
+kill -9 "$FILL" "$RDR" 2>/dev/null; wait "$FILL" "$RDR" 2>/dev/null
+
+# one-directional on purpose: bytes already on the wire keep the taint
+probe_strand() { # $1 sent-bytes -> "<rc>:<marker still there?>"
+  local marker="$SANDBOX/strand.$1"; : > "$marker"
+  PYTHONDONTWRITEBYTECODE=1 python3 -c "
+import importlib.util as u, time
+s=u.spec_from_file_location('dctl', '$DUPLEXCTL'); m=u.module_from_spec(s); s.loader.exec_module(m)
+m._INFLIGHT['intent'], m._INFLIGHT['sent'] = '$marker', $1
+m.arm_watchdog('$WATCH_RUN_DIR', 'strand', 1, 'send')
+time.sleep(5)" >/dev/null 2>&1
+  printf '%s:%s' "$?" "$([ -e "$marker" ] && echo 1 || echo 0)"
+}
+chk_eq "handler clears a 0-byte marker and exits typed 8" "8:0" "$(probe_strand 0)"
+chk_eq "bytes already sent keep the taint (a torn frame must still poison)" "8:1" "$(probe_strand 7)"
+
+echo "== timeout knob: upper clamp, never OverflowError, never disabled (S2-3) =="
+chk_eq "at the ceiling honored" 3600 "$(probe 3600)"
+chk_eq "above the ceiling clamps down" 3600 "$(probe 3601)"
+chk_eq "2**31-1 clamps (no longer a ~68-year no-op bound)" 3600 "$(probe 2147483647)"
+chk_eq "2**31 clamps instead of raising OverflowError" 3600 "$(probe 2147483648)"
+chk_eq "absurd value clamps" 3600 "$(probe 99999999999)"
+out="$(AGENT_WATCH_STATUS_TIMEOUT=99999999999 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" classify okC 2>&1)"; rc=$?
+chk_eq "huge knob still classifies normally" 0 "$rc"
+chk_contains "huge knob prints the real verdict" "DONE: engine idle" "$out"
+chk_not_contains "huge knob raises no traceback" "Traceback" "$out"
+sprobe() { AGENT_WATCH_SEND_TIMEOUT="$1" PYTHONDONTWRITEBYTECODE=1 python3 -c \
+  "import sys; sys.path.insert(0, '$AW_DIR'); import importlib.util as u; \
+s=u.spec_from_file_location('dctl', '$DUPLEXCTL'); m=u.module_from_spec(s); s.loader.exec_module(m); \
+print(m.send_timeout())"; }
+chk_eq "send knob default (above the longest legitimate hold)" 40 "$(unset AGENT_WATCH_SEND_TIMEOUT; sprobe "")"
+chk_eq "send knob honored" 9 "$(sprobe 9)"
+chk_eq "send knob clamps too" 3600 "$(sprobe 2147483648)"
+
+echo "== watchdog armed BEFORE Session() reads meta (minor-4) =="
+# a fifo standing in for a wedged run-dir: Session.__init__ blocks reading meta
+mkfifo "$WATCH_RUN_DIR/pre.duplex.meta"
+: > "$WATCH_RUN_DIR/pre.duplex.round-started"; : > "$WATCH_RUN_DIR/pre.duplex.events.jsonl"
+mkfifo "$WATCH_RUN_DIR/pre.duplex.in"
+start=$(date +%s)
+out="$(AGENT_WATCH_STATUS_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" classify pre 2>&1)"; rc=$?
+elapsed=$(( $(date +%s) - start ))
+chk_eq "blocking meta read → still exit 8, not a hang" 8 "$rc"
+chk_eq "…and inside deadline+2s" 1 "$([ "$elapsed" -le 5 ] && echo 1 || echo 0)"
+chk_contains "classify verdict text unchanged" "classify timeout" "$out"
+
+echo "== handler survives a hostile stdout (minor-7) =="
+seed_session hgB omp "$WT"
+python3 - "$WATCH_RUN_DIR/hgB.duplex.wlock" "$SANDBOX/held3" <<'EOF' &
+import fcntl, sys, time
+with open(sys.argv[1], "a") as fh:
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    open(sys.argv[2], "w").close()
+    time.sleep(60)
+EOF
+HOLDER=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$SANDBOX/held3" ] && break; /bin/sleep 0.2; done
+AGENT_WATCH_STATUS_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" classify hgB \
+  2>"$SANDBOX/e1.log" >&-; rc=$?
+chk_eq "stdout closed → still typed exit 8" 8 "$rc"
+chk_not_contains "closed stdout raises no traceback" "Traceback" "$(cat "$SANDBOX/e1.log")"
+AGENT_WATCH_STATUS_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" classify hgB \
+  2>"$SANDBOX/e2.log" | true
+rc=${PIPESTATUS[0]}
+chk_eq "stdout is a dead pipe (EPIPE) → still typed exit 8" 8 "$rc"
+chk_contains "EPIPE falls the verdict back to stderr" "ENGINE-SILENT" "$(cat "$SANDBOX/e2.log")"
+chk_not_contains "EPIPE raises no traceback" "Traceback" "$(cat "$SANDBOX/e2.log")"
+kill -9 "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+
 unset FAKE_TMUX_HASSESSION
 sandbox_clean
 

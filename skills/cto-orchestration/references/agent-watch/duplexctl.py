@@ -191,26 +191,27 @@ def build_frame(engine: str, verb: str, text: str, req_id: str) -> str:
     raise AssertionError  # unreachable
 
 
-LOCK_WAIT_SECS = 40.0  # > the longest LEGITIMATE hold: 5s fifo-open + 30s write deadline + slack
-
-
 def acquire_writer_lock(lock) -> None:
-    """Bounded flock. A plain LOCK_EX was the one unbounded wait in the lane: a
-    wedged/zombie holder blocked every later send AND classify forever (field hit:
-    a hung `agentctl status` pinned an orchestrator's polling loop). The bound sits
-    ABOVE the longest legitimate hold, so a real concurrent big-frame send still
-    wins the lock — only a stuck holder trips it."""
-    deadline = time.monotonic() + LOCK_WAIT_SECS
-    while True:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
-        except OSError:
-            if time.monotonic() >= deadline:
-                die(f"writer lock busy for {LOCK_WAIT_SECS:.0f}s ({lock.name}) — another sender is "
-                    "wedged holding it; check for a stuck agentctl/duplexctl process, then "
-                    "agentctl stop + restart with the engine's resume args")
-            time.sleep(0.1)
+    """Plain blocking LOCK_EX. The kernel's flock queue is fair; a LOCK_NB + fixed
+    0.1s retry loop was tried and REVERTED (review 2026-07-28): against a healthy
+    churning writer the poll starves (0.5s holds → 11.3s max wait vs 0.51s
+    blocking) and can reach its own 40s bound, printing "another sender is wedged
+    … stop + restart" at a lane that is perfectly fine — and inside classify the
+    30s alarm preempted it anyway, so the diagnostic was unreachable.
+    The wedged-holder case is bounded ONE LEVEL UP instead: every verb that can
+    reach this call arms the per-command SIGALRM watchdog (see arm_watchdog), so a
+    stuck holder yields a typed exit 8 with an honest both-candidates message
+    instead of an infinite wait. A permanent flock errno (EBADF …) also surfaces
+    immediately again rather than being retried into a 40s stall."""
+    fcntl.flock(lock, fcntl.LOCK_EX)
+
+
+# In-flight frame state, read by the watchdog handler (S2-2, review 2026-07-28):
+# a signal that _exit()s during a blocked fifo write must not strand the durable
+# write-intent marker when NOTHING was sent — a 0-byte "torn frame" poisons every
+# later classify/send until stop+restart. sent > 0 keeps the taint: a genuinely
+# torn frame must still fail closed.
+_INFLIGHT: dict[str, object] = {"intent": None, "sent": 0}
 
 
 def write_frame(sess: Session, frame: str, on_ready=None) -> None:
@@ -243,11 +244,15 @@ def write_frame(sess: Session, frame: str, on_ready=None) -> None:
             # stacking frames onto a torn protocol stream (review R2 2026-07-19).
             with open(sess.intent, "w", encoding="utf-8") as fh:
                 fh.write(f"{len(payload)}\n")
+            # from here the marker is durable state a SIGALRM _exit() would strand
+            _INFLIGHT["intent"], _INFLIGHT["sent"] = sess.intent, 0
             sent = 0
             write_deadline = time.monotonic() + 30.0
             while sent < len(payload):
                 try:
-                    sent += os.write(fd, payload[sent:sent + 65536])
+                    # one store, published right after the write returns: the
+                    # handler must never see sent == 0 while bytes are on the wire
+                    _INFLIGHT["sent"] = sent = sent + os.write(fd, payload[sent:sent + 65536])
                 except BlockingIOError:
                     remaining = write_deadline - time.monotonic()
                     if remaining <= 0:
@@ -257,6 +262,7 @@ def write_frame(sess: Session, frame: str, on_ready=None) -> None:
                 except (BrokenPipeError, OSError) as exc:
                     if sent == 0:
                         os.unlink(sess.intent)
+                        _INFLIGHT["intent"] = None
                         die(f"fifo write failed before any byte ({exc}) — engine died; see status")
                     die(f"fifo write failed mid-frame ({exc}) after {sent}/{len(payload)} bytes "
                         "— frame is TORN, input stream tainted: agentctl stop, then restart "
@@ -268,6 +274,7 @@ def write_frame(sess: Session, frame: str, on_ready=None) -> None:
                     "— frame is TORN, session input stream is tainted: agentctl stop, then restart "
                     "with the engine's resume args", 2)
             os.unlink(sess.intent)
+            _INFLIGHT["intent"] = None
         finally:
             os.close(fd)
 
@@ -593,6 +600,17 @@ def classify(sess: Session) -> int:
 
 # ── commands ──────────────────────────────────────────────────────────────────
 def cmd_send(args: argparse.Namespace) -> int:
+    """send reaches the blocking writer flock and the fifo write with NO classify
+    watchdog above it, so it arms the same one-alarm-per-process bound around the
+    whole verb (armed before Session(), cleared on every exit path)."""
+    arm_watchdog(args.run_dir, args.session, send_timeout(), "send")
+    try:
+        return send_frame(args)
+    finally:
+        signal.alarm(0)
+
+
+def send_frame(args: argparse.Namespace) -> int:
     sess = Session(args.run_dir, args.session)
     sess.require_meta()
     engine = sess.meta["engine"]
@@ -742,7 +760,13 @@ def cmd_wait_ready(args: argparse.Namespace) -> int:
     if init is None or "error" in init:
         print(f"ERR: codex initialize failed: {clip(json.dumps(init, ensure_ascii=False), 200)}", file=sys.stderr)
         return 1
-    write_frame(sess, jsonrpc(None, "initialized"))
+    # same bound as send: this is the one write_frame outside cmd_send, and the
+    # rest of wait-ready is already bounded by its own --wait timeouts
+    arm_watchdog(args.run_dir, args.session, send_timeout(), "send")
+    try:
+        write_frame(sess, jsonrpc(None, "initialized"))
+    finally:
+        signal.alarm(0)
     if sess.meta.get("resume_thread"):
         started = codex_request(sess, "thread/resume",
                                 {"threadId": sess.meta["resume_thread"]}, timeout=args.wait)
@@ -762,51 +786,101 @@ def cmd_wait_ready(args: argparse.Namespace) -> int:
 
 
 STATUS_TIMEOUT_DEFAULT = 30
+SEND_TIMEOUT_DEFAULT = 40   # > the longest legitimate hold: 5s fifo-open + 30s write deadline + slack
+TIMEOUT_MAX = 3600          # signal.alarm() takes a C int — a knob must never crash it, nor disable it
+
+
+def env_timeout(var: str, default: int) -> int:
+    """Positive integer seconds from `var`. Empty / 0 / negative / non-numeric falls
+    back to `default` instead of disabling the bound — an unparsable knob must never
+    be the reason the control plane hangs again. Anything above TIMEOUT_MAX clamps
+    DOWN to it: un-clamped, a value >= 2**31 made signal.alarm() raise OverflowError
+    (traceback, rc=1, no verdict at all) and 2147483647 (~68 years) silently
+    disabled the watchdog the docstring promises (review 2026-07-28)."""
+    try:
+        secs = int(os.environ.get(var, "").strip())
+    except ValueError:
+        return default
+    if secs <= 0:
+        return default
+    return min(secs, TIMEOUT_MAX)
 
 
 def status_timeout() -> int:
-    """Hard deadline for ONE classify, from AGENT_WATCH_STATUS_TIMEOUT (positive
-    integer seconds). Empty / 0 / negative / non-numeric falls back to the default
-    instead of disabling the bound — an unparsable knob must never be the reason
-    the control plane hangs again."""
-    try:
-        secs = int(os.environ.get("AGENT_WATCH_STATUS_TIMEOUT", "").strip())
-    except ValueError:
-        return STATUS_TIMEOUT_DEFAULT
-    return secs if secs > 0 else STATUS_TIMEOUT_DEFAULT
+    """Hard deadline for ONE classify — AGENT_WATCH_STATUS_TIMEOUT."""
+    return env_timeout("AGENT_WATCH_STATUS_TIMEOUT", STATUS_TIMEOUT_DEFAULT)
 
 
-def arm_status_watchdog(sess: Session, secs: int) -> None:
-    """SIGALRM hard stop for classify: a status query is a CONTROL-PLANE read and
-    must always answer. Every blocking call classify reaches is nominally bounded
-    (see acquire_writer_lock / wait_for / the 5s+30s fifo deadlines), but bounds
-    can be defeated by a wedged host — field hit: one `agentctl status` hung and
-    pinned an orchestrator's whole polling loop. Timing out is reported with the
-    EXISTING exit-8 vocabulary (ENGINE-SILENT: the engine/lock did not respond),
-    disposition identical: read stderr, stop + resume if needed.
-    The handler writes and _exit()s IN-SIGNAL on purpose — raising would be
-    swallowed by classify's `except OSError` arms (TimeoutError IS an OSError),
-    and unwinding normally would have to traverse the very code that is stuck."""
+def send_timeout() -> int:
+    """Hard deadline for ONE send — AGENT_WATCH_SEND_TIMEOUT. send reaches the
+    blocking writer flock and the fifo write with no classify watchdog above it,
+    so it arms the same alarm around the whole verb."""
+    return env_timeout("AGENT_WATCH_SEND_TIMEOUT", SEND_TIMEOUT_DEFAULT)
+
+
+def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
+    """SIGALRM hard stop for ONE command: a status query is a CONTROL-PLANE read and
+    must always answer, and a send must never wait forever on the writer lock. Every
+    blocking call underneath is nominally bounded (wait_for / the 5s+30s fifo
+    deadlines) except the kernel-fair LOCK_EX, and bounds can be defeated by a wedged
+    host — field hit: one `agentctl status` hung and pinned an orchestrator's whole
+    polling loop. Timing out is reported with the EXISTING exit-8 vocabulary
+    (ENGINE-SILENT), disposition identical: read stderr, stop + resume if needed.
+    Armed BEFORE any Session() is built — the constructor stats and reads the meta
+    file, so a wedged run-dir used to hang outside the watchdog — hence the stderr
+    path is derived from run_dir/name here instead of from a Session.
+    ONE alarm per process: each verb arms at entry and clears in a finally, no nesting.
+    The handler writes and _exit()s IN-SIGNAL on purpose — raising would be swallowed
+    by classify's `except OSError` arms (TimeoutError IS an OSError), and unwinding
+    normally would have to traverse the very code that is stuck."""
+    stderr_log = os.path.join(run_dir, f"{name}.duplex.stderr.log")
+    if verb == "classify":
+        msg = (
+            f"ENGINE-SILENT: classify timeout after {secs}s — the control-plane query never "
+            f"came back (engine or writer lock unresponsive); inspect {stderr_log}, then "
+            "agentctl stop + restart with the engine's resume args if it stays stuck\n"
+        ).encode("utf-8")
+    else:
+        msg = (
+            f"ENGINE-SILENT: send timeout after {secs}s — the frame never went out: the writer "
+            f"lock is held by another sender, or the fifo is unresponsive; inspect {stderr_log} "
+            "and agentctl status, then agentctl stop + restart with the engine's resume args if "
+            "it stays stuck\n"
+        ).encode("utf-8")
+
     def fire(_signum, _frame):
+        # undo the ONE piece of durable state an _exit() would strand: a write-intent
+        # marker with ZERO bytes sent is not a torn frame, and leaving it behind makes
+        # every later classify/send fail closed until stop+restart. sent > 0 keeps the
+        # marker — a genuinely torn frame must still poison the stream.
+        intent = _INFLIGHT["intent"]
+        if isinstance(intent, str) and _INFLIGHT["sent"] == 0:
+            try:
+                os.unlink(intent)
+            except OSError:
+                pass
         try:
             sys.stdout.flush()
         except Exception:
             pass
-        os.write(1, (
-            f"ENGINE-SILENT: classify timeout after {secs}s — the control-plane query never "
-            f"came back (engine or writer lock unresponsive); inspect {sess.stderr}, then "
-            "agentctl stop + restart with the engine's resume args if it stays stuck\n"
-        ).encode("utf-8"))
+        try:
+            os.write(1, msg)
+        except Exception:
+            # fd 1 closed / EPIPE: the verdict is the only output that matters, so
+            # try stderr, then give up — the typed exit 8 still carries the meaning.
+            try:
+                os.write(2, msg)
+            except Exception:
+                pass
         os._exit(8)
     signal.signal(signal.SIGALRM, fire)
     signal.alarm(secs)
 
 
 def cmd_classify(args: argparse.Namespace) -> int:
-    sess = Session(args.run_dir, args.session)
-    arm_status_watchdog(sess, status_timeout())
+    arm_watchdog(args.run_dir, args.session, status_timeout(), "classify")
     try:
-        return classify(sess)
+        return classify(Session(args.run_dir, args.session))
     finally:
         signal.alarm(0)
 
