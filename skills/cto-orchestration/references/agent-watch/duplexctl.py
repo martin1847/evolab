@@ -31,6 +31,7 @@ import glob as globmod
 import json
 import os
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -189,6 +190,28 @@ def build_frame(engine: str, verb: str, text: str, req_id: str) -> str:
     raise AssertionError  # unreachable
 
 
+LOCK_WAIT_SECS = 40.0  # > the longest LEGITIMATE hold: 5s fifo-open + 30s write deadline + slack
+
+
+def acquire_writer_lock(lock) -> None:
+    """Bounded flock. A plain LOCK_EX was the one unbounded wait in the lane: a
+    wedged/zombie holder blocked every later send AND classify forever (field hit:
+    a hung `agentctl status` pinned an orchestrator's polling loop). The bound sits
+    ABOVE the longest legitimate hold, so a real concurrent big-frame send still
+    wins the lock — only a stuck holder trips it."""
+    deadline = time.monotonic() + LOCK_WAIT_SECS
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                die(f"writer lock busy for {LOCK_WAIT_SECS:.0f}s ({lock.name}) — another sender is "
+                    "wedged holding it; check for a stuck agentctl/duplexctl process, then "
+                    "agentctl stop + restart with the engine's resume args")
+            time.sleep(0.1)
+
+
 def write_frame(sess: Session, frame: str, on_ready=None) -> None:
     """flock-serialized fifo write. O_NONBLOCK open doubles as a liveness probe
     (ENXIO = nothing holds the read end = supervisor pane is gone) and STAYS on
@@ -200,7 +223,7 @@ def write_frame(sess: Session, frame: str, on_ready=None) -> None:
     start, and must be committed once bytes begin to flow."""
     payload = memoryview(frame.encode("utf-8") + b"\n")
     with open(sess.wlock, "a", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        acquire_writer_lock(lock)
         fd = None
         deadline = time.monotonic() + 5.0  # pane opens the fifo asynchronously at launch
         while fd is None:
@@ -737,8 +760,54 @@ def cmd_wait_ready(args: argparse.Namespace) -> int:
     return 0
 
 
+STATUS_TIMEOUT_DEFAULT = 30
+
+
+def status_timeout() -> int:
+    """Hard deadline for ONE classify, from AGENT_WATCH_STATUS_TIMEOUT (positive
+    integer seconds). Empty / 0 / negative / non-numeric falls back to the default
+    instead of disabling the bound — an unparsable knob must never be the reason
+    the control plane hangs again."""
+    try:
+        secs = int(os.environ.get("AGENT_WATCH_STATUS_TIMEOUT", "").strip())
+    except ValueError:
+        return STATUS_TIMEOUT_DEFAULT
+    return secs if secs > 0 else STATUS_TIMEOUT_DEFAULT
+
+
+def arm_status_watchdog(sess: Session, secs: int) -> None:
+    """SIGALRM hard stop for classify: a status query is a CONTROL-PLANE read and
+    must always answer. Every blocking call classify reaches is nominally bounded
+    (see acquire_writer_lock / wait_for / the 5s+30s fifo deadlines), but bounds
+    can be defeated by a wedged host — field hit: one `agentctl status` hung and
+    pinned an orchestrator's whole polling loop. Timing out is reported with the
+    EXISTING exit-8 vocabulary (ENGINE-SILENT: the engine/lock did not respond),
+    disposition identical: read stderr, stop + resume if needed.
+    The handler writes and _exit()s IN-SIGNAL on purpose — raising would be
+    swallowed by classify's `except OSError` arms (TimeoutError IS an OSError),
+    and unwinding normally would have to traverse the very code that is stuck."""
+    def fire(_signum, _frame):
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        os.write(1, (
+            f"ENGINE-SILENT: classify timeout after {secs}s — the control-plane query never "
+            f"came back (engine or writer lock unresponsive); inspect {sess.stderr}, then "
+            "agentctl stop + restart with the engine's resume args if it stays stuck\n"
+        ).encode("utf-8"))
+        os._exit(8)
+    signal.signal(signal.SIGALRM, fire)
+    signal.alarm(secs)
+
+
 def cmd_classify(args: argparse.Namespace) -> int:
-    return classify(Session(args.run_dir, args.session))
+    sess = Session(args.run_dir, args.session)
+    arm_status_watchdog(sess, status_timeout())
+    try:
+        return classify(sess)
+    finally:
+        signal.alarm(0)
 
 
 def main() -> None:
