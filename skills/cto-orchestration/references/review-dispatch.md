@@ -78,6 +78,10 @@ existing behavior of <同场景的既有路径>"这类对齐要求>; ... Add tes
 回归测试>. Re-run the suites, commit, append the change note to the findings doc.
 ```
 
+修复涉及**资源界限 / 生命周期**（锁、超时、marker、句柄）时，模板必须加一句：先枚举**全部**够得到
+该资源的路径再动手（SKILL §3「病类确认后枚举同模式点」的修复态 fire 点——实证：删无界锁时三个 verb
+只包了两个，漏网 verb 把无界等待带回生产，复审才抓出）。
+
 ## SKILL §2 对抗式评审循环的展开
 
 SKILL 主干是判据清单；这里是轴全枚举、实证、ledger 栏目、达标线与模板。
