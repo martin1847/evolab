@@ -475,6 +475,7 @@ bash "$AGENTCTL" start claude nwR "$WT" --goal "$declared" >/dev/null 2>&1
 /bin/sleep 0.3
 out="$(bash "$AGENTCTL" status nwR 2>&1)"; rc=$?
 chk_eq "gated engine → RUNNING 10" 10 "$rc"
+chk_eq "RUNNING leaves no terminal marker" 0 "$([ -e "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
 out="$(AGENT_WATCH_MAX_POLLS=2 AGENT_WATCH_SILENT_POLLS=99 bash "$AGENTCTL" watch nwR 2>&1)"; rc=$?
 chk_eq "bounded poll exhausted → exit 7" 7 "$rc"
 chk_eq "watch TIMEOUT ends with a machine-readable tail" "EXIT=7" "$(printf '%s\n' "$out" | tail -1)"
@@ -504,8 +505,15 @@ done
 out="$(bash "$AGENTCTL" status nwR 2>&1)"; rc=$?
 chk_eq "released gate → DONE 0" 0 "$rc"
 chk_not_contains "terminal verdict carries no watcher note" "no watcher armed" "$out"
+chk_eq "status DONE drops the terminal marker" 1 "$([ -s "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
+chk_contains "marker records rc0" '"rc":0' "$(cat "$WATCH_RUN_DIR/nwR.terminal.json" 2>/dev/null)"
+rm -f "$WATCH_RUN_DIR/nwR.terminal.json"   # watch path must drop it independently
+out="$(AGENT_WATCH_POLL_SECS=1 AGENT_WATCH_MAX_POLLS=6 bash "$AGENTCTL" watch nwR 2>&1)"; rc=$?
+chk_eq "watch reaches stable DONE" 0 "$rc"
+chk_eq "watch path also drops the terminal marker" 1 "$([ -s "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
 bash "$AGENTCTL" stop nwR >/dev/null 2>&1
 chk_eq "stop removes the watcher pid file" 0 "$([ -e "$WATCH_RUN_DIR/nwR.duplex.watch.pid" ] && echo 1 || echo 0)"
+chk_eq "stop removes the terminal marker" 0 "$([ -e "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
 unset FAKE_CLAUDE_GATE
 sweep_fakes; sandbox_clean
 
