@@ -113,9 +113,10 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   死亡也当完成事件推送——仍唤醒编排者，status 复核 + re-arm 零信息丢失）> 自研轮询卡死但活着
   （零通知，沉默与"还在跑"同形 = 编排者失明）。判据不是"会不会失败"，而是**失败时响不响**——会被
   收割的 watcher 比会卡死的轮询器可靠；自研通知通道投产前先拿已知阳性证明它会响。
-- **终态 marker**：算出 DONE 的任何观察者（watch 或 status）落 `$RUN/<s>.terminal.json`
-  （ts / rc / deliverable）——纯文件系统等待与事后恢复真相都不依赖"当时有人在听"，通知进程
-  全被收割也不丢；`stop` 清除。
+- **终态 marker**：算出 DONE 的观察者落 `$RUN/<s>.terminal.json`（ts / rc / deliverable，
+  合法 JSON）——纯文件系统等待与事后恢复真相都不依赖"当时有人在听"，通知进程全被收割也不丢。
+  生命周期 = 存在即"本轮已完成"：`start` / `steer`（新轮）/ `stop` 都清除；status 单读只在
+  已声明 deliverable（门背书）时落盘，未声明的由 watch 双稳读落。
 - **Agent 工具异步 subagent 的完成通知有黑洞**：只在"停止且自身无存活后台子进程"时才发；子 agent 自起
   后台 fork（E2E/monitor）→ 父 idle 而通知永不来（实证 2026-06-26，靠主动 SendMessage 才发现）。
   对策：别只信完成通知（fallback 自检兜底）；派工要求验证同回合做完、不留孤儿 fork、里程碑 SendMessage 回 main。

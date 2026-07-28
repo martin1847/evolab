@@ -33,6 +33,8 @@ chk_has "reminder routes to the hard gate" 'retro-check.sh' "$out"
 json_ok "SessionStart(compact) output is valid JSON" "$out"
 out="$(printf '{"hook_event_name":"SessionStart","source":"startup"}' | bash "$SH")"; rc=$?
 chk_eq "SessionStart(startup) stays silent, exit 0" "0|" "$rc|$out"
+out="$(printf '{"hook_event_name":"SessionStart","source":"compact","meta":{"source":"startup"}}' | bash "$SH")"; rc=$?
+chk_has "duplicated nested source key cannot silence the reminder (F8)" '"additionalContext"' "$out"
 out="$(printf '' | bash "$SH")"; rc=$?
 chk_eq "empty stdin stays silent, exit 0" "0|" "$rc|$out"
 

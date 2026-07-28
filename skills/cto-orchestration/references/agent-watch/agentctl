@@ -57,16 +57,25 @@ watcher_alive() { # $1 session
 consume_tombstone() { # $1 session
   local t="$DIR/$1.watch.tombstone.jsonl"
   [ -f "$t" ] || return 0
-  cat "$t" >> "$t.consumed" 2>/dev/null; rm -f "$t"
+  # && — a failed append must NOT destroy the forensics (review F4); an unconsumed
+  # tombstone re-reports at worst, a deleted one is gone for good.
+  cat "$t" >> "$t.consumed" 2>/dev/null && rm -f "$t"
 }
 
 # DONE persists as a filesystem fact: whichever observer (watch or status) first computes
 # a terminal DONE drops this marker, so pure-file waiters and post-mortems recover the
 # truth even if every notifying process was reaped (field-proposed 2026-07-28 — a stalled
 # poller is silent, but a marker on disk needs nobody listening).
+# Lifecycle: existence means THIS round of THIS session is believed done — start, steer
+# (new round) and stop all clear it (review F1/F2: an identity-less marker inherited by a
+# later same-name session or round is a durable false DONE). JSON goes through python
+# (quotes/backslashes in globs stay parseable, F3) with tmp+rename (no torn read, F7);
+# the meta re-check right before publish keeps a racing stop from resurrecting a marker.
 write_terminal_marker() { # $1 session
-  printf '{"ts":"%s","rc":0,"deliverable":"%s"}\n' \
-    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(meta_get "$1" deliverable)" > "$DIR/$1.terminal.json"
+  [ -f "$DIR/$1.duplex.meta" ] || return 0
+  "$PY" -c 'import json,sys,time; print(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "rc": 0, "deliverable": sys.argv[1]}))' \
+    "$(meta_get "$1" deliverable)" > "$DIR/$1.terminal.json.tmp" 2>/dev/null \
+    && mv "$DIR/$1.terminal.json.tmp" "$DIR/$1.terminal.json"
 }
 
 # The BLOCKED.md footer keeps the cross-engine ask-user protocol alive on the duplex lane:
@@ -129,7 +138,7 @@ cmd_start() {
   if ! mkfifo "$FIFO" 2>/dev/null; then
     echo "ERR: session '$S' fifo already exists ($FIFO) — concurrent start, or crash residue: agentctl stop $S first" >&2; exit 1
   fi
-  rm -f "$RC"; : > "$EV"; : > "$ERR"
+  rm -f "$RC" "$DIR/$S.terminal.json"; : > "$EV"; : > "$ERR"
 
   EXTRA_Q=""  # zero args to `printf ' %q'` would still format once → a literal '' engine arg
   [ "${#EXTRA[@]}" -gt 0 ] && EXTRA_Q="$(printf ' %q' "${EXTRA[@]}")"
@@ -191,6 +200,10 @@ cmd_steer() {
   case "$(lane_of "$S")" in
     duplex)
       [ "$MODE" = -f ] && { [ -e "$ARG" ] || { echo "ERR: file not found: $ARG" >&2; exit 1; }; }
+      # a steer opens a new round: DONE is no longer a fact. Pre-clearing is the safe
+      # direction — a missing marker sends waiters back to status (which re-writes it if
+      # still DONE); a stale marker is a durable false DONE (review F1①).
+      rm -f "$DIR/$S.terminal.json"
       # -d rides duplexctl: applied atomically (key-scoped meta_update) only after a
       # successful delivery — the shell grep+mv snapshot could roll back a concurrent
       # sender's round counter (review S2 2026-07-19)
@@ -206,7 +219,10 @@ cmd_status() {
     duplex)
       msg="$("$PY" "$CTL" --run-dir "$DIR" classify "$S")"; rc=$?
       [ -n "$msg" ] && printf '%s\n' "$msg"   # a died classify says it all on stderr
-      [ "$rc" = 0 ] && write_terminal_marker "$S"
+      # one-shot status persists DONE only when the deliverable gate vouched for it —
+      # a bare idle read at a turn boundary must not become durable truth (review F6);
+      # sessions without a declared deliverable get their marker from watch's 2-stable read.
+      [ "$rc" = 0 ] && [ -n "$(meta_get "$S" deliverable)" ] && write_terminal_marker "$S"
       # RUNNING with nobody watching is the field's most expensive omission (start,
       # then forget to arm the watcher — 4 catches in one production day). Advisory
       # only: the typed line and the exit code are untouched.
@@ -218,7 +234,10 @@ cmd_status() {
         # Second liveness check right at the emit point: a re-arm racing this call has
         # already consumed the tombstone AND flipped liveness (cold-review F-01).
         if [ -f "$TOMB" ] && ! watcher_alive "$S"; then
-          echo "note: previous watcher killed externally — $(tail -1 "$TOMB") — killed ≠ worker dead"
+          # single read + emptiness guard: a rotation racing between the -f test and the
+          # read must not print an empty attribution (review F5)
+          last="$(tail -1 "$TOMB" 2>/dev/null)"
+          [ -n "$last" ] && echo "note: previous watcher killed externally — $last — killed ≠ worker dead"
           # The host reaps background tasks in batches (same-second double-kill, field
           # 2026-07-25). Correlation here is tombstone-mtime proximity only — honest
           # wording, no causality claim (cold-review F-02).
@@ -314,7 +333,8 @@ cmd_stop() {
       tmux has-session -t "$S" 2>/dev/null && { tmux kill-session -t "$S" 2>/dev/null; echo "killed bare tmux session $S"; cleaned=1; }
       for f in "$DIR/$S.duplex.in" "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" \
                "$DIR/$S.duplex.sent-offset" "$DIR/$S.duplex.round-started" \
-               "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid"; do
+               "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" \
+               "$DIR/$S.terminal.json"; do
         [ -e "$f" ] && { rm -f "$f"; cleaned=1; }
       done
       if [ "$cleaned" = 1 ]; then echo "removed orphan session residue for '$S'"

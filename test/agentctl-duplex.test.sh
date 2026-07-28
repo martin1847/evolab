@@ -505,15 +505,45 @@ done
 out="$(bash "$AGENTCTL" status nwR 2>&1)"; rc=$?
 chk_eq "released gate → DONE 0" 0 "$rc"
 chk_not_contains "terminal verdict carries no watcher note" "no watcher armed" "$out"
-chk_eq "status DONE drops the terminal marker" 1 "$([ -s "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
-chk_contains "marker records rc0" '"rc":0' "$(cat "$WATCH_RUN_DIR/nwR.terminal.json" 2>/dev/null)"
-rm -f "$WATCH_RUN_DIR/nwR.terminal.json"   # watch path must drop it independently
+chk_eq "undeclared deliverable: one-shot status leaves no durable marker (F6)" 0 "$([ -e "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
 out="$(AGENT_WATCH_POLL_SECS=1 AGENT_WATCH_MAX_POLLS=6 bash "$AGENTCTL" watch nwR 2>&1)"; rc=$?
 chk_eq "watch reaches stable DONE" 0 "$rc"
-chk_eq "watch path also drops the terminal marker" 1 "$([ -s "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
+chk_eq "watch 2-stable read drops the marker even undeclared" 1 "$([ -s "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
+chk_contains "marker records rc0" '"rc": 0' "$(cat "$WATCH_RUN_DIR/nwR.terminal.json" 2>/dev/null)"
 bash "$AGENTCTL" stop nwR >/dev/null 2>&1
 chk_eq "stop removes the watcher pid file" 0 "$([ -e "$WATCH_RUN_DIR/nwR.duplex.watch.pid" ] && echo 1 || echo 0)"
 chk_eq "stop removes the terminal marker" 0 "$([ -e "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
+
+# marker lifecycle (review F1/F3): declared deliverable + quoted glob → durable, parseable, round-scoped
+bash "$AGENTCTL" start claude dmS "$WT" --goal "$declared" --deliverable 'dm-"q"-*.md' >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q '"type":"result"' "$WATCH_RUN_DIR/dmS.duplex.events.jsonl" 2>/dev/null && break; /bin/sleep 0.2; done
+: > "$WT/dm-\"q\"-1.md"
+out="$(bash "$AGENTCTL" status dmS 2>&1)"; rc=$?
+chk_eq "declared+fresh deliverable → DONE 0" 0 "$rc"
+chk_eq "declared deliverable: status persists the marker" 1 "$([ -s "$WATCH_RUN_DIR/dmS.terminal.json" ] && echo 1 || echo 0)"
+chk_eq "quoted glob still yields valid marker JSON (F3)" 0 "$(python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$WATCH_RUN_DIR/dmS.terminal.json" >/dev/null 2>&1; echo $?)"
+bash "$AGENTCTL" steer dmS -m "round two" >/dev/null 2>&1
+chk_eq "steer opens a new round and clears the marker (F1)" 0 "$([ -e "$WATCH_RUN_DIR/dmS.terminal.json" ] && echo 1 || echo 0)"
+bash "$AGENTCTL" stop dmS >/dev/null 2>&1
+
+# stale same-name marker: start claims the name and clears prior-life residue (F1)
+printf '{"rc":0,"stale":true}\n' > "$WATCH_RUN_DIR/stM.terminal.json"
+bash "$AGENTCTL" start claude stM "$WT" --goal "$declared" >/dev/null 2>&1
+chk_eq "start clears a stale same-name marker (F1)" 0 "$([ -e "$WATCH_RUN_DIR/stM.terminal.json" ] && echo 1 || echo 0)"
+bash "$AGENTCTL" stop stM >/dev/null 2>&1
+printf '{"rc":0}\n' > "$WATCH_RUN_DIR/orx.terminal.json"
+: > "$WATCH_RUN_DIR/orx.duplex.prompt"
+out="$(bash "$AGENTCTL" stop orx 2>&1)"
+chk_contains "none-branch stop sweeps residue" "orphan session residue" "$out"
+chk_eq "none-branch stop clears the marker too (F1)" 0 "$([ -e "$WATCH_RUN_DIR/orx.terminal.json" ] && echo 1 || echo 0)"
+
+# tombstone rotation must never destroy forensics on a failed append (F4)
+printf 'engine=claude\ncwd=%s\n' "$WT" > "$WATCH_RUN_DIR/fbT.duplex.meta"
+printf '{"event":"watcher-killed"}\n' > "$WATCH_RUN_DIR/fbT.watch.tombstone.jsonl"
+mkdir -p "$WATCH_RUN_DIR/fbT.watch.tombstone.jsonl.consumed"
+bash "$AGENTCTL" stop fbT >/dev/null 2>&1
+chk_eq "failed rotation keeps the tombstone (F4)" 1 "$([ -f "$WATCH_RUN_DIR/fbT.watch.tombstone.jsonl" ] && echo 1 || echo 0)"
+rm -rf "$WATCH_RUN_DIR/fbT.watch.tombstone.jsonl.consumed" "$WATCH_RUN_DIR/fbT.watch.tombstone.jsonl"
 unset FAKE_CLAUDE_GATE
 sweep_fakes; sandbox_clean
 
