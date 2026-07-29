@@ -69,6 +69,12 @@ def main():
                 or glob.glob(f"/tmp/claude-*/**/tasks/{tid}.output", recursive=True)
                 or glob.glob(f"/private/tmp/claude-*/*/*/tasks/{tid}.output")
                 or glob.glob(f"/private/tmp/claude-*/**/tasks/{tid}.output", recursive=True))
+        # Agent-type tasks: tasks/<id>.output stays a ~130B stub until completion (live-stat'd
+        # mid-run 2026-07-30; external seat n=3 same day), so its mtime == creation and the
+        # freshness check FAIL-OPENS after FRESH_S. The live instrument is the subagent
+        # transcript (mtime advances every tool turn); TaskStop's task_id IS the agent id.
+        # Bash-type tasks (KillShell) do stream into .output — keep both sources, take freshest.
+        hits += glob.glob(os.path.expanduser(f"~/.claude/projects/*/*/subagents/agent-{tid}.jsonl"))
         age = min(time.time() - os.path.getmtime(h) for h in hits) if hits else 1e9
         if age < FRESH_S:
             sys.stderr.write(
