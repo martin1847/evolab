@@ -1,6 +1,6 @@
 ---
 name: observability-standard
-version: 1.2.2
+version: 1.2.3
 description: 生产级可观测性与工程规范,适用于**所有后端服务** —— 普通微服务(auth / 网关 / 业务服务)与 agent / 多 agent / RAG 知识库项目通用。核心:用 trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点、跨进程 W3C traceparent 传播、日志级别纪律、边界类型纪律(含 id 持久化:不往业务行塞 trace_id);agent / RAG 场景在此基线上加 LLM / 工具 / 检索埋点与 GenAI 语义约定。Use this skill whenever writing or reviewing backend code that involves logging setup, OpenTelemetry tracing, structured logs, cross-process context propagation, choosing log levels (INFO vs DEBUG), correlating logs / traces / db to debug, defining types for boundary or inter-service data — and additionally agent orchestration / sub-agents, LLM / tool / retrieval calls, or GenAI semantic conventions. 适用 Python / Go / Java / Rust。Apply it even when the user only says things like "加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪",不限于显式提到规范时。目标:trace_id 串 trace/log、业务 id 反查 db,让线上问题最快定位。
 ---
 

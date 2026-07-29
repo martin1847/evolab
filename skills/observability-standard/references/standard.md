@@ -148,6 +148,7 @@
 ### §5.1 Agent 增量(在 §5.0 基线上)
 
 > 基线:OpenTelemetry GenAI conventions 当前状态为 **Development**。字段以仓库 pinned oracle 为准;仅当具体 instrumentation 仍依赖旧版迁移机制时设置 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`,不得把 `latest` 当稳定契约。
+> 事实基线(2026-07 亲验):`gen_ai.*` **零属性 Stable**(SEO 站"已稳定"说法与 spec 原文矛盾,勿信);约定 2026-06-12 整体迁仓至 `open-telemetry/semantic-conventions-genai`(旧 semconv 固定链接/codegen 失效);`gen_ai.system` 已废、现名 `gen_ai.provider.name`(主流平台仍读写旧名,接入逐属性核对);**Java 上游 GenAI instrumentation 仅 openai 一个模块**——Java 侧发 `gen_ai.*` 需自建(pin revision + 内部抽象层,字面量不散落业务代码)。
 >
 > **接入 LLM 可观测平台(Langfuse / Phoenix 等)优先走 OTLP ingestion** —— 当作一个 OTLP 后端接,不在应用代码引其 SDK(Langfuse 已支持 OTLP)。
 
