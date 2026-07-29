@@ -101,12 +101,12 @@ def main():
                 return checker_error(f"tool_input.{field} must be a string.")
         if BROWSER_RE.search(prompt) and re.search(r"mcp__chrome-?devtools", prompt, re.I):
             sys.stderr.write(
-                "DENY: browser/E2E subagent dispatched to load chrome-devtools MCP (`mcp__chrome-devtools...`). "
-                "Use Playwright MCP (`mcp__playwright__browser_*`) — it launches its OWN isolated Chromium. "
-                "chrome-devtools attaches the user's real Chrome via CDP → multi-agent + user-browser "
-                "contention → hangs (bit us twice; frontend-verify.md Playwright-first). Rewrite the ToolSearch "
-                "to `select:mcp__playwright__browser_navigate,...` and re-dispatch. (Prose mention like 'never "
-                "use chrome-devtools' is fine — this fires only on the mcp__chrome-devtools tool token.)\n"
+                "DENY: browser/E2E subagent dispatched to load chrome-devtools MCP (`mcp__chrome-devtools...`) "
+                "— it attaches the user's real Chrome via CDP; multi-agent contention hangs (bit us twice). "
+                "Fix: use Playwright MCP (its OWN isolated Chromium): rewrite the ToolSearch to "
+                "`select:mcp__playwright__browser_navigate,...` and re-dispatch. (Prose mention like 'never "
+                "use chrome-devtools' is fine — this fires only on the mcp__chrome-devtools tool token.) "
+                "Read: cto-orchestration/references/frontend-verify.md (Playwright-first).\n"
             )
             return 2
 
@@ -160,12 +160,17 @@ def main():
                 return 0
             if not BROWSER_RE.search(prompt):
                 return 0
+            # instrument correction (external-seat report 2026-07-29, 3 false-STALLED in one day):
+            # the task .output file is agent-type-dependent — for many agents it stays a stub until
+            # completion, so "output-file growth" as positive evidence manufactures false STALLED.
             msg = (
                 "[browser/long subagent launched] Its completion notification can BLACK-HOLE (a live Playwright "
                 "session / dev server / bg fork keeps it from firing — you'll blind-wait forever). DO NOW, don't "
-                "rely on the auto-notify: set a deadline-bounded background watch on POSITIVE evidence (output-file "
-                "growth / milestone SendMessage — NOT screenshot-count, a11y agents write no images); if it goes "
-                "quiet past the deadline, SendMessage to poke it, then kill+relaunch rather than wait. (cto S1.4/S7.)"
+                "rely on the auto-notify: set a deadline-bounded background watch on POSITIVE evidence — milestone "
+                "SendMessage from the agent (NOT .output growth: for many agent types it stays a stub until "
+                "completion, 3 false-STALLED field hits; NOT screenshot-count, a11y agents write no images); if it "
+                "goes quiet past the deadline, SendMessage to poke it, then kill+relaunch rather than wait. "
+                "(cto S1.4/S7.)"
             )
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": msg}}))
         except Exception:

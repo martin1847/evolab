@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # 电在回路 (shock-in-the-loop) — hard gate for meta/structure-not-discipline.md's L1 exit
-# contract (deny-with-directions): every DENY message a shipped hook can emit must point back
-# to the owning doc (a *.md reference), AND at least one referenced doc must actually exist
-# under skills/ (pointer rot = a shock with directions to nowhere). Scans SOURCE, so any
-# future DENY added without a valid pointer fails here automatically.
+# contract (deny-with-directions): every DENY message a shipped hook can emit must carry a
+# literal `Read: <path>.md` pointer that resolves as a skills-rooted PATH. The old basename
+# fallback accepted any same-named .md anywhere under skills/, so stale-directory pointers
+# and prose-only mentions passed (cold-review M2, 2026-07-29). Scans SOURCE, so any future
+# DENY added without a valid pointer fails here automatically.
 set -u
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
@@ -28,12 +29,17 @@ for node in ast.walk(tree):
     elif (isinstance(node, ast.Constant) and id(node) not in inner
           and isinstance(node.value, str) and node.value.lstrip().startswith("DENY")):
         msgs.append((node.lineno, node.value))
-def resolvable(tok):  # skill-rooted path or unique basename under skills/
+def resolvable(tok):  # skills-rooted RELATIVE path only — an absolute tok makes os.path.join
+    # DISCARD the skills prefix (light-review P1 2026-07-30), and ../ could traverse out, so
+    # reject absolute and require realpath containment under the skills root.
     tok = tok.strip(".,;)")
-    return (os.path.exists(os.path.join("..", "skills", tok))
-            or bool(g.glob(os.path.join("..", "skills", "**", os.path.basename(tok)), recursive=True)))
+    if tok.startswith("/"):
+        return False
+    root = os.path.realpath(os.path.join("..", "skills"))
+    p = os.path.realpath(os.path.join(root, tok))
+    return p.startswith(root + os.sep) and os.path.exists(p)
 bad = [str(ln) for ln, s in msgs
-       if not any(resolvable(t) for t in re.findall(r"[\w./-]+\.md", s))]
+       if not any(resolvable(t) for t in re.findall(r"Read:\s*([\w./-]+\.md)", s))]
 print(f"{len(msgs)} denies, missing/unresolvable-pointer lines: {','.join(bad) if bad else 'none'}")
 sys.exit(1 if bad or not msgs else 0)
 PY
@@ -57,11 +63,36 @@ import sys
 def main(x):
     sys.stderr.write(f"DENY: thing {x} refused. Do the other thing. Read: agent-mail/SKILL.md.\n")
 EOF
+cat > "$FIX/staledir.py" <<'EOF'
+import sys
+def main(x):
+    # needle split in SOURCE so the repo-wide stale-path gate never matches this fixture;
+    # the AST scanner joins adjacent literals, so the scanner still sees the full stale path
+    sys.stderr.write(f"DENY: thing {x} refused. Read: cto-orchestration/references/agent-" "watch/README.md.\n")
+EOF
+cat > "$FIX/prose.py" <<'EOF'
+import sys
+def main(x):
+    sys.stderr.write(f"DENY: thing {x} refused (frontend-verify.md mentioned in prose, no Read pointer).\n")
+EOF
 out="$(scan "$FIX/bad.py")"; rc=$?
 chk_eq "scanner flags pointer-less DENY" 1 "$rc"
 chk_contains "scanner names the offending line" "pointer lines: 3" "$out"
 out="$(scan "$FIX/rotten.py")"; rc=$?
 chk_eq "scanner flags rotten pointer (target missing)" 1 "$rc"
+# absolute pointer to an EXISTING file outside skills/ — join discards the prefix, must not pass
+touch "$FIX/target.md"
+cat > "$FIX/abs.py" <<EOF
+import sys
+def main(x):
+    sys.stderr.write(f"DENY: thing {x} refused. Read: $FIX/target.md.\n")
+EOF
+out="$(scan "$FIX/staledir.py")"; rc=$?
+chk_eq "scanner flags stale-directory pointer (basename exists elsewhere)" 1 "$rc"
+out="$(scan "$FIX/abs.py")"; rc=$?
+chk_eq "scanner flags absolute pointer outside skills root" 1 "$rc"
+out="$(scan "$FIX/prose.py")"; rc=$?
+chk_eq "scanner flags prose-only .md mention without Read:" 1 "$rc"
 out="$(scan "$FIX/good.py")"; rc=$?
 chk_eq "scanner passes resolvable DENY" 0 "$rc"
 rm -rf "$FIX"
