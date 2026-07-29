@@ -94,12 +94,20 @@ chk_contains "runtime persists workflow" "workflow=%s" "$agentctl_body"
 chk_contains "runtime persists max rounds" "max_rounds=%s" "$agentctl_body"
 chk_contains "runtime owns budget exhausted" "BUDGET-EXHAUSTED" "$duplexctl_body"
 
-# rename completeness: the retired directory path must not survive anywhere in the shipped
-# tree — a path-list grep missed a tracked consumer in examples/ after the agentctl rename
-# (cold-review field hit 2026-07-29). Runtime contract names (AGENT_WATCH_*, /tmp run dir)
-# are NOT paths and stay. Needle is split so this test never matches its own source.
+# rename completeness: the retired directory path must not survive in any TRACKED file —
+# a path-list grep missed a tracked consumer outside the listed dirs after the agentctl
+# rename (cold-review field hit 2026-07-29; that derivative doc is since deleted). Tracked-only
+# via git grep so another seat's untracked WIP never trips it; NO pathspec list — a pathspec
+# that stops existing makes git grep fatal and the gate silently green. fs-grep fallback
+# covers git-less archive/installed copies. Runtime contract names (AGENT_WATCH_*, /tmp run
+# dir) are NOT paths and stay. Needle is split so this test never matches its own source;
+# the git path excludes this file explicitly instead.
 old_dir="references/agent-""watch"
-stale="$(grep -rlF "$old_dir" ../skills ../examples ../meta ../templates ../README.md ../.claude-plugin ../test 2>/dev/null | grep -v __pycache__ || true)"
+if git -C .. rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  stale="$(git -C .. grep -lF "$old_dir" -- ':(exclude)test/cto-docs-contract.test.sh' 2>/dev/null || true)"
+else
+  stale="$(grep -rlF "$old_dir" ../skills ../meta ../templates ../README.md ../.claude-plugin ../test 2>/dev/null | grep -v __pycache__ || true)"
+fi
 chk_eq "no tracked consumer of the retired $old_dir path" "" "$stale"
 
 summary
