@@ -45,6 +45,15 @@ pre-push 可被 `--no-verify` 绕过，本质是**快速反馈层**（write-time
 CI 复跑同一脚本才构成真门（硬层归 IaC / required CI，与附录 C「本地 hook 不冒充
 required CI」同款双层）。
 
+## 门的适用性纪律（绿 ≠ 门跑过）
+
+CI 的 workflow 定义取自 **PR head commit**：head 早于某道门落地的 PR，其 CI 里该门
+**根本不存在**——「全绿」对该门零证据力，`rerun` 也无效（复用旧定义）。下游实证
+（2026-07-29）：门落地当天 5 个 open PR 全绿，ancestry 核查后 2 个一道新门都没跑过。
+机械判据（可下沉进合并政策）：`git merge-base --is-ancestor <门合入 commit> <PR head>`，
+非 ancestor ⇒ rebase 后门才第一次真跑。同族条目：「绿因为零覆盖」讲规则空转，
+本条讲**运行本身没发生**——门落地日必须清点存量 open PR 的盲区。
+
 ## 负探针台账
 
 每关落地时同车交付负探针配方（怎么让它红、红完怎么恢复），登记进该仓 AGENTS.md

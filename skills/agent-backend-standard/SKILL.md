@@ -1,6 +1,6 @@
 ---
 name: agent-backend-standard
-version: 1.3.0
+version: 1.4.0
 description: "生产级 agent 时代后端工程手册(hub)——建 / 评审 agent·LLM 后端、**任何碰 DB 的持久层后端**、或为任何后端建立 / 评审 repo 工程门禁时加载。覆盖:架构与控制流、上下文与 prompt 工程、工具设计(ACI)、记忆与状态、检索/RAG、韧性与幂等、人在环、安全护栏与生成操作的有界执行、评估、可观测与成本、代码/依赖生命周期与反死代码、**数据访问纪律(连接·读·写事务)**、**缓存纪律(准入·失效治理)**、**秘密接触面纪律(分离·deny·金丝雀)**、Python/Go/Java/Rust 统一 `fix/check/test` 工程接口与门禁、规范治理。本文件是目录,深度按需读 references/。可观测性/Git/A2A 对外契约是独立 skill,本 hub 交叉引用不重复。Use when building or reviewing agent/LLM backend code, ANY backend touching a database, or establishing/reviewing repository engineering gates for a backend: architecture, prompts, tools, memory, RAG, resilience, HITL, safety and bounded execution, eval, cost, code/dependency lifecycle, data access, and the Python/Go/Java/Rust fix/check/test gate interface."
 ---
 
@@ -13,12 +13,12 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 > *TBD* 章 = 已占位、待真实素材再写实(不空写通用建议)。
 
 ## Book I — Foundations
-- **I-1 何时该建 agent** —— simplicity-first;能确定性 / 工作流解决就别上 agent。*TBD*
-- **I-2 架构与控制流** —— augmented-LLM 基元、workflow 模式(chaining/routing/parallel/orchestrator-workers/evaluator)、单 vs 多 agent。*TBD*
+- **I-1 何时该建 agent** → `references/agent-foundations.md` —— simplicity-first 升级路径(单调用→augmented→工作流→agent 循环,实测不够才升);已知步骤用真控制流;停止条件量化不了就别建。
+- **I-2 架构与控制流** → `references/agent-foundations.md` —— 五工作流基元(chaining/routing/parallel/orchestrator-workers/evaluator)、循环四分类(turn/goal/time/proactive)、单 vs 多 agent(artifact handoff 不对话)、上下文工程四处方(just-in-time/compaction/note-taking/sub-agent)。
 
 ## Book II — Engineering Concerns
 - **II-3 上下文与 prompt 工程** → `references/prompt-context.md` —— 含 **prompt 内容生命周期**(写死值绑 eval、模型耦合打 `REVISIT-WHEN`)。
-- **II-4 工具 / 函数设计(ACI)** —— 整合/命名空间/返回上下文/token 效率。*TBD*(交叉引 A2A 对外契约规范)
+- **II-4 工具 / 函数设计(ACI)** → `references/tool-design.md` —— 质量定义="只拿工具能答多跳真问题";描述/示例杠杆大于实现(Tool Search 49→74%、Examples 72→90%);命名空间/token 效率(response_format、~25k 上限、中间结果不过模型可省 98%)/错误为 LLM 而写;有状态 handle 四约束(MCP 2026-07-28)。(交叉引 A2A 对外契约规范)
 - **II-5 记忆 / 状态 / 持久** → `references/state-durability.md` —— workflow 首次 runnable / 首个副作用前原子固化 immutable effective-config snapshot(`snapshot_id` + digest);step / resume / recovery 只读该 snapshot,缺失 / 损坏 / digest mismatch fail-closed。
 - **II-6 检索 / RAG / grounding** —— chunking、faithfulness、向量弱点。*TBD*
 - **II-7 韧性 / 错误 / 幂等** → `references/resilience.md` —— 每个外部/LLM/工具调用:超时 + 有界重试 + 幂等 + 熔断 + 池/并发;**事件循环不阻塞**(async 运行时承重条,五层门禁:lint→测试期检测→staging 阈值→生产 lag 遥测→部署断言)。
@@ -26,7 +26,7 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 - **II-9 安全 · 护栏 · 生成操作的有界执行** → `references/safety-bounded-execution.md` —— 执行不可信生成操作(尤 SQL)的硬边界、安全分层、workflow 迭代上限。
 
 ## Book III — Operations & Governance
-- **III-10 评估与测试** —— offline/online、LLM-as-judge、eval 驱动选型。*TBD*
+- **III-10 评估与测试** → `references/evals.md` —— 从 20-50 真实失败起步/两专家同判=好任务/grade outputs not paths;**pass^k 非 pass@k**、<3pp 差距不当能力差;judge 用 Kappa 校准+多 judge 一致门+Unknown 逃生口;威胁模型=被测物会作弊(reward hacking);MCP server eval 形态(10 多跳问题+字符串比对)。
 - **III-11 可观测与成本 / 时延** → `references/observability-cost.md` —— 薄:成本/token/时延预算;埋点本体交叉引 `observability-standard`,不重复。
 - **III-12 规范治理** → `references/governance.md` —— 例外/偏离、owner、手册如何演化。
 
