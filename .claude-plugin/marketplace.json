@@ -68,6 +68,14 @@
         "."
       ],
       "description": "agent 时代后端工程手册（hub）：架构与控制流、上下文/prompt 工程、工具设计（ACI）、记忆与检索、持久层纪律，加 repo-owned engineering gate 四语言稳定接口与组件 lifecycle/ratchet 收口契约。"
+    },
+    {
+      "name": "agent-frontend-standard",
+      "source": "./skills/agent-frontend-standard",
+      "skills": [
+        "."
+      ],
+      "description": "agent 时代前端工程手册：设计系统即契约（token 语义/受限组件词表/lint 硬门）、类型端到端契约、视觉验证环（a11y 树优先+截图双轨）、前端测试分时门禁与 gotcha 库；能下沉 lint/CI 的绝不写散文。"
     }
   ]
 }
