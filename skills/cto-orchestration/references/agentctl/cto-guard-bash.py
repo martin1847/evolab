@@ -105,7 +105,7 @@ def main():
             "DENY: shell `&` backgrounding -> ORPHAN (no completion callback; wrapper falsely reports "
             "done). Fix: drop the `&`, use Bash run_in_background:true; a data `&` (URLs) must be "
             "quoted. `&&` and `2>&1`-style redirects pass. "
-            "Read: cto-orchestration/references/agent-watch/README.md §typed 状态.\n"
+            "Read: cto-orchestration/references/agentctl/README.md §typed 状态.\n"
         )
         return 2
 
@@ -124,7 +124,7 @@ def main():
             "DENY: 'idle==done' poller — idle≠done (staged tasks idle at every commit boundary). "
             "Fix: add a POSITIVE check: git deliverable (`git diff --stat` / `git log ..HEAD`) for "
             "completion, or a pane grep for Verdict/prompt for reviews. "
-            "Read: cto-orchestration/references/agent-watch/README.md §判完成要正向证据.\n"
+            "Read: cto-orchestration/references/agentctl/README.md §判完成要正向证据.\n"
         )
         return 2
 
@@ -153,7 +153,7 @@ def main():
                 "Enter; ~70-80% delivery). Fix: steer by protocol: `agentctl steer <session> -m \"…\"` "
                 "(or -f <file>) delivers a native frame mid-turn. Control-key / short-ASCII sends on a "
                 "manually attached session pass. "
-                "Read: cto-orchestration/references/agent-watch/README.md (裸 send-keys 坑枚举).\n"
+                "Read: cto-orchestration/references/agentctl/README.md (裸 send-keys 坑枚举).\n"
             )
             return 2
 
@@ -312,7 +312,7 @@ def main():
                 "NOT resend the same text): prefix each call `git -C /abs/<repo>` / `gh -R "
                 "<owner>/<repo>`, or lead the line with `cd /abs/<repo> && …`. Repo-insensitive "
                 "forms (git --version, gh auth/api …) pass. "
-                "Read: cto-orchestration/references/agent-watch/README.md §cwd 锚定.\n"
+                "Read: cto-orchestration/references/agentctl/README.md §cwd 锚定.\n"
             )
             return 2
 
@@ -363,7 +363,7 @@ def main():
                     "untracked files and VERIFY the salvage in its own command, then ask. Already "
                     "approved? `touch /tmp/cto-allow-worktree-destroy` (one-shot, consumed on use) "
                     "and re-run. Non-force remove of a clean tree passes (standing grant). "
-                    "Read: cto-orchestration/references/agent-watch/README.md §强制层 ⑦.\n"
+                    "Read: cto-orchestration/references/agentctl/README.md §强制层 ⑦.\n"
                 )
                 return 2
         else:
@@ -419,7 +419,7 @@ def main():
                 "the Bash timeout (default 2min) kills it mid-watch (exit 143). Fix: re-run with "
                 "run_in_background:true; deliberately-synchronous shell orchestrators prefix "
                 "AGENT_WATCH_SYNC=1. "
-                "Read: cto-orchestration/references/agent-watch/README.md §Launch.\n"
+                "Read: cto-orchestration/references/agentctl/README.md §Launch.\n"
             )
             return 2
 

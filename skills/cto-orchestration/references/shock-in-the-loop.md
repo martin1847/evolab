@@ -61,5 +61,5 @@
 DENY: Agent dispatch missing explicit model tier.
 Why: 2026-07-10 长上下文评审派发默认档打满 quota（实证）。          ← why+日期
 Fix: 重派并显式钉档：Agent(..., model: "opus"|"haiku")。            ← 正路命令
-Read: cto-orchestration/references/agent-watch/README.md §P0c        ← owning-doc 指针
+Read: cto-orchestration/references/agentctl/README.md §P0c        ← owning-doc 指针
 ```

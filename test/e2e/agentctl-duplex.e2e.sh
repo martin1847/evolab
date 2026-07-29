@@ -16,7 +16,7 @@ cd "$(dirname "$0")"
 . ../lib-testkit.sh   # assertion helpers only
 
 REPO_ROOT="$(cd ../.. && pwd)"
-AW="$REPO_ROOT/skills/cto-orchestration/references/agent-watch"
+AW="$REPO_ROOT/skills/cto-orchestration/references/agentctl"
 AGENTCTL="$AW/agentctl"
 
 echo "== agentctl-duplex.e2e (omp + claude duplex legs; uses API tokens) =="

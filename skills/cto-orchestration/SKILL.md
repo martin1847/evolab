@@ -26,7 +26,7 @@ metadata:
 | 执行 agent | 按 goal 实现、自测、E2E、交付；不扩 scope；须可观测且可轮间 resume | omp / Claude Code |
 | 评审 agent | 冷上下文只读挑刺，给 evidence + severity + verdict；不改码 | codex / 不同 lineage 模型 |
 | 运维 agent | 对不可达环境只读取证与部署后验证；不顺手修复 | 用户转交提示词 |
-| watcher | 返回 typed 状态；不把 idle 或沉默解释成完成 | `references/agent-watch/` |
+| watcher | 返回 typed 状态；不把 idle 或沉默解释成完成 | `references/agentctl/` |
 
 默认用 omp 执行、codex 评审，但**工具名不证明异构**；派工前看实际 model/backend，避免执行席与评审席落到同一 lineage 或 quota 池。
 
@@ -42,7 +42,7 @@ duplex 协议（omp rpc / claude stream-json / codex app-server），能力差�
 另有 **Agent subagent**（浏览器 / MCP / 隔离主上下文的读密集工作：独立上下文、只回蒸馏结论、显式按任务分档 model）。
 TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 控制始终走协议。
 
-文件任务必须声明 `--deliverable <glob>`（相对 glob 按会话 cwd 解析），让 runtime 做 freshness gate；非文件结果不带。lane 的完整限制、状态与命令见 `references/agent-watch/README.md`。
+文件任务必须声明 `--deliverable <glob>`（相对 glob 按会话 cwd 解析），让 runtime 做 freshness gate；非文件结果不带。lane 的完整限制、状态与命令见 `references/agentctl/README.md`。
 
 ## 1. 每次派工闭环
 
@@ -51,13 +51,13 @@ TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 
 3. **派发并挂 watcher**：
 
    ```bash
-   references/agent-watch/agentctl start <omp|codex|claude> <session> <cwd> --goal <abs-goal-or-brief> [--deliverable <glob>]
+   references/agentctl/agentctl start <omp|codex|claude> <session> <cwd> --goal <abs-goal-or-brief> [--deliverable <glob>]
    ```
 
-   `start` 在 goal 帧被接受后立即返回，**不会自动 watch**；紧接着用宿主的受控后台能力运行 `agentctl watch <session>`。先接线 `references/agent-watch/guard-hooks.json`；guard 负责高频机械失误，主干不复制其规则表。
+   `start` 在 goal 帧被接受后立即返回，**不会自动 watch**；紧接着用宿主的受控后台能力运行 `agentctl watch <session>`。先接线 `references/agentctl/guard-hooks.json`；guard 负责高频机械失误，主干不复制其规则表。
 
    理解门：runtime footer 要求简短复述后立即开工，真阻塞写 `<cwd>/BLOCKED.md` 并停止（三引擎同协议）。
-4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；完整状态表见 agent-watch README。
+4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；完整状态表见 agentctl README。
 5. **steering 走 `agentctl steer`**：语义按 §0 引擎能力表——默认排队/下一轮，`--now` mid-turn，
    `--replace` 弃当前重来；不支持的组合由接口当场拒绝并指正路。投递成功 ≠ 模型照做，验收仍看交付物。
    每个后续 turn 都重新挂 `agentctl watch`。
@@ -107,7 +107,7 @@ TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 
 | 前端真实验证、状态形状矩阵、浏览器委派 | `references/frontend-verify.md` |
 | 评审 brief、ledger、收敛 | `references/review-dispatch.md` |
 | 基线与收工四件套 | `references/dispatch-baseline.md` |
-| agentctl 命令面、duplex 机制、steering、guard wiring | `references/agent-watch/README.md` |
+| agentctl 命令面、duplex 机制、steering、guard wiring | `references/agentctl/README.md` |
 | 电在回路：承重规则下沉强制层、DENY 三件套、下沉判据 | `references/shock-in-the-loop.md` |
 | 主理人决策队列 | `references/decision-queue.md` |
 | 项目 AGENTS.md 编排增量 | `references/agents-md-orchestration-section.md` |

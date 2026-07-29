@@ -130,7 +130,7 @@ if [ -d "$AWDIR" ] && [ -n "$TOP" ]; then
   if [ "$dead" -gt 0 ]; then fail "$dead 本仓终态会话未清 — agentctl stop 收口（引擎进程与控制态在泄漏）"
   else ok "no terminal-but-uncleaned session for this repo"; fi
   [ "$live" -gt 0 ] && warn "$live live/unknown session(s) of this repo still registered:$livenames — 逐个确认是有意长跑，其余 stop"
-else echo "  [skip] no agent-watch run dir / not a git repo"; fi
+else echo "  [skip] no agentctl run dir / not a git repo"; fi
 
 echo "== result: $fails FAIL, $warns warn =="
 [ "$fails" -eq 0 ]

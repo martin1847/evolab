@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared test kit for the agent-watch suite. Sourced by each *.test.sh.
+# Shared test kit for the agentctl suite. Sourced by each *.test.sh.
 # Provides: hermetic temp sandbox (own AGENT_WATCH_DIR + temp PATH bin with fake
 # tmux/sleep), fixture seeding helpers, and PASS/FAIL assertion accounting.
 #
@@ -15,10 +15,10 @@ set -u
 # Tests that assert exec routing set the switch INLINE per invocation.
 unset AGENT_WATCH_SYNC 2>/dev/null || true
 
-# Resolve the agent-watch dir. test/ lives at the repo root; the scripts under
-# test live under skills/cto-orchestration/references/agent-watch/.
+# Resolve the agentctl dir. test/ lives at the repo root; the scripts under
+# test live under skills/cto-orchestration/references/agentctl/.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AW_DIR="$REPO_ROOT/skills/cto-orchestration/references/agent-watch"
+AW_DIR="$REPO_ROOT/skills/cto-orchestration/references/agentctl"
 AGENTCTL="$AW_DIR/agentctl"
 
 PASS=0

@@ -80,7 +80,7 @@ def main():
                 "agent confirms stuck / BROWSER-UNAVAILABLE, or you hold positive evidence the dispatch "
                 "premise is wrong (bad cwd/goal) so its liveness is beside the point: "
                 f"`touch /tmp/cto-allow-kill-{tid}` then re-run TaskStop. "
-                "Read: cto-orchestration/references/agent-watch/README.md (完成通知黑洞).\n"
+                "Read: cto-orchestration/references/agentctl/README.md (完成通知黑洞).\n"
             )
             return 2
         return 0

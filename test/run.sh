@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runner for the agent-watch test suite. Runs every *.test.sh (bash) + the bun TS
+# Runner for the agentctl test suite. Runs every *.test.sh (bash) + the bun TS
 # test (SKIP if bun absent), prints per-test PASS/FAIL, exits non-zero if any fail.
 # Hermetic: each test creates its own temp AGENT_WATCH_DIR + temp PATH bin and cleans up.
 set -u
@@ -24,7 +24,7 @@ run_one() { # $1 label  $2... command
   fi
 }
 
-echo "######## agent-watch test suite ########"
+echo "######## agentctl test suite ########"
 
 # Auto-discover: every test/*.test.sh runs — a hardcoded list here silently skips
 # new suites (bitten 2026-07-10: two new files, SUMMARY still green at old count).

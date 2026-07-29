@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# guard-wire.e2e.sh — LIVE closed-loop for the agent-watch enforcement layer.
+# guard-wire.e2e.sh — LIVE closed-loop for the agentctl enforcement layer.
 # Proves the REAL delivery path, not just script logic: a fresh headless `claude` session,
 # with cto-guard wired via project .claude/settings.json, actually DENIES a trailing-`&`
 # Bash command (PreToolUse exit-2 path shown to the agent; command never runs).
@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 . ../lib-testkit.sh   # assertion helpers only; no sandbox needed
 
 REPO_ROOT="$(cd ../.. && pwd)"
-BASH_GUARD="$REPO_ROOT/skills/cto-orchestration/references/agent-watch/cto-guard-bash.py"
+BASH_GUARD="$REPO_ROOT/skills/cto-orchestration/references/agentctl/cto-guard-bash.py"
 
 echo "== guard-wire.e2e (live claude session; ~1min, uses API tokens) =="
 [ -x "$BASH_GUARD" ] || { echo "  FAIL guard script missing/not executable: $BASH_GUARD"; exit 1; }

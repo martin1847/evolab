@@ -8,7 +8,7 @@ set -u
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
 
-GUARD="../skills/cto-orchestration/references/agent-watch/cto-guard-agent.py"
+GUARD="../skills/cto-orchestration/references/agentctl/cto-guard-agent.py"
 
 echo "== cto-guard-agent.py =="
 

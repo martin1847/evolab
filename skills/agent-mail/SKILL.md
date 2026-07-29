@@ -19,7 +19,7 @@ description: 多编排者/长期 agent 身份之间的异步信箱总线——�
 ## 数据目录（总线）
 
 ```
-$AGENT_MAIL_DIR/            # 默认 ~/.agents/mail（持久数据留 $HOME；agent-watch 运行态已迁 /tmp/agent-watch-run）
+$AGENT_MAIL_DIR/            # 默认 ~/.agents/mail（持久数据留 $HOME；agentctl 运行态已迁 /tmp/agent-watch-run）
   registry.md               # 名册：id → 工作目录 → 职责（agentmail register 维护）
   <agent-id>/inbox/         # 发给"我"的信
   <agent-id>/archive/       # "我"处理完移进来

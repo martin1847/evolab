@@ -67,8 +67,8 @@ chk_eq "scanner passes resolvable DENY" 0 "$rc"
 rm -rf "$FIX"
 
 # the shipped guards
-for f in ../skills/cto-orchestration/references/agent-watch/cto-guard-bash.py \
-         ../skills/cto-orchestration/references/agent-watch/cto-guard-agent.py \
+for f in ../skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
+         ../skills/cto-orchestration/references/agentctl/cto-guard-agent.py \
          ../skills/agent-mail/mail-guard.py; do
   out="$(scan "$f")"; rc=$?
   chk_eq "$(basename "$f"): every DENY carries a resolvable doc pointer" 0 "$rc"

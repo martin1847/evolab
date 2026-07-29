@@ -6,7 +6,7 @@ set -u
 cd "$(dirname "$0")"
 . ./lib-testkit.sh
 
-GUARD="../skills/cto-orchestration/references/agent-watch/cto-guard-bash.py"
+GUARD="../skills/cto-orchestration/references/agentctl/cto-guard-bash.py"
 
 echo "== cto-guard-bash.py =="
 
@@ -70,7 +70,7 @@ run 'tmux send-keys -t s1 Escape'
 chk_eq "send-keys control key allowed" 0 "$RC"
 run 'tmux send-keys -t s1 "read /tmp/goal.md" Enter'
 chk_eq "send-keys short ASCII allowed" 0 "$RC"
-run 'bash references/agent-watch/agentctl steer s1 -m "长中文放行指令：按评审意见回修①②"'
+run 'bash references/agentctl/agentctl steer s1 -m "长中文放行指令：按评审意见回修①②"'
 chk_eq "agentctl steer safe path allowed" 0 "$RC"
 
 # Heredoc bodies are safe to ignore only when Bash disables expansion by quoting the delimiter.
@@ -103,29 +103,29 @@ ctx() { printf '%s' "$1" | python3 -c 'import sys,json
 try: d=json.load(sys.stdin)
 except Exception: print(""); sys.exit()
 print(d.get("hookSpecificOutput",{}).get("additionalContext",""))'; }
-run 'bash references/agent-watch/agentctl start omp mysess /wt --goal /tmp/g.md'
+run 'bash references/agentctl/agentctl start omp mysess /wt --goal /tmp/g.md'
 chk_eq "start w/o watch exit 0" 0 "$RC"
 chk_contains "start w/o watch reminds arm watcher" "watcher" "$(ctx "$OUT")"
 chk_contains "reminder names the session" "mysess" "$(ctx "$OUT")"
 # start WITH watch on the same session, BACKGROUNDED -> silent (no double-nag)
-run 'agentctl start omp mysess /wt --goal /tmp/g.md && bash references/agent-watch/agentctl watch mysess' 1
+run 'agentctl start omp mysess /wt --goal /tmp/g.md && bash references/agentctl/agentctl watch mysess' 1
 chk_eq "start + watch same cmd (bg) exit 0" 0 "$RC"; chk_eq "start + watch silent" "" "$OUT"
 
 # (5) blocking `agentctl watch` in the FOREGROUND -> DENY (killed at Bash timeout, exit 143)
-run 'agentctl steer mysess -f /tmp/fix.md && bash references/agent-watch/agentctl watch mysess'
+run 'agentctl steer mysess -f /tmp/fix.md && bash references/agentctl/agentctl watch mysess'
 chk_eq "chained foreground watch denied (field case)" 2 "$RC"; chk_contains "foreground deny names 143" "143" "$ERR"
-run 'AGENT_WATCH_POLL_SECS=5 bash references/agent-watch/agentctl watch mysess'
+run 'AGENT_WATCH_POLL_SECS=5 bash references/agentctl/agentctl watch mysess'
 chk_eq "env-prefixed foreground watch denied" 2 "$RC"
 # explicit sync opt-out for shell orchestrators that run watch synchronously by design
-run 'AGENT_WATCH_SYNC=1 bash references/agent-watch/agentctl watch mysess; rc=$?'
+run 'AGENT_WATCH_SYNC=1 bash references/agentctl/agentctl watch mysess; rc=$?'
 chk_eq "AGENT_WATCH_SYNC=1 foreground allowed" 0 "$RC"
 # start returns after the goal frame is accepted -> foreground is fine
-run 'bash references/agent-watch/agentctl start omp mysess /wt --goal /tmp/g.md'
+run 'bash references/agentctl/agentctl start omp mysess /wt --goal /tmp/g.md'
 chk_eq "start --goal foreground allowed (returns immediately)" 0 "$RC"
 # path as an ARGUMENT is not an invocation (self-inflicted false positives, 2026-07-11)
-run 'grep -n foo references/agent-watch/agentctl references/agent-watch/duplexctl.py'
+run 'grep -n foo references/agentctl/agentctl references/agentctl/duplexctl.py'
 chk_eq "agentctl path as grep arg allowed" 0 "$RC"
-run 'grep -n x agent-watch/duplexctl.py agent-watch/agentctl'
+run 'grep -n x agentctl/duplexctl.py agentctl/agentctl'
 chk_eq "arg after .py arg allowed (suffix trap)" 0 "$RC"
 run 'agentctl status mysess'
 chk_eq "one-shot status foreground allowed" 0 "$RC"
@@ -153,9 +153,9 @@ chk_eq "quoted-data forged marker does not bypass" 2 "$RC"
 run "AGENT_WATCH_SYNC=1 bash -lc 'agentctl watch mysess'"
 chk_eq "unquoted prefix marker on wrapped call allowed" 0 "$RC"
 # rule 3 pairing must be a command-position invocation, not prose/echo
-run 'bash references/agent-watch/agentctl start omp mysess /wt --goal /tmp/g.md; echo watch mysess'
+run 'bash references/agentctl/agentctl start omp mysess /wt --goal /tmp/g.md; echo watch mysess'
 chk_contains "prose watch does not silence the reminder" "watcher" "$(ctx "$OUT")"
-run 'bash references/agent-watch/agentctl start omp mysess /wt --goal /tmp/g.md; echo agentctl watch mysess'
+run 'bash references/agentctl/agentctl start omp mysess /wt --goal /tmp/g.md; echo agentctl watch mysess'
 chk_contains "echoed invocation text does not silence the reminder" "watcher" "$(ctx "$OUT")"
 # ── (6) live e2e gates: premium orchestrator must dispatch, runner declares E2E_ECONOMY=1 ──
 run 'bash test/e2e/guard-wire.e2e.sh'

@@ -10,7 +10,7 @@
    与 goal 合同纵深防御）+ ②编排者行为内核（角色绑定必并；纪律 bullets **按该文件头部的三层分工
    条件并入**——编排者个人全局配置已有同款则只留角色绑定，防两层复制漂移）。
 3. **wire 强制层 hooks**：`cto-guard-bash.py` + `cto-guard-agent.py` 两条 entry 并进 bootstrap §11 已建的
-   settings.json（路径用**绝对路径**——hooks 不展开 `~`；entry 真源 `references/agent-watch/guard-hooks.json`——读它、
+   settings.json（路径用**绝对路径**——hooks 不展开 `~`；entry 真源 `references/agentctl/guard-hooks.json`——读它、
    command 换安装根绝对路径后 merge，别抄散文；细节 README §Wiring）；接完各喂一条合成 payload **验真触发**（尾随 `&` 应 deny、browser 派发应出提醒），别只信"配了"。
    （多编排者场景装了 `agent-mail` 的，其席位注册 + 收信 hook 由该 skill 自己的「接入」节自包含，不在本清单。）
 4. 建 `docs/orchestration/` + `docs/orchestration/archive/` 目录（生命周期见 SKILL §5）。
