@@ -100,6 +100,21 @@ run PreToolUse TaskStop '{"task_id":"zz-ghost-task-000"}'
 chk_eq "unknown task allows (no transcript found)" 0 "$RC"
 rm -rf /tmp/claude-zztest
 
+# jsonl source (Agent-type tasks): tasks/<id>.output is a completion-time stub, liveness lives in
+# the subagent transcript — a fresh agent-<tid>.jsonl ALONE (no tasks/*.output anywhere) must DENY.
+# HOME is overridden so the guard's ~/.claude glob resolves into the fixture, keeping this hermetic.
+JID="zzjsonltest$$"
+JH="/tmp/claude-zztest-home"; mkdir -p "$JH/.claude/projects/p/s/subagents"
+touch "$JH/.claude/projects/p/s/subagents/agent-$JID.jsonl"
+tmpe="$(mktemp)"
+OUT="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TaskStop\",\"tool_input\":{\"task_id\":\"$JID\"}}" | HOME="$JH" python3 "$GUARD" 2>"$tmpe")"; RC=$?
+ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "fresh subagent jsonl alone denies kill" 2 "$RC"; chk_contains "jsonl deny says ALIVE" "ALIVE" "$ERR"
+touch -t 202601010000 "$JH/.claude/projects/p/s/subagents/agent-$JID.jsonl"
+OUT="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TaskStop\",\"tool_input\":{\"task_id\":\"$JID\"}}" | HOME="$JH" python3 "$GUARD" 2>/dev/null)"; RC=$?
+chk_eq "stale jsonl allows kill" 0 "$RC"
+rm -rf "$JH"
+
 # ── degenerate ──
 tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"
