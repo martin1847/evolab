@@ -52,6 +52,10 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - [ ] <可验证后置条件 + **证明命令与预期输出**（如 "`npm test` exits 0"）——写成只看输出即可机械判
   pass/fail 的形态（两个评审独立判得同一结论；harness 原生完成判定器如 Claude Code `/goal` 可直接消费这种条件）>
 - [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立，E2E 范围匹配声明范围。
+- [ ] 凡含「部署/配置生效后重测」步骤：先写**生效前置确认**（命令 + 期望值）再测；测量探针打在
+  **运行时真源**上（DB 行 / 活进程 / 线上 endpoint），不拿构建 SHA、镜像 tag 等**代理指标**下
+  生效结论（实证 ×2 同日：代理指标看不见真源、误判"旧配置"打断了正确的 worker；没写前置确认，
+  worker 就自己发明等待、对早已完成的部署空转半小时）。
 - 普通非 review-loop 长跑可按需写时长 / 成本预算；耗尽仍未达成 = 保持任务 active + STOP and report。
   review-loop 的轮数预算只由 runtime `--max-rounds`（会话 meta）强制，本 GOAL 不复制轮数。
 - 鉴权/会话/用户数据相关改动：验证须覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 / 未登录），
@@ -64,6 +68,10 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - 禁止删 / 改 / 跳过测试、断言或 grader，禁止压制错误顶替修 root cause——测试集对执行者只读
   （成功标准"红→绿"最易被 game）。
 - 旗标门控：<flag 名，默认 ON/OFF + 理由>。
+- **等待配方**（goal 涉及长耗时外部作业时写明，缺则 worker 自己发明一个）：禁止阻塞 sleep >60s；
+  改短轮询，每次醒来做一次**有判据的检查**（命令 + 达成条件），连续 N 次未达成 → STOP and
+  report（实证 ×2：两个 worker 各自发明 900/1500s 阻塞 sleep，顶穿 watcher 窗口 → 成串假
+  TIMEOUT，其一纯空转）。
 - **动手前理解门**：复述 / 立即开工 / BLOCKED 协议由 runtime 在每次 goal 投递时固定追加，本 GOAL 不复制（高风险任务升级为先交 mini-plan：goal 里显式要求先产出 plan 文件再动手）。
 - **存疑协议**：goal 没写明的事项标 `NEEDS-CLARIFICATION: <具体问题>` 停下问，**禁止合理化猜测**
   （猜而不问是 goal 执行最常见的静默失败）；需要超 scope 改动、或同一路径连败两次：STOP and
