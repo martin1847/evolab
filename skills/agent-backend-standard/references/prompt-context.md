@@ -1,6 +1,6 @@
 # II-3 — 上下文与 prompt 工程
 
-> hub `agent-backend-standard` 的一章。当前只写实 **prompt 内容生命周期**(有真实素材);上下文工程四处方(just-in-time/compaction/note-taking/sub-agent)已写实于 `references/agent-foundations.md`(I-2);本章待扩的 prompt 层(右高度 system prompt、context 作有限资源)*TBD*。
+> hub `agent-backend-standard` 的一章。当前只写实 **prompt 内容生命周期**(有真实素材);上下文工程四处方(just-in-time/compaction/note-taking/sub-agent)已写实于 I-2 合章(经 SKILL.md 目录进入);本章待扩的 prompt 层(右高度 system prompt、context 作有限资源)*TBD*。
 
 ## 1. prompt 内容生命周期(MUST)
 
