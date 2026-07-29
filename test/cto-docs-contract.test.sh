@@ -94,4 +94,12 @@ chk_contains "runtime persists workflow" "workflow=%s" "$agentctl_body"
 chk_contains "runtime persists max rounds" "max_rounds=%s" "$agentctl_body"
 chk_contains "runtime owns budget exhausted" "BUDGET-EXHAUSTED" "$duplexctl_body"
 
+# rename completeness: the retired directory path must not survive anywhere in the shipped
+# tree — a path-list grep missed a tracked consumer in examples/ after the agentctl rename
+# (cold-review field hit 2026-07-29). Runtime contract names (AGENT_WATCH_*, /tmp run dir)
+# are NOT paths and stay. Needle is split so this test never matches its own source.
+old_dir="references/agent-""watch"
+stale="$(grep -rlF "$old_dir" ../skills ../examples ../meta ../templates ../README.md ../.claude-plugin ../test 2>/dev/null | grep -v __pycache__ || true)"
+chk_eq "no tracked consumer of the retired $old_dir path" "" "$stale"
+
 summary

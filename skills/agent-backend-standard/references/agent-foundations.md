@@ -12,7 +12,7 @@
   agent 循环。每一级只有在上一级实测不够时才升——agent 循环的成本是
   不确定性+token+调试面。
 - 建 agent 前先问：停止条件能否量化？（测试通过数/阈值/明确验收）——
-  量化不了的目标交给 agent 只会拿到 "looks done"（北极星 doctrine 同款）。
+  量化不了的目标交给 agent 只会拿到 "looks done"。
 
 ## I-2 架构与控制流
 
@@ -36,4 +36,4 @@ sub-agent 架构（大读移出主上下文）。反面：context rot——塞�
 ## 电在回路接线
 
 工作流/agent 选型是判断项（散文层）；但停止条件量化与迭代预算上限可下沉——
-goal 门/Stop hook/最大轮数熔断（附录 F、前端 skill 视觉环同款）。
+goal 门/Stop hook/最大轮数熔断（门禁落地见附录 F selfcheck-gates，经 SKILL.md 目录进入）。
