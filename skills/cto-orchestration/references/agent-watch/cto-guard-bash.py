@@ -102,10 +102,9 @@ def main():
     #     `&` in a URL (`curl x?a=1&b=2`) IS a real shell background hazard → DENY is correct (quote it).
     if re.search(r"(?<![&>])&(?![&>])", unq):
         sys.stderr.write(
-            "DENY: shell & backgrounding -> ORPHAN (no completion callback; the orchestrator can't track it "
-            "and the wrapper falsely reports done). Fires on trailing `&`, `& ;`, `& disown`, AND "
-            "background-then-chain `foo & bar` (e.g. `nohup … & echo`). `&&`, `2>&1`/`&>`/`N>&M` redirects, "
-            "and quoted `&` are allowed. Drop the & and use the Bash tool run_in_background:true instead. "
+            "DENY: shell `&` backgrounding -> ORPHAN (no completion callback; wrapper falsely reports "
+            "done). Fix: drop the `&`, use Bash run_in_background:true; a data `&` (URLs) must be "
+            "quoted. `&&` and `2>&1`-style redirects pass. "
             "Read: cto-orchestration/references/agent-watch/README.md §typed 状态.\n"
         )
         return 2
@@ -122,11 +121,10 @@ def main():
     )
     if has_loop and has_capture and has_idle and not has_positive:
         sys.stderr.write(
-            "DENY: hand-rolled 'idle==done' poller (loop+capture-pane+idle grep, no positive-evidence "
-            "check). idle≠done — staged tasks idle at every commit boundary. Add a POSITIVE check: git "
-            "deliverable (git diff --stat / git log ..HEAD) for agent completion, or a pane grep for "
-            "Verdict/prompt for reviews. Read: cto-orchestration/references/agent-watch/README.md "
-            "§判完成要正向证据.\n"
+            "DENY: 'idle==done' poller — idle≠done (staged tasks idle at every commit boundary). "
+            "Fix: add a POSITIVE check: git deliverable (`git diff --stat` / `git log ..HEAD`) for "
+            "completion, or a pane grep for Verdict/prompt for reviews. "
+            "Read: cto-orchestration/references/agent-watch/README.md §判完成要正向证据.\n"
         )
         return 2
 
@@ -151,12 +149,10 @@ def main():
         long_quoted = any(len(q) > 120 for q in quoted)
         if has_cjk or long_quoted:
             sys.stderr.write(
-                "DENY: raw `tmux send-keys` text injection — pane keystrokes are the retired TUI "
-                "lane's failure mode (popup eats Enter, message stalls unseen; self-inflicted 24-min "
-                "stall 2026-07-04, industry-measured ~70-80% delivery). Workers are steered by "
-                "PROTOCOL, never by pane: `agentctl steer <session> -m \"…\"` (or -f <file>) — duplex "
-                "delivers a native frame mid-turn, round resumes the next round. Control-key sends "
-                "(Enter/Escape/C-u/short ASCII picks) on a manually attached session are fine. "
+                "DENY: raw `tmux send-keys` text payload — pane keystrokes stall unseen (popup eats "
+                "Enter; ~70-80% delivery). Fix: steer by protocol: `agentctl steer <session> -m \"…\"` "
+                "(or -f <file>) delivers a native frame mid-turn. Control-key / short-ASCII sends on a "
+                "manually attached session pass. "
                 "Read: cto-orchestration/references/agent-watch/README.md (裸 send-keys 坑枚举).\n"
             )
             return 2
@@ -166,6 +162,8 @@ def main():
     #     call's cwd) — in an umbrella of sibling git repos a bare `git`/`gh` then acts on the WRONG
     #     repo (field hits: 3 bites in one wave 2026-07-24; PR opened in the wrong repo 2026-07-26).
     #     This is an orchestration slip (cwd discipline), not git policy — see NOTE below.
+    #     Deny message leads with REWRITE-don't-resend: field hit 2026-07-29, 4 identical resends
+    #     in a row (the agent acknowledges the deny then re-emits the same text verbatim).
     #     Scope gate: only fires when the REAL cwd (symlinks resolved — a symlinked cwd hid the
     #     umbrella, review probe 2026-07-26) or an ancestor within 5 levels is an umbrella root
     #     (>=2 immediate children with .git); single-repo projects never see it.
@@ -309,13 +307,11 @@ def main():
             bad8 = bool(re.search(r"\bgit\b|\bgh\b", orig8))
         if bad8:
             sys.stderr.write(
-                "DENY: unanchored git/gh in a multi-repo umbrella workspace — shell cwd drifts "
-                "across tool calls (a denied command's cd never ran; parallel calls leave the "
-                "last call's cwd), so a bare git/gh acts on the WRONG repo (2026-07-26: PR "
-                "opened in the wrong repo; 2026-07-24: 3 bites in one wave). Anchor it: lead "
-                "with `cd /abs/<repo> && …` (&&-joined, absolute), or self-anchor every call "
-                "(`git -C <path>` / `gh -R <owner>/<repo>`); repo-insensitive forms "
-                "(git --version, gh auth/api …) pass unanchored. "
+                "DENY: unanchored git/gh in a multi-repo umbrella — shell cwd drifts across tool "
+                "calls, so a bare git/gh can act on the WRONG repo. Fix: REWRITE the command (do "
+                "NOT resend the same text): prefix each call `git -C /abs/<repo>` / `gh -R "
+                "<owner>/<repo>`, or lead the line with `cd /abs/<repo> && …`. Repo-insensitive "
+                "forms (git --version, gh auth/api …) pass. "
                 "Read: cto-orchestration/references/agent-watch/README.md §cwd 锚定.\n"
             )
             return 2
@@ -361,15 +357,12 @@ def main():
                 consumed = False
             if not consumed:
                 sys.stderr.write(
-                    "DENY: `git worktree remove --force` / `git worktree prune` needs the principal's "
-                    "explicit fresh-turn approval — force bulldozes untracked files (2026-07-19: "
-                    "probe scripts lost when a chained salvage-cp silently aborted before a force "
-                    "remove) and prune mass-deletes by staleness guess. First inspect `git -C <wt> "
-                    "status --porcelain`, salvage untracked files, VERIFY the salvage in its own "
-                    "command, then ask. Approved already? `touch /tmp/cto-allow-worktree-destroy` "
-                    "(one-shot, consumed on use) and re-run — any verified legitimate motive "
-                    "qualifies. Non-force `git worktree remove` of a clean tree needs no ask "
-                    "(standing grant). "
+                    "DENY: `git worktree remove --force` / `prune` needs the principal's explicit "
+                    "fresh-turn approval (force bulldozes untracked files; prune mass-deletes on "
+                    "staleness guesses). Fix: inspect `git -C <wt> status --porcelain`, salvage "
+                    "untracked files and VERIFY the salvage in its own command, then ask. Already "
+                    "approved? `touch /tmp/cto-allow-worktree-destroy` (one-shot, consumed on use) "
+                    "and re-run. Non-force remove of a clean tree passes (standing grant). "
                     "Read: cto-orchestration/references/agent-watch/README.md §强制层 ⑦.\n"
                 )
                 return 2
@@ -422,11 +415,10 @@ def main():
             r"AGENT_WATCH_SYNC=1[^;|&]*agentctl[\"'\s]+watch", cmd)
         if watchcall and not sync_attached:
             sys.stderr.write(
-                "DENY: blocking `agentctl watch` in the FOREGROUND — it blocks until the agent's "
-                "terminal state, so a foreground Bash timeout (default 2min) kills it mid-watch "
-                "(exit 143) and the watcher dies with it (field hit 2026-07-11). Re-run with "
-                "run_in_background:true. Synchronous shell orchestrators (codex): prefix the command "
-                "with AGENT_WATCH_SYNC=1 to pass. "
+                "DENY: foreground `agentctl watch` — it blocks until the agent's terminal state; "
+                "the Bash timeout (default 2min) kills it mid-watch (exit 143). Fix: re-run with "
+                "run_in_background:true; deliberately-synchronous shell orchestrators prefix "
+                "AGENT_WATCH_SYNC=1. "
                 "Read: cto-orchestration/references/agent-watch/README.md §Launch.\n"
             )
             return 2
@@ -444,11 +436,9 @@ def main():
         )
         if not paired:
             ctx = (
-                f"REMINDER (cto-guard): session '{session}' has no watcher. `agentctl start` returns "
-                f"after the goal frame is accepted — arm the PRIMARY signal right after it: run "
-                f"`agentctl watch {session}` via the Bash tool with run_in_background:true (NOT "
-                f"shell &, which orphans it). A ScheduleWakeup timer is only the BACKSTOP, not a "
-                f"substitute for the watcher."
+                f"REMINDER (cto-guard): session '{session}' has no watcher — arm the PRIMARY signal "
+                f"now: `agentctl watch {session}` via Bash run_in_background:true (NOT shell &, "
+                f"which orphans). A ScheduleWakeup timer is only the backstop."
             )
             print(json.dumps({
                 "hookSpecificOutput": {
@@ -475,10 +465,9 @@ def main():
         )
         if e2ecall:
             sys.stderr.write(
-                "DENY: running a live e2e gate in this (premium) session. Live e2e is mechanical "
-                "supervision that burns real minutes + tokens — dispatch it to a CHEAP model instead "
-                "(Agent tool, economy tier e.g. haiku), and have the worker prefix each gate command "
-                "with E2E_ECONOMY=1 (the declaration 'I am the dispatched economy runner'). "
+                "DENY: live e2e gate in this (premium) session — it is mechanical supervision. "
+                "Fix: dispatch to a CHEAP-model worker (Agent tool, e.g. haiku) that prefixes each "
+                "gate command with E2E_ECONOMY=1 (the economy-runner declaration). "
                 "Read: cto-orchestration/SKILL.md §0 (不自己跑长 E2E / model 按活分档).\n"
             )
             return 2
