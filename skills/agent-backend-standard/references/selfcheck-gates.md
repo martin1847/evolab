@@ -2,13 +2,13 @@
 
 > **电在回路（shock-in-the-loop）：soft prompts steer, hard gates hold the line。**
 > canonical：`cto-orchestration/references/shock-in-the-loop.md`（下沉判据/分层/DENY 三件套/
-> override 有形）；公开锚点：krpc `skills/krpc/references/guardrails.md`（概念为本工程体系首创）。
+> override 有形；概念为本工程体系首创）。
 > 写作纪律**「能电不文」**：能下沉的绝不写散文；散文只留方法论与门判不了的判断项（可稍详不啰嗦）。
 >
 > 定位：门禁**从哪来、如何演化**。门禁接口长什么样归附录 C（engineering-interface），
 > 本章管的是另一条供给线：把真实评审 findings 蒸馏成仓库自己的护栏。
 > 实证来源：某双服务后端仓活体运行（五条负探针实测；曾实抓「契约语义收窄未升版」
-> 「聚合数组漏登静默失守」两类真事故）+ krpc 仓 SPEC 镜像漂移 / docs-site 错分支两起真事故。
+> 「聚合数组漏登静默失守」两类真事故）+ 某下游仓 SPEC 镜像漂移 / docs-site 错分支两起真事故。
 
 ## 回路（机制本体）
 
@@ -74,5 +74,5 @@ CI 的 workflow 定义取自 **PR head commit**：head 早于某道门落地的 
 - 新仓：`repo-governance-bootstrap` 建骨架（`pre-push.template` + `PR_SELF_CHECK`
   skeleton + AGENTS.md 指引 slot），清单从空开始。
 - 存量仓：从最近一季真 findings 里蒸馏首批条目；可机检的按下沉判据挑 1–2 关起步。
-- krpc 生态有面向下游的自包含快照（krpc 仓 `skills/krpc/references/guardrails.md`，
-  公开仓不能引私有 skill）；方法论演化以本章为 canonical，快照机会性同步。
+- 下游生态可留面向自己的自包含快照（公开仓不能引私有 skill）；方法论演化以本章为
+  canonical，快照机会性同步。
