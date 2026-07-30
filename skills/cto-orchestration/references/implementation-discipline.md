@@ -33,8 +33,13 @@ WARN 侧逐字节回归一段零发现，真救场的是三态矩阵的离线态
 
 不可降三条（无论档位）：①量具先自证判别力（SKILL §3）；②红样本钉不可变锚（SHA 或仓内
 fixture）；③声称「不阻断/不误伤」的红线必须实跑，不能只写文案。
-自举盲区：门检查不了「自己有没有被跑过」，只能靠更外层兜（服务端 required check /
-合并动作拦截）——同族条目见 agent-backend selfcheck-gates「门的适用性纪律」。
+自举盲区：门检查不了「自己有没有被跑过」，靠更外层兜（服务端 required check / 合并动作
+拦截）——**但外层自身先验两件事再信**：①对**这条 ref** 真 required（读 ruleset API，如
+`gh api repos/O/R/rules/branches/<ref>`；旧 `branches/<b>/protection` 对 ruleset 会 404、
+`.protected` 恒 true，都不可作证据）；②本次的绿产生于门**落地之后**（比 check 的
+`completed_at` 与门合入时间，或 strict 政策强制 up-to-date）。两个失败态都不报错、只静默
+变绿（外部席位 n=2 实证：ruleset include 漏路径 → 门红照样自合；strict=false → 门落地前的
+旧绿计数）。同族条目见 agent-backend selfcheck-gates「门的适用性纪律」。
 
 ## 病类收敛
 

@@ -23,10 +23,10 @@
 | 层 | 位置 | 适合 | 性质 |
 | --- | --- | --- | --- |
 | L1 hook | PreToolUse / pre-commit | 本地可判定：模型档位、危险 flag、路径越界 | 早反馈，秒级 |
-| L2 required CI / 服务端 ruleset | PR 合并线 | 可离线判定:测试、脱敏、格式、conformance | 收口，绕不过 |
+| L2 required CI / 服务端 ruleset | PR 合并线 | 可离线判定:测试、脱敏、格式、conformance | 收口；「绕不过」以 ref 真在 ruleset 覆盖内 + 绿新于门为前提（两者都要验，见 implementation-discipline 自举盲区） |
 | L0 散文 | SKILL/README | 方向、判据、指针 | 不承重执行 |
 
-同一规则可双层：hook 给早反馈，CI 收口（hook 可被本地绕过，CI 不可）。
+同一规则可双层：hook 给早反馈，CI 收口（hook 可被本地绕过；CI 在覆盖 + 新鲜两前提验过后才算不可绕）。
 
 ## 3. DENY 文案三件套（三件即上限）
 
