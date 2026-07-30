@@ -158,6 +158,13 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 `.claude/settings.json` / Codex `.codex/hooks.json` 同格式）。**直接 exec 别加 `python3 `/`bash `
 前缀**（脚本自带 shebang）；matcher 别手编（与实现同包维护，曾实证 README 抄本漂移丢 `KillShell`）。
 
+**扩展 = 组合，不 fork 不注入**（owner 裁 2026-07-30）：项目/席位要自己的规则（如构建工具锚定、
+项目特有禁令），在**自己的** settings 里并列再挂一个自己的 hook 脚本——hooks 是列表、逐个都跑、
+任一 exit 2 即 DENY，天然可组合零耦合。本 guard 不提供加载外部规则的扩展点（repo 内代码进 hook
+进程 = 任意仓库可执行代码，红线）；自写 guard 建议沿用 DENY 三件套 + 可解析文档指针的契约。
+「单 SoT」按**规则**算不按文件算：本 guard 已盖的面（git/gh 锚定）别再自建双源，没盖的面自己的
+规则就是唯一正源。
+
 - **`cto-guard-bash.py`（PreToolUse·Bash）** — ① 拦背景 `&`（剥引号 span 后任意单 `&`；`&&`/重定向/
   引号内放行）；② DENY 纯 idle-absence 裸轮询（带 git 交付物 / Verdict 正向 grep 才放行）；③
   `agentctl start` 后同条没 arm watch → 提醒（omission 无法硬 deny）；④ 拦长/CJK 裸 `tmux send-keys`
