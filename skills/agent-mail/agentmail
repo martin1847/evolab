@@ -21,6 +21,8 @@ agentmail — agent-mail inter-orchestrator mailbox  (root: $AGENT_MAIL_DIR, def
   agentmail archive <agent-id> <id>                   move a handled letter to archive (gzip'd)
   agentmail prune <agent-id> [days]                   delete archive letters older than N days (default 60)
   agentmail roster                                    print roster
+  agentmail wire [--project <abs-path>]               idempotent hook wiring; level decided by
+                                                       user-level state (duplicate = refused)
 EOF
 }
 
@@ -144,6 +146,129 @@ EOF
     ;;
   roster)
     [ -f "$REG" ] && cat "$REG" || echo "(no registry yet — agentmail register <agent-id> <workdir> <focus>)"
+    ;;
+  wire)
+    # Idempotent hook wiring — the LEVEL DECISION lives in code, not prose (two live onboard
+    # incidents 2026-07-30 came from prose ordering: duplicate mail hooks / scope spillover).
+    # Decision table (condition → action):
+    #   user-level has any mail hook + --project → REFUSE (a project copy double-reports letters)
+    #   user-level has any mail hook (no flag)   → complete missing entries at USER level
+    #   no mail hook anywhere + --project <abs>  → wire that project's settings (config isolation)
+    #   no mail hook anywhere (no flag)          → wire USER level (resident orchestrator machine)
+    # Entries come from hooks.json (the wiring truth source) — commands become absolute install
+    # paths, no interpreter prefix. Merge is entry-level idempotent; writes are backup + atomic.
+    proj=""
+    if [ "${1:-}" = "--project" ]; then
+      proj="${2:?--project needs an absolute path}"
+      case "$proj" in /*) ;; *) echo "ERR: --project must be an absolute path, got: $proj" >&2; exit 1;; esac
+      [ -z "${3:-}" ] || { echo "ERR: surplus wire argument: $3 (usage: agentmail wire [--project <abs-path>])" >&2; exit 1; }
+    elif [ -n "${1:-}" ]; then
+      echo "ERR: unknown wire argument: $1 (usage: agentmail wire [--project <abs-path>])" >&2; exit 1
+    fi
+    WIRE_PROJECT="$proj" WIRE_SELF="$(cd "$(dirname "$0")" && pwd -P)" python3 - <<'PYW'
+import json, os, sys, tempfile, time
+self_dir = os.environ["WIRE_SELF"]
+proj = os.environ.get("WIRE_PROJECT", "")
+hooks_src = json.load(open(os.path.join(self_dir, "hooks.json"), encoding="utf-8"))
+user_path = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+MAIL_BASENAMES = {"mail-check.py", "mail-guard.py"}
+
+def load(p):
+    return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else {}
+
+def is_mail_cmd(cmd):
+    # provenance = exact basename AND an 'agent-mail' path component (every install shape —
+    # skills/agent-mail, ~/.agents/skills/agent-mail — carries it). Three review probes set
+    # the fence posts (2026-07-30): substring '/x/not-mail-check.py-wrapper' must not match,
+    # prior install '/old/root/agent-mail/mail-check.py' must match, and a same-named
+    # UNRELATED tool '/opt/calendar/mail-check.py' must not match either.
+    p = os.path.normpath(str(cmd).strip())
+    return os.path.basename(p) in MAIL_BASENAMES and "agent-mail" in p.split(os.sep)
+
+def has_mail_hook(cfg):
+    return any(is_mail_cmd(h.get("command", ""))
+               for groups in (cfg.get("hooks") or {}).values()
+               for g in groups or [] for h in (g.get("hooks") or []))
+
+try:
+    user_cfg = load(user_path)
+except Exception as e:
+    sys.stderr.write(f"ERR: cannot parse {user_path}: {e} — fix it first; refusing to touch it.\n")
+    sys.exit(1)
+
+if has_mail_hook(user_cfg):
+    if proj:
+        sys.stderr.write("ERR: user-level settings already carry mail hooks — a project copy would "
+                         "double-report every letter. Remove the user-level entries first if project "
+                         "isolation is really wanted.\n")
+        sys.exit(1)
+    target, cfg = user_path, user_cfg
+else:
+    target = os.path.join(proj, ".claude", "settings.json") if proj else user_path
+    try:
+        cfg = load(target)
+    except Exception as e:
+        sys.stderr.write(f"ERR: cannot parse {target}: {e} — fix it first; refusing to touch it.\n")
+        sys.exit(1)
+
+hooks = cfg.setdefault("hooks", {})
+added, present = [], []
+for ev, entries in hooks_src.items():
+    if ev == "//":
+        continue
+    for e in entries:
+        cmd = os.path.join(self_dir, e["command"])
+        groups = hooks.setdefault(ev, [])
+        # presence = agent-mail provenance + same script: another install root counts as
+        # wired (adding ours would double-fire, review M1), while a same-named UNRELATED
+        # tool does not (ours must still be added beside it, review R2)
+        if any(is_mail_cmd(h.get("command", ""))
+               and os.path.basename(os.path.normpath(h.get("command", ""))) == os.path.basename(cmd)
+               for g in groups for h in (g.get("hooks") or [])):
+            present.append(f"{ev}:{os.path.basename(cmd)}")
+            continue
+        g = {"hooks": [{"type": "command", "command": cmd}]}
+        if "matcher" in e:
+            g["matcher"] = e["matcher"]
+        groups.append(g)
+        added.append(f"{ev}:{os.path.basename(cmd)}")
+
+if not added:
+    print(f"already wired ({target}) — nothing to do")
+    sys.exit(0)
+tdir = os.path.dirname(target)
+os.makedirs(tdir, exist_ok=True)
+if os.path.exists(target):
+    # O_EXCL: never write through a pre-planted file/symlink at the backup name
+    bak = f"{target}.bak-{time.strftime('%Y%m%d%H%M%S')}-{os.getpid()}"
+    fd = os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(open(target, encoding="utf-8").read())
+        fh.flush(); os.fsync(fh.fileno())
+# mkstemp, not a predictable name: a pre-planted `settings.json.tmp` symlink turned the
+# "atomic" write into an arbitrary-file clobber (review M2 live probe). Same-dir keeps
+# os.replace an atomic same-filesystem rename; fsync file + dir for durability.
+fd, tmp = tempfile.mkstemp(dir=tdir, prefix=".settings-wire-", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+        fh.flush(); os.fsync(fh.fileno())
+    os.replace(tmp, target)
+except BaseException:
+    try: os.unlink(tmp)
+    except OSError: pass
+    raise
+dfd = os.open(tdir, os.O_RDONLY)
+try: os.fsync(dfd)
+finally: os.close(dfd)
+print(f"wired {len(added)} entry(ies) at {'project' if proj else 'user'} level → {target}")
+for a in added:
+    print(f"  + {a}")
+for s in present:
+    print(f"  = {s} (already present)")
+print("verify: AGENT_MAIL_SELF=<seat-id> trigger once — letters surface, empty inbox stays silent")
+PYW
     ;;
   *) usage; [ -z "$cmd" ] || exit 1;;
 esac

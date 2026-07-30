@@ -1,6 +1,6 @@
 ---
 name: agent-mail
-version: 0.1.12
+version: 0.1.13
 description: 多编排者/长期 agent 身份之间的异步信箱总线——发信、收信、回信、归档、名册注册。每个身份一个 inbox，一封信只有一个去处（收件人 inbox），收信只查自己信箱。触发：给另一个编排者/CTO/agent 写信或提议、查我的信箱、跨编排者协调、看有哪些注册身份。不用于人类电子邮件（gmail/给真人同事或客户写信）或普通消息转发。可选伴随 cto-orchestration 使用（多编排者场景）。Use when writing to / reading mail from another orchestrator agent, coordinating across orchestrators, or managing the agent roster; NOT for human email.
 ---
 
@@ -112,12 +112,11 @@ agentmail roster                                    # 打印名册
 ## 接入（新席位，两步，本 skill 自包含——不依赖任何编排 skill 的清单）
 
 1. **注册**：`agentmail register <席位id> <项目根绝对路径> <职责一句话>`（名册加行 + 信箱建好）。
-2. **wire hooks**：**entry 真源 = 本 skill `hooks.json`（别抄散文）**——读它、command 换安装根
-   绝对路径（hooks 不展开 `~`、不加 `python3 ` 前缀）。**落点先判层级、再动手（本判据只管本 skill
-   的 mail entry，其他 hook——guard/memory 等——照各自 skill 的接入指引，别连坐跳过）**：先查
-   `~/.claude/settings.json` 是否已有 mail-check/mail-guard entry（编排位常驻机器通常用户级已接）——
-   **已有 → mail entry 项目 settings 一条都不加**（重复接入 = 同信双报）；没有 → 常驻编排机进
-   用户级接一次，需要配置隔离或不同版本的才进项目 settings（层级判据 = 席位属性非项目属性）。**三个 entry（Claude Code）**：
+2. **wire hooks（Claude Code）**：
+   - [ ] ALWAYS → 跑 `<安装根>/agentmail wire`（对象：本 skill 的 mail entry；幂等，落点层级由
+     命令自判——用户级已接则原地补全并拒 `--project` 重复〔同信双报〕，全新默认接用户级，
+     需配置隔离才 `--project <abs>`。其他 hook——guard/memory 等——照各自 skill 的接入指引）。
+   entry 真源 = 本 skill `hooks.json`（wire 读它展开绝对路径；手工接线才需要自己抄）。**三个 entry（Claude Code）**：
    `SessionStart` 开场全量冒泡 + **`UserPromptSubmit` 增量投递** + `PreToolUse`（`mail-guard.py`
    拦 Write/Edit/MultiEdit 直写 inbox，发信必须走 `agentmail send`）——长跑 session 永不重启，中途来信靠增量投递
    在下一个 prompt turn 冒泡（只报**新到**、报过不复读、无新静默，`.notify-state` 记账；forcing function 不再
@@ -135,7 +134,8 @@ agentmail roster                                    # 打印名册
    - **codex / omp 无此能力**：codex 事件集只有 `PreToolUse`/`PermissionRequest`/`Stop`（无 SessionStart /
      UserPromptSubmit），且其 hook 不走 `additionalContext` 注入——**增量投递是 CC 席位专属**。codex/omp
      长跑席位收中途信靠 `agentmail check` 主动查（或该席位由 CC 编排者代管转达）。
-   接完设 `AGENT_MAIL_SELF=<席位id>` 跑一次**验真触发**（有信应出 JSON、空箱应静默），别只信"配了"。
+   - [ ] 接完 → `AGENT_MAIL_SELF=<席位id>` 跑一次**验真触发**（对象：刚接的 mail hook——有信应出
+     JSON、空箱应静默），别只信"配了"。
 
 ## 远程信箱（跨网络边界的收件人）
 
