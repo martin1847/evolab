@@ -278,7 +278,7 @@ EOF
 HOLDER=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$SANDBOX/held4" ] && break; /bin/sleep 0.2; done
 start=$(date +%s)
-out="$(AGENT_WATCH_SEND_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" \
+out="$(AGENT_WATCH_READY_TIMEOUT=3 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" \
        wait-ready wrA --wait 2 2>&1)"; rc=$?
 elapsed=$(( $(date +%s) - start ))
 chk_eq "wedged lock → wait-ready returns, exit 8 (was an infinite hang)" 8 "$rc"
@@ -305,7 +305,12 @@ chk_eq "sized for the whole verb, floor covers 3 default round trips" 60 "$(rpro
 chk_eq "short --wait does not shrink below the floor" 60 "$(rprobe 3)"
 chk_eq "long --wait scales the bound (3*wait+15)" 195 "$(rprobe 60)"
 chk_eq "absurd --wait still clamps at the ceiling" 3600 "$(rprobe 100000)"
-chk_eq "the send knob overrides it outright" 3 "$(AGENT_WATCH_SEND_TIMEOUT=3 rprobe 60)"
+chk_eq "the ready knob overrides it outright" 3 "$(AGENT_WATCH_READY_TIMEOUT=3 rprobe 60)"
+chk_eq "invalid ready knob degrades to the derived bound, not the floor" 195 "$(AGENT_WATCH_READY_TIMEOUT=abc rprobe 60)"
+chk_eq "zero ready knob degrades to the derived bound too" 195 "$(AGENT_WATCH_READY_TIMEOUT=0 rprobe 60)"
+# regression (R3 nit): shortening send must NOT shrink the handshake window — the send
+# knob doubling as this bound killed legitimate slow handshakes
+chk_eq "the send knob no longer leaks into the handshake bound" 195 "$(AGENT_WATCH_SEND_TIMEOUT=3 rprobe 60)"
 
 # N2 ordering: the strand window between publishing _INFLIGHT and creating the
 # marker file is ~2 bytecodes — not observably testable, so assert the ORDER in

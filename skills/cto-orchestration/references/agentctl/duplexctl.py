@@ -840,12 +840,17 @@ READY_TIMEOUT_FLOOR = 60    # three default --wait round trips (15s each) + slac
 def ready_timeout(wait: float) -> int:
     """Hard deadline for ONE wait-ready. Sized for the WHOLE verb: the codex
     handshake makes three --wait-bounded round trips, so a flat SEND_TIMEOUT_DEFAULT
-    would cut a legitimate slow handshake short. AGENT_WATCH_SEND_TIMEOUT overrides
-    it outright when set — same knob, same 'the frame could not go out' bound —
-    which is also how a test/operator shortens it."""
-    if os.environ.get("AGENT_WATCH_SEND_TIMEOUT", "").strip():
-        return send_timeout()
-    return min(max(READY_TIMEOUT_FLOOR, int(3 * wait) + 15), TIMEOUT_MAX)
+    would cut a legitimate slow handshake short. AGENT_WATCH_READY_TIMEOUT overrides
+    outright (how a test/operator shortens it). AGENT_WATCH_SEND_TIMEOUT deliberately
+    does NOT leak in — it bounds send only; when it doubled as this bound, an operator
+    shortening send silently shrank the handshake window below 3*wait+15 and the
+    watchdog killed legitimate slow handshakes (R3 nit 2026-07-28, fixed 2026-07-30)."""
+    derived = min(max(READY_TIMEOUT_FLOOR, int(3 * wait) + 15), TIMEOUT_MAX)
+    if os.environ.get("AGENT_WATCH_READY_TIMEOUT", "").strip():
+        # invalid knob values must degrade to the DERIVED bound, not the bare floor —
+        # a floor fallback re-shrinks the window the knob split was meant to protect
+        return env_timeout("AGENT_WATCH_READY_TIMEOUT", derived)
+    return derived
 
 
 def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
