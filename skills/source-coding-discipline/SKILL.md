@@ -1,6 +1,6 @@
 ---
 name: source-coding-discipline
-version: 0.1.1
+version: 0.1.2
 description: Use when a task involves reading, editing, reviewing, testing, debugging, refactoring, or otherwise working with source code files. Source paths include **/*.{py,ts,tsx,js,jsx,mjs,go,rs,java,kt,swift,rb,c,cc,cpp,h,hpp,sh,bash,zsh,sql,vue,svelte}. Do not use for docs-only, planning-only, or non-code file tasks unless the task also touches source code.
 ---
 
@@ -14,7 +14,7 @@ description: Use when a task involves reading, editing, reviewing, testing, debu
 
 **先思考再编码**：显式说出假设，不确定就问；多种解读全部列出、不静默选边；有更简单的路径就说出来；困惑就停下来问。
 
-**简单优先——解决问题的最少代码，零投机**：不做超出要求的功能；单次使用的代码不抽象；没要求的"灵活性/可配置性"不引入；不可能发生的场景不写错误处理。写了 200 行能压到 50 行的，重写。自问："资深工程师会觉得这过度复杂吗？"（零投机指交付物范围——风险枚举 / 预判 / 评审轴该大胆发散。）
+**简单优先——交付物代码零投机（仅限交付物；风险枚举 / 预判 / 评审轴不受此限、该大胆发散）**：不做超出要求的功能；单次使用的代码不抽象；没要求的"灵活性/可配置性"不引入；不可能发生的场景不写错误处理。写了 200 行能压到 50 行的，重写。自问："资深工程师会觉得这过度复杂吗？"
 
 **外科手术式改动**：每一行改动都能直接追溯到用户请求。不"改进"邻近代码/注释/格式，顺应已有风格。自己的改动产生的孤儿（未用 import/变量/函数）要清；既有死代码指出来、不删。
 
