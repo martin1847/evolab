@@ -37,9 +37,9 @@ fixture）；③声称「不阻断/不误伤」的红线必须实跑，不能只
 拦截）——**但外层自身先验两件事再信**：①对**这条 ref** 真 required（读 ruleset API，如
 `gh api repos/O/R/rules/branches/<ref>`；旧 `branches/<b>/protection` 对 ruleset 会 404、
 `.protected` 只报「有无任一保护」、分不出是否含你的 required check，都不可作证据）；
-②本次的绿产生于门**落地之后**（比该 required check 的 `completed_at` 与门合入时间；旧绿用
-`PUT /pulls/N/update-branch` 逼新头重跑——strict 只强制齐平 base，base 未动时门前旧绿仍
-计数，不能当新鲜度证明）。两个失败态都不报错、只静默变绿（外部席位 n=2 实证：ruleset
+②本次的绿产生于门**落地之后**（比该 required check 的 `completed_at` 与门合入时间；旧绿要
+逼一次新 head 重跑——门已进 base 用 `update-branch`，base 未动则空 commit push；strict 只
+强制齐平 base，不能当新鲜度证明）。两个失败态都不报错、只静默变绿（外部席位 n=2 实证：ruleset
 include 漏路径 → 门红照样自合；门落地前的旧绿计数）。同族条目见 agent-backend selfcheck-gates「门的适用性纪律」。
 
 ## 病类收敛
