@@ -8,7 +8,9 @@
 > --max-rounds <N>`——与 omp 派发同构。start 返回后立即另挂 `agentctl watch`；复审轮同样是
 > `agentctl steer -f` + `watch`。裸 `tmux new-session` 绕过 durable state 与 lane routing，别用。
 > 初轮计入总轮数；stop-loss 只认 runtime meta（duplex 会话档），GOAL/brief 不复制轮数。到限后 send 返回
-> `BUDGET-EXHAUSTED`（exit 9），不得绕过，转人工裁决。
+> `BUDGET-EXHAUSTED`（exit 9），不得绕过，转人工裁决。定 `--max-rounds` 时：催写 nudge 也走 steer 计轮
+> ——预算 = 内容轮 + 1（外部席位单日 n=4 实证 idle-no-deliverable；max-rounds 1 遇 idle 即死局，连催写
+> 都投不进只能重开。上限不是燃料，slack 轮用不到零成本）。
 
 ## goal-review（派发前，白名单免评 + 其余必评）
 
