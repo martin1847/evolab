@@ -1,8 +1,9 @@
 # GOAL — <一句话任务名>（<implementation | research-only | hotfix>）
 
 > Owner: omp. Worktree `<abs path>`, branch `<feat/...>`（cut from latest origin/<base> @ <sha>）.
-> Reviewer: codex（after commits; flag only findings that affect correctness or the stated
-> requirements——no bar-raising，拔高式 review 必驱动 over-engineering）. Commits stay LOCAL — pushing requires
+> Reviewer: codex（after commits; diff 口径 three-dot `origin/<base>...HEAD`；flag only findings
+> that affect correctness or the stated requirements——no bar-raising，拔高式 review 必驱动
+> over-engineering）. Commits stay LOCAL — pushing requires
 > <用户名> approval. 本 goal 中所有“先读路径”和“交付物路径”必须写绝对路径，尤其跨伞仓/子仓；
 > 不要求证明命令内部每个参数都绝对化。如属研究：RESEARCH ONLY — no code changes, no commits.
 
