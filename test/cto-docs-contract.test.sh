@@ -24,10 +24,18 @@ readme_body="$(cat ../skills/cto-orchestration/references/agentctl/README.md)"
 
 echo "== cto docs contract =="
 chk_contains "unified surface is agentctl" "agentctl start|steer|status|watch|stop" "$skill_body"
-chk_contains "engine capability table present" "steer 默认（排队/下一轮）" "$skill_body"
+# WS3: the provider capability matrix is RUNTIME-generated. The main skill keeps the control
+# principle and a pointer; the wire-level truth is asserted against duplexctl's one table.
+chk_contains "capability truth is runtime-generated" "agentctl capabilities" "$skill_body"
+chk_contains "main skill keeps the control principle" "能力差异不分叉车道" "$skill_body"
+chk_not_contains "no prose capability matrix survives in the main skill" \
+  "abort_and_prompt" "$skill_body"
+chk_not_contains "and no per-engine steer column table either" \
+  "steer 默认（排队/下一轮）" "$skill_body"
 chk_contains "single lane three engines" "一条 lane、三引擎" "$skill_body"
-chk_contains "codex mid-turn steer is native" "turn/steer\` 原生" "$skill_body"
-chk_contains "codex has no queue, refuses cleanly" "codex 无排队" "$skill_body"
+chk_contains "codex mid-turn steer is native" "turn/steer" "$duplexctl_body"
+chk_contains "capability states are one closed enum" "CAPABILITY_STATES" "$duplexctl_body"
+chk_contains "the capability table is what routing consumes" "VERB_CAPABILITY" "$duplexctl_body"
 chk_contains "TUI lane is retired" "TUI 车道已裁撤" "$skill_body"
 chk_contains "file deliverables require the gate" '文件任务必须声明 `--deliverable <glob>`' "$skill_body"
 chk_contains "deliverable glob is session-cwd relative" "相对 glob 按会话 cwd 解析" "$skill_body"

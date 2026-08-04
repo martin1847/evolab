@@ -1,0 +1,12 @@
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -1263,6 +1263,9 @@
+ # branch is attached here rather than inside the cell that names it.
+ PROVIDERS["codex"]["capabilities"]["queuedSteer"]["impl"] = codex_route_start
+ 
++# MUTATION: a provider the lane still launches disappears from the contract.
++del PROVIDERS["codex"]
++
+ # ── everything below is DERIVED from the table above ─────────────────────────
+ CAPABILITIES = {name: rec["capabilities"] for name, rec in PROVIDERS.items()}
+ # route id → the branch that really performs it. Send routes (frame builder / JSON-RPC

@@ -1,0 +1,11 @@
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -1104,7 +1104,7 @@
+         # handshake that stopped resuming must contradict the contract, and it does — the
+         # behaviour battery starts a real (fake) codex with --resume-thread and asserts the
+         # frame on the wire (cold review R1: this literal drifted silently).
+-        started = codex_request(sess, capability(engine, "resume")["route"],
++        started = codex_request(sess, "thread/start",
+                                 {"threadId": sess.meta["resume_thread"]}, timeout=args.wait)
+     else:
+         params = {"cwd": sess.meta.get("cwd"), "approvalPolicy": "never",

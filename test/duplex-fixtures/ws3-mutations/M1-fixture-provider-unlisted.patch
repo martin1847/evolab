@@ -1,0 +1,13 @@
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -1272,6 +1272,10 @@
+           for name, caps in CAPABILITIES.items()}
+ # engine → state projector, consumed by classify.
+ PROJECTORS = {name: rec["projector"] for name, rec in PROVIDERS.items()}
++# MUTATION: a fixture adapter is hand-added to the DERIVED registries — the lane can
++# route and project it, but no capability cell declares it.
++ROUTES["fixtureprov"] = {"user": build_frame}
++PROJECTORS["fixtureprov"] = project_claude
+ 
+ 
+ def capability_document() -> dict:

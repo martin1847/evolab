@@ -31,6 +31,7 @@ import glob as globmod
 import json
 import os
 import select
+import shlex
 import signal
 import subprocess
 import sys
@@ -123,6 +124,114 @@ def clip(text: str, limit: int = SUMMARY_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+# ── provider capability contract: vocabulary ─────────────────────────────────
+# The TABLE itself lives at the bottom of this file (§provider contract), next to the
+# routing branches it names — everything a provider does is generated FROM it:
+#   * `ROUTES` (route id → executable branch), `PROJECTORS` (engine → state projector) and
+#     the shell-consumable provider spec `duplexctl providers --shell` (which is the ONLY
+#     provider list `agentctl` has: allowlist, binary, pinned argv, argv forwarding and the
+#     resume start flag all come from it) are derived, never hand-maintained;
+#   * `route` IS the wire name the branch emits (omp/claude frame type, codex JSON-RPC
+#     method), and the branches read it back out — the handshake's resume method, the omp
+#     ask frame type and every steer frame come from the cell, not from a literal;
+#   * `refusal` IS the text a refused verb prints, so a rejection and the published
+#     contract cannot disagree about the recommended supported path.
+# Adding a provider or a capability is ONE edit in that table. `probe.py drift` proves
+# table↔registry consistency and `agentctl-capabilities.test.sh` §C8 proves the declared
+# capability is actually PERFORMED against the hermetic fake engines — registry agreement
+# alone was not enough (cold review R1: three behaviour mutations stayed green).
+SUPPORTED, DEGRADED, UNSUPPORTED, EXPERIMENTAL = (
+    "supported", "degraded", "unsupported", "experimental")
+CAPABILITY_STATES = (SUPPORTED, DEGRADED, UNSUPPORTED, EXPERIMENTAL)
+CAPABILITY_SCHEMA_VERSION = 1
+
+# the closed capability vocabulary, in output order
+CAPABILITY_ORDER = ("queuedSteer", "midTurnSteer", "replaceTurn", "structuredAsk",
+                    "structuredReply", "resume", "permissionEnforcement")
+
+# WHAT EACH CAPABILITY MEANS. Written down because a criterion applied unevenly is the same
+# defect as a wrong cell: cold review R1 caught `resume` being judged "has a dedicated duplex
+# verb" for omp/claude but "the documented public invocation works" for codex. Every cell is
+# judged against the sentence here — the OPERATION the operator can invoke through
+# `agentctl`, not the protocol niceness of how the lane serves it.
+CAPABILITY_DEFINITIONS = {
+    "queuedSteer": "deliver a message that the engine consumes at/after the current turn "
+                   "boundary, without discarding the running turn",
+    "midTurnSteer": "deliver a message that reaches the engine INSIDE the running turn",
+    "replaceTurn": "abandon the running turn and start a replacement in the same session",
+    "structuredAsk": "the engine's own question reaches the operator as a typed "
+                     "WAITING-INPUT projection, not as prose to be read out of a log",
+    "structuredReply": "answer such a question through a dedicated agentctl verb",
+    "resume": "continue a prior conversation's context in a new round through a documented "
+              "`agentctl` invocation (in-session route, or stop + start with resume args)",
+    "permissionEnforcement": "the runtime constrains what the engine may do and enforces it",
+}
+
+# the send verbs that ARE capability claims. `prompt` (goal delivery) and `get-state`
+# (omp's liveness probe) are lane plumbing: without them the lane cannot exist at all,
+# so they are not provider capabilities and carry no state.
+VERB_CAPABILITY = {"steer": "queuedSteer", "steer-now": "midTurnSteer",
+                   "replace": "replaceTurn"}
+
+# Non-protocol realizations. A capability served by one of these has no wire route, so the
+# drift gate cannot check it against ROUTES — the behaviour battery must. Closed set:
+# `start-argv` = `agentctl start` forwards unrecognized args verbatim to the engine, which
+# is how omp/claude native resume is invoked.
+SURFACE_START_ARGV = "start-argv"
+CAPABILITY_SURFACES = (SURFACE_START_ARGV,)
+
+
+def _cap(state: str, route: str = "", note: str = "", refusal: str = "",
+         fallback: str = "", surface: str = "", detect: dict | None = None,
+         start_flag: str = "", impl=None) -> dict:
+    """One capability cell.
+
+    state    — closed enum; never a boolean, because behaviour here is provider-specific.
+    route    — the wire name (frame type / JSON-RPC method) the branch emits, "" if none.
+    impl     — the branch that performs `route`; ROUTES is built from these pairs.
+    surface  — a non-protocol realization (see CAPABILITY_SURFACES) when there is no route.
+    note     — published EXACTLY for degraded (names the degradation) and unsupported
+               (names the recommended supported path). A supported cell publishes no note:
+               the state is the whole claim. A refusal doubles as the note, so the rejected
+               operator and the contract reader see one sentence.
+    refusal  — what a refused verb prints.
+    fallback — the verb a degraded capability is honestly served by instead.
+    detect   — projector-side recognition data (ask frame noise / ask method names), read
+               BACK by the projector so the contract owns it too.
+    start_flag — the `agentctl start` flag that drives this capability, if any.
+    """
+    published = note or refusal
+    if state == SUPPORTED or state == EXPERIMENTAL:
+        published = ""      # notes exist exactly where the state is not self-explanatory
+    return {"state": state, "note": published, "refusal": refusal, "route": route,
+            "fallback": fallback, "surface": surface, "detect": detect or {},
+            "start_flag": start_flag, "impl": impl}
+
+
+def provider(engine: str) -> dict:
+    """The provider adapter record, or a typed death. An engine with no contract has no
+    routing either — failing closed here is what keeps the two from drifting apart."""
+    record = PROVIDERS.get(engine)
+    if record is None:
+        die(f"unknown duplex engine: {engine} — no capability contract "
+            "(see `agentctl capabilities`)")
+    return record
+
+
+def capability(engine: str, name: str) -> dict:
+    cell = provider(engine)["capabilities"].get(name)
+    if cell is None:
+        die(f"provider '{engine}' declares no capability '{name}' "
+            "(see `agentctl capabilities`)")
+    return cell
+
+
+def route_of(engine: str, verb: str) -> str:
+    """The wire route a capability verb resolves to — "" when the provider does not have it."""
+    name = VERB_CAPABILITY.get(verb)
+    return capability(engine, name)["route"] if name else ""
+
+
 # ── frames ────────────────────────────────────────────────────────────────────
 def jsonrpc(req_id, method: str, params=None) -> str:
     frame = {"jsonrpc": "2.0", "method": method}
@@ -177,22 +286,24 @@ def codex_active_turn(sess: Session):
 
 
 def build_frame(engine: str, verb: str, text: str, req_id: str) -> str:
+    """The wire frame for one verb. A CAPABILITY verb takes its frame type from the one
+    capability table (`route` IS the wire name), so a frame type cannot exist without a
+    declared capability; `prompt` / `get-state` are lane plumbing and stay literal."""
     if engine == "omp":
-        omp_type = {
-            "prompt": "prompt", "steer": "follow_up", "steer-now": "steer",
-            "replace": "abort_and_prompt", "get-state": "get_state",
-        }.get(verb)
-        if omp_type is None:
+        omp_type = {"prompt": "prompt", "get-state": "get_state"}.get(verb) \
+            or route_of("omp", verb)
+        if not omp_type:
             die(f"unsupported omp verb: {verb}")
         frame = {"id": req_id, "type": omp_type}
         if omp_type != "get_state":
             frame["message"] = text
         return json.dumps(frame, ensure_ascii=False)
     if engine == "claude":
-        if verb not in ("prompt", "steer", "steer-now"):
+        claude_type = "user" if verb == "prompt" else route_of("claude", verb)
+        if not claude_type:
             die(f"unsupported claude verb: {verb} (no public interrupt/replace frame)")
         return json.dumps(
-            {"type": "user",
+            {"type": claude_type,
              "message": {"role": "user",
                          "content": [{"type": "text", "text": text}]}},
             ensure_ascii=False)
@@ -383,8 +494,6 @@ def tail_frames(sess: Session, window: int = 262144) -> list[dict]:
 
 QUOTA_RE = ("insufficient_quota", "invalid_api_key", "No API key",
             "credit balance", "billing")
-# omp pushes a setWidget extension_ui_request at connect: UI chrome, not a question.
-UI_NOISE_METHODS = {"setWidget", "set_widget"}
 
 
 def deliverable_fresh(sess: Session) -> tuple[bool, str]:
@@ -448,13 +557,18 @@ def project_omp(sess: Session) -> tuple[str, str]:
         return "RUNNING", f"streaming, queued={data.get('queuedMessageCount', 0)}"
     if data.get("queuedMessageCount"):
         return "RUNNING", "idle but messages queued"
-    # idle: is there an unanswered real question? (setWidget chrome ignored)
+    # idle: is there an unanswered real question? The frame type, the connect-time UI chrome
+    # to ignore and the frames that clear a pending ask all come from the structuredAsk cell —
+    # this projector IS omp's structuredAsk route, so it must not carry its own literals.
+    ask = capability("omp", "structuredAsk")
+    noise = ask["detect"].get("noise", ())
+    clears = ask["detect"].get("clears", ())
     pending = None
     for frame in tail_frames(sess):
         ftype = frame.get("type")
-        if ftype == "extension_ui_request" and frame.get("method") not in UI_NOISE_METHODS:
+        if ftype == ask["route"] and frame.get("method") not in noise:
             pending = frame
-        elif ftype in ("extension_ui_response", "agent_start"):
+        elif ftype in clears:
             pending = None
     if pending is not None:
         return "WAITING", clip(json.dumps(pending, ensure_ascii=False), 200)
@@ -489,9 +603,6 @@ def project_claude(sess: Session) -> tuple[str, str]:
     return "RUNNING", f"last frame type={last.get('type')}"
 
 
-CODEX_ASK_METHODS = ("requestApproval", "requestUserInput", "elicitation")
-
-
 def project_codex(sess: Session) -> tuple[str, str]:
     try:
         sent = int(open(sess.sent_offset, encoding="utf-8").read().strip())
@@ -504,6 +615,8 @@ def project_codex(sess: Session) -> tuple[str, str]:
         return "RUNNING", "output started, no complete frame yet"
     last_completed = None
     started_after_completed = False
+    # this projector IS codex's structuredAsk route: the ask method names come from the cell
+    ask_methods = capability("codex", "structuredAsk")["detect"].get("methods", ())
     pending_ask = None
     answer_text = ""
     ours = sess.meta.get("thread")
@@ -523,7 +636,7 @@ def project_codex(sess: Session) -> tuple[str, str]:
             item = params.get("item") or {}
             if item.get("phase") == "final_answer" and item.get("text"):
                 answer_text = item["text"]
-        if frame.get("id") is not None and any(m in method for m in CODEX_ASK_METHODS):
+        if frame.get("id") is not None and any(m in method for m in ask_methods):
             pending_ask = frame
         elif pending_ask is not None and (
                 (not method and frame.get("id") == pending_ask.get("id"))
@@ -719,8 +832,7 @@ def classify(sess: Session) -> int:
               f" — {detail}")
 
     # 4. live projection
-    projector = {"omp": project_omp, "claude": project_claude, "codex": project_codex}[engine]
-    state, detail = projector(sess)
+    state, detail = PROJECTORS[engine](sess)
     if state == "WAITING":
         print(f"WAITING-INPUT: {detail}")
         return 4
@@ -761,6 +873,62 @@ def cmd_send(args: argparse.Namespace) -> int:
         signal.alarm(0)
 
 
+# ── codex routes: the executable branch behind each declared codex capability ────────
+# Registered in ROUTES under the SAME route id the capability table declares, and each
+# handler sends exactly that id as its JSON-RPC method — the declared route IS the wire
+# truth, not a label sitting beside it.
+def codex_route_start(sess: Session, ctx: dict):
+    """`turn/start` — goal delivery (`prompt`) and the queuedSteer capability. codex has no
+    queue, so as a STEER this route refuses while a turn is active, with the capability
+    table's own refusal text."""
+    if ctx["verb"] == "steer" and ctx["active"] is not None:
+        die(capability("codex", "queuedSteer")["refusal"])
+    return codex_request(sess, ctx["route"],
+                         {"threadId": ctx["thread"], "input": codex_text_input(ctx["text"])},
+                         on_ready=ctx["on_ready"])
+
+
+def codex_route_steer(sess: Session, ctx: dict):
+    """`turn/steer` — native mid-turn steering, guarded by the expected turn id."""
+    if ctx["active"] is None:
+        die("no active turn to steer — default steer starts the next turn instead")
+    return codex_request(sess, ctx["route"],
+                         {"threadId": ctx["thread"], "expectedTurnId": ctx["active"],
+                          "input": codex_text_input(ctx["text"])},
+                         on_ready=ctx["on_ready"])
+
+
+def codex_route_replace(sess: Session, ctx: dict):
+    """`turn/interrupt+turn/start` — the two methods in the route id are the two frames this
+    branch really sends, in that order."""
+    interrupt, start = ctx["route"].split("+")
+    thread, active = ctx["thread"], ctx["active"]
+    if active is not None:
+        pre_offset = events_size(sess)
+        intr = codex_request(sess, interrupt, {"threadId": thread, "turnId": active})
+        if intr is None or "error" in intr:
+            die(f"{interrupt} not accepted: {clip(json.dumps(intr, ensure_ascii=False), 200)}", 2)
+        # only OUR turn's terminal frame opens the replacement; a stray
+        # completion or a timeout must refuse (review S2 2026-07-19)
+        done = wait_for(
+            sess, pre_offset,
+            lambda f: f.get("method") == "turn/completed"
+            and (f.get("params") or {}).get("threadId") in (None, thread)
+            and ((f.get("params") or {}).get("turn") or {}).get("id") == active,
+            timeout=15.0)
+        if done is None:
+            die("interrupted turn did not reach a terminal state in 15s — NOT starting "
+                "the replacement; check status, then retry or stop+resume", 2)
+    # THE codex replace commit point: the engine has accepted the interrupt and the
+    # interrupted turn is terminal (or there was nothing to interrupt), so the replacement
+    # really is about to be written — and the new attempt is durable before that frame goes
+    # out. A refusal above returns without rotating anything.
+    ctx["commit"]("replace")
+    return codex_request(sess, start,
+                         {"threadId": thread, "input": codex_text_input(ctx["text"])},
+                         on_ready=ctx["on_ready"])
+
+
 def send_frame(args: argparse.Namespace) -> int:
     sess = Session(args.run_dir, args.session)
     sess.require_meta()
@@ -779,14 +947,23 @@ def send_frame(args: argparse.Namespace) -> int:
             "engine's input stream is tainted: agentctl stop, then restart with resume args", 2)
     if args.verb in ("prompt", "steer", "steer-now", "replace"):
         check_review_budget(sess, text)
-    if engine == "claude" and args.verb == "replace":
-        # degrading replace to a queued steer would silently keep the doomed turn
-        # running — refuse and route the operator to the honest path instead
-        die("claude has no interrupt/replace frame — `agentctl stop` the session, then "
-            "restart with `--resume <session_id>` (engine args) and the new goal")
-    if engine == "claude" and args.verb == "steer-now":
-        print("note: claude has no public interrupt frame — delivering as queued steer (lands at the next turn boundary)")
-        args.verb = "steer"
+    # ── capability gate ───────────────────────────────────────────────────────────────
+    # The ONE table decides what this verb may do on this engine. No per-engine special case
+    # lives here, and the sentence a rejected operator reads is the sentence
+    # `agentctl capabilities` publishes — they cannot drift apart.
+    cap_name = VERB_CAPABILITY.get(args.verb)
+    if cap_name:
+        cap_entry = capability(engine, cap_name)
+        if cap_entry["state"] == UNSUPPORTED:
+            # degrading an unsupported verb into a lesser one would silently keep the doomed
+            # turn running — refuse and route the operator to the honest path instead
+            die(cap_entry["refusal"])
+        if cap_entry["fallback"]:
+            # a DEGRADED capability honestly served by another verb: name the degradation out
+            # loud, then route to the verb that actually exists
+            print(f"note: {cap_entry['note']}")
+            args.verb = cap_entry["fallback"]
+            cap_name = VERB_CAPABILITY[args.verb]
     # Identity commit points. The record must be durable BEFORE the frame it authorises
     # leaves — but no earlier than the point where that frame is actually going to be sent:
     # a codex --replace whose interrupt handshake times out is REFUSED, and rotating the
@@ -838,53 +1015,18 @@ def send_frame(args: argparse.Namespace) -> int:
 
     if engine == "codex":
         thread = sess.meta.get("thread") or die("no threadId in meta — handshake incomplete")
-        active = codex_active_turn(sess)
-        if args.verb == "steer":
-            if active is not None:
-                die("codex has no queue — a turn is ACTIVE: use --now (native mid-turn "
-                    "turn/steer) or wait for DONE, then steer the next turn")
-            reply = codex_request(sess, "turn/start",
-                                  {"threadId": thread, "input": codex_text_input(text)},
-                                  on_ready=commit_round_state)
-        elif args.verb == "steer-now":
-            if active is None:
-                die("no active turn to steer — default steer starts the next turn instead")
-            reply = codex_request(sess, "turn/steer",
-                                  {"threadId": thread, "expectedTurnId": active,
-                                   "input": codex_text_input(text)},
-                                  on_ready=commit_round_state)
-        elif args.verb == "replace":
-            if active is not None:
-                pre_offset = events_size(sess)
-                intr = codex_request(sess, "turn/interrupt",
-                                     {"threadId": thread, "turnId": active})
-                if intr is None or "error" in intr:
-                    die(f"turn/interrupt not accepted: {clip(json.dumps(intr, ensure_ascii=False), 200)}", 2)
-                # only OUR turn's terminal frame opens the replacement; a stray
-                # completion or a timeout must refuse (review S2 2026-07-19)
-                done = wait_for(
-                    sess, pre_offset,
-                    lambda f: f.get("method") == "turn/completed"
-                    and (f.get("params") or {}).get("threadId") in (None, thread)
-                    and ((f.get("params") or {}).get("turn") or {}).get("id") == active,
-                    timeout=15.0)
-                if done is None:
-                    die("interrupted turn did not reach a terminal state in 15s — NOT starting "
-                        "the replacement; check status, then retry or stop+resume", 2)
-            # THE codex replace commit point: the engine has accepted the interrupt and the
-            # interrupted turn is terminal (or there was nothing to interrupt), so the
-            # replacement really is about to be written — and the new attempt is durable
-            # before that frame goes out. A refusal above returns without rotating anything.
-            commit_identity("replace")
-            reply = codex_request(sess, "turn/start",
-                                  {"threadId": thread, "input": codex_text_input(text)},
-                                  on_ready=commit_round_state)
-        elif args.verb == "prompt":
-            reply = codex_request(sess, "turn/start",
-                                  {"threadId": thread, "input": codex_text_input(text)},
-                                  on_ready=commit_round_state)
-        else:
+        if not cap_name and args.verb != "prompt":
             die(f"unsupported codex verb: {args.verb}")
+        # `prompt` is lane plumbing and rides the same turn/start route; every CAPABILITY
+        # verb resolves its route through the one table.
+        route = route_of(engine, args.verb) if cap_name else "turn/start"
+        handler = ROUTES[engine].get(route)
+        if handler is None:
+            die(f"codex declares route '{route}' with no executable branch — the capability "
+                "contract and the routing are out of sync")
+        reply = handler(sess, {"thread": thread, "text": text, "verb": args.verb,
+                               "active": codex_active_turn(sess), "route": route,
+                               "on_ready": commit_round_state, "commit": commit_identity})
         if reply is None:
             print("WARN: no JSON-RPC response in 20s — frame delivered, engine may be busy; verify with agentctl status")
             return 3
@@ -958,7 +1100,11 @@ def handshake(args: argparse.Namespace) -> int:
         return 1
     write_frame(sess, jsonrpc(None, "initialized"))
     if sess.meta.get("resume_thread"):
-        started = codex_request(sess, "thread/resume",
+        # the resume METHOD is the capability's declared route, not a literal here: a
+        # handshake that stopped resuming must contradict the contract, and it does — the
+        # behaviour battery starts a real (fake) codex with --resume-thread and asserts the
+        # frame on the wire (cold review R1: this literal drifted silently).
+        started = codex_request(sess, capability(engine, "resume")["route"],
                                 {"threadId": sess.meta["resume_thread"]}, timeout=args.wait)
     else:
         params = {"cwd": sess.meta.get("cwd"), "approvalPolicy": "never",
@@ -972,6 +1118,237 @@ def handshake(args: argparse.Namespace) -> int:
         return 1
     meta_update(sess, "thread", thread_id)
     print(f"ready: codex app-server handshake complete (thread {thread_id})")
+    return 0
+
+
+# ── provider contract: THE table ─────────────────────────────────────────────
+# One record per provider adapter: how the lane LAUNCHES it, how the lane PROJECTS it, and
+# what it can do. Everything else about a provider is derived below — there is no second
+# list anywhere, in this file or in the shell.
+#
+# Each capability cell is judged against CAPABILITY_DEFINITIONS (see the vocabulary block at
+# the top): the OPERATION an operator can invoke through `agentctl`, never "how elegantly the
+# duplex protocol happens to serve it". `route` names a wire method/frame type with an
+# executable branch; `surface` names a non-protocol realization when there is no wire route.
+PROVIDERS: dict[str, dict] = {
+    "omp": {
+        "bin_env": "AGENTCTL_BIN_OMP",
+        "bin": "omp",
+        "argv": ("--mode=rpc",),
+        # unrecognized `agentctl start` args are forwarded verbatim to the engine — that IS
+        # omp's resume surface, so the two facts live in one record
+        "extra_argv": True,
+        "projector": project_omp,
+        "capabilities": {
+            "queuedSteer": _cap(SUPPORTED, route="follow_up", impl=build_frame),
+            "midTurnSteer": _cap(SUPPORTED, route="steer", impl=build_frame),
+            "replaceTurn": _cap(SUPPORTED, route="abort_and_prompt", impl=build_frame),
+            # engine questions arrive as extension_ui_request frames and project as
+            # WAITING-INPUT; the connect-time setWidget push is UI chrome, not a question
+            "structuredAsk": _cap(
+                SUPPORTED, route="extension_ui_request", impl=project_omp,
+                detect={"noise": ("setWidget", "set_widget"),
+                        "clears": ("extension_ui_response", "agent_start")}),
+            "structuredReply": _cap(
+                UNSUPPORTED,
+                refusal="the lane has no structured reply verb — answer a pending omp "
+                        "question with `agentctl steer` (the engine consumes it as the "
+                        "next user message)"),
+            # DEGRADED, not unsupported: `agentctl start` forwards the engine's own resume
+            # args verbatim, so the documented operation IS invocable through the CLI. What
+            # is missing is an IN-SESSION route — recovery costs a stop and a new attempt
+            # identity, and the lane cannot confirm the engine honoured the flag.
+            "resume": _cap(
+                DEGRADED, surface=SURFACE_START_ARGV,
+                note="no in-session resume route: `agentctl stop`, then `agentctl start omp "
+                     "<s> <cwd> --goal <f> -r <session-file>` — start forwards the engine "
+                     "args verbatim, but this is a NEW session and attempt identity, and "
+                     "the lane cannot confirm the engine accepted the flag"),
+            "permissionEnforcement": _cap(
+                UNSUPPORTED,
+                refusal="the lane sets no permission flag for omp: the engine's own "
+                        "defaults govern and the runtime enforces nothing"),
+        },
+    },
+    "claude": {
+        "bin_env": "AGENTCTL_BIN_CLAUDE",
+        "bin": "claude",
+        "argv": ("-p", "--input-format", "stream-json", "--output-format", "stream-json",
+                 "--verbose", "--permission-mode", "bypassPermissions"),
+        "extra_argv": True,
+        "projector": project_claude,
+        "capabilities": {
+            # native queue: lands at the next turn boundary. The protocol has no per-frame
+            # ack, so `send` reports delivery, never acceptance.
+            "queuedSteer": _cap(SUPPORTED, route="user", impl=build_frame),
+            # THE degradation this contract exists to stop advertising as native steering.
+            "midTurnSteer": _cap(
+                DEGRADED, route="user", impl=build_frame,
+                note="claude has no public interrupt frame — `--now` is delivered as a "
+                     "QUEUED steer that lands at the next turn boundary, NOT native "
+                     "mid-turn steering",
+                fallback="steer"),
+            "replaceTurn": _cap(
+                UNSUPPORTED,
+                refusal="claude has no interrupt/replace frame — `agentctl stop` the "
+                        "session, then restart with `--resume <session_id>` (engine args) "
+                        "and the new goal"),
+            "structuredAsk": _cap(
+                UNSUPPORTED,
+                refusal="claude emits no structured ask frame on stream-json (a prose "
+                        "'permission denied' is an error, not a question) — the worker asks "
+                        "by writing BLOCKED.md, which projects as WAITING-INPUT (exit 4)"),
+            "structuredReply": _cap(
+                UNSUPPORTED,
+                refusal="the lane has no structured reply verb — answer a BLOCKED.md "
+                        "question with `agentctl steer`"),
+            "resume": _cap(
+                DEGRADED, surface=SURFACE_START_ARGV,
+                note="no in-session resume route: `agentctl stop`, then `agentctl start "
+                     "claude <s> <cwd> --goal <f> --resume <session_id>` — start forwards "
+                     "the engine args verbatim (cwd-bound), but this is a NEW session and "
+                     "attempt identity, and the lane cannot confirm the engine accepted it"),
+            "permissionEnforcement": _cap(
+                UNSUPPORTED,
+                refusal="the lane launches claude with `--permission-mode "
+                        "bypassPermissions`: prompts are disabled by design, the runtime "
+                        "enforces nothing"),
+        },
+    },
+    "codex": {
+        "bin_env": "AGENTCTL_BIN_CODEX",
+        "bin": "codex",
+        "argv": ("app-server",),
+        # engine config rides the protocol (thread/start params), so stray argv is REFUSED
+        # rather than silently dropped — and codex therefore has no start-argv surface
+        "extra_argv": False,
+        "projector": project_codex,
+        "capabilities": {
+            # a route that EXISTS but refuses under a named condition is degraded, not
+            # supported: the refusal below is the string the busy-turn branch prints.
+            "queuedSteer": _cap(
+                DEGRADED, route="turn/start", impl=None,
+                note="codex has no queue: a default steer starts the NEXT turn when idle "
+                     "and is REFUSED while a turn is active",
+                refusal="codex has no queue — a turn is ACTIVE: use --now (native mid-turn "
+                        "turn/steer) or wait for DONE, then steer the next turn"),
+            "midTurnSteer": _cap(SUPPORTED, route="turn/steer", impl=codex_route_steer),
+            # the interrupted turn must reach a terminal frame before the replacement
+            # starts; an interrupt that is not accepted refuses instead of replacing
+            "replaceTurn": _cap(SUPPORTED, route="turn/interrupt+turn/start",
+                                impl=codex_route_replace),
+            # requestApproval / requestUserInput / elicitation project as WAITING-INPUT;
+            # approvalPolicy=never should keep them from appearing at all
+            "structuredAsk": _cap(
+                SUPPORTED, route="codex-ask", impl=project_codex,
+                detect={"methods": ("requestApproval", "requestUserInput", "elicitation")}),
+            "structuredReply": _cap(
+                UNSUPPORTED,
+                refusal="the lane has no structured reply verb — answer manually over the "
+                        "raw protocol, or `agentctl stop` and restart with "
+                        "`--resume-thread <id>`"),
+            # the only IN-SESSION resume in the lane: the handshake resumes the thread, so
+            # the next round continues the same conversation without a stop/start dance
+            "resume": _cap(SUPPORTED, route="thread/resume", impl=handshake,
+                           start_flag="--resume-thread"),
+            "permissionEnforcement": _cap(
+                UNSUPPORTED,
+                refusal="the handshake pins approvalPolicy=never and "
+                        "sandbox=danger-full-access: approvals are disabled by design, the "
+                        "runtime enforces nothing"),
+        },
+    },
+}
+# `turn/start` is shared by codex's queuedSteer route and by goal delivery (`prompt`), so its
+# branch is attached here rather than inside the cell that names it.
+PROVIDERS["codex"]["capabilities"]["queuedSteer"]["impl"] = codex_route_start
+
+# ── everything below is DERIVED from the table above ─────────────────────────
+CAPABILITIES = {name: rec["capabilities"] for name, rec in PROVIDERS.items()}
+# route id → the branch that really performs it. Send routes (frame builder / JSON-RPC
+# handler) and projection routes (structuredAsk is realized by the projector, not by a send
+# frame) alike. A route cannot exist without a cell declaring it, because this IS the cells.
+ROUTES = {name: {cell["route"]: cell["impl"] for cell in caps.values() if cell["route"]}
+          for name, caps in CAPABILITIES.items()}
+# engine → state projector, consumed by classify.
+PROJECTORS = {name: rec["projector"] for name, rec in PROVIDERS.items()}
+
+
+def capability_document() -> dict:
+    """The published machine contract. Exactly `{state}` for supported/experimental and
+    exactly `{state, note}` for degraded (names the degradation) and unsupported (names the
+    recommended supported path) — a supported cell publishes no note, because the state IS
+    the whole claim (cold review R1). Route ids, refusals, surfaces and fallbacks are
+    IMPLEMENTATION: publishing them would invite callers to depend on wire details that are
+    free to change under a stable state."""
+    return {
+        "schemaVersion": CAPABILITY_SCHEMA_VERSION,
+        "providers": {
+            engine: {
+                name: ({"state": cell["state"], "note": cell["note"]} if cell["note"]
+                       else {"state": cell["state"]})
+                for name, cell in ((n, capability(engine, n)) for n in CAPABILITY_ORDER)
+            }
+            for engine in PROVIDERS
+        },
+    }
+
+
+def cmd_capabilities(args: argparse.Namespace) -> int:
+    """Runtime-generated provider capability contract. There is no prose copy of this table:
+    the main skill points here, and every provider behaviour is generated from it."""
+    doc = capability_document()
+    if args.json:
+        print(json.dumps(doc, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    engines = list(PROVIDERS)
+    head = max(len(n) for n in CAPABILITY_ORDER) + 2
+    col = max(max(len(e) for e in engines), max(len(s) for s in CAPABILITY_STATES)) + 2
+    print(f"provider capability contract (schemaVersion {doc['schemaVersion']}) — generated "
+          f"from the provider table in {os.path.basename(__file__)}; no prose copy exists")
+    print("".join(["capability".ljust(head)] + [e.ljust(col) for e in engines]))
+    for name in CAPABILITY_ORDER:
+        print("".join([name.ljust(head)]
+                      + [doc["providers"][e][name]["state"].ljust(col) for e in engines]))
+    print("\ncapability definitions (the criterion every cell is judged against — the "
+          "OPERATION agentctl exposes, not the protocol's elegance):")
+    for name in CAPABILITY_ORDER:
+        print(f"  {name.ljust(head - 2)} {CAPABILITY_DEFINITIONS[name]}")
+    print("\nnotes (published exactly for degraded — naming the degradation — and "
+          "unsupported — naming the recommended supported path):")
+    for engine in engines:
+        for name in CAPABILITY_ORDER:
+            cell = doc["providers"][engine][name]
+            if cell.get("note"):
+                print(f"  {engine}.{name} [{cell['state']}] {cell['note']}")
+    print(f"\nstates: {' / '.join(CAPABILITY_STATES)}")
+    return 0
+
+
+def provider_spec_rows() -> list[str]:
+    """The shell-consumable provider spec — `agentctl`'s ONLY provider list.
+
+    `name|bin_env|default_bin|pinned_argv|extra_argv|resume_start_flag`, argv already
+    shell-quoted. The allowlist, the launch command, whether unrecognized start args are
+    forwarded (which IS the start-argv resume surface) and which start flag drives the
+    provider's resume capability all come from here, so the shell cannot hold an opinion the
+    table does not (cold review R1: a renamed launch branch went undetected)."""
+    rows = []
+    for name, rec in PROVIDERS.items():
+        argv = " ".join(shlex.quote(a) for a in rec["argv"])
+        rows.append("|".join([
+            name, rec["bin_env"], rec["bin"], argv,
+            "1" if rec["extra_argv"] else "0",
+            rec["capabilities"]["resume"]["start_flag"],
+        ]))
+    return rows
+
+
+def cmd_providers(args: argparse.Namespace) -> int:
+    if args.shell:
+        print("\n".join(provider_spec_rows()))
+    else:
+        print("\n".join(PROVIDERS))
     return 0
 
 
@@ -1182,6 +1559,15 @@ def main() -> None:
     p_id.add_argument("--armed", default="", help="arm-time identity token (publish)")
     p_id.add_argument("--rc", type=int, default=0)
     p_id.set_defaults(func=cmd_identity)
+
+    p_cap = sub.add_parser("capabilities", help="runtime-generated provider capability contract")
+    p_cap.add_argument("--json", action="store_true", help="stable machine shape")
+    p_cap.set_defaults(func=cmd_capabilities)
+
+    p_prov = sub.add_parser("providers", help="the provider adapter spec agentctl launches from")
+    p_prov.add_argument("--shell", action="store_true",
+                        help="name|bin_env|default_bin|argv|extra_argv|resume_flag rows")
+    p_prov.set_defaults(func=cmd_providers)
 
     args = parser.parse_args()
     sys.exit(args.func(args))

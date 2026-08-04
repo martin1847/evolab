@@ -31,13 +31,10 @@ metadata:
 默认用 omp 执行、codex 评审，但**工具名不证明异构**；派工前看实际 model/backend，避免执行席与评审席落到同一 lineage 或 quota 池。
 
 派工统一走 `agentctl start|steer|status|watch|stop`——**一条 lane、三引擎**，每个引擎跑自己的原生
-duplex 协议（omp rpc / claude stream-json / codex app-server），能力差异不分叉车道、由接口干净拒绝：
-
-| 引擎 | steer 默认（排队/下一轮） | `--now`（mid-turn） | `--replace` |
-|---|---|---|---|
-| omp | `follow_up` 原生排队 | `steer` 原生 | `abort_and_prompt` 原生 |
-| claude | 原生排队到 turn 边界 | 降级排队（明说） | 拒绝 → stop+resume |
-| codex | idle 时开下一 turn；**codex 无排队**，忙时拒绝并指路 `--now` | `turn/steer` 原生（带并发守卫） | interrupt+start |
+duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原则：能力差异不分叉车道，由
+接口当场拒绝并指正路**——不支持的组合永远是 typed 拒绝 + 正路，绝不静默降级成别的语义。谁支持什么
+由 runtime 自己讲，本文不留第二份能力表：`agentctl capabilities`（人读表 / `--json` 机器读；状态
+闭枚举 supported·degraded·unsupported·experimental，degraded 必带降级说明）。
 
 另有 **Agent subagent**（浏览器 / MCP / 隔离主上下文的读密集工作：独立上下文、只回蒸馏结论、显式按任务分档 model）。
 TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 控制始终走协议。
@@ -58,9 +55,9 @@ TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 
 
    理解门：runtime footer 要求简短复述后立即开工，真阻塞写 `<cwd>/BLOCKED.md` 并停止（三引擎同协议）。
 4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；完整状态表见 agentctl README。
-5. **steering 走 `agentctl steer`**：语义按 §0 引擎能力表——默认排队/下一轮，`--now` mid-turn，
-   `--replace` 弃当前重来；不支持的组合由接口当场拒绝并指正路。投递成功 ≠ 模型照做，验收仍看交付物。
-   每个后续 turn 都重新挂 `agentctl watch`。
+5. **steering 走 `agentctl steer`**：默认排队/下一轮，`--now` mid-turn，`--replace` 弃当前重来；
+   引擎能力差异查 `agentctl capabilities`，不支持的组合由接口当场拒绝并指正路。投递成功 ≠ 模型照做，
+   验收仍看交付物。每个后续 turn 都重新挂 `agentctl watch`。
 6. **Implemented → Verified**：必须同时有 fresh 正向交付证据、不同 lineage 的独立评审、真实用户路径 E2E。先本机真路径，再部署，再部署环境 E2E，最后才关单；git 集成与 push 门禁归 Git workflow 标准。
 
 ## 2. 对抗式评审循环

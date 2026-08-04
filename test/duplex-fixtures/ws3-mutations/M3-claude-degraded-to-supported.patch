@@ -1,0 +1,16 @@
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -1182,12 +1182,7 @@
+             # ack, so `send` reports delivery, never acceptance.
+             "queuedSteer": _cap(SUPPORTED, route="user", impl=build_frame),
+             # THE degradation this contract exists to stop advertising as native steering.
+-            "midTurnSteer": _cap(
+-                DEGRADED, route="user", impl=build_frame,
+-                note="claude has no public interrupt frame — `--now` is delivered as a "
+-                     "QUEUED steer that lands at the next turn boundary, NOT native "
+-                     "mid-turn steering",
+-                fallback="steer"),
++            "midTurnSteer": _cap(SUPPORTED, route="user", impl=build_frame),
+             "replaceTurn": _cap(
+                 UNSUPPORTED,
+                 refusal="claude has no interrupt/replace frame — `agentctl stop` the "

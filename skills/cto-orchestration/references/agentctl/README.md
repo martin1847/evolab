@@ -18,11 +18,11 @@ agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]
 agentctl status <session>      # one-shot typed verdict（exit code = 结论）
 agentctl watch  <session>      # 阻塞至终态；run_in_background 挂起
 agentctl stop   <session>      # 结束 + 按进程组收割整棵树 + 清控制态（events/rc/stderr 留作尸检）
+agentctl capabilities [--json]  # 运行时生成的三引擎能力契约（路由与本表同源，唯一真源）
 ```
 
-- **steer 语义**（能力差异拒绝制，不分叉车道）：默认排队 / `--now` / `--replace` × 三引擎的语义
-  矩阵（含原生动词）见 SKILL.md §0 表；runtime 对不支持组合当场拒绝并指正路（claude `--replace`
-  拒绝 → `stop` + `--resume <sid>` 重启）。投递成功 ≠ 模型照做，验收仍看交付物。
+- **steer 语义**（能力差异拒绝制，不分叉车道）：三引擎能力矩阵由 runtime 生成，`agentctl capabilities`
+  是唯一真源（同一张表既驱动路由、又出拒绝文案）。投递成功 ≠ 模型照做，验收仍看交付物。
 - **typed exit 三引擎同词汇**（全表见 [typed 状态](#typed-状态编排者纪律)）；
   **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析（现场假阴性收编）；freshness
@@ -61,9 +61,9 @@ steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影�
 
 - goal 投递 = `prompt` 帧（正文 = goal 文件 + HEADLESS 协议 footer：立即开工、真阻塞写
   `<cwd>/BLOCKED.md` 停下——fresh BLOCKED.md 映射 exit 4，三引擎同协议）。
-- **崩溃恢复腿**：引擎死（rc 落盘）→ `agentctl stop` 清态，然后用引擎原生 resume 开新会话：
-  omp `… -r <session-file>`（engine args）/ claude `… --resume <sid>`（engine args，cwd 绑定）/
-  codex `agentctl start codex s2 <cwd> --goal f --resume-thread <threadId>`（meta `thread=` 里有）。
+- **崩溃恢复腿**：照 `agentctl capabilities` 的 `resume` 行走——degraded 两家（`stop` 后重开会话、
+  engine args 由 start 原样转发）正路在各自 note 里；codex 唯一 supported，握手内续 thread：
+  `agentctl start codex <s> <cwd> --goal <f> --resume-thread <threadId>`（supported 不带 note，故写这）。
 - 单写者纪律：所有 fifo 写经 `duplexctl.py`（flock）；并发 steer 由锁串行。
 
 codex 引擎注：app-server 官方标 experimental，但错误帧自描述（参数漂移当场报全量合法值）、

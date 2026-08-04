@@ -1055,8 +1055,10 @@ if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   # enforce. BLOCKED.md is the headless protocol's escalation channel — an exact path, not a
   # wildcard. WS2 (the delivery receipt) extends the SAME subsystem and the same three runtime
   # files, so its owned paths are listed here too — the guardrail is about never touching
-  # guard / git-workflow / review policy, not about which workstream is in flight.
-  allow='^(skills/cto-orchestration/references/agentctl/(agentctl|duplexctl\.py|identity\.py|README\.md)|test/(agentctl-identity|agentctl-duplex|agentctl-receipt|duplexctl-timeout)\.test\.sh|test/duplex-fixtures/fake_codex_duplex\.py|test/duplex-fixtures/ws1/?[^/]*|test/duplex-fixtures/ws1-mutations/?[^/]*|test/duplex-fixtures/ws2/?[^/]*|test/duplex-fixtures/ws2-mutations/?[^/]*|docs/orchestration/?|docs/orchestration/WS[12]_FINDINGS\.md|BLOCKED\.md)$'
+  # guard / git-workflow / review policy, not about which workstream is in flight. WS3 (the
+  # capability contract) additionally owns the main SKILL.md and the docs-contract suite,
+  # because DELETING the prose capability matrix from the skill is its deliverable.
+  allow='^(skills/cto-orchestration/(SKILL\.md|references/agentctl/(agentctl|duplexctl\.py|identity\.py|README\.md))|test/(agentctl-identity|agentctl-duplex|agentctl-receipt|agentctl-capabilities|cto-docs-contract|duplexctl-timeout)\.test\.sh|test/duplex-fixtures/fake_codex_duplex\.py|test/duplex-fixtures/ws1/?[^/]*|test/duplex-fixtures/ws1-mutations/?[^/]*|test/duplex-fixtures/ws2/?[^/]*|test/duplex-fixtures/ws2-mutations/?[^/]*|test/duplex-fixtures/ws3/?[^/]*|test/duplex-fixtures/ws3-mutations/?[^/]*|docs/orchestration/?|docs/orchestration/WS[123]_FINDINGS\.md|BLOCKED\.md)$'
   stray="$(printf '%s\n' "$changed" | grep -v -E "$allow" | grep -c . )"
   chk_eq "changed-file list stays inside reliability-core scope (no guard / git-workflow / review policy)" \
     0 "$stray"

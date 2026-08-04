@@ -1,0 +1,11 @@
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -1189,7 +1189,7 @@
+                      "mid-turn steering",
+                 fallback="steer"),
+             "replaceTurn": _cap(
+-                UNSUPPORTED,
++                SUPPORTED,
+                 refusal="claude has no interrupt/replace frame — `agentctl stop` the "
+                         "session, then restart with `--resume <session_id>` (engine args) "
+                         "and the new goal"),

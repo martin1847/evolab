@@ -5,6 +5,9 @@ JSON-RPC over stdio. Env controls:
   FAKE_PROVIDER_LOG        append every received frame
   FAKE_CODEX_DELIVERABLE   path written during each turn
   FAKE_CODEX_GATE=<path>   turn stays ACTIVE until this file exists (steer window)
+  FAKE_CODEX_ASK=1         after turn/start, emit a native requestUserInput REQUEST (an id-
+                           bearing server→client frame) and leave the turn open — the
+                           structured-ask shape agentctl must project as WAITING-INPUT
   FAKE_CODEX_ERROR_TURN=1  complete turns with status=failed + error
   FAKE_CODEX_DROP_INTERRUPT_TERMINAL=1
                            accept turn/interrupt but never emit the turn's terminal event
@@ -95,6 +98,12 @@ for line in sys.stdin:
             emit({"method": "turn/completed",
                   "params": {"threadId": "thread-sub",
                              "turn": {"id": "sub-1", "status": "completed", "error": None}}})
+        if os.environ.get("FAKE_CODEX_ASK") == "1":
+            # a real engine ask: correlated request, no terminal frame until it is answered
+            emit({"id": "ask-1", "method": "requestUserInput",
+                  "params": {"threadId": "thread-1",
+                             "questions": [{"id": "q1", "prompt": "Proceed?"}]}})
+            continue
         threading.Thread(target=complete_turn, args=(tid,), daemon=True).start()
     elif method == "turn/steer":
         expected = message["params"].get("expectedTurnId")
