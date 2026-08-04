@@ -23,7 +23,7 @@ canonical = 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓的 enro
 
 1. **从最新 base 起 feature 分支**:`git switch -c <type>/<slug>`(`feat/` `fix/` `chore/` …),不在受保护分支上直接改。
 2. **受保护分支禁直推**:`main`/`master`/`develop`/`dev`/`release/**`/`project/*` 一律走 PR,MUST NOT `git push` 直推、MUST NOT `push -f` 改写其历史。
-3. **rebase 是条件动作、不是仪式**:push/PR 前 `git fetch`,查 base 动没动(`git log <branchpoint>..origin/<base>` 空 = 没动)。**没动 → 什么都不做**(空 rebase 是 no-op,不是漏步骤);**动了且碰了你改的文件 → rebase 或把 base merge 进来**解冲突再 PR;**动了但文件不重叠 → 可不动**。并发会话下 `fetch`+检查必做,但"检查"≠"每次都 rebase"。
+3. **rebase 是条件动作、不是仪式**:push/PR 前 `git fetch`,查 base 动没动(`git log <branchpoint>..origin/<base>` 空 = 没动)。**没动 → 什么都不做**(空 rebase 是 no-op,不是漏步骤);**动了且碰了你改的文件 → rebase 或把 base merge 进来**解冲突再 PR;**动了但文件不重叠 → 可不动**。并发会话下 `fetch`+检查必做,但"检查"≠"每次都 rebase"。评审/阅读用途的差分用 three-dot(`origin/<base>...HEAD`,merge-base 差分)——stale-base 两点差分会把他人 commit 的反向删除误读为回退;rebase 只服务 push/merge。
 4. **走 PR,只把已配硬门当硬门**:PR 描述讲清 what/why;Tier 3 等 required checks 绿再合;review / CODEOWNERS / last-push / conversation resolution 仅在 repo-local gate 明确要求时阻断合并,否则跨人评审只是建议;**合并方式按本仓声明的集成策略**(见 §集成策略)。
 5. **提交信息**:讲清意图,**MUST NOT 加任何 AI / Claude 签名行 / co-author**。
 6. **force push 仅限自己的 feature 分支**,优先 `--force-with-lease`;受保护分支永不 force。
