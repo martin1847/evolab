@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 0416f0b..792494e 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -501,7 +501,7 @@ class IdentityStore:
+                 return UNKNOWN, (f"active identity record is {status} ({self.path})"
+                                  f"{self._why()} — nothing may be published under an "
+                                  "unestablished identity")
+-            current = self._token_of(rec)
++            current = armed_token   # MUTATION: no pre-publish re-read of the record
+             if armed_token != current:
+                 armed_parts, now_parts = armed_token.split("/"), current.split("/")
+                 if len(armed_parts) != 3:

@@ -1,0 +1,16 @@
+diff --git a/skills/cto-orchestration/references/agentctl/duplexctl.py b/skills/cto-orchestration/references/agentctl/duplexctl.py
+index f2aa640..4905802 100755
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -730,9 +730,8 @@ def send_frame(args: argparse.Namespace) -> int:
+         store = identity.IdentityStore(args.run_dir, args.session)
+         try:
+             rec = store.transition(kind)
+-        except identity.IdentityPersistError as exc:
+-            die(f"IDENTITY-PERSIST-FAILED: {exc} — frame NOT sent; the prior active identity "
+-                "record (if any) stays authoritative", 2)
++        except identity.IdentityPersistError:
++            rec = {"attemptId": "unpersisted"}  # MUTATION: no pre-frame persist gate
+         print(f"identity: attempt {rec['attemptId']} incarnation "
+               f"{rec.get('processIncarnation') or 'UNESTABLISHED'}")
+ 

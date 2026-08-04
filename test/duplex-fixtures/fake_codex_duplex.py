@@ -6,6 +6,11 @@ JSON-RPC over stdio. Env controls:
   FAKE_CODEX_DELIVERABLE   path written during each turn
   FAKE_CODEX_GATE=<path>   turn stays ACTIVE until this file exists (steer window)
   FAKE_CODEX_ERROR_TURN=1  complete turns with status=failed + error
+  FAKE_CODEX_DROP_INTERRUPT_TERMINAL=1
+                           accept turn/interrupt but never emit the turn's terminal event
+                           (the engine takes the interrupt and then goes silent — agentctl
+                           must refuse to start the replacement, and must not have rotated
+                           the attempt identity for a replacement that never happens)
 """
 from __future__ import annotations
 
@@ -104,6 +109,7 @@ for line in sys.stdin:
         else:
             state["cancelled"].add(tid)
             emit({"id": req_id, "result": {}})
-            complete_turn(tid, interrupted=True)
+            if os.environ.get("FAKE_CODEX_DROP_INTERRUPT_TERMINAL") != "1":
+                complete_turn(tid, interrupted=True)
     else:
         emit({"id": req_id, "error": {"code": -32600, "message": f"unknown method {method}"}})

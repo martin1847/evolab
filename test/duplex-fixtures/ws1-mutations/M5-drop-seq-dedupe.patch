@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 0416f0b..a0f1fee 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -476,7 +476,7 @@ class IdentityStore:
+                 raise IdentityPersistError(
+                     f"event seq {seq!r} is not a non-negative int — sameness is undecidable")
+             water = rec["seqWatermark"]   # load() guarantees an int >= WATERMARK_UNSET
+-            if seq <= water:
++            if False:   # MUTATION: no monotonic dedupe
+                 return False
+             rec["seqWatermark"] = seq
+             rec["stateVersion"] = int(rec.get("stateVersion", 0)) + 1

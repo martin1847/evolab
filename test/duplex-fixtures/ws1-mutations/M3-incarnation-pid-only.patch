@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index a4902c3..40f81e7 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -288,7 +288,7 @@ class IdentityStore:
+         if not isinstance(active_inc, str) or not active_inc:
+             return (UNKNOWN,
+                     f"active process incarnation unestablished ({rec.get('incarnationSignal')})")
+-        if got_inc != active_inc:
++        if got_inc.split("@")[0] != active_inc.split("@")[0]:
+             return (STALE_INCARNATION,
+                     f"evidence incarnation '{got_inc}' ≠ active '{active_inc}'")
+         return OK, f"attempt {got_attempt} + incarnation matched the active record"

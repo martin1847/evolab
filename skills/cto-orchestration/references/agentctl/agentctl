@@ -27,7 +27,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 CTL="$HERE/duplexctl.py"
 PY="${AGENTCTL_PYTHON:-python3}"
-
+ARMED_ID=""   # arm-time snapshot of the active identity; set by status/watch before classify
 q() { printf %q "$1"; }
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
@@ -113,20 +113,34 @@ reap_tree() { # $1 pane_pid (== pgid)  $2 expected leader lstart ("" = pid read 
 # later same-name session or round is a durable false DONE). JSON goes through python
 # (quotes/backslashes in globs stay parseable, F3) with tmp+rename (no torn read, F7);
 # the meta re-check right before publish keeps a racing stop from resurrecting a marker.
-write_terminal_marker() { # $1 session
-  [ -f "$DIR/$1.duplex.meta" ] || return 0
-  "$PY" -c 'import json,sys,time; print(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "rc": 0, "deliverable": sys.argv[1]}))' \
-    "$(meta_get "$1" deliverable)" > "$DIR/$1.terminal.json.tmp" 2>/dev/null \
-    && mv "$DIR/$1.terminal.json.tmp" "$DIR/$1.terminal.json"
+# Publication is FENCED by attempt identity, and every identity file operation lives in ONE
+# place (duplexctl's identity module): the marker is stamped with the ACTIVE identity and the
+# record is re-read immediately before the write, so a watcher armed under attempt A can never
+# publish a terminal conclusion for attempt B. Refusal prints the typed stale class, writes
+# nothing, and returns 2 — an ambiguous identity is never allowed to read as DONE.
+publish_terminal_marker() { # $1 session — stdout: typed line on refusal; rc 2 = refused
+  "$PY" "$CTL" --run-dir "$DIR" identity publish "$1" --armed "$ARMED_ID"
+}
+
+identity_token() { # $1 session — opaque arm-time snapshot ("" = legacy session, unfenced)
+  "$PY" "$CTL" --run-dir "$DIR" identity token "$1" 2>/dev/null
+}
+
+# Cleanup is a MUTATION of identity state and is refused when the shared lock cannot be
+# acquired, so its exit code is load-bearing: swallowing it would let a reclaimed session name
+# inherit its predecessor's authority — the exact class this whole module exists to fence.
+identity_clear() { # $1 session — 0 = identity dropped, non-zero = refused (message on stdout)
+  "$PY" "$CTL" --run-dir "$DIR" identity clear "$1" 2>&1
 }
 
 # The BLOCKED.md footer keeps the cross-engine ask-user protocol alive on the duplex lane:
 # headless engines cannot prompt, so "on doubt, write BLOCKED.md and stop" maps to exit 4.
-append_footer() { # $1 out-file  $2 cwd
-  printf '\n\n---\nHEADLESS PROTOCOL\n%s\n%s\n%s\n' \
+append_footer() { # $1 out-file  $2 cwd  $3 identity stamp file
+  printf '\n\n---\nHEADLESS PROTOCOL\n%s\n%s\n%s\n%s\n' \
     'Briefly restate the files/contracts, scope, and main risk, then start work immediately. Do not wait for approval or interaction.' \
     'This session is non-interactive. Work from this message and stop when done; further instructions may arrive as new messages.' \
-    "If genuinely blocked, write the blocker to $2/BLOCKED.md and stop." >> "$1"
+    "If genuinely blocked, write the blocker to $2/BLOCKED.md and stop." \
+    "When you write that file, make its LAST line the exact contents of $3 — that stamp proves the blocker belongs to this attempt; an unstamped blocker still works but is fenced only by round freshness." >> "$1"
 }
 
 cmd_start() {
@@ -181,6 +195,13 @@ cmd_start() {
     echo "ERR: session '$S' fifo already exists ($FIFO) — concurrent start, or crash residue: agentctl stop $S first" >&2; exit 1
   fi
   rm -f "$RC" "$DIR/$S.terminal.json"; : > "$EV"; : > "$ERR"
+  # a reclaimed name must not inherit its predecessor's authority: if the old identity cannot
+  # be dropped, REFUSE to start rather than run a session over someone else's record
+  if ! CLEAR_OUT="$(identity_clear "$S")"; then
+    echo "ERR: cannot clear the previous identity for '$S' — $CLEAR_OUT" >&2
+    echo "HINT: another process may hold the identity lock, or $DIR/$S.identity.lock is unreadable" >&2
+    rm -f "$FIFO"; exit 1
+  fi
 
   EXTRA_Q=""  # zero args to `printf ' %q'` would still format once → a literal '' engine arg
   [ "${#EXTRA[@]}" -gt 0 ] && EXTRA_Q="$(printf ' %q' "${EXTRA[@]}")"
@@ -232,7 +253,7 @@ cmd_start() {
   fi
 
   PROMPT="$DIR/$S.duplex.prompt"
-  cat "$GOAL" > "$PROMPT"; append_footer "$PROMPT" "$CWD"
+  cat "$GOAL" > "$PROMPT"; append_footer "$PROMPT" "$CWD" "$DIR/$S.identity.d/blocked-stamp.txt"
   "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb prompt --file "$PROMPT" || {
     echo "ERR: goal delivery failed — engine up but prompt not accepted; inspect then agentctl stop $S" >&2; exit 2; }
   echo "started $ENG → duplex session '$S' (cwd $CWD; tmux supervises, protocol steers)"
@@ -272,12 +293,21 @@ cmd_status() {
   S="${1:?usage: agentctl status <session>}"
   case "$(lane_of "$S")" in
     duplex)
+      # snapshot the identity BEFORE classify: the publish below re-reads the record and
+      # refuses if it rotated in between, so a conclusion computed under one attempt can
+      # never be published under another (TOCTOU window closed).
+      ARMED_ID="$(identity_token "$S")"
       msg="$("$PY" "$CTL" --run-dir "$DIR" classify "$S")"; rc=$?
       [ -n "$msg" ] && printf '%s\n' "$msg"   # a died classify says it all on stderr
       # one-shot status persists DONE only when the deliverable gate vouched for it —
       # a bare idle read at a turn boundary must not become durable truth (review F6);
       # sessions without a declared deliverable get their marker from watch's 2-stable read.
-      [ "$rc" = 0 ] && [ -n "$(meta_get "$S" deliverable)" ] && write_terminal_marker "$S"
+      if [ "$rc" = 0 ] && [ -n "$(meta_get "$S" deliverable)" ]; then
+        pmsg="$(publish_terminal_marker "$S")"; prc=$?
+        [ -n "$pmsg" ] && printf '%s\n' "$pmsg"
+        # a refused publish means THIS verdict is not ours to publish: never report OK
+        [ "$prc" = 0 ] || rc=2
+      fi
       # RUNNING with nobody watching is the field's most expensive omission (start,
       # then forget to arm the watcher — 4 catches in one production day). Advisory
       # only: the typed line and the exit code are untouched.
@@ -339,6 +369,9 @@ cmd_watch() {
   # ENGINE-SILENT bound: a steer was delivered but the engine produced zero output for
   # ~2min. The duplex analog of the old NO-HOOK exit 8 — report honestly, never guess.
   SILENT_MAX="${AGENT_WATCH_SILENT_POLLS:-8}"
+  # arm-time identity snapshot: this watcher may only ever publish a conclusion for the
+  # identity it armed under (re-verified inside publish, immediately before the write).
+  ARMED_ID="$(identity_token "$S")"
   echo "=== [$S] DUPLEX-WATCH ARMED at $(date '+%H:%M:%S') (stateless — safe to kill and re-run) ==="
   idle=0; silent=0; tmo=0; i=1
   while [ "$i" -le "$MAX" ]; do
@@ -356,7 +389,12 @@ cmd_watch() {
         # before an auto-consumed queued message must not read as terminal.
         idle=$((idle+1)); silent=0; tmo=0
         if [ "$idle" -ge 2 ]; then
-          [ "$rc" = 0 ] && write_terminal_marker "$S"
+          if [ "$rc" = 0 ]; then
+            pmsg="$(publish_terminal_marker "$S")"; prc=$?
+            [ -n "$pmsg" ] && msg="$msg
+$pmsg"
+            [ "$prc" = 0 ] || rc=2   # armed under another identity: publish nothing, report the class
+          fi
           echo "=== [$S] $msg ==="; watch_exit "$rc"
         fi ;;
       8)
@@ -399,11 +437,21 @@ cmd_stop() {
             "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" \
             "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" \
             "$DIR/$S.terminal.json" 2>/dev/null
+      # the attempt is over: its authority should die with the control state. A refused clear
+      # must be SAID OUT LOUD — the session is down but its identity still holds authority, so
+      # a same-name restart would be refused rather than silently inheriting it.
+      ID_RC=0
+      CLEAR_OUT="$(identity_clear "$S")" || ID_RC=1
+      [ "$ID_RC" = 0 ] || echo "WARN: identity state was NOT cleared for '$S' — $CLEAR_OUT" >&2
       consume_tombstone "$S"
       echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc"
       if [ -n "$live_pg" ]; then reap_tree "$live_pg" ""
       else reap_tree "$meta_pg" "$meta_ls"; fi
-      exit $? ;;
+      REAP_RC=$?
+      # a refused identity clear is a real failure of stop's contract, even though the engine
+      # and its process group are gone: the caller must know the name is not free to reuse
+      [ "$ID_RC" = 0 ] || exit 1
+      exit "$REAP_RC" ;;
     none)
       # no lane meta: clean bare tmux AND orphan duplex claims (crash residue like a
       # stray fifo/write-intent) — this IS the recovery path the start error advertises
@@ -420,6 +468,9 @@ cmd_stop() {
                "$DIR/$S.terminal.json"; do
         [ -e "$f" ] && { rm -f "$f"; cleaned=1; }
       done
+      # orphan identity must not outlive the residue it belonged to
+      CLEAR_OUT="$(identity_clear "$S")" || { reap_rc=1
+        echo "WARN: identity state was NOT cleared for '$S' — $CLEAR_OUT" >&2; }
       if [ "$cleaned" = 1 ]; then echo "removed orphan session residue for '$S'"; exit "$reap_rc"
       elif [ -e "$DIR/$S.duplex.events.jsonl" ] || [ -e "$DIR/$S.duplex.rc" ]; then
         # idempotent re-stop: session already cleaned, only post-mortem artifacts remain

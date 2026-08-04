@@ -1,0 +1,26 @@
+diff --git a/skills/cto-orchestration/references/agentctl/duplexctl.py b/skills/cto-orchestration/references/agentctl/duplexctl.py
+index a8ab634..e419e23 100755
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -608,7 +608,7 @@ def classify(sess: Session) -> int:
+         judged = marker_verdict(store)
+         if judged is not None:
+             klass, detail, marker = judged
+-            if klass == identity.OK and marker.get("rc") == 0:
++            if klass in (identity.OK, identity.STALE_ATTEMPT) and marker.get("rc") == 0:
+                 stamp = identity.IdentityStore.marker_stamp(marker)
+                 try:
+                     first = store.apply_event(stamp["attemptId"], stamp.get("seq"))
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 0416f0b..2f1de2f 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -466,7 +466,7 @@ class IdentityStore:
+             if status != STATUS_OK or rec is None:
+                 raise IdentityPersistError(
+                     f"active identity record is {status} ({self.path}){self._why()}")
+-            if attempt_id != rec["attemptId"]:
++            if False:   # MUTATION: same predicate, second enforcement depth
+                 raise IdentityPersistError(
+                     f"event attempt {attempt_id} is not the active attempt {rec['attemptId']}")
+             if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:

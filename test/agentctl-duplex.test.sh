@@ -627,6 +627,9 @@ WT8="$SANDBOX/wt8"; mkdir -p "$WT8" "$SANDBOX/bin8"
 ln -s /usr/bin/true "$SANDBOX/bin8/tmux"   # hand-built session: liveness probe must pass so classify reaches the lock
 printf 'engine=omp\ncwd=%s\n' "$WT8" > "$WATCH_RUN_DIR/tmoS.duplex.meta"
 : > "$WATCH_RUN_DIR/tmoS.duplex.events.jsonl"; : > "$WATCH_RUN_DIR/tmoS.duplex.stderr.log"
+# classify refuses a session with no established identity the same way it refuses a corrupt
+# one (WS1), so a hand-built session has to arm a record before the lock contention matters
+python3 "$AW_DIR/duplexctl.py" --run-dir "$WATCH_RUN_DIR" identity start tmoS >/dev/null 2>&1
 python3 - "$WATCH_RUN_DIR/tmoS.duplex.wlock" "$SANDBOX/held8" <<'EOF' &
 import fcntl, sys, time
 with open(sys.argv[1], "a") as fh:

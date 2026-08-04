@@ -21,6 +21,10 @@ seed_session() { # $1 name  $2 engine  $3 cwd
   : > "$WATCH_RUN_DIR/$1.duplex.round-started"
   : > "$WATCH_RUN_DIR/$1.duplex.events.jsonl"
   mkfifo "$WATCH_RUN_DIR/$1.duplex.in" 2>/dev/null || true
+  # classify refuses a session whose active-identity record is MISSING exactly as it refuses
+  # a corrupt one (WS1 fencing), so a hand-built session must arm one too — the incarnation
+  # stays unestablished here (no pane), which is fine: nothing in this suite adopts evidence.
+  python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity start "$1" >/dev/null 2>&1
 }
 
 echo "== classify hangs on a wedged writer lock → bounded exit 8 =="

@@ -38,6 +38,13 @@ from typing import NoReturn
 import time
 import uuid
 
+# self-locating: this file is run as a script AND loaded by absolute path (tests use
+# spec_from_file_location), where sys.path never contains the agentctl dir.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+import identity  # noqa: E402  (needs the path above)
+
 SUMMARY_CHARS = 600
 
 
@@ -536,10 +543,40 @@ def project_codex(sess: Session) -> tuple[str, str]:
     return "IDLE", clip(answer_text) or "turn completed"
 
 
+def marker_verdict(store) -> tuple[str, str, dict] | None:
+    """(class, detail, marker) for the terminal marker on disk, or None when there is no
+    marker to judge. A marker that exists but cannot be parsed OR fails the schema gate is
+    UNKNOWN, never ignored and never classified: ambiguous terminal evidence must not read as
+    'nothing happened', and it must not reach the record at all."""
+    status, marker = store.read_terminal_marker()
+    if status == identity.STATUS_ABSENT:
+        return None
+    if status == identity.STATUS_CORRUPT:
+        return identity.UNKNOWN, f"marker {store.marker_path} is unparseable", {}
+    valid, detail = identity.IdentityStore.validate_marker_schema(marker)
+    if not valid:
+        return identity.UNKNOWN, detail, {}
+    klass, detail = store.classify_stamp(identity.IdentityStore.marker_stamp(marker))
+    return klass, detail, marker
+
+
 def classify(sess: Session) -> int:
     sess.require_meta()
     engine = sess.meta.get("engine", "")
     cwd = sess.meta.get("cwd", ".")
+    # Identity is the fence every later decision leans on, so an identity that cannot be
+    # established at all stops the verdict here: MISSING and CORRUPT get the same typed
+    # exit-2 treatment. Letting ABSENT continue was a fail-open — the rc/deliverable lane
+    # below then returned DONE for a session with no established identity, and status
+    # published an unstamped marker off an empty arm token (cold review R1).
+    store = identity.IdentityStore(sess.run, sess.name)
+    _active, id_status = store.load()
+    if id_status != identity.STATUS_OK:
+        why = f" — {store.corrupt_reason}" if store.corrupt_reason else ""
+        print(f"IDENTITY-UNKNOWN: active identity record is {id_status} ({store.path}){why}"
+              " — no state may be adopted or concluded; agentctl stop, then restart to "
+              "establish a new attempt")
+        return 2
 
     # 1. engine process exited? (the pane shell writes RC on engine exit)
     if os.path.exists(sess.rc):
@@ -561,8 +598,34 @@ def classify(sess: Session) -> int:
         print(f"FAILED: engine exited rc={rc} — tail {sess.events} / {sess.stderr} (raw kept on disk)")
         return 2
 
-    # 2. supervisor pane gone without an rc = killed mid-flight
+    # 2. supervisor pane gone without an rc = killed mid-flight — UNLESS a terminal marker
+    #    stamped with the CURRENT identity is on disk. A dead process cannot emit new events,
+    #    so a matching stamp is honest evidence that this round finished before the pane was
+    #    reaped (exactly what the marker was invented for), while a same-pid impostor is
+    #    caught by the start-time half of the incarnation. Anything else is labelled and NOT
+    #    adopted — the stale file stays on disk untouched for post-mortem.
     if not tmux_alive(sess.name):
+        judged = marker_verdict(store)
+        if judged is not None:
+            klass, detail, marker = judged
+            if klass == identity.OK and marker.get("rc") == 0:
+                stamp = identity.IdentityStore.marker_stamp(marker)
+                try:
+                    first = store.apply_event(stamp["attemptId"], stamp.get("seq"))
+                except identity.IdentityPersistError as exc:
+                    print(f"IDENTITY-UNKNOWN: cannot record the marker adoption ({exc}) — "
+                          "refusing to adopt terminal evidence")
+                    return 2
+                again = "" if first else " (event already applied — idempotent re-read)"
+                print(f"DONE: adopted the terminal marker of the current attempt{again} — "
+                      f"engine pane already reaped; {detail}")
+                return 0
+            if klass == identity.UNKNOWN:
+                print(f"IDENTITY-UNKNOWN: terminal marker not adoptable — {detail}")
+                return 2
+            if klass != identity.OK:
+                print(f"{klass}: terminal marker NOT adopted (kept on disk for post-mortem, "
+                      f"not rewritten) — {detail}")
         print("AGENT-DEAD: no rc and no tmux session — killed mid-flight; agentctl stop to clean, then restart")
         return 2
 
@@ -571,14 +634,27 @@ def classify(sess: Session) -> int:
         print("FAILED: torn frame on the input stream (write-intent marker) — agentctl stop, then restart with resume args")
         return 2
 
-    # 3. agent-declared blocker (cross-engine ask-user protocol)
+    # 3. agent-declared blocker (cross-engine ask-user protocol), fenced by identity: a
+    #    record stamped by a PRIOR attempt must never park the current one in WAITING-INPUT.
+    #    An unstamped record keeps the pre-existing round-epoch mtime fence.
     blocked = os.path.join(cwd, "BLOCKED.md")
     try:
-        if os.path.getmtime(blocked) >= os.path.getmtime(sess.epoch):
+        blocked_fresh = os.path.getmtime(blocked) >= os.path.getmtime(sess.epoch)
+    except OSError:
+        blocked_fresh = False
+    if blocked_fresh:
+        bstatus, bstamp = identity.blocked_stamp(blocked)
+        klass, detail = (store.classify_stamp(bstamp) if bstatus == "stamped"
+                         else (identity.OK, "unstamped record — round-epoch fence only"))
+        if klass == identity.UNKNOWN:
+            print(f"IDENTITY-UNKNOWN: BLOCKED.md stamp is not decidable — {detail}; refusing "
+                  "to adopt it and refusing to conclude anything else about this round")
+            return 2
+        if klass == identity.OK:
             print("WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via agentctl steer")
             return 4
-    except OSError:
-        pass
+        print(f"{klass}: BLOCKED.md NOT adopted (kept on disk for post-mortem, not rewritten)"
+              f" — {detail}")
 
     # 4. live projection
     projector = {"omp": project_omp, "claude": project_claude, "codex": project_codex}[engine]
@@ -643,6 +719,31 @@ def send_frame(args: argparse.Namespace) -> int:
     if engine == "claude" and args.verb == "steer-now":
         print("note: claude has no public interrupt frame — delivering as queued steer (lands at the next turn boundary)")
         args.verb = "steer"
+    # Identity commit points. The record must be durable BEFORE the frame it authorises
+    # leaves — but no earlier than the point where that frame is actually going to be sent:
+    # a codex --replace whose interrupt handshake times out is REFUSED, and rotating the
+    # attempt for a replacement that never starts made the still-current attempt stale,
+    # over-rejecting its own later evidence and invalidating an armed watcher (cold review
+    # R1). So `prompt` commits here, and `replace` commits at its engine's real
+    # replacement-frame commit point (immediately below for a single-frame replace, after the
+    # interrupt handshake for codex). A queued/--now steer keeps the whole triple.
+    def commit_identity(kind: str) -> None:
+        store = identity.IdentityStore(args.run_dir, args.session)
+        try:
+            rec = store.transition(kind)
+        except identity.IdentityPersistError as exc:
+            die(f"IDENTITY-PERSIST-FAILED: {exc} — frame NOT sent; the prior active identity "
+                "record (if any) stays authoritative", 2)
+        print(f"identity: attempt {rec['attemptId']} incarnation "
+              f"{rec.get('processIncarnation') or 'UNESTABLISHED'}")
+
+    if args.verb == "prompt":
+        commit_identity("start")
+    elif args.verb == "replace" and engine != "codex":
+        # omp's abort_and_prompt IS the replacement frame: there is no separate handshake to
+        # wait for, so the commit point is right here, before write_frame.
+        commit_identity("replace")
+
     offset_box = {}
 
     def commit_round_state():
@@ -702,6 +803,11 @@ def send_frame(args: argparse.Namespace) -> int:
                 if done is None:
                     die("interrupted turn did not reach a terminal state in 15s — NOT starting "
                         "the replacement; check status, then retry or stop+resume", 2)
+            # THE codex replace commit point: the engine has accepted the interrupt and the
+            # interrupted turn is terminal (or there was nothing to interrupt), so the
+            # replacement really is about to be written — and the new attempt is durable
+            # before that frame goes out. A refusal above returns without rotating anything.
+            commit_identity("replace")
             reply = codex_request(sess, "turn/start",
                                   {"threadId": thread, "input": codex_text_input(text)},
                                   on_ready=commit_round_state)
@@ -928,6 +1034,46 @@ def cmd_classify(args: argparse.Namespace) -> int:
         signal.alarm(0)
 
 
+def cmd_identity(args: argparse.Namespace) -> int:
+    """The ONLY identity surface for callers outside this process (agentctl uses it for the
+    arm-time token and for fenced marker publication)."""
+    store = identity.IdentityStore(args.run_dir, args.session)
+    if args.op == "token":
+        print(store.token())
+        return 0
+    if args.op == "show":
+        rec, status = store.load()
+        if status != identity.STATUS_OK:
+            print(f"IDENTITY-UNKNOWN: active identity record is {status} ({store.path})")
+            return 3 if status == identity.STATUS_ABSENT else 2
+        print(json.dumps(rec, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if args.op in ("start", "replace", "resume"):
+        try:
+            rec = store.transition(args.op)
+        except (identity.IdentityPersistError, ValueError) as exc:
+            die(f"IDENTITY-PERSIST-FAILED: {exc}", 2)
+        print(f"identity {args.op}: attempt {rec['attemptId']} incarnation "
+              f"{rec.get('processIncarnation') or 'UNESTABLISHED'}")
+        return 0
+    if args.op == "publish":
+        try:
+            klass, detail = store.publish_terminal(args.armed, rc=args.rc)
+        except identity.IdentityPersistError as exc:
+            print(f"IDENTITY-UNKNOWN: {exc} — no terminal conclusion published")
+            return 2
+        if klass != identity.OK:
+            print(f"{klass}: {detail}")
+            return 2
+        return 0
+    try:
+        store.clear()
+    except identity.IdentityPersistError as exc:
+        die(f"IDENTITY-PERSIST-FAILED: {exc} — identity state left UNCHANGED; a lock that "
+            "cannot be acquired proves nothing about holders", 2)
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="duplexctl")
     parser.add_argument("--run-dir", default=os.environ.get("AGENT_WATCH_DIR", "/tmp/agent-watch-run"))
@@ -951,6 +1097,14 @@ def main() -> None:
     p_cls = sub.add_parser("classify", help="one-shot typed state projection")
     p_cls.add_argument("session")
     p_cls.set_defaults(func=cmd_classify)
+
+    p_id = sub.add_parser("identity", help="attempt-identity record (the one state abstraction)")
+    p_id.add_argument("op", choices=["token", "show", "start", "replace", "resume",
+                                     "publish", "clear"])
+    p_id.add_argument("session")
+    p_id.add_argument("--armed", default="", help="arm-time identity token (publish)")
+    p_id.add_argument("--rc", type=int, default=0)
+    p_id.set_defaults(func=cmd_identity)
 
     args = parser.parse_args()
     sys.exit(args.func(args))

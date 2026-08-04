@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/duplexctl.py b/skills/cto-orchestration/references/agentctl/duplexctl.py
+index f2aa640..ed7b74f 100755
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -649,7 +649,7 @@ def classify(sess: Session) -> int:
+             print(f"IDENTITY-UNKNOWN: BLOCKED.md stamp is not decidable — {detail}; refusing "
+                   "to adopt it and refusing to conclude anything else about this round")
+             return 2
+-        if klass == identity.OK:
++        if klass != identity.UNKNOWN:
+             print("WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via agentctl steer")
+             return 4
+         print(f"{klass}: BLOCKED.md NOT adopted (kept on disk for post-mortem, not rewritten)"

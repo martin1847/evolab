@@ -109,6 +109,34 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
 | 9 BUDGET-EXHAUSTED | review-loop 轮数上限（steer 计轮） | 转人工裁决 |
 | 10 RUNNING | 瞬时态（status 一次性查询用） | 继续等 |
 
+新增 typed MESSAGE 行（**exit 码契约不变**，三类都映射到既有失败 / UNKNOWN 出口）：
+
+| MESSAGE 行 | 触发 | 映射 exit | 处置 |
+|---|---|---|---|
+| `STALE-ATTEMPT` | 证据 stamp 的 `attempt_id` ≠ 活跃记录（精确串比） | 不改判：证据被丢弃后按本轮真实态出码（marker 路径落 2 AGENT-DEAD；BLOCKED 路径继续投影） | 视为**前一次 attempt 的遗留**，留盘做事后取证，别回填 |
+| `STALE-INCARNATION` | `attempt_id` 相同但 `process_incarnation`（pid@start-time）不同 = pid 复用 / 换进程 | 同上 | 同上；说明有 impostor 或未走 resume 的重启 |
+| `IDENTITY-UNKNOWN` | 活跃记录缺 / 损坏 / 无法解析、stamp 缺字段、start-time 信号取不到 | 2（既有失败出口，**永不映射成 0**） | 身份不可判定就不许收货：`agentctl stop` 后重启建立新 attempt |
+
+- **attempt 身份三元组**：`session_id`（跨轮稳定）/ `attempt_id`（start 与 `--replace` 各换新）/
+  `process_incarnation`（`pid@start-time`，pid 单独不够——会复用；tmux 名更不够——会重名）。
+  唯一活跃记录写在 `$RUN/<s>.identity.d/active.json`，mkstemp 同目录 + fsync + `os.replace` 原子落盘。
+  **提交点 = "该帧真要发出去"的那一刻，且在帧之前**：`start` 在首个 goal 帧前；omp `--replace`
+  （`abort_and_prompt` 本身就是替换帧）在该帧前；**codex `--replace` 在引擎接受 interrupt 且被中断
+  turn 到达终态之后、替换 `turn/start` 之前**——interrupt 超时被拒的替换**不换身份**（否则把仍然当前的
+  attempt 变陈旧，连它自己后来的证据和已挂 watcher 一起误杀）。写失败则该 verb typed 失败且帧不发，
+  前一份记录继续持有权威。排队 / `--now` steer 不换身份、不写盘。
+- **活跃记录缺失与损坏同罪**：两者都 = 身份不可建立 ⇒ `IDENTITY-UNKNOWN` exit 2，不存在"没有记录就按
+  legacy 放行"这条路（否则 rc/deliverable 腿会给一个没有身份的会话发 DONE）。
+- **陈旧是读时派生**（stamp ≠ 活跃记录），陈旧文件**不回写**：唯一真相写者是活跃记录，旧证据留盘取证。
+  watcher 只在"挂载时快照 == 发布前在锁内重读的活跃记录"时才发布终态结论，否则只吐上表的 typed 行、
+  什么都不发布。**身份的每一次变更（transition / 事件采信 / marker 发布）共用一把稳定的 per-session
+  锁**（`$RUN/<s>.identity.lock`，放 run 目录所以跨 clear/重建仍是同一 inode）：token 比对、记录改写、
+  marker 落盘同在一个临界区内完成，中间没有让并发 replace 挤进来、再被发布者旧副本盖回去的窗口。
+- 所有身份读写只走一个抽象（`identity.py` / `duplexctl identity {token,show,start,replace,resume,publish,clear}`）；
+  `duplexctl identity show <s>` 是给下游（含 WS2 delivery receipt）的读 API。
+- BLOCKED 归属：footer 让 worker 把 `$RUN/<s>.identity.d/blocked-stamp.txt` 的内容作为 `BLOCKED.md`
+  末行。带 stamp 的记录按上表围栏；**未带 stamp 的沿用原有 round-epoch mtime 围栏**（CLI 行为不变）。
+
 - **turn_end ≠ 任务终态**：多步 agent 每个 turn/阶段边界都呈 idle（实证 2026-07-05 单日 4 次假
   DONE）——deliverable gate + watch 的 2 连稳定读正是为此；多轮 goal 靠 epoch 轮转防上一轮产物开门
   （实证 2026-07-11 三任务全中）。
@@ -118,10 +146,16 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   死亡也当完成事件推送——仍唤醒编排者，status 复核 + re-arm 零信息丢失）> 自研轮询卡死但活着
   （零通知，沉默与"还在跑"同形 = 编排者失明）。判据不是"会不会失败"，而是**失败时响不响**——会被
   收割的 watcher 比会卡死的轮询器可靠；自研通知通道投产前先拿已知阳性证明它会响。
-- **终态 marker**：算出 DONE 的观察者落 `$RUN/<s>.terminal.json`（ts / rc / deliverable，
-  合法 JSON）——纯文件系统等待与事后恢复真相都不依赖"当时有人在听"，通知进程全被收割也不丢。
-  生命周期 = 存在即"本轮已完成"：`start` / `steer`（新轮）/ `stop` 都清除；status 单读只在
+- **终态 marker**：算出 DONE 的观察者落 `$RUN/<s>.terminal.json`（ts / rc / deliverable +
+  `identity` stamp，合法 JSON）——纯文件系统等待与事后恢复真相都不依赖"当时有人在听"，通知进程全被
+  收割也不丢。生命周期 = 存在即"本轮已完成"：`start` / `steer`（新轮）/ `stop` 都清除；status 单读只在
   已声明 deliverable（门背书）时落盘，未声明的由 watch 双稳读落。
+  **pane 已亡（无 rc）时 marker 可被采信一次**：死进程发不出新事件，stamp 与活跃记录精确一致即
+  "本轮在 pane 被收割前就已完成"（此前一律 AGENT-DEAD）。采信前先过 marker schema 门
+  （`rc` 严格 int——`False == 0` 不算 0；stamp 的 attemptId / incarnation 非空串、`seq` 必须是 int），
+  再按 **per-attempt 单调 high-watermark** 判同一性：只有 `seq > watermark` 才推进状态，
+  `seq <= watermark` 在该 attempt 的整个生命周期里都是 no-op（不用有界环——会遗忘旧键从而允许重放）。
+  stamp 不一致 / 不可判定（含 schema 不合格）→ 上表 typed 行，绝不采信、绝不动记录。
 - **Agent 工具异步 subagent 的完成通知有黑洞**：只在"停止且自身无存活后台子进程"时才发；子 agent 自起
   后台 fork（E2E/monitor）→ 父 idle 而通知永不来（实证 2026-06-26，靠主动 SendMessage 才发现）。
   对策：别只信完成通知（fallback 自检兜底）；派工要求验证同回合做完、不留孤儿 fork、里程碑 SendMessage 回 main。
