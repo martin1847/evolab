@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 3fefed1..2cadc5f 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -919,6 +919,8 @@ class IdentityStore:
+         # receipt schema, so requiring it refused contract-shaped records that carried every
+         # declared field and the right path (cold review R2, the erased-benefit direction).
+         expected = declared_target(meta.get("cwd", ""), declared)
++        if marker.get("deliverable") != declared:   # MUTANT: non-contract field required
++            return RECEIPT_INVALID, f"record deliverable {marker.get('deliverable')!r} mismatch"
+         for item in entries:
+             if not isinstance(item, dict):
+                 return RECEIPT_INVALID, f"deliverable entry {item!r} is not an object"

@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index c0768fe..d8cfd2b 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -94,7 +94,7 @@ REASONS = frozenset({OK, NO_DELIVERABLE_DECLARED, MISSING, UNREADABLE, SYMLINK,
+                      GLOB, OVERSIZED_HASH_SKIPPED, IDENTITY_UNKNOWN, PUBLISH_INTERRUPTED,
+                      STALE_ATTEMPT, STALE_INCARNATION})
+ # the ONLY two reasons that still deliver: full evidence, or a bounded-cost honest label
+-DELIVERING_REASONS = frozenset({OK, OVERSIZED_HASH_SKIPPED})
++DELIVERING_REASONS = frozenset({OK, OVERSIZED_HASH_SKIPPED, MISSING})  # MUTANT
+ 
+ PHASE_DELIVERED = "delivered"
+ ENGINE_COMPLETED = "completed"

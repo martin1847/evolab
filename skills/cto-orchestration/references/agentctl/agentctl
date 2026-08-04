@@ -194,7 +194,11 @@ cmd_start() {
   if ! mkfifo "$FIFO" 2>/dev/null; then
     echo "ERR: session '$S' fifo already exists ($FIFO) — concurrent start, or crash residue: agentctl stop $S first" >&2; exit 1
   fi
-  rm -f "$RC" "$DIR/$S.terminal.json"; : > "$EV"; : > "$ERR"
+  # the terminal record AND any debris of an interrupted publish share one lifecycle: a
+  # leftover temp would otherwise make the NEXT attempt read PUBLISH_INTERRUPTED forever.
+  # The temp name is session- and purpose-scoped (`.<s>.terminal.json-*.tmp`), so this glob can
+  # never reach a sibling session's state.
+  rm -f "$RC" "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp; : > "$EV"; : > "$ERR"
   # a reclaimed name must not inherit its predecessor's authority: if the old identity cannot
   # be dropped, REFUSE to start rather than run a session over someone else's record
   if ! CLEAR_OUT="$(identity_clear "$S")"; then
@@ -279,7 +283,7 @@ cmd_steer() {
       # a steer opens a new round: DONE is no longer a fact. Pre-clearing is the safe
       # direction — a missing marker sends waiters back to status (which re-writes it if
       # still DONE); a stale marker is a durable false DONE (review F1①).
-      rm -f "$DIR/$S.terminal.json"
+      rm -f "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp
       # -d rides duplexctl: applied atomically (key-scoped meta_update) only after a
       # successful delivery — the shell grep+mv snapshot could roll back a concurrent
       # sender's round counter (review S2 2026-07-19)
@@ -436,7 +440,7 @@ cmd_stop() {
       rm -f "$DIR/$S.duplex.in" "$DIR/$S.duplex.meta" "$DIR/$S.duplex.round-started" \
             "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" \
             "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" \
-            "$DIR/$S.terminal.json" 2>/dev/null
+            "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp 2>/dev/null
       # the attempt is over: its authority should die with the control state. A refused clear
       # must be SAID OUT LOUD — the session is down but its identity still holds authority, so
       # a same-name restart would be refused rather than silently inheriting it.
@@ -465,7 +469,7 @@ cmd_stop() {
       for f in "$DIR/$S.duplex.in" "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" \
                "$DIR/$S.duplex.sent-offset" "$DIR/$S.duplex.round-started" \
                "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" \
-               "$DIR/$S.terminal.json"; do
+               "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp; do
         [ -e "$f" ] && { rm -f "$f"; cleaned=1; }
       done
       # orphan identity must not outlive the residue it belonged to

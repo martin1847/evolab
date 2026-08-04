@@ -1,0 +1,16 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 889241f..91d9ecc 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -253,10 +253,7 @@ def _rfc3339(value) -> bool:
+         return False
+     if parsed.tzinfo is None:
+         return False
+-    if leap:
+-        utc = parsed.astimezone(datetime.timezone.utc)
+-        return (utc.hour, utc.minute) == (23, 59)
+-    return True
++    return True                                   # MUTANT: :60 accepted at any position
+ 
+ 
+ def _platform_prefix(path: str) -> tuple[str, str] | None:

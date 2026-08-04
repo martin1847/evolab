@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/duplexctl.py b/skills/cto-orchestration/references/agentctl/duplexctl.py
+index 582d26b..51b694c 100755
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -663,7 +663,7 @@ def classify(sess: Session) -> int:
+                 # undecidable evidence, not adoptable evidence; a receipt-LESS WS1 marker stays
+                 # adoptable exactly as before, because it claims nothing.
+                 state, why = store.receipt_status(marker)
+-                if state == identity.RECEIPT_INVALID:
++                if False:                            # MUTANT: dead-pane shortcut restored
+                     print("IDENTITY-UNKNOWN: terminal record claims delivery but its receipt "
+                           f"body is invalid — {why}; refusing to adopt it (kept on disk for "
+                           "post-mortem, not rewritten)")

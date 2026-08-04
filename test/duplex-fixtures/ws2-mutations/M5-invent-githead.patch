@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index a6d2862..5cfde0f 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -195,7 +195,7 @@ def git_head(cwd: str) -> str | None:
+     except (OSError, subprocess.SubprocessError):
+         return None
+     head = probe.stdout.strip()
+-    return head if probe.returncode == 0 and head else None
++    return head if probe.returncode == 0 and head else '0' * 40  # MUTANT: invented provenance
+ 
+ 
+ def _rfc3339(value) -> bool:

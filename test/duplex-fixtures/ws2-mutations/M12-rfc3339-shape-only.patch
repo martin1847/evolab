@@ -1,0 +1,17 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 889241f..abe4595 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -241,6 +241,12 @@ def _rfc3339(value) -> bool:
+         return False
+     if not RFC3339_RE.fullmatch(value):
+         return False
++    import time as _t                                  # MUTANT: shape + first 19 chars only
++    try:
++        _t.strptime(value[:19].replace("t", "T"), "%Y-%m-%dT%H:%M:%S")
++    except ValueError:
++        return False
++    return True
+     leap = value[17:19] == "60"
+     text = value[:17] + ("59" if leap else value[17:19]) + value[19:]
+     # normalise the two case-insensitive letters for parsers older than 3.11

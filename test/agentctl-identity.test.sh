@@ -1050,12 +1050,15 @@ teardown
 if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   changed="$( { git -C "$REPO_ROOT" diff --name-only main...HEAD 2>/dev/null
                 git -C "$REPO_ROOT" status --porcelain 2>/dev/null | awk '{print $NF}'; } | sort -u )"
-  # every entry is an exact path or one WS1-owned directory: an unrestricted docs(/.*)? let a
-  # modified review/E2E policy anywhere under docs/ pass the guardrail this claims to enforce.
-  # BLOCKED.md is the headless protocol's escalation channel — an exact path, not a wildcard.
-  allow='^(skills/cto-orchestration/references/agentctl/(agentctl|duplexctl\.py|identity\.py|README\.md)|test/(agentctl-identity|agentctl-duplex|duplexctl-timeout)\.test\.sh|test/duplex-fixtures/fake_codex_duplex\.py|test/duplex-fixtures/ws1/?[^/]*|test/duplex-fixtures/ws1-mutations/?[^/]*|docs/orchestration/?|docs/orchestration/WS1_FINDINGS\.md|BLOCKED\.md)$'
+  # every entry is an exact path or one workstream-owned directory: an unrestricted docs(/.*)?
+  # let a modified review/E2E policy anywhere under docs/ pass the guardrail this claims to
+  # enforce. BLOCKED.md is the headless protocol's escalation channel — an exact path, not a
+  # wildcard. WS2 (the delivery receipt) extends the SAME subsystem and the same three runtime
+  # files, so its owned paths are listed here too — the guardrail is about never touching
+  # guard / git-workflow / review policy, not about which workstream is in flight.
+  allow='^(skills/cto-orchestration/references/agentctl/(agentctl|duplexctl\.py|identity\.py|README\.md)|test/(agentctl-identity|agentctl-duplex|agentctl-receipt|duplexctl-timeout)\.test\.sh|test/duplex-fixtures/fake_codex_duplex\.py|test/duplex-fixtures/ws1/?[^/]*|test/duplex-fixtures/ws1-mutations/?[^/]*|test/duplex-fixtures/ws2/?[^/]*|test/duplex-fixtures/ws2-mutations/?[^/]*|docs/orchestration/?|docs/orchestration/WS[12]_FINDINGS\.md|BLOCKED\.md)$'
   stray="$(printf '%s\n' "$changed" | grep -v -E "$allow" | grep -c . )"
-  chk_eq "changed-file list stays inside WS1 scope (no guard / git-workflow / review policy)" \
+  chk_eq "changed-file list stays inside reliability-core scope (no guard / git-workflow / review policy)" \
     0 "$stray"
   [ "$stray" = 0 ] || printf '%s\n' "$changed" | grep -v -E "$allow" | sed 's/^/    stray> /'
 else

@@ -1,0 +1,20 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 889241f..e41b598 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -273,10 +273,11 @@ def _platform_prefix(path: str) -> tuple[str, str] | None:
+     runtime — a user component is never exempt at any depth, and a platform without these aliases
+     exempts nothing. Creating a new top-level entry needs root, which is the trust argument."""
+     literal = os.path.normpath(path)
+-    for alias in PLATFORM_ALIASES:
+-        if literal == alias or literal.startswith(alias + os.sep):
+-            if os.path.islink(alias):
+-                return alias, os.path.realpath(alias)
++    prefix = ""                                     # MUTANT: any first symlink is "the platform"
++    for part in literal.strip(os.sep).split(os.sep):
++        prefix = f"{prefix}{os.sep}{part}"
++        if os.path.islink(prefix):
++            return prefix, os.path.realpath(prefix)
+     return None
+ 
+ 

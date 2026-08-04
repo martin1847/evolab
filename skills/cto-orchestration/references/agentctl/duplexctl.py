@@ -560,6 +560,43 @@ def marker_verdict(store) -> tuple[str, str, dict] | None:
     return klass, detail, marker
 
 
+def receipt_note(marker: dict) -> str:
+    """Delivered-evidence summary appended to a DONE line. Hash evidence, not mtime: it names
+    the exact bytes this attempt observed. The `delivered ≠ verified` label is part of the
+    line, not a footnote — nothing here claims review, E2E or deployment."""
+    if marker.get("phase") != identity.PHASE_DELIVERED:
+        return ""
+    bits = []
+    for item in marker.get("deliverables") or []:
+        sha = item.get("sha256") or "-"
+        short = sha if sha == identity.HASH_SKIPPED else sha[:12]
+        bits.append(f"{os.path.basename(item.get('path') or '-')} sha256={short} "
+                    f"size={item.get('size')}")
+    head = marker.get("gitHead")
+    return (f", delivered evidence: {'; '.join(bits)} @git "
+            f"{head[:12] if isinstance(head, str) else 'null'} "
+            f"(reason={marker.get('reason')}; delivered ≠ verified)")
+
+
+def delivered_receipt(store) -> dict | None:
+    """The terminal record IF it is identity-valid for the current attempt AND is a VALID
+    delivered receipt. Two gates, both required:
+
+    - the WS1 identity fence (staleness is judged on the RECORD — the bytes at the declared path
+      carry no provenance of their own), and
+    - the WS2 receipt-body schema (`IdentityStore.receipt_status`). Without the second one, a
+      record whose nested stamp matched the active attempt superseded the mtime gate on the
+      strength of arbitrary fields, so a forged body opened a gate the real deliverable
+      predicate had just refused (cold review R1)."""
+    judged = marker_verdict(store)
+    if judged is None:
+        return None
+    klass, _detail, marker = judged
+    if klass != identity.OK:
+        return None
+    return store.delivered_receipt(marker)
+
+
 def classify(sess: Session) -> int:
     sess.require_meta()
     engine = sess.meta.get("engine", "")
@@ -589,6 +626,15 @@ def classify(sess: Session) -> int:
             return 5
         if rc == "0":
             ok, hit = deliverable_fresh(sess)
+            receipt = None if ok else delivered_receipt(store)
+            if receipt is not None:
+                # Hash evidence SUPERSEDES the mtime heuristic: an identity-valid receipt of
+                # this round names the exact bytes that were observed, while mtime only ever
+                # guessed freshness (and produced field false-negatives). Legacy markers keep
+                # the mtime path — they carry no hashes to supersede it with.
+                print(f"DONE: engine exited rc=0{receipt_note(receipt)} — receipt evidence "
+                      "supersedes the mtime freshness heuristic")
+                return 0
             if ok:
                 note = f", deliverable fresh: {hit}" if hit else ""
                 print(f"DONE: engine exited rc=0{note} (duplex engines normally stay alive — treat as complete)")
@@ -609,6 +655,19 @@ def classify(sess: Session) -> int:
         if judged is not None:
             klass, detail, marker = judged
             if klass == identity.OK and marker.get("rc") == 0:
+                # ONE acceptance rule for every reader that can conclude terminal truth. This
+                # branch used to call marker_verdict() alone, so a current-stamped rc=0 record
+                # whose RECEIPT BODY was invalid was adopted as DONE 0 here while the canonical
+                # reader (`identity receipt`) refused the very same record with exit 3 (cold
+                # review R3). A record that CLAIMS delivery and fails the body validator is
+                # undecidable evidence, not adoptable evidence; a receipt-LESS WS1 marker stays
+                # adoptable exactly as before, because it claims nothing.
+                state, why = store.receipt_status(marker)
+                if state == identity.RECEIPT_INVALID:
+                    print("IDENTITY-UNKNOWN: terminal record claims delivery but its receipt "
+                          f"body is invalid — {why}; refusing to adopt it (kept on disk for "
+                          "post-mortem, not rewritten)")
+                    return 2
                 stamp = identity.IdentityStore.marker_stamp(marker)
                 try:
                     first = store.apply_event(stamp["attemptId"], stamp.get("seq"))
@@ -617,8 +676,11 @@ def classify(sess: Session) -> int:
                           "refusing to adopt terminal evidence")
                     return 2
                 again = "" if first else " (event already applied — idempotent re-read)"
+                # the delivered-evidence summary is printed ONLY for a receipt that passed the
+                # WS2 schema gate, so an invalid body can never speak in a DONE line either
                 print(f"DONE: adopted the terminal marker of the current attempt{again} — "
-                      f"engine pane already reaped; {detail}")
+                      f"engine pane already reaped; {detail}"
+                      f"{receipt_note(store.delivered_receipt(marker) or {})}")
                 return 0
             if klass == identity.UNKNOWN:
                 print(f"IDENTITY-UNKNOWN: terminal marker not adoptable — {detail}")
@@ -672,6 +734,12 @@ def classify(sess: Session) -> int:
         print(f"RUNNING: {detail}")
         return 10
     ok, hit = deliverable_fresh(sess)
+    receipt = None if ok else delivered_receipt(store)
+    if receipt is not None:
+        print(f"DONE: engine idle{receipt_note(receipt)} — receipt evidence supersedes the "
+              "mtime freshness heuristic")
+        print(f"last: {detail}")
+        return 0
     if not ok:
         print(f"IDLE-NO-DELIVERABLE: engine idle but '{sess.meta.get('deliverable')}' not produced this round — steer the agent; do not stop")
         return 6
@@ -1048,6 +1116,12 @@ def cmd_identity(args: argparse.Namespace) -> int:
             return 3 if status == identity.STATUS_ABSENT else 2
         print(json.dumps(rec, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
+    if args.op == "receipt":
+        # the read API for the ONE terminal record: fenced verdict + structural reason, for
+        # operators and for downstream callers that must not re-derive the fence themselves
+        view = store.receipt_view()
+        print(json.dumps(view, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if view.get("delivered") else 3
     if args.op in ("start", "replace", "resume"):
         try:
             rec = store.transition(args.op)
@@ -1060,11 +1134,14 @@ def cmd_identity(args: argparse.Namespace) -> int:
         try:
             klass, detail = store.publish_terminal(args.armed, rc=args.rc)
         except identity.IdentityPersistError as exc:
-            print(f"IDENTITY-UNKNOWN: {exc} — no terminal conclusion published")
+            print(f"IDENTITY-UNKNOWN: reason={identity.PUBLISH_INTERRUPTED} {exc} — no "
+                  "terminal conclusion published")
             return 2
         if klass != identity.OK:
             print(f"{klass}: {detail}")
             return 2
+        # the machine line the DONE verdict carries: reason= first, evidence after
+        print(detail)
         return 0
     try:
         store.clear()
@@ -1100,7 +1177,7 @@ def main() -> None:
 
     p_id = sub.add_parser("identity", help="attempt-identity record (the one state abstraction)")
     p_id.add_argument("op", choices=["token", "show", "start", "replace", "resume",
-                                     "publish", "clear"])
+                                     "publish", "receipt", "clear"])
     p_id.add_argument("session")
     p_id.add_argument("--armed", default="", help="arm-time identity token (publish)")
     p_id.add_argument("--rc", type=int, default=0)

@@ -1,0 +1,14 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index a6d2862..b7a9fa7 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -824,8 +824,7 @@ class IdentityStore:
+         the active attempt + incarnation — that is the WS1 fence's job and its trust boundary."""
+         if marker.get("phase") is None:
+             return RECEIPT_LEGACY, "record makes no delivery claim (pre-receipt WS1 marker)"
+-        if marker.get("phase") != PHASE_DELIVERED:
+-            return RECEIPT_INVALID, f"unknown phase {marker.get('phase')!r}"
++        return RECEIPT_OK, "MUTANT: receipt body never validated"
+         if marker.get("schemaVersion") != SCHEMA_VERSION:
+             return RECEIPT_INVALID, (f"schemaVersion {marker.get('schemaVersion')!r} is not "
+                                      f"{SCHEMA_VERSION}")

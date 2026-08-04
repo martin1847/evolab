@@ -1,0 +1,15 @@
+diff --git a/skills/cto-orchestration/references/agentctl/duplexctl.py b/skills/cto-orchestration/references/agentctl/duplexctl.py
+index 0261c84..3687fe7 100755
+--- a/skills/cto-orchestration/references/agentctl/duplexctl.py
++++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
+@@ -591,9 +591,7 @@ def delivered_receipt(store) -> dict | None:
+     judged = marker_verdict(store)
+     if judged is None:
+         return None
+-    klass, _detail, marker = judged
+-    if klass != identity.OK:
+-        return None
++    klass, _detail, marker = judged  # MUTANT: identity fence dropped
+     return store.delivered_receipt(marker)
+ 
+ 

@@ -32,17 +32,27 @@ fail-closed: an exact-string mismatch is typed STALE-ATTEMPT / STALE-INCARNATION
 anything undecidable (record missing a field, corrupt, incarnation signal unobtainable,
 evidence unstamped) is typed IDENTITY-UNKNOWN — never silently adopted, never mapped to OK.
 
-Deliberately NOT here: delivery receipts (workstream 2). WS1 creates no receipt code; WS2
-consumes this module's read API (`IdentityStore.load()` / `duplexctl identity show`).
+THE DELIVERY RECEIPT (workstream 2) IS THIS SAME RECORD, not a second one. When the runtime
+concludes the engine is terminal, publish_terminal writes ONE record at marker_path carrying
+both the WS1 fence stamp and the receipt fields (schemaVersion / sessionId / attemptId /
+processIncarnation / phase / engineOutcome / deliverables[path,sha256,size] / gitHead /
+completedAt / reason). `phase="delivered"` means ONLY that the runtime was terminal and the
+declared artifact evidence was observed and hashed — never reviewed, verified, merged or
+deployed. Every non-delivered or refused outcome carries a STRUCTURAL `reason` from the closed
+enum below (never a prose string), in the record and in the status/watch machine line.
 """
 from __future__ import annotations
 
 import contextlib
+import datetime
 import errno
 import fcntl
+import glob as globmod
+import hashlib
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import tempfile
@@ -64,6 +74,75 @@ OK = "OK"
 STALE_ATTEMPT = "STALE-ATTEMPT"
 STALE_INCARNATION = "STALE-INCARNATION"
 UNKNOWN = "IDENTITY-UNKNOWN"
+
+# ── receipt vocabulary (workstream 2) ────────────────────────────────────────────────
+# The STRUCTURAL reason channel. Every non-delivered / refused outcome carries exactly one of
+# these, in the record AND in the status/watch machine line; callers and tests assert on the
+# enum, never on the accompanying human text. Adding an outcome means adding a value HERE —
+# a new prose string is not a reason.
+NO_DELIVERABLE_DECLARED = "NO_DELIVERABLE_DECLARED"
+MISSING = "MISSING"
+UNREADABLE = "UNREADABLE"
+SYMLINK = "SYMLINK"
+DIRECTORY = "DIRECTORY"
+GLOB = "GLOB"
+OVERSIZED_HASH_SKIPPED = "OVERSIZED_HASH_SKIPPED"
+IDENTITY_UNKNOWN = "IDENTITY_UNKNOWN"
+PUBLISH_INTERRUPTED = "PUBLISH_INTERRUPTED"
+# the WS1 stale classes ride the same channel: a record fenced out by identity is a
+# non-delivered outcome too, and its reason is the class that refused it
+REASONS = frozenset({OK, NO_DELIVERABLE_DECLARED, MISSING, UNREADABLE, SYMLINK, DIRECTORY,
+                     GLOB, OVERSIZED_HASH_SKIPPED, IDENTITY_UNKNOWN, PUBLISH_INTERRUPTED,
+                     STALE_ATTEMPT, STALE_INCARNATION})
+# the ONLY two reasons that still deliver: full evidence, or a bounded-cost honest label
+DELIVERING_REASONS = frozenset({OK, OVERSIZED_HASH_SKIPPED})
+
+PHASE_DELIVERED = "delivered"
+ENGINE_COMPLETED = "completed"
+# > 64 MiB is hashed as `sha256:"oversized"` with the REAL size: bounded cost, honest label.
+# The one bounded case that still delivers — a silent skip would claim a hash it never took.
+HASH_MAX_BYTES = 64 * 1024 * 1024
+HASH_SKIPPED = "oversized"
+GLOB_META = "*?["
+
+# receipt-schema verdicts at the READ boundary (cold review R1: a record whose nested WS1 stamp
+# matched the active attempt used to be adopted as delivered no matter what its receipt body
+# said — a forged `sha256:"oversized"` on a 5-byte file, an invented gitHead and an arbitrary
+# completedAt opened the DONE gate the real deliverable predicate had just refused).
+RECEIPT_LEGACY = "legacy"     # no delivery claim at all: a WS1 marker, adoptable AS a marker
+RECEIPT_INVALID = "invalid"   # claims delivery but does not validate ⇒ never delivered
+RECEIPT_OK = "ok"
+
+# `\Z` + fullmatch, never `$`: Python's `$` matches immediately BEFORE a trailing newline, so
+# `[0-9a-f]{64}$` accepted a 65-character digest ending in "\n" and the reader delivered it
+# (cold review R3). Evidence values are matched in FULL or not at all.
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+# BOTH git object-id widths: 40 hex (sha1) and 64 hex (sha256, `git init --object-format=sha256`).
+# The contract asks for the worktree HEAD, not for a sha1 — accepting only 40 made the REAL
+# publisher write a receipt its own reader then refused in a sha256 repository (cold review R2).
+GITHEAD_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+# RFC3339 spelling: `t`/`z` may be lower case, seconds may be `60` (leap second), and an
+# offset is mandatory. Shape only — the semantics are checked by parsing (see _rfc3339).
+RFC3339_RE = re.compile(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})\Z")
+
+# The ONLY prefixes the symlink walk may exempt for an absolute declaration: OS-level aliases
+# that are symlinks by the platform's own design (darwin's `/var`, `/tmp`, `/etc` → `/private/*`).
+# Top-level and fixed on purpose — a USER path component is never exempt, at any depth, and a
+# platform without these aliases exempts nothing (cold review R2: the first symlink found in the
+# cwd used to be exempted, which let a user's `alias -> real` hide foreign content).
+PLATFORM_ALIASES = ("/var", "/tmp", "/etc")
+
+# Directory-traversal open flag, in order of preference: POSIX `O_SEARCH` (darwin), Linux's
+# `O_PATH`, then plain `O_RDONLY`. Only the last one demands READ permission on the ancestors,
+# which pathname resolution never required (cold review R2).
+_SEARCH_FLAG = getattr(os, "O_SEARCH", None) or getattr(os, "O_PATH", None) or os.O_RDONLY
+
+# TEST-ONLY deterministic publish seam. When AGENTCTL_PUBLISH_BARRIER names a path, the
+# terminal-record writer touches that file after the temp file is written+fsynced and
+# IMMEDIATELY SIGKILLs itself, before os.replace. That makes the interruption window a
+# fact (the barrier file proves it was reached) instead of a timing race. Production never
+# sets it; the seam is one env read on a path that already holds the lock.
+BARRIER_ENV = "AGENTCTL_PUBLISH_BARRIER"
 
 # The worker copies this line verbatim as the last line of BLOCKED.md; a record without it
 # falls back to the pre-existing round-epoch mtime fence (documented in the README).
@@ -122,6 +201,259 @@ def _read_regular(path: str) -> str:
     finally:
         os.close(fd)
     return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def git_head(cwd: str) -> str | None:
+    """Worktree HEAD of the repository containing the SESSION's cwd — not the orchestrator's
+    (a background `agentctl watch` inherits the dispatcher's cwd, which is a different repo
+    entirely). None when there is no repository: provenance is never invented."""
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    try:
+        probe = subprocess.run(["git", "-C", cwd, "rev-parse", "HEAD"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    head = probe.stdout.strip()
+    return head if probe.returncode == 0 and head else None
+
+
+def _rfc3339(value) -> bool:
+    """A real RFC3339 timestamp? Shape by regex, then the WHOLE value is parsed.
+
+    Two earlier versions were wrong in opposite directions and for the same reason — the parts
+    after the seconds were treated as decoration rather than data:
+
+    - shape + `strptime` of the first 19 characters never checked the offset at all, so `+99:99`,
+      `+24:00` and `+23:60` validated, while lowercase `t`/`z` (lawful RFC3339) was refused
+      (cold review R2);
+    - rewriting EVERY `:60` to `:59` accepted a leap second at an impossible position, e.g.
+      `2026-08-04T14:00:60Z` (cold review R3).
+
+    So: an offset is REQUIRED (RFC3339 has no floating local time), the whole value is parsed,
+    and `:60` is accepted ONLY where a leap second can exist — as the 61st second of the LAST
+    minute of a UTC day. `datetime` cannot represent that instant, so it is parsed as `:59` at
+    the same offset and the position is checked in UTC; that is a spelling concession, not a
+    claim about the instant, and it accepts every lawful spelling of it (`23:59:60Z`,
+    `18:59:60-05:00`, `00:59:60+01:00`)."""
+    if not isinstance(value, str):
+        return False
+    if not RFC3339_RE.fullmatch(value):
+        return False
+    leap = value[17:19] == "60"
+    text = value[:17] + ("59" if leap else value[17:19]) + value[19:]
+    # normalise the two case-insensitive letters for parsers older than 3.11
+    text = text[:10] + "T" + text[11:]
+    if text[-1] in "Zz":
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        return False
+    if leap:
+        utc = parsed.astimezone(datetime.timezone.utc)
+        return (utc.hour, utc.minute) == (23, 59)
+    return True
+
+
+def _platform_prefix(path: str) -> tuple[str, str] | None:
+    """(alias, resolved) for the OS-level path alias `path` starts with, or None.
+
+    This is the ONE exemption the symlink walk grants an absolute declaration: on macOS every
+    temp/CI tree hangs under `/var -> private/var`, so refusing that prefix would refuse delivery
+    on a whole class of machines.
+
+    It must be the PLATFORM's alias and nothing else. An earlier version returned the first
+    symlink found in the literal session cwd, whatever it was: with a user's `alias -> real` the
+    walk started BELOW the user link and foreign bytes were hashed with `reason=OK` (cold review
+    R2). So candidates come from a fixed, top-level allowlist, each still verified to BE a link at
+    runtime — a user component is never exempt at any depth, and a platform without these aliases
+    exempts nothing. Creating a new top-level entry needs root, which is the trust argument."""
+    literal = os.path.normpath(path)
+    for alias in PLATFORM_ALIASES:
+        if literal == alias or literal.startswith(alias + os.sep):
+            if os.path.islink(alias):
+                return alias, os.path.realpath(alias)
+    return None
+
+
+def _anchor_and_parts(cwd: str, declared: str) -> tuple[str, list[str]]:
+    """(anchor, components) for the symlink-checked descent. The anchor is a REAL directory
+    nobody is allowed to reach through a link; every component below it is walked.
+
+    - RELATIVE declaration → anchor = realpath(session cwd). The cwd is the trust root the
+      operator named, and `agentctl start` records it already resolved (`cd "$CWD" && pwd -P`),
+      so its literal form carries no links in production anyway.
+    - ABSOLUTE declaration → anchor = the platform alias when the declaration starts with one,
+      else the filesystem root, and EVERY remaining component is walked. There is deliberately no
+      "inside the session cwd" shortcut: matching a prefix by realpath and anchoring at the
+      resolved cwd skipped a user's own `alias` for `alias/cwd/report.md`, so bytes behind the
+      link were digested and recorded under the resolved name (cold review R3). An absolute path
+      is judged as written — the receipt claims that path, so that path is what gets checked.
+    """
+    if not os.path.isabs(declared):
+        return (os.path.realpath(cwd or "."),
+                [p for p in os.path.normpath(declared).split(os.sep)
+                 if p not in ("", os.curdir)])
+    target = os.path.normpath(declared)
+    parts = [p for p in target.split(os.sep) if p not in ("", os.curdir)]
+    plat = _platform_prefix(target)
+    if plat is not None:
+        alias_parts = [p for p in plat[0].strip(os.sep).split(os.sep) if p]
+        return plat[1], parts[len(alias_parts):]
+    return os.sep, parts
+
+
+def declared_target(cwd: str, declared: str) -> str:
+    """The absolute path a declaration denotes — ONE resolver for both sides of the contract:
+    the publisher records exactly this path, and the read boundary requires a receipt to claim
+    exactly this path. Two independent resolutions would let a receipt name a plausible-looking
+    neighbour of the declared artifact and still validate."""
+    anchor, parts = _anchor_and_parts(cwd, declared)
+    return os.path.join(anchor, *parts) if parts else anchor
+
+
+def _open_dir(name: str, dir_fd: int | None = None) -> int:
+    """Open a DIRECTORY for traversal only. Ordinary pathname resolution needs SEARCH (`x`) on
+    the ancestors, not READ (`r`) — opening them `O_RDONLY|O_DIRECTORY` added a permission
+    requirement the old predicate never had, so a perfectly readable deliverable under a mode
+    0111 directory came back `UNREADABLE (EACCES)` (cold review R2). `O_SEARCH` is exactly this
+    (POSIX; present on darwin), `O_PATH` is Linux's equivalent, and where neither exists the
+    `O_RDONLY` form remains as the only portable fallback."""
+    flags = _SEARCH_FLAG | os.O_DIRECTORY
+    if dir_fd is None:
+        return os.open(name, flags)
+    return os.open(name, flags | os.O_NOFOLLOW, dir_fd=dir_fd)
+
+
+def _open_evidence(cwd: str, declared: str) -> tuple[int | None, str, str]:
+    """Open the declared deliverable by descending ONE component at a time from the anchor,
+    each hop `O_NOFOLLOW` and relative to the previous component's fd (openat semantics).
+    Returns (fd, reason, detail); fd is None whenever reason refuses.
+
+    Why component-wise instead of "islink() the ancestors, then open":
+    - `O_NOFOLLOW` alone guards only the FINAL component, so a symlinked ANCESTOR was followed
+      and a foreign tree's bytes were hashed under the declared path (cold review R2);
+    - a separate islink() pre-check is a check-then-open TOCTOU — the ancestor can be swapped
+      for a link between the check and the open (also flagged in R2). Here the kernel makes the
+      decision at the moment of use, per component, so there is no window to swap into.
+
+    Ancestors are opened for SEARCH, never for READ: see `_open_dir`.
+    """
+    anchor, parts = _anchor_and_parts(cwd, declared)
+    path = declared_target(cwd, declared)
+    try:
+        dfd = _open_dir(anchor)
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return None, MISSING, f"anchor directory '{anchor}' of '{path}' does not exist"
+        return None, UNREADABLE, f"anchor directory '{anchor}' cannot be opened ({exc})"
+    if not parts:
+        os.close(dfd)
+        return None, DIRECTORY, f"declared deliverable '{path}' is a directory"
+    try:
+        for part in parts[:-1]:
+            try:
+                nxt = _open_dir(part, dfd)
+            except OSError as exc:
+                klass = SYMLINK if exc.errno in (errno.ELOOP, errno.EMLINK) else ""
+                if exc.errno == errno.ENOTDIR:
+                    # macOS reports O_DIRECTORY|O_NOFOLLOW on a symlink as ENOTDIR, which is
+                    # also what a regular file in the middle of the path gives. Re-open the SAME
+                    # component through the SAME dirfd without O_DIRECTORY to tell them apart:
+                    # ELOOP ⇒ it is a link, otherwise it is a non-directory. Both outcomes
+                    # REFUSE, so a component swapped between the two calls can only change the
+                    # label, never open the gate.
+                    try:
+                        probe = os.open(part, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                        dir_fd=dfd)
+                    except OSError as again:
+                        klass = SYMLINK if again.errno in (errno.ELOOP, errno.EMLINK) else ""
+                    else:
+                        os.close(probe)
+                if klass == SYMLINK:
+                    return None, SYMLINK, (f"'{path}' is reachable only through the symlinked "
+                                           f"component '{part}' — evidence is never hashed "
+                                           "through a link, at any depth")
+                if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+                    return None, MISSING, (f"declared deliverable '{path}' does not exist "
+                                           f"(component '{part}': {exc.strerror})")
+                return None, UNREADABLE, (f"component '{part}' of '{path}' cannot be traversed "
+                                          f"({exc})")
+            os.close(dfd)
+            dfd = nxt
+        try:
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.EMLINK):
+                return None, SYMLINK, f"declared deliverable '{path}' is a symlink"
+            if exc.errno == errno.ENOENT:
+                return None, MISSING, f"declared deliverable '{path}' does not exist"
+            if exc.errno == errno.EISDIR:
+                return None, DIRECTORY, f"declared deliverable '{path}' is a directory"
+            return None, UNREADABLE, f"declared deliverable '{path}' cannot be opened ({exc})"
+    finally:
+        os.close(dfd)
+    return fd, OK, path
+
+
+def deliverable_evidence(cwd: str, declared: str) -> tuple[list[dict], str, str]:
+    """Hash the DECLARED deliverable. Returns (deliverables, reason, detail) — the whole
+    bounded-evidence table in one function, so no caller has to re-derive it:
+
+        not declared            ([], NO_DELIVERABLE_DECLARED)  never vacuously delivered
+        glob metacharacter      ([], GLOB)          a declared deliverable is an explicit path
+        symlinked component     ([], SYMLINK)       never hash through a link, at any depth
+        absent                  ([], MISSING)
+        directory               ([], DIRECTORY)
+        unreadable / irregular  ([], UNREADABLE)    EACCES, fifo, device — nothing to hash
+        > HASH_MAX_BYTES        ([entry], OVERSIZED_HASH_SKIPPED)  sha256="oversized", real size
+        otherwise               ([entry], OK)
+
+    A relative path anchors to the SESSION's cwd (the same rule the deliverable gate learned
+    the hard way: a relative pattern resolved in the watcher's cwd was a field false-negative).
+    """
+    if not declared:
+        return [], NO_DELIVERABLE_DECLARED, "no deliverable declared for this session"
+    if any(ch in declared for ch in GLOB_META):
+        return [], GLOB, (f"declared deliverable '{declared}' contains glob metacharacters — a "
+                          "receipt names explicit regular-file paths, so the mtime gate still "
+                          "judges this session and no hash evidence is claimed")
+    fd, reason, detail = _open_evidence(cwd, declared)
+    if fd is None:
+        return [], reason, detail
+    path = detail
+    try:
+        info = os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode):
+            return [], DIRECTORY, f"declared deliverable '{path}' is a directory"
+        if not stat.S_ISREG(info.st_mode):
+            return [], UNREADABLE, (f"declared deliverable '{path}' is not a regular file "
+                                    "(fifo/socket/device) — there are no bytes to hash")
+        size = info.st_size
+        if size > HASH_MAX_BYTES:
+            return ([{"path": path, "sha256": HASH_SKIPPED, "size": size}],
+                    OVERSIZED_HASH_SKIPPED,
+                    f"'{path}' is {size} bytes (> {HASH_MAX_BYTES}) — size recorded, hash "
+                    "explicitly skipped and labelled, never claimed")
+        digest = hashlib.sha256()
+        read = 0
+        while True:
+            try:
+                block = os.read(fd, 1 << 20)
+            except OSError as exc:
+                return [], UNREADABLE, f"read of '{path}' failed after {read} bytes ({exc})"
+            if not block:
+                break
+            read += len(block)
+            digest.update(block)
+        return ([{"path": path, "sha256": digest.hexdigest(), "size": read}], OK,
+                f"hashed '{path}' ({read} bytes)")
+    finally:
+        os.close(fd)
 
 
 def blocked_stamp(path: str) -> tuple[str, dict]:
@@ -381,8 +713,8 @@ class IdentityStore:
                 "through an untrusted path")
         try:
             os.makedirs(self.dir, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".identity-",
-                                       suffix=".tmp")
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path),
+                                       prefix=f".{os.path.basename(path)}-", suffix=".tmp")
         except OSError as exc:
             raise IdentityPersistError(f"cannot create identity temp file in {self.dir}: {exc}") from exc
         try:
@@ -390,6 +722,7 @@ class IdentityStore:
                 fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
+            self._barrier(path)
             os.replace(tmp, path)
         except OSError as exc:
             try:
@@ -400,6 +733,22 @@ class IdentityStore:
 
     def _atomic_json(self, path: str, payload: dict) -> None:
         self._atomic_text(path, json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def _barrier(self, path: str) -> None:
+        """TEST-ONLY seam, between "temp file complete on disk" and os.replace — the exact
+        window an interrupted publish has to survive. Fires only for the terminal record and
+        only when the env names a barrier file: record that the window was REACHED, then
+        SIGKILL ourselves. SIGKILL is uncatchable, so the crash is deterministic rather than a
+        timing race, and the surviving state is whatever os.replace had not yet swapped: the
+        prior complete record, or none — never partial JSON at `path`."""
+        target = os.environ.get(BARRIER_ENV, "")
+        if not target or path != self.marker_path:
+            return
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(f"reached pid={os.getpid()} path={path}\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.kill(os.getpid(), signal.SIGKILL)
 
     def _write(self, rec: dict) -> dict:
         rec["writtenAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -494,24 +843,201 @@ class IdentityStore:
             self._write(rec)
             return True
 
+    def temp_glob(self) -> str:
+        """Temp pattern of the terminal record's atomic write. Every atomic write names its temp
+        after its TARGET (`.<basename>-*.tmp`), so debris is attributable to one file of one
+        session — that is what lets the same lifecycle which clears the record clear its debris,
+        instead of a shared `.identity-*` pool nobody can attribute."""
+        return os.path.join(self.run_dir, f".{self.name}.terminal.json-*.tmp")
+
+    def publish_debris(self) -> list[str]:
+        """Temp files of a terminal-record publish that never reached os.replace. Their
+        presence is the only on-disk trace of an interrupted publication (the record itself is
+        either the prior complete one or absent — that is the whole point of the rename)."""
+        return sorted(globmod.glob(self.temp_glob()))
+
+    def receipt_line(self, marker: dict, reason: str) -> str:
+        """The MACHINE line: `reason=<enum>` first, evidence after. Callers and tests parse
+        the enum; the human text that follows is never a contract."""
+        bits = [f"reason={reason}", f"phase={marker.get('phase') or '-'}"]
+        for item in marker.get("deliverables") or []:
+            sha = item.get("sha256") or "-"
+            short = sha if sha == HASH_SKIPPED else sha[:12]
+            bits.append(f"deliverable={os.path.basename(item.get('path') or '-')}"
+                        f" sha256={short} size={item.get('size')}")
+        if "gitHead" in marker:
+            head = marker.get("gitHead")
+            bits.append(f"gitHead={head[:12] if isinstance(head, str) else 'null'}")
+        return " ".join(bits)
+
+    def receipt_status(self, marker: dict) -> tuple[str, str]:
+        """Validate the WS2 RECEIPT BODY of a record. Returns (RECEIPT_LEGACY | RECEIPT_INVALID
+        | RECEIPT_OK, detail). Run at the READ boundary, BEFORE any delivered conclusion —
+        `validate_marker_schema` (WS1) only ever judged `rc` and the fence stamp, so a record
+        whose nested stamp matched the active attempt was adopted as delivered no matter what
+        its receipt body said: a forged `sha256:"oversized"` on a 5-byte file with an invented
+        gitHead and an arbitrary completedAt opened the DONE gate the real deliverable predicate
+        had just refused (cold review R1, reproduced with production `classify`).
+
+        A record that makes NO delivery claim is RECEIPT_LEGACY — a WS1 marker, adoptable as a
+        marker on the pre-existing mtime path, never as a receipt. Anything that claims delivery
+        and fails any rule below is RECEIPT_INVALID: fail closed, never delivered.
+
+        What this CAN prove: internal consistency, and that the claim is about the deliverable
+        THIS session declared, under the identity the fence just matched. What it cannot prove
+        is the truthfulness of a self-consistent forgery written by something that already knows
+        the active attempt + incarnation — that is the WS1 fence's job and its trust boundary."""
+        if marker.get("phase") is None:
+            return RECEIPT_LEGACY, "record makes no delivery claim (pre-receipt WS1 marker)"
+        if marker.get("phase") != PHASE_DELIVERED:
+            return RECEIPT_INVALID, f"unknown phase {marker.get('phase')!r}"
+        if marker.get("schemaVersion") != SCHEMA_VERSION:
+            return RECEIPT_INVALID, (f"schemaVersion {marker.get('schemaVersion')!r} is not "
+                                     f"{SCHEMA_VERSION}")
+        rc = marker.get("rc")
+        if isinstance(rc, bool) or not isinstance(rc, int) or rc != 0:
+            return RECEIPT_INVALID, f"rc {rc!r} is not the int 0 (a bool is not an exit code)"
+        if marker.get("engineOutcome") != ENGINE_COMPLETED:
+            return RECEIPT_INVALID, (f"engineOutcome {marker.get('engineOutcome')!r} is not "
+                                     f"{ENGINE_COMPLETED!r}")
+        reason = marker.get("reason")
+        if reason not in DELIVERING_REASONS:
+            return RECEIPT_INVALID, f"reason {reason!r} does not deliver"
+        # the receipt view of the triple must BE the fenced stamp, not merely look like one
+        stamp = self.marker_stamp(marker)
+        for field in ("sessionId", "attemptId", "processIncarnation"):
+            top, inner = marker.get(field), stamp.get(field)
+            if not isinstance(top, str) or not top:
+                return RECEIPT_INVALID, f"top-level {field} is missing or not a non-empty string"
+            if top != inner:
+                return RECEIPT_INVALID, (f"top-level {field} {top!r} ≠ the fenced stamp's "
+                                         f"{inner!r}")
+        if not _rfc3339(marker.get("completedAt")):
+            return RECEIPT_INVALID, f"completedAt {marker.get('completedAt')!r} is not RFC3339"
+        head = marker.get("gitHead")
+        if head is not None and not (isinstance(head, str) and GITHEAD_RE.fullmatch(head)):
+            return RECEIPT_INVALID, (f"gitHead {head!r} is neither null nor a git object id "
+                                     "(40 hex for sha1, 64 for sha256)")
+        entries = marker.get("deliverables")
+        if not isinstance(entries, list) or not entries:
+            return RECEIPT_INVALID, "deliverables is not a non-empty list"
+        meta = _meta_read(self.meta_path)
+        declared = meta.get("deliverable", "")
+        if not declared:
+            return RECEIPT_INVALID, ("this session declares no deliverable, so no record of it "
+                                     "may claim delivered evidence")
+        # The declared-deliverable cross-check is on the entry PATH below. The singular
+        # top-level `deliverable` field is a WS1 marker extension, NOT part of the binding
+        # receipt schema, so requiring it refused contract-shaped records that carried every
+        # declared field and the right path (cold review R2, the erased-benefit direction).
+        expected = declared_target(meta.get("cwd", ""), declared)
+        for item in entries:
+            if not isinstance(item, dict):
+                return RECEIPT_INVALID, f"deliverable entry {item!r} is not an object"
+            path, sha, size = item.get("path"), item.get("sha256"), item.get("size")
+            if not isinstance(path, str) or not path:
+                return RECEIPT_INVALID, "a deliverable entry has no path"
+            if path != expected:
+                return RECEIPT_INVALID, (f"recorded path {path!r} is not the declared "
+                                         f"deliverable {expected!r}")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                return RECEIPT_INVALID, f"size {size!r} is not a non-negative int"
+            if sha == HASH_SKIPPED:
+                # the ONE case with no digest: the label is only legitimate when the recorded
+                # size actually exceeds the bound AND the reason says so
+                if reason != OVERSIZED_HASH_SKIPPED or size <= HASH_MAX_BYTES:
+                    return RECEIPT_INVALID, (f"sha256 {HASH_SKIPPED!r} claimed with reason "
+                                             f"{reason!r} and size {size} — the skip label is "
+                                             f"only honest above {HASH_MAX_BYTES} bytes")
+            elif not (isinstance(sha, str) and SHA256_RE.fullmatch(sha)):
+                return RECEIPT_INVALID, f"sha256 {sha!r} is neither 64-hex nor {HASH_SKIPPED!r}"
+            elif reason != OK or size > HASH_MAX_BYTES:
+                return RECEIPT_INVALID, (f"a real digest with reason {reason!r} and size {size} "
+                                         "is self-contradictory")
+        return RECEIPT_OK, f"receipt schema valid ({len(entries)} deliverable(s))"
+
+    def delivered_receipt(self, marker: dict) -> dict | None:
+        """The record IF it is a VALID delivered receipt. Identity is judged by the caller (the
+        WS1 fence); this adds the receipt-body gate that used to be missing entirely."""
+        state, _detail = self.receipt_status(marker)
+        return marker if state == RECEIPT_OK else None
+
+    def receipt_view(self) -> dict:
+        """The read API for the ONE terminal record, fenced. `delivered` is true only when the
+        record is identity-valid for the CURRENT attempt AND claims phase=delivered — staleness
+        is judged on the RECORD, never on the bytes at the declared path (a raw artifact on disk
+        carries no provenance of its own). `reason` is always from the closed enum: the WS1
+        class when identity refuses the record, PUBLISH_INTERRUPTED when there is no record but
+        a publish left debris, otherwise the record's own reason."""
+        status, marker = self.read_terminal_marker()
+        if status == STATUS_ABSENT:
+            debris = self.publish_debris()
+            return {"status": status, "verdict": "", "delivered": False,
+                    "reason": PUBLISH_INTERRUPTED if debris else "",
+                    "debris": len(debris),
+                    "detail": ("a terminal-record publish did not reach its rename — no record "
+                               "was published, and no partial record exists" if debris
+                               else f"no terminal record at {self.marker_path}")}
+        if status == STATUS_CORRUPT:
+            return {"status": status, "verdict": UNKNOWN, "delivered": False,
+                    "reason": IDENTITY_UNKNOWN, "debris": len(self.publish_debris()),
+                    "detail": f"terminal record at {self.marker_path} is unusable"}
+        klass, detail = self.classify_stamp(self.marker_stamp(marker))
+        state, why = self.receipt_status(marker)
+        reason = marker.get("reason")
+        if klass != OK:
+            reason = IDENTITY_UNKNOWN if klass == UNKNOWN else klass
+        elif state == RECEIPT_LEGACY:
+            # a WS1 marker carries no receipt: adoptable as a marker, never delivered, and it
+            # must not be labelled broken either
+            reason = "" if reason not in REASONS else reason
+        elif state == RECEIPT_INVALID:
+            reason = IDENTITY_UNKNOWN
+            detail = f"receipt schema refused — {why}"
+        view = {"status": status, "verdict": klass, "debris": len(self.publish_debris()),
+                "delivered": klass == OK and state == RECEIPT_OK,
+                "receipt": state, "reason": reason or "", "detail": detail}
+        for field in ("phase", "engineOutcome", "deliverables", "gitHead", "completedAt",
+                      "schemaVersion", "deliverable"):
+            if field in marker:
+                view[field] = marker[field]
+        return view
+
     def publish_terminal(self, armed_token: str, rc: int = 0) -> tuple[str, str]:
-        """Publish the terminal marker, stamped with the ACTIVE identity. Returns
-        (verdict, detail); the marker is written only on OK.
+        """Publish the ONE terminal record — WS1 fence stamp and WS2 delivery receipt in the
+        same file. Returns (verdict, detail); the record is written only on OK, and `detail`
+        carries the structural `reason=` machine line.
 
         The whole decision runs under the shared lock: re-read the record, compare it with
-        the caller's arm-time snapshot, bump the publish sequence and write the marker — with
-        no window for a concurrent transition to interleave. A watcher armed under attempt A
-        therefore cannot publish a conclusion for attempt B, and cannot resurrect A by
-        writing back a record it read before the comparison."""
+        the caller's arm-time snapshot, gather the deliverable evidence, bump the publish
+        sequence and write the record — with no window for a concurrent transition to
+        interleave. A watcher armed under attempt A therefore cannot publish a conclusion for
+        attempt B, and cannot resurrect A by writing back a record it read before the
+        comparison.
+
+        `phase=delivered` is set ONLY when the engine outcome is rc=0 AND the deliverable gate
+        was DECLARED and satisfied by hashed evidence. Every other case publishes the terminal
+        record WITHOUT phase — with a typed reason — so no session is ever vacuously
+        delivered, and the existing outcome classes are untouched."""
         with self._locked():
             if not os.path.exists(self.meta_path):
-                # racing stop already removed the lane: nothing to resurrect
-                return OK, "session stopped — no marker published"
+                # The lane is gone (a racing stop, or state someone removed), so the current
+                # session's identity is no longer establishable and NOTHING may be concluded
+                # under it. This used to return class OK with reason=IDENTITY_UNKNOWN: the
+                # publisher then exited 0, and `agentctl status/watch` — which convert only a
+                # NONZERO publisher exit into refusal — kept the prior DONE verdict alive. That
+                # is exactly "a refusal silently becomes OK" (cold review R3). The class is the
+                # WS1 unknown class, so duplexctl exits 2 and both callers refuse; the stop race
+                # explains the missing meta, it does not make the pre-stop conclusion reportable.
+                return UNKNOWN, (f"reason={IDENTITY_UNKNOWN} session meta {self.meta_path} is "
+                                 "gone (stopped or cleaned mid-flight) — no terminal record "
+                                 "published, no delivery receipt, and no prior conclusion may "
+                                 "be reported as this session's result")
             rec, status = self.load()
             if status != STATUS_OK or rec is None:
-                return UNKNOWN, (f"active identity record is {status} ({self.path})"
-                                 f"{self._why()} — nothing may be published under an "
-                                 "unestablished identity")
+                return UNKNOWN, (f"reason={IDENTITY_UNKNOWN} active identity record is {status} "
+                                 f"({self.path}){self._why()} — nothing may be published under "
+                                 "an unestablished identity")
             current = self._token_of(rec)
             if armed_token != current:
                 armed_parts, now_parts = armed_token.split("/"), current.split("/")
@@ -521,20 +1047,41 @@ class IdentityStore:
                     klass = STALE_INCARNATION
                 else:
                     klass = STALE_ATTEMPT
-                return klass, ("active identity changed between arming and publish "
-                               f"(armed '{armed_token or '-'}' ≠ now '{current}') — "
-                               "no terminal conclusion published")
+                return klass, (f"reason={klass} active identity changed between arming and "
+                               f"publish (armed '{armed_token or '-'}' ≠ now '{current}') — "
+                               "no terminal conclusion published, no delivery receipt")
+            meta = _meta_read(self.meta_path)
+            declared, cwd = meta.get("deliverable", ""), meta.get("cwd", "")
+            entries, reason, why = deliverable_evidence(cwd, declared)
+            delivered = rc == 0 and reason in DELIVERING_REASONS
             seq = int(rec.get("publishSeq", 0)) + 1
             rec["publishSeq"] = seq
             self._write(rec)
-            marker = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "rc": rc,
-                      "deliverable": _meta_read(self.meta_path).get("deliverable", ""),
+            marker = {"schemaVersion": SCHEMA_VERSION,
+                      "completedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                      "rc": rc,
+                      "deliverable": declared,
+                      "reason": reason,
+                      # the receipt view of the triple (spec field names) and the WS1 fence
+                      # view (`identity`, incl. the publish seq) are the SAME values from the
+                      # SAME record read — one authority, two shapes, no divergence possible
+                      "sessionId": rec["sessionId"],
+                      "attemptId": rec["attemptId"],
+                      "processIncarnation": rec.get("processIncarnation"),
                       "identity": {"sessionId": rec["sessionId"],
                                    "attemptId": rec["attemptId"],
                                    "processIncarnation": rec.get("processIncarnation"),
                                    "seq": seq}}
+            if delivered:
+                marker["phase"] = PHASE_DELIVERED
+                marker["engineOutcome"] = ENGINE_COMPLETED
+                marker["deliverables"] = entries
+                marker["gitHead"] = git_head(cwd)
             self._atomic_json(self.marker_path, marker)
-            return OK, f"terminal marker published ({self.marker_path})"
+            return OK, (f"terminal record published ({self.marker_path}) "
+                        f"{self.receipt_line(marker, reason)} — {why}"
+                        + (" (delivered ≠ verified: runtime terminal + hashed artifact "
+                           "evidence only)" if delivered else ""))
 
     def clear(self) -> None:
         """Drop this session's identity state so a stopped or freshly claimed name inherits

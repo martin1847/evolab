@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 889241f..3e222fa 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -120,7 +120,7 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+ # BOTH git object-id widths: 40 hex (sha1) and 64 hex (sha256, `git init --object-format=sha256`).
+ # The contract asks for the worktree HEAD, not for a sha1 — accepting only 40 made the REAL
+ # publisher write a receipt its own reader then refused in a sha256 repository (cold review R2).
+-GITHEAD_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
++GITHEAD_RE = re.compile(r"[0-9a-f]{40}\Z")  # MUTANT: sha256 repositories rejected
+ # RFC3339 spelling: `t`/`z` may be lower case, seconds may be `60` (leap second), and an
+ # offset is mandatory. Shape only — the semantics are checked by parsing (see _rfc3339).
+ RFC3339_RE = re.compile(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})\Z")

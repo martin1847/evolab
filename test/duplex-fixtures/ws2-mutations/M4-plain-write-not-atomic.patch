@@ -1,0 +1,24 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index c0768fe..3a14fd7 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -545,12 +545,13 @@ class IdentityStore:
+         except OSError as exc:
+             raise IdentityPersistError(f"cannot create identity temp file in {self.dir}: {exc}") from exc
+         try:
+-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+-                fh.write(text)
+-                fh.flush()
+-                os.fsync(fh.fileno())
+-            self._barrier(path)
+-            os.replace(tmp, path)
++            os.close(fd); os.unlink(tmp)                      # MUTANT: no temp file at all
++            with open(path, "w", encoding="utf-8") as out:    # MUTANT: plain in-place write
++                half = len(text) // 2
++                out.write(text[:half]); out.flush(); os.fsync(out.fileno())
++                self._barrier(path)                           # interrupted mid-write
++                out.write(text[half:]); out.flush(); os.fsync(out.fileno())
++            tmp = path
+         except OSError as exc:
+             try:
+                 os.unlink(tmp)

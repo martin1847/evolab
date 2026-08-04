@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 3fefed1..c88d4f7 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -311,7 +311,7 @@ def _open_dir(name: str, dir_fd: int | None = None) -> int:
+     0111 directory came back `UNREADABLE (EACCES)` (cold review R2). `O_SEARCH` is exactly this
+     (POSIX; present on darwin), `O_PATH` is Linux's equivalent, and where neither exists the
+     `O_RDONLY` form remains as the only portable fallback."""
+-    flags = _SEARCH_FLAG | os.O_DIRECTORY
++    flags = os.O_RDONLY | os.O_DIRECTORY  # MUTANT: demands READ on every ancestor
+     if dir_fd is None:
+         return os.open(name, flags)
+     return os.open(name, flags | os.O_NOFOLLOW, dir_fd=dir_fd)

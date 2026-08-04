@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index 889241f..0fdaaea 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -300,6 +300,8 @@ def _anchor_and_parts(cwd: str, declared: str) -> tuple[str, list[str]]:
+                  if p not in ("", os.curdir)])
+     target = os.path.normpath(declared)
+     parts = [p for p in target.split(os.sep) if p not in ("", os.curdir)]
++    # MUTANT: absolute declarations exempt from the ancestor walk again
++    return os.path.dirname(target), parts[-1:]
+     plat = _platform_prefix(target)
+     if plat is not None:
+         alias_parts = [p for p in plat[0].strip(os.sep).split(os.sep) if p]

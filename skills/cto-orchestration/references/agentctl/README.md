@@ -132,8 +132,9 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   什么都不发布。**身份的每一次变更（transition / 事件采信 / marker 发布）共用一把稳定的 per-session
   锁**（`$RUN/<s>.identity.lock`，放 run 目录所以跨 clear/重建仍是同一 inode）：token 比对、记录改写、
   marker 落盘同在一个临界区内完成，中间没有让并发 replace 挤进来、再被发布者旧副本盖回去的窗口。
-- 所有身份读写只走一个抽象（`identity.py` / `duplexctl identity {token,show,start,replace,resume,publish,clear}`）；
-  `duplexctl identity show <s>` 是给下游（含 WS2 delivery receipt）的读 API。
+- 所有身份读写只走一个抽象（`identity.py` / `duplexctl identity {token,show,start,replace,resume,publish,receipt,clear}`）；
+  `duplexctl identity show <s>` 读活跃记录，`identity receipt <s>` 读**唯一终态记录**（围栏判定 +
+  结构化 reason，exit 0 = delivered / 3 = 未交付）——给下游与人的读 API。
 - BLOCKED 归属：footer 让 worker 把 `$RUN/<s>.identity.d/blocked-stamp.txt` 的内容作为 `BLOCKED.md`
   末行。带 stamp 的记录按上表围栏；**未带 stamp 的沿用原有 round-epoch mtime 围栏**（CLI 行为不变）。
 
@@ -146,11 +147,77 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   死亡也当完成事件推送——仍唤醒编排者，status 复核 + re-arm 零信息丢失）> 自研轮询卡死但活着
   （零通知，沉默与"还在跑"同形 = 编排者失明）。判据不是"会不会失败"，而是**失败时响不响**——会被
   收割的 watcher 比会卡死的轮询器可靠；自研通知通道投产前先拿已知阳性证明它会响。
-- **终态 marker**：算出 DONE 的观察者落 `$RUN/<s>.terminal.json`（ts / rc / deliverable +
-  `identity` stamp，合法 JSON）——纯文件系统等待与事后恢复真相都不依赖"当时有人在听"，通知进程全被
-  收割也不丢。生命周期 = 存在即"本轮已完成"：`start` / `steer`（新轮）/ `stop` 都清除；status 单读只在
-  已声明 deliverable（门背书）时落盘，未声明的由 watch 双稳读落。
-  **pane 已亡（无 rc）时 marker 可被采信一次**：死进程发不出新事件，stamp 与活跃记录精确一致即
+- **终态记录 = 交付回执（唯一一份，不存在第二份权威）**：算出 DONE 的观察者落
+  `$RUN/<s>.terminal.json`——同一个文件既是 WS1 围栏 stamp 又是 WS2 delivery receipt，字段：
+  `schemaVersion / completedAt(RFC3339) / rc / deliverable / reason / sessionId / attemptId /
+  processIncarnation / identity{…,seq}`；交付成立时再加
+  `phase:"delivered" / engineOutcome:"completed" / deliverables[{path,sha256,size}] / gitHead`
+  （合法 JSON）——纯文件系统等待与事后恢复真相都不依赖"当时有人在听"，通知进程全被
+  收割也不丢。生命周期 = 存在即"本轮已完成"：`start` / `steer`（新轮）/ `stop` 都清除（连同发布中断
+  残留的 `.<s>.terminal.json-*.tmp`）；status 单读只在已声明 deliverable（门背书）时落盘，未声明的由
+  watch 双稳读落。
+- **`phase=delivered` ≠ 已验证**：它只表示"运行时终态 + 已声明产物的证据被观察并算过哈希"，
+  **不表示** reviewed / verified / E2E 通过 / merged / deployed。回执自己不是验收，任何"已验证"结论
+  必须另有独立来源。
+- **结构化 reason（闭集，不是散文）**：每个未交付 / 被拒结论都在记录里和 status/watch 机器行上带
+  `reason=<enum>`：`OK` / `NO_DELIVERABLE_DECLARED` / `MISSING` / `UNREADABLE` / `SYMLINK` /
+  `DIRECTORY` / `GLOB` / `OVERSIZED_HASH_SKIPPED` / `IDENTITY_UNKNOWN` / `PUBLISH_INTERRUPTED`
+  （身份围栏拒收时 reason = WS1 的 `STALE-ATTEMPT` / `STALE-INCARNATION`）。加一种结论 = 在
+  `identity.py` 这一处扩枚举，永不新增散文串；调用方与测试只断言枚举。
+- **有界取证规则**（每条都 typed，绝不静默）：声明路径缺失 = `MISSING`；存在但读不了（EACCES /
+  fifo / 设备）= `UNREADABLE`；末段或**任一祖先**是符号链接 = `SYMLINK`——判定方式是 **openat 式
+  逐段下降**（每跳 `O_NOFOLLOW` 且相对上一段的 fd），所以①绝对路径声明不再有豁免（曾经"cwd 之外
+  只判末段"，于是被链接的祖先被跟随、外源字节被哈希成交付，R1 评审实证）②没有 islink 预检就没有
+  check-then-open TOCTOU；③祖先按 **SEARCH 打开**（`O_SEARCH` / Linux `O_PATH`，回落 `O_RDONLY`），
+  绝不额外要求目录可读——路径解析本来只要 x，用 `O_RDONLY` 会把 mode 0111 祖先下完全可读的产物
+  误判成 `UNREADABLE`（R2 评审实证）。anchor（谁都不许经链接到达的真实起点）：**相对声明**用
+  realpath(会话 cwd)——cwd 是操作者指定的信任根，且 `agentctl start` 记的本来就是 `pwd -P` 解析过
+  的形态；**绝对声明**只在命中**固定的顶层平台别名白名单**（`/var` `/tmp` `/etc`——darwin 自己做成
+  `/private/*` 的那几个，且运行时仍验证它当前是链接）时豁免那一段，否则从文件系统根开始，其余
+  每一段都走。绝对声明**没有"落在 cwd 内"的捷径**：曾经"前缀 realpath 等于 realpath(cwd) 就锚在
+  解析后的 cwd"，于是 `alias -> real` + cwd `alias/cwd` + 声明 `alias/cwd/report.md` 时逐段走从
+  `alias` 之下才开始、链接背后的字节被哈希（R3 评审实证）；**用户自建的链接在任何深度都不豁免**
+  （R2 评审实证：原来"cwd 里第一个链接"就算平台前缀）。绝对路径按写出来的样子判——回执声称哪条
+  路径就检查哪条路径。目录 = `DIRECTORY`；路径含 glob 元字符
+  （`*?[`）= `GLOB`（回执要显式常规文件路径，该会话仍走原 mtime 门）；常规文件 > 64 MiB = **仍交付**，
+  `sha256:"oversized"` + 真实 `size` + `reason=OVERSIZED_HASH_SKIPPED`（有界成本、诚实标注，唯一
+  一条"仍交付"的有界例外）；未声明 deliverable = 落终态记录但**无 `phase`**、
+  `reason=NO_DELIVERABLE_DECLARED`（绝不空口交付）；非 git 目录 = 交付且 `gitHead:null`（绝不编造）。
+  相对路径按**会话 cwd** 解析，`gitHead` 读的是该 cwd 所属仓库的 worktree HEAD，不是编排者的。
+- **读边界先校验 receipt schema，再谈交付**（`identity.receipt_status()`）——**每一个能得出终态
+  真相的读者都走这同一道门**，不存在分支专用捷径：`phase` 缺失 = legacy WS1 marker（按 marker
+  采信、永不算交付）；声称交付但违反任一条 = 拒收、`reason=IDENTITY_UNKNOWN`、绝不 DONE-by-receipt。
+  曾经 pane 已亡的采信分支只查 WS1 stamp，于是同一条记录被 `identity receipt` 退 3 拒收、却被
+  `classify` 退 0 当终态真相采信（R3 评审实证）。校验：`schemaVersion==1`、`rc` 严格 int 0、
+  `engineOutcome=="completed"`、
+  `reason` ∈ 可交付集、顶层 `sessionId/attemptId/processIncarnation` 与被围栏的 `identity` stamp
+  逐字段相等、`completedAt` 用**完整解析**（形状允许小写 `t`/`z` 与闰秒 `:60`、必须带偏移；
+  再由 `datetime.fromisoformat` 拒掉 `+24:00` / `+23:60` / 13 月 / 32 日 / 25 点这类不可能值——
+  只匹形状再 strptime 前 19 字符等于根本没校验偏移，R2 评审实证；`:60` 还必须落在 **UTC 一天的
+  最后一分钟**，否则 `2026-08-04T14:00:60Z` 这种不存在的瞬时也会过，R3 评审实证）、`gitHead` 为
+  null 或 git object id（sha1 40 hex 或 sha256 64 hex——只认 40 会让 `--object-format=sha256`
+  仓库里**发布者自己写的回执被自家读边界拒收**，R2 评审实证）、`deliverables` 非空
+  且**所有证据值整串匹配**（`\Z` + `fullmatch`，绝不用 `$`——Python 的 `$` 匹在末尾换行之前，
+  于是 40/64-hex + `\n`、sha256 + `\n` 全被放行，R3 评审实证）；
+  `deliverables` 每项 `path` 非空、`size` 非负 int、`sha256` 为 64-hex 或恰好 `oversized` 哨兵（哨兵只在
+  `reason=OVERSIZED_HASH_SKIPPED` 且 size 超界时合法；真摘要只在 `reason=OK` 且 size 不超界时合法），
+  且 entry 的 path 必须等于同一个解析器（`declared_target()`）的结果。**只**校验绑定 schema 声明的
+  字段：单数 `deliverable` 是 WS1 marker 的扩展、不在绑定字段表里，要求它会拒掉合规记录
+  （R2 评审实证）。**没有这道门时**：只要嵌套 stamp 与活跃 attempt 一致，伪造 body
+  就能在 5 字节文件上声称 oversized + 编造 gitHead + 任意 completedAt，把真实 deliverable 谓词刚
+  拒掉的门变成 DONE 0（R1 评审用生产 classify 实证）。这道门证明的是内部一致 + 声称的就是本会话
+  声明的产物；它证明不了"已知当前 attempt+incarnation 的自洽伪造"是真的——那是 WS1 围栏的信任边界。
+- **会话 lane 消失 = 拒收，不是发布成功**：meta 不在（stop 竞态 / 被清）时发布返回 WS1 的
+  `IDENTITY-UNKNOWN` 类、`reason=IDENTITY_UNKNOWN`、不落任何记录，`duplexctl` 退 2、status/watch
+  双双拒收。曾经返回 OK 让发布者退 0，而调用方只把非零退出转成拒收——旧的 DONE 就那样活着被当成
+  本会话结果（R1 评审实证）。stop 竞态能解释 meta 为什么不见，但不能让 stop 之前的结论变成现在的结论。
+- **回执有效性绑定 attempt + incarnation**：陈旧判定永远落在**记录**上，不落在文件字节上（磁盘上的
+  产物自己不带来源）。陈旧 / 异源 stamp 的记录一律拒收（`STALE-*` / `IDENTITY_UNKNOWN`），
+  身份有效的记录则如实哈希当下字节。**有回执时哈希证据取代 mtime 新鲜度启发**（legacy 无回执 marker
+  仍走 mtime 门，行为不变）。发布仍是 mkstemp+fsync+`os.replace` 且在同一把身份锁内：中断只会留下
+  前一份完整记录或没有记录，永不留半截 JSON；只留 temp 残骸时读侧报 `reason=PUBLISH_INTERRUPTED`。
+  exit 码契约不变——回执只决定"能不能声称交付"，不改变既有出口分类。
+- **pane 已亡（无 rc）时终态记录可被采信一次**：死进程发不出新事件，stamp 与活跃记录精确一致即
   "本轮在 pane 被收割前就已完成"（此前一律 AGENT-DEAD）。采信前先过 marker schema 门
   （`rc` 严格 int——`False == 0` 不算 0；stamp 的 attemptId / incarnation 非空串、`seq` 必须是 int），
   再按 **per-attempt 单调 high-watermark** 判同一性：只有 `seq > watermark` 才推进状态，

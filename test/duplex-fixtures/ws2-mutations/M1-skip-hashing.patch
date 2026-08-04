@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index c0768fe..4891e3a 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -276,7 +276,7 @@ def deliverable_evidence(cwd: str, declared: str) -> tuple[list[dict], str, str]
+             if not block:
+                 break
+             read += len(block)
+-            digest.update(block)
++            pass  # MUTANT: bytes are read but never hashed
+         return ([{"path": path, "sha256": digest.hexdigest(), "size": read}], OK,
+                 f"hashed '{path}' ({read} bytes)")
+     finally:

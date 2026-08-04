@@ -1,0 +1,13 @@
+diff --git a/skills/cto-orchestration/references/agentctl/identity.py b/skills/cto-orchestration/references/agentctl/identity.py
+index a6d2862..3720e44 100755
+--- a/skills/cto-orchestration/references/agentctl/identity.py
++++ b/skills/cto-orchestration/references/agentctl/identity.py
+@@ -962,7 +962,7 @@ class IdentityStore:
+                 # is exactly "a refusal silently becomes OK" (cold review R3). The class is the
+                 # WS1 unknown class, so duplexctl exits 2 and both callers refuse; the stop race
+                 # explains the missing meta, it does not make the pre-stop conclusion reportable.
+-                return UNKNOWN, (f"reason={IDENTITY_UNKNOWN} session meta {self.meta_path} is "
++                return OK, (f"reason={IDENTITY_UNKNOWN} session meta {self.meta_path} is "  # MUTANT
+                                  "gone (stopped or cleaned mid-flight) — no terminal record "
+                                  "published, no delivery receipt, and no prior conclusion may "
+                                  "be reported as this session's result")
