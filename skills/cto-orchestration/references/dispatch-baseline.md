@@ -16,9 +16,10 @@ git worktree add ../wt-<name> -b feat/<name> origin/<base>
 
 **不让 agent 在过期基线开工。**
 
-- **rebase 条件动作 / 集成默认 squash（merge-commit 弃用）**：判据、ADR-trailer 与合后 ancestry
-  陷阱归 `git-workflow-standard`（§工作流、§集成策略），此处不复读。编排位只记一条：多会话并发时
-  base 常被别的 PR 推进，**`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
+- **rebase 条件动作 / 集成默认 squash（merge-commit 弃用）**：base 没动不 rebase；动了且与
+  改动重叠才 rebase（或 merge base 进来）——判据细节与合后 ancestry 陷阱归你所在仓的 Git 协作
+  规范，此处不复读。编排位只记一条：多会话并发时 base 常被别的 PR 推进，
+  **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
 - 按 SHA 部署的项目：squash / rebase-merge 的 ancestry 都干净线性（`contains <sha>` 成立）。
 - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主
   checkout、非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout

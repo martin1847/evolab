@@ -11,7 +11,7 @@
 > `BUDGET-EXHAUSTED`（exit 9），不得绕过，转人工裁决。
 > 差分口径统一 **three-dot**（`origin/<base>...HEAD`，对 merge-base 差分）：并发合并环境下 stale base 的
 > 两点差分会把他人 commit 的反向删除混进评审面、误判为回退报 blocking（外部席位单日 n=3 实证）；
-> 评审不因 base 移动而 rebase；rebase 若需要（条件判据归 git-workflow-standard）由编排者在 push 前收口。
+> 评审不因 base 移动而 rebase；rebase 归 push/merge 阶段、由编排者按所在仓的 Git 协作规范收口。
 > 定 `--max-rounds` 时：催写 nudge 也走 steer 计轮——预算 = 内容轮 + 1（外部席位单日 n=4 实证
 > idle-no-deliverable；max-rounds 1 遇 idle 即死局，连催写都投不进只能重开。上限不是燃料，slack 轮
 > 用不到零成本）。
