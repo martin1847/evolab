@@ -71,6 +71,7 @@ TUI 车道已裁撤；需要人工现场时直接 `tmux attach` 旁观，worker 
 - 先枚举执行分叉；轴装配先查 path→轴映射表（表命中必进 brief，判断只增补），再点名 `缺失消费者`、
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。
 - 只有 blocking 驱动续轮；第 3 轮起每轮续派须在 brief 写 `SHIP-BLOCKING: <依据>`；同一 finding 的修复连续 2 轮只新增 finding，则止损并转人工裁决或 accept-documented。
+- **杠杆账（简单干脆优先）**：用户可见小病 → 先找交互/配置层一刀关整类的最小解；机制自明（关掉即该类物理不可发生）且可逆 → 直做，机制存疑 → 仍过 §3 先量再改；取证仅在最小解不明时派。修复轮 ≥2 或对外协定往返 ≥2 → 主动算杠杆账（残余 = 概率×血量×复杂度）提降级案，不等主理人纠偏；单 seat 不堆叠多份合同——交付时点会被最慢件绑架（外部席位单日 n=2 主理人纠偏实证）。
 - 多轮 headless review 显式传 `--workflow review-loop --max-rounds N`（三引擎通用：每次 goal/steer 投递计一轮）；轮数与 stop-loss 只认 runtime meta，主干不复制状态机。
 - 评审期间执行 agent 不写同一 worktree。
 
