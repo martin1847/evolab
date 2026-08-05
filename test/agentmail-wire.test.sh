@@ -119,4 +119,13 @@ out="$(HOME="$H12b" bash "$AM" wire 2>&1)"; rc=$?
 chk_eq "user wiring proceeds beside unrelated same-name tool" 0 "$rc"
 chk_eq "our mail-check added, not treated as present" 2 "$(jq_get "$H12b/.claude/settings.json" 'len(c["hooks"]["SessionStart"])')"
 
+# 13. invoked via a PATH symlink (mail-check.py's ~/.local/bin convenience install) → hooks.json
+# must resolve beside the REAL script, not the symlink ($0 has to follow the link chain)
+H13="$FIX/h13"; B13="$FIX/bin13"; mkdir -p "$H13" "$B13"
+ln -s "$SELF_DIR/agentmail" "$B13/agentmail"
+out="$(HOME="$H13" "$B13/agentmail" wire 2>&1)"; rc=$?
+chk_eq "symlinked invocation wires (exit 0)" 0 "$rc"
+chk_eq "commands resolve beside the real script, not the symlink" "$SELF_DIR/mail-check.py" \
+  "$(jq_get "$H13/.claude/settings.json" 'c["hooks"]["SessionStart"][0]["hooks"][0]["command"]')"
+
 summary

@@ -165,7 +165,14 @@ EOF
     elif [ -n "${1:-}" ]; then
       echo "ERR: unknown wire argument: $1 (usage: agentmail wire [--project <abs-path>])" >&2; exit 1
     fi
-    WIRE_PROJECT="$proj" WIRE_SELF="$(cd "$(dirname "$0")" && pwd -P)" python3 - <<'PYW'
+    # $0 may be the ~/.local/bin symlink (mail-check.py convenience install) — follow the
+    # link chain before dirname, else hooks.json is looked up beside the symlink.
+    SELF="$0"
+    while [ -L "$SELF" ]; do
+      link="$(readlink "$SELF")"
+      case "$link" in /*) SELF="$link" ;; *) SELF="$(dirname "$SELF")/$link" ;; esac
+    done
+    WIRE_PROJECT="$proj" WIRE_SELF="$(cd "$(dirname "$SELF")" && pwd -P)" python3 - <<'PYW'
 import json, os, sys, tempfile, time
 self_dir = os.environ["WIRE_SELF"]
 proj = os.environ.get("WIRE_PROJECT", "")

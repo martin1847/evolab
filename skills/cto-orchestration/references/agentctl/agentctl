@@ -24,7 +24,14 @@
 #   0 DONE / 1 SESSION-GONE / 2 FAILED|AGENT-DEAD / 3 send-unconfirmed / 4 WAITING-INPUT
 #   / 5 STALLED-EXTERNAL / 6 IDLE-NO-DELIVERABLE / 7 WATCH-TIMEOUT / 8 ENGINE-SILENT
 set -uo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
+# $0 may be a PATH symlink (~/.local/bin convenience installs) — follow the link chain
+# before dirname, else CTL resolves beside the symlink and every engine name goes unknown.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  link="$(readlink "$SELF")"
+  case "$link" in /*) SELF="$link" ;; *) SELF="$(dirname "$SELF")/$link" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
 DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 CTL="$HERE/duplexctl.py"
 PY="${AGENTCTL_PYTHON:-python3}"

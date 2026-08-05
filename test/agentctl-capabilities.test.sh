@@ -554,4 +554,19 @@ sweep_fakes
 unset FAKE_TMUX_LAUNCH_LOG AGENTCTL_BIN_OMP AGENTCTL_BIN_CLAUDE AGENTCTL_BIN_CODEX FAKE_PROVIDER_LOG
 teardown
 
+echo "== C9: PATH-symlink invocation still resolves duplexctl.py beside the REAL script =="
+# Deployment surface, not protocol: agentctl is symlinked into ~/.local/bin on seats. $0 is
+# then the symlink, and a dirname that doesn't follow the link chain points CTL at the bin
+# dir — capabilities table unreadable, every engine name goes unknown (live seat incident,
+# 2026-08-05). Two hops pins the resolution LOOP, not just one readlink.
+setup
+BIN="$SANDBOX/bin"; mkdir -p "$BIN"
+ln -s "$AGENTCTL" "$BIN/agentctl-real-hop"
+ln -s "agentctl-real-hop" "$BIN/agentctl"
+out="$("$BIN/agentctl" capabilities 2>&1)"; rc=$?
+chk_eq "C9 symlinked agentctl exits 0" 0 "$rc"
+chk_contains "C9 capability table read through a two-hop relative symlink" \
+  "capability contract" "$out"
+teardown
+
 summary
