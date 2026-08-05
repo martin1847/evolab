@@ -57,6 +57,8 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - [ ] <可验证后置条件 + **证明命令与预期输出**（如 "`npm test` exits 0"）——写成只看输出即可机械判
   pass/fail 的形态（两个评审独立判得同一结论；harness 原生完成判定器如 Claude Code `/goal` 可直接消费这种条件）>
 - [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立。
+- [ ] 本 goal 定义验收仪器 → 只写**要看见什么损害**与观察面，不写用什么机制看（对象：Done-when 各条）
+  ——机制归实现者：机制写死 = 把编排者的模型错误烘进合同，抹掉实现者那次独立抽样。
 - [ ] 凡含「部署/配置生效后重测」步骤：先写**生效前置确认**（命令 + 期望值）再测；测量探针打
   **运行时真源**（DB 行 / 活进程 / 线上 endpoint），不拿构建 SHA、镜像 tag 等**代理指标**下生效
   结论（实证：代理指标误判打断正确 worker；缺前置确认则 worker 自己发明等待、对已完成部署空转）。
