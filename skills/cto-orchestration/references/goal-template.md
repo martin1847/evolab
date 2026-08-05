@@ -20,6 +20,10 @@ radius（A/B 实测 ~1/3 token、1 回合 vs 6+；动态分发/无测试警告 g
 
 > 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行（preflight 门默认校验）；普通 bugfix、机械改动和纯研究删除它、派发加 `--no-preflight`。
 Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only falsifier actually run> => <observed result>
+<!-- Preflight 探针命令锚 repo 根（只扫子目录会漏兄弟目录的真实调用方，前提假则 goal 塌）；
+     贴出的结果只是声明——goal-review 评审须复跑探针，不采信贴出值（外部席位台架实证：预计算
+     结果诱导评审不复跑） -->
+
 Optional absence-evidence gate (delete unless the decision relies on not observing X): known-positive probe: <how the detector proves it can see X>; otherwise report UNKNOWN.
 
 ## Pre-triage hypotheses (verify, don't trust)
@@ -57,6 +61,9 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - [ ] <可验证后置条件 + **证明命令与预期输出**（如 "`npm test` exits 0"）——写成只看输出即可机械判
   pass/fail 的形态（两个评审独立判得同一结论；harness 原生完成判定器如 Claude Code `/goal` 可直接消费这种条件）>
 - [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立。
+- [ ] ALWAYS → 全部交付物已 commit（对象：本 goal 的改动；证明 = `git status --short` 空 +
+  交付物在 `git log` 可见）——评审员审的是合同不是过程卫生，散在工作树的交付 0/6 个评审 run
+  发现（外部席位三模型台架实证），只能靠模板兜。
 - [ ] 本 goal 定义验收仪器 → 只写**要看见什么损害**与观察面，不写用什么机制看（对象：Done-when 各条）
   ——机制归实现者：机制写死 = 把编排者的模型错误烘进合同，抹掉实现者那次独立抽样。
 - [ ] 凡含「部署/配置生效后重测」步骤：先写**生效前置确认**（命令 + 期望值）再测；测量探针打
