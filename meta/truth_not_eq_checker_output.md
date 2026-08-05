@@ -56,7 +56,7 @@ Action 只表达“接下来做什么”：`ALLOW / DENY / HOLD / REMIND`。
 footer 里的说明文本——**随手探针同病，且不在"高风险 checker"的措辞覆盖内**，所以这条按人人适用的
 判据写，不按门的等级写。
 
-## 为什么机械的 workflow 也会撒谎（第三句的由来）
+## 为什么机械的 workflow 也会撒谎（第四短语的由来）
 
 直觉说机制比人稳定，怎么会撒谎？因为**稳定管的是方差，撒谎是偏置**。机制以近零方差执行的是
 它被编码的 spec，不是你的意图——编码错了（观察面选错、谓词写错、scope 圈错），它就以机器级
@@ -77,8 +77,8 @@ footer 里的说明文本——**随手探针同病，且不在"高风险 checke
 所以「Workflow outside, intelligence inside」在我们屋里定稿为四短语（NS-1）：
 **Deterministic workflow outside, bounded intelligence inside, evidence at the boundary —
 and intelligence periodically attacks the workflow.**
-前两句让系统便宜地跑（确定性机制管流程/状态/验收，判断力只花在编不出来的地方），第三句让它
-不在跑的过程中悄悄烂掉：异构变异打承诺面、活体门抓措辞病、known-positive 校准探针、编排位
+前三短语让系统便宜且可交接地跑（确定性机制管流程/状态/验收；判断力只花在编不出来的地方；
+边界以证据交接），第四短语让它不在跑的过程中悄悄烂掉：异构变异打承诺面、活体门抓措辞病、known-positive 校准探针、编排位
 对 SHIP 做变异复验。攻击的节律挂在既有触点上（评审轮、大版门、复盘），不新设仪式。
 
 ## evolab 当前落地

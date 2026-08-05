@@ -14,7 +14,7 @@ and intelligence periodically attacks the workflow.**
 |---|---|---|
 | SKILL | 少量稳定原则（何时派工 / 读并行写单线 / goal 合同 / Implemented≠Verified / 不可逆真人授权 / 冷评审与 E2E 判据） | `skills/*/SKILL.md` 主干 |
 | references | 门判不了的操作细则——**过渡层**：变得可判定者持续下沉 runtime | `skills/*/references/` |
-| runtime | 机械控制：attempt identity · capability · typed status · watcher · 轮数/超时预算 · delivery receipt · stale fencing · 进程收割（缺口台账：permission profile / 通用 retry budget，等实证再做） | `agentctl` + hooks + CI |
+| runtime | 机械控制：attempt identity · capability · typed status · watcher · 轮数/超时预算 · delivery receipt · stale fencing · 进程收割 | `agentctl` + hooks + CI |
 | agent | 边界内的专业判断：读码 / 设计 / 实现 / 找问题 / 裁决建议 | omp / codex / claude 席位 |
 
 边界证据形态：回执 sha256 · typed status · 评审探针 + attest · preflight 读数 · 变异红证。
