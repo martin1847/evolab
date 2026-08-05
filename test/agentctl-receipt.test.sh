@@ -28,6 +28,10 @@ ctl() { python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" "$@"; }
 setup() {
   sandbox_new
   WT="$SANDBOX/wt"; mkdir -p "$WT"
+  # canonical form: on darwin $TMPDIR lives under /var -> /private/var, and a forged record
+  # carrying the UNRESOLVED path is refused by the declared-path rule before any rule under
+  # test is reached — every schema probe then passed for the wrong reason (Linux CI, 2026-08-05)
+  WTP="$(cd "$WT" && pwd -P)"
 }
 teardown() { sandbox_clean; }
 
@@ -166,7 +170,7 @@ chk_eq "R2 stale evidence stays on disk, not rewritten" "$a_sha" "$(rec_field r2
 # same way — including one whose deliverables claim a hash of bytes nobody read
 python3 "$WS2/forge_receipt.py" "$WATCH_RUN_DIR/r2.terminal.json" \
   --attempt "$(python3 -c 'import uuid;print(uuid.uuid4().hex)')" --incarnation "$$@FAKE-r2" \
-  --deliverable "$WT/report.md" --sha256 "$(printf 0123456789abcdef | shasum -a 256 | cut -d' ' -f1)" \
+  --deliverable "$WTP/report.md" --sha256 "$(printf 0123456789abcdef | shasum -a 256 | cut -d' ' -f1)" \
   --size 4 --phase delivered >/dev/null
 out="$(bash "$AGENTCTL" status r2 2>&1)"; rc=$?
 chk_eq "R2 a forged foreign receipt is refused too" 6 "$rc"
@@ -419,7 +423,7 @@ schema_probe() { # $1 label  $2... forge args (after --phase delivered)
   local label="$1"; shift
   python3 "$WS2/forge_receipt.py" "$WATCH_RUN_DIR/r7b.terminal.json" \
     --attempt "$(cur_stamp r7b attemptId)" --incarnation "$(cur_stamp r7b processIncarnation)" \
-    --session "$(cur_stamp r7b sessionId)" --deliverable "$WT/report.md" \
+    --session "$(cur_stamp r7b sessionId)" --deliverable "$WTP/report.md" \
     --phase delivered "$@" >/dev/null
   chk_eq "R7 SCHEMA: $label ⇒ not delivered" "False" "$(view_field r7b delivered)"
   chk_eq "R7 SCHEMA: $label ⇒ typed IDENTITY_UNKNOWN" "IDENTITY_UNKNOWN" "$(view_field r7b reason)"
@@ -442,19 +446,11 @@ schema_probe "schemaVersion is unknown"    --sha256 "$good_sha" --size 11 --sche
 schema_probe "deliverables is not a list"  --deliverables-raw '{"path":"x"}'
 schema_probe "deliverables is empty"       --deliverables-raw '[]'
 schema_probe "a deliverable entry is not an object" --deliverables-raw '["report.md"]'
-schema_probe "a deliverable entry has no sha256" --deliverables-raw "[{\"path\":\"$WT/report.md\",\"size\":11}]"
+schema_probe "a deliverable entry has no sha256" --deliverables-raw "[{\"path\":\"$WTP/report.md\",\"size\":11}]"
 schema_probe "the recorded path is not the declared deliverable" \
-  --deliverables-raw "[{\"path\":\"$WT/somethingelse.md\",\"sha256\":\"$good_sha\",\"size\":11}]"
+  --deliverables-raw "[{\"path\":\"$WTP/somethingelse.md\",\"sha256\":\"$good_sha\",\"size\":11}]"
 schema_probe "reason contradicts the delivered claim" --sha256 "$good_sha" --size 11 --reason MISSING
 # the identity triple must be CROSS-CHECKED against the fenced stamp, not merely present
-python3 "$WS2/forge_receipt.py" "$WATCH_RUN_DIR/r7b.terminal.json" \
-  --attempt "$(cur_stamp r7b attemptId)" --incarnation "$(cur_stamp r7b processIncarnation)" \
-  --session "$(newid)" --deliverable "$WT/report.md" --sha256 "$good_sha" --size 11 \
-  --phase delivered >/dev/null
-chk_eq "R7 SCHEMA: top-level sessionId ≠ the fenced stamp ⇒ not delivered" "False" \
-  "$(view_field r7b delivered)"
-chk_eq "R7 SCHEMA: and typed IDENTITY_UNKNOWN" "IDENTITY_UNKNOWN" "$(view_field r7b reason)"
-
 # PAIRED GREEN: the record the REAL publisher writes passes the validator and still delivers —
 # including the genuine oversized case, whose label is legitimate because the size backs it
 publish r7b >/dev/null
@@ -464,6 +460,45 @@ chk_eq "R7 PAIRED GREEN: with reason=OK" "OK" "$(view_field r7b reason)"
 out="$(bash "$AGENTCTL" status r7b 2>&1)"; rc=$?
 chk_eq "R7 PAIRED GREEN: and its hash evidence still supersedes a stale mtime → DONE 0" 0 "$rc"
 chk_contains "R7 PAIRED GREEN: the supersede is explicit" "supersedes the mtime freshness heuristic" "$out"
+
+# sessionId probes get their OWN session and an unused seq: on the shared r7b record the
+# refusal came from an earlier rule (proved by mutation — dropping sessionId from the triple
+# cross-check left both assertions green), i.e. they were passing for the wrong reason.
+mk_session r7c report.md
+printf 'real bytes\n' > "$WT/report.md"
+c_sha="$(sha_of "$WT/report.md")"
+/bin/sleep 0.02; touch "$WATCH_RUN_DIR/r7c.duplex.round-started"
+
+# --session sets BOTH views, so it cannot express a receipt-vs-stamp mismatch at all;
+# --top-session moves ONLY the receipt view, which is the claim under test.
+python3 "$WS2/forge_receipt.py" "$WATCH_RUN_DIR/r7c.terminal.json" \
+  --attempt "$(cur_stamp r7c attemptId)" --incarnation "$(cur_stamp r7c processIncarnation)" \
+  --session "$(cur_stamp r7c sessionId)" --top-session "$(newid)" --seq 41 \
+  --deliverable "$WTP/report.md" --sha256 "$c_sha" --size 11 --phase delivered >/dev/null
+chk_eq "R7 SCHEMA: top-level sessionId ≠ the fenced stamp ⇒ not delivered" "False" \
+  "$(view_field r7c delivered)"
+chk_eq "R7 SCHEMA: and typed IDENTITY_UNKNOWN" "IDENTITY_UNKNOWN" "$(view_field r7c reason)"
+
+# PAIRED GREEN on the same session and seq: identical record, matching sessionId ⇒ delivers,
+# so the refusal above is attributable to sessionId alone.
+python3 "$WS2/forge_receipt.py" "$WATCH_RUN_DIR/r7c.terminal.json" \
+  --attempt "$(cur_stamp r7c attemptId)" --incarnation "$(cur_stamp r7c processIncarnation)" \
+  --session "$(cur_stamp r7c sessionId)" --seq 41 \
+  --deliverable "$WTP/report.md" --sha256 "$c_sha" --size 11 --phase delivered >/dev/null
+chk_eq "R7 SCHEMA PAIRED GREEN: the same record with a matching sessionId delivers" "True" \
+  "$(view_field r7c delivered)"
+
+# the case Linux CI caught: a record whose two session views AGREE with each other but name a
+# foreign session still rode this attempt's stamp into `delivered`, because the WS1 fence pins
+# attemptId + incarnation only. The receipt must also belong to the ACTIVE session.
+python3 "$WS2/forge_receipt.py" "$WATCH_RUN_DIR/r7c.terminal.json" \
+  --attempt "$(cur_stamp r7c attemptId)" --incarnation "$(cur_stamp r7c processIncarnation)" \
+  --session "$(newid)" --seq 42 \
+  --deliverable "$WTP/report.md" --sha256 "$c_sha" --size 11 --phase delivered >/dev/null
+chk_eq "R7 SCHEMA: a self-consistent FOREIGN sessionId is refused" "False" \
+  "$(view_field r7c delivered)"
+chk_eq "R7 SCHEMA: and types it IDENTITY_UNKNOWN" "IDENTITY_UNKNOWN" "$(view_field r7c reason)"
+
 mk_session r7c huge.bin
 python3 -c 'import sys; f=open(sys.argv[1],"wb"); f.truncate(64*1024*1024+1); f.close()' "$WT/huge.bin"
 publish r7c >/dev/null
@@ -574,7 +609,7 @@ python3 "$WS2/forge_receipt.py" "$WATCH_RUN_DIR/r9.terminal.json" \
   --attempt "$(ctl identity show r9 | python3 -c 'import json,sys;print(json.load(sys.stdin)["attemptId"])')" \
   --incarnation "$(ctl identity show r9 | python3 -c 'import json,sys;print(json.load(sys.stdin)["processIncarnation"])')" \
   --session "$(ctl identity show r9 | python3 -c 'import json,sys;print(json.load(sys.stdin)["sessionId"])')" \
-  --deliverable "$WT/report.md" --sha256 "$(sha_of "$WT/report.md")" \
+  --deliverable "$WTP/report.md" --sha256 "$(sha_of "$WT/report.md")" \
   --size "$(wc -c < "$WT/report.md" | tr -d ' ')" --phase delivered >/dev/null
 chk_eq "R9 a record left over from before the stop is not delivered without a lane" "False" \
   "$(view_field r9 delivered)"

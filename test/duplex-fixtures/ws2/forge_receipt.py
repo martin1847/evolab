@@ -42,6 +42,8 @@ parser.add_argument("--schema-version", dest="schema_version", type=int, default
 parser.add_argument("--deliverables-raw", dest="deliverables_raw",
                     help="JSON literal for the whole deliverables value (shape probes)")
 parser.add_argument("--no-identity", action="store_true")
+parser.add_argument("--top-session", help="top-level sessionId ONLY — lets a probe forge a record "
+                                          "whose receipt view disagrees with its own fenced stamp")
 args = parser.parse_args()
 
 record = {"schemaVersion": args.schema_version,
@@ -56,6 +58,8 @@ if args.incarnation is not None:
     record["processIncarnation"] = args.incarnation
 if args.session is not None:
     record["sessionId"] = args.session
+if args.top_session is not None:
+    record["sessionId"] = args.top_session
 if args.phase:
     record["phase"] = args.phase
     if not args.no_engine_outcome:

@@ -912,6 +912,16 @@ class IdentityStore:
             if top != inner:
                 return RECEIPT_INVALID, (f"top-level {field} {top!r} ≠ the fenced stamp's "
                                          f"{inner!r}")
+        # …and the triple must be THIS session's. The WS1 fence pins attemptId + incarnation
+        # only, so a self-consistent record naming a foreign sessionId rode this attempt's
+        # stamp into `delivered` (Linux CI 2026-08-05; masked on darwin by a path-canonical
+        # mismatch that refused every forged record earlier).
+        active, state = self.load()
+        if state != STATUS_OK or not active:
+            return RECEIPT_INVALID, "no active identity record to bind this receipt to"
+        if marker.get("sessionId") != active.get("sessionId"):
+            return RECEIPT_INVALID, (f"sessionId {marker.get('sessionId')!r} is not the active "
+                                     f"session {active.get('sessionId')!r}")
         if not _rfc3339(marker.get("completedAt")):
             return RECEIPT_INVALID, f"completedAt {marker.get('completedAt')!r} is not RFC3339"
         head = marker.get("gitHead")

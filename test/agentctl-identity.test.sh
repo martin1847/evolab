@@ -1047,24 +1047,11 @@ resid="$(ps -Ao command= 2>/dev/null | grep -F -e "$SB" -e "$SOCK" | grep -v gre
 chk_eq "ps: nothing from this suite outlives it (no daemon, no leaked engine)" 0 "$resid"
 teardown
 
-if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-  changed="$( { git -C "$REPO_ROOT" diff --name-only main...HEAD 2>/dev/null
-                git -C "$REPO_ROOT" status --porcelain 2>/dev/null | awk '{print $NF}'; } | sort -u )"
-  # every entry is an exact path or one workstream-owned directory: an unrestricted docs(/.*)?
-  # let a modified review/E2E policy anywhere under docs/ pass the guardrail this claims to
-  # enforce. BLOCKED.md is the headless protocol's escalation channel — an exact path, not a
-  # wildcard. WS2 (the delivery receipt) extends the SAME subsystem and the same three runtime
-  # files, so its owned paths are listed here too — the guardrail is about never touching
-  # guard / git-workflow / review policy, not about which workstream is in flight. WS3 (the
-  # capability contract) additionally owns the main SKILL.md and the docs-contract suite,
-  # because DELETING the prose capability matrix from the skill is its deliverable.
-  allow='^(skills/cto-orchestration/(SKILL\.md|references/agentctl/(agentctl|duplexctl\.py|identity\.py|README\.md))|test/(agentctl-identity|agentctl-duplex|agentctl-receipt|agentctl-capabilities|cto-docs-contract|duplexctl-timeout)\.test\.sh|test/duplex-fixtures/fake_codex_duplex\.py|test/duplex-fixtures/ws1/?[^/]*|test/duplex-fixtures/ws1-mutations/?[^/]*|test/duplex-fixtures/ws2/?[^/]*|test/duplex-fixtures/ws2-mutations/?[^/]*|test/duplex-fixtures/ws3/?[^/]*|test/duplex-fixtures/ws3-mutations/?[^/]*|docs/orchestration/?|docs/orchestration/WS[123]_FINDINGS\.md|BLOCKED\.md)$'
-  stray="$(printf '%s\n' "$changed" | grep -v -E "$allow" | grep -c . )"
-  chk_eq "changed-file list stays inside reliability-core scope (no guard / git-workflow / review policy)" \
-    0 "$stray"
-  [ "$stray" = 0 ] || printf '%s\n' "$changed" | grep -v -E "$allow" | sed 's/^/    stray> /'
-else
-  echo "  NOT VERIFIED scope check: not a git checkout"
-fi
+# NOTE: a branch-scope guardrail used to live here (diff main...HEAD vs an allowlist). It was
+# a worktree-lifetime check for the reliability-core branches, and it read repository state from
+# OUTSIDE this suite's sandbox — so once the workstreams merged it began firing on legitimate,
+# already-reviewed doctrine commits (Linux CI, 2026-08-05) while staying green on the author's
+# machine. A hermetic suite must not assert on the surrounding checkout; scope discipline is the
+# reviewer's and the pre-push gate's job, not a runtime test's. Removed rather than patched.
 
 summary
