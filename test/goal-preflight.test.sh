@@ -98,6 +98,15 @@ printf "$ok## Premises\n- [ ] a 与 b 一致\n- [ ] c 与 d 一致\n$dw- [ ] 表
 run_check "$goal"
 chk_contains "[R2] ROW NUMBER counts within Done-when only" "第 1 条" "$out"
 
+# [R3] two adopted fixes: english "returned 0" is evidence; "## Done When" capitalisation counts
+printf "$ok$dw- [ ] HTTP response matches golden JSON (proof: jq -e .ok response.json returned 0)\n" > "$goal"
+run_check "$goal"
+chk_eq "[R3] FALSE-POSITIVE GUARD: bare english returned-N proof is silent" "" "$out"
+
+printf "$ok## Done When\n- [ ] 表与注册表一致\n" > "$goal"
+run_check "$goal"
+chk_contains "[R3] SECTION CASE: '## Done When' is still in scope" "断言内部一致" "$out"
+
 printf '# no preflight\n## Done when\n- [ ] 断言表与注册表一致\n' > "$goal"
 run_check "$goal"
 chk_eq "GATE PRECEDENCE: a hard failure still rejects" 1 "$rc"

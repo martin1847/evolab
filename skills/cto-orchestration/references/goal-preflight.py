@@ -20,7 +20,7 @@ PLACEHOLDER = re.compile(r"<[^<>\n]+>")
 # WARN-class smell only: an acceptance row asserting INTERNAL agreement (table vs registry)
 # instead of observable behaviour is where same-source self-proof hides. Never blocks — this
 # gate validates declaration shape and is never an oracle for oracle quality.
-DONE_WHEN_RE = re.compile(r"(?ms)^##+ +Done[ -]?when.*?(?=^##+ |\Z)")
+DONE_WHEN_RE = re.compile(r"(?msi)^##+ +Done[ -]?when.*?(?=^##+ |\Z)")
 ROW_RE = re.compile(r"(?ms)^\s*- \[ \] (.+?)(?=^\s*[-*] |\Z)")
 CONSISTENCY_RE = re.compile(
     r"一致|相同|等同|等价|镜像|匹配|同步|自洽|漂移|比对|对比"
@@ -29,7 +29,7 @@ CONSISTENCY_RE = re.compile(
 )
 # proof-shape, not vocabulary: a runnable command, an exit/return reading, or a named observation
 EVIDENCE_RE = re.compile(
-    r"`[^`\n]+`|\bexits? +\d|\brc *[=:]|返回 *\d|退出码|exit[- ]?code|stdout|stderr"
+    r"`[^`\n]+`|\bexits? +\d|\brc *[=:]|\breturn(?:ed|s)? +\d|返回 *\d|退出码|exit[- ]?code|stdout|stderr"
     r"|--exit-code|变红|转红|观察到|observed|实测|真跑|探针|probe",
     re.IGNORECASE,
 )
