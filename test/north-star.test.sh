@@ -25,9 +25,9 @@ body = open(ns_path, encoding="utf-8").read()
 if not re.search(r"(?m)^> v\d+\.\d+\.\d+\b", body):
     bad.append("no semver revision line (`> vX.Y.Z`)")
 heads = re.findall(r"(?m)^## (NS-\d+)\b", body)
-for raw in re.findall(r"(?m)^## (NS-\S+)", body):
-    if not re.fullmatch(r"NS-\d+", raw.split()[0]):
-        bad.append(f"malformed NS heading: {raw.split()[0]}")
+for raw in re.findall(r"(?m)^## +(NS\S*)", body):
+    if not re.fullmatch(r"NS-\d+", raw):
+        bad.append(f"malformed NS heading: {raw!r}")
 if not heads:
     bad.append("no NS-<n> headings")
 if len(heads) != len(set(heads)):
@@ -96,13 +96,21 @@ chk_eq "KNOWN-BAD: missing NORTH_STAR reds" 1 "$rc"
 printf '# NS\n> v1.0.0\n\n## NS-1 x\n\n## NS-x malformed\n' > "$SANDBOX/docs/NORTH_STAR.md"
 out="$(check "$SANDBOX")"; rc=$?
 chk_eq "[R1] KNOWN-BAD: malformed NS heading reds" 1 "$rc"
-chk_contains "[R1] and names it" "malformed NS heading: NS-x" "$out"
+chk_contains "[R1] and names it" "malformed NS heading" "$out"
 
 gitroot="$SANDBOX/sub.git-name"; mkdir -p "$gitroot/docs"
 printf '# NS\n> v1.0.0\n\n## NS-1 x\n' > "$gitroot/docs/NORTH_STAR.md"
 printf 'cites NS-''7\n' > "$gitroot/dangling.md"
 out="$(check "$gitroot")"; rc=$?
 chk_eq "[R1] KNOWN-BAD: a .git-substring ROOT is still scanned (no vacuous green)" 1 "$rc"
+
+# [R2] the two shapes that still slipped: a bare '## NS-' tail and any NS-prefixed non-id
+printf '# NS\n> v1.0.0\n\n## NS-1 ok\n\n## NS-\n' > "$SANDBOX/docs/NORTH_STAR.md"
+out="$(check "$SANDBOX")"; rc=$?
+chk_eq "[R2] KNOWN-BAD: bare 'NS-' heading reds" 1 "$rc"
+printf '# NS\n> v1.0.0\n\n## NS-1 ok\n\n## NS-x malformed\n' > "$SANDBOX/docs/NORTH_STAR.md"
+out="$(check "$SANDBOX")"; rc=$?
+chk_eq "[R2] KNOWN-BAD: NS-x beside a valid heading still reds" 1 "$rc"
 
 printf '# NS\n> v1.0.0\n\n## NS-1 x - see NS-''8\n' > "$SANDBOX/docs/NORTH_STAR.md"
 rm -f "$SANDBOX/ok.md"
