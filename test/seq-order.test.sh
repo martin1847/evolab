@@ -42,9 +42,18 @@ assert_has "$out" "out of order after" "duplicate-or-regress flagged"
 w "$T/badsuf.sh" '# --- 6c. later suffix' '# --- 6b. earlier suffix'
 out="$(python3 "$CHECK" "$T/badsuf.sh" 2>&1)"; assert_rc $? 1 "suffix regression rc"
 
-# 5. the real tree is clean (tracked + untracked-not-ignored shell files)
+# 5. markdown layer-ladder: clean L0→L1→L2 (gaps fine) passes; reversed order — the
+# real 2026-08-05 incident (L1,L2,L0 read fine in a diff; gate was shell-only) — caught
+w "$T/good.md" '| 层 | 位置 |' '| --- | --- |' '| L0 prose | a |' '| L1 hook | b |' '| L3 gap | c |'
+out="$(python3 "$CHECK" "$T/good.md" 2>&1)"; assert_rc $? 0 "md layer ladder clean rc"
+w "$T/bad.md" '| L1 hook | a |' '| L2 ci | b |' '| L0 prose | c |'
+out="$(python3 "$CHECK" "$T/bad.md" 2>&1)"; rc=$?
+assert_rc "$rc" 1 "md reversed layer ladder rc"
+assert_has "$out" "bad.md:3" "points at the reversed layer row"
+
+# 6. the real tree is clean (tracked + untracked-not-ignored shell files + markdown)
 files="$(git -C "$REPO" ls-files --cached --others --exclude-standard \
-          "test/*.sh" "scripts/*.sh" "skills/**/*.sh" | sed "s|^|$REPO/|")"
+          "test/*.sh" "scripts/*.sh" "skills/**/*.sh" "*.md" | sed "s|^|$REPO/|")"
 out="$(printf '%s\n' "$files" | xargs python3 "$CHECK" 2>&1)"; rc=$?
 assert_rc "$rc" 0 "repo tree sequence-clean"
 [ -n "$out" ] && echo "$out"

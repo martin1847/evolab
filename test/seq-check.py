@@ -10,6 +10,11 @@ allowed (removals are legitimate). Patterns (shell files):
   # --- <n><suffix>. ...  numbered section comments (6b/6c style suffixes)
   echo "<n>) ...          user-visible numbered check headers
 
+Markdown files (tables):
+
+  | L<n> ...              layer-ladder table rows (L0/L1/L2 — 2026-08-05 incident:
+                          a reversed L-table read fine in a diff; gate was shell-only)
+
 Usage: seq-check.py <file>...   exits 1 listing every out-of-order/duplicate label.
 """
 
@@ -20,6 +25,7 @@ PATTERNS = [
     ("case-letter", re.compile(r'^#\s*(?:---\s*)?Case\s+([A-Z]+)\b')),
     ("section-num", re.compile(r'^#\s*---\s*(\d+)([a-z]?)[.)]')),
     ("echo-num", re.compile(r'^echo\s+"(\d+)\)')),
+    ("layer-num", re.compile(r'^\|\s*L(\d+)\b')),
 ]
 
 
