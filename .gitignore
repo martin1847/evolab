@@ -19,3 +19,4 @@ security
 ACCESS.local.*
 .env*
 meta/draft/
+docs/orchestration/
