@@ -17,6 +17,27 @@ UNRESOLVED = re.compile(
     re.IGNORECASE,
 )
 PLACEHOLDER = re.compile(r"<[^<>\n]+>")
+# WARN-class smell only: an acceptance row asserting INTERNAL agreement (table vs registry)
+# instead of observable behaviour is where same-source self-proof hides. Never blocks — the
+# gate validates shape, never oracle quality (see meta/truth_not_eq_checker_output.md).
+CHECKLIST_RE = re.compile(r"(?m)^\s*- \[ \] (.+)$")
+CONSISTENCY_RE = re.compile(
+    r"一致|相同|匹配|同步|自洽|漂移|比对|对比|in sync|consistent|matches|drift", re.IGNORECASE
+)
+BEHAVIOUR_RE = re.compile(
+    r"行为|实际|观察|运行|执行|调用|发出|变红|红|绿|输出|探针|exit|rc\b|stdout|stderr|emit|frame|probe",
+    re.IGNORECASE,
+)
+
+
+def warn(rows):
+    for number, row in rows:
+        print(
+            f"WARN: preflight: Done-when 第 {number} 条断言内部自洽而没有可观察行为 — "
+            f"坏样本打在承诺面了吗？{row[:60]} "
+            "Read: cto-orchestration/references/review-dispatch.md §goal-review 仪器第 5 问.",
+            file=sys.stderr,
+        )
 
 
 def fail(message):
@@ -43,6 +64,11 @@ def main():
         return fail("replace every placeholder with the probe actually run and its observed result")
     if UNRESOLVED.match(probe) or UNRESOLVED.match(observed):
         return fail("the cheapest refutation must be run before dispatch; unresolved/N/A is not evidence")
+    warn([
+        (number, row)
+        for number, row in enumerate(CHECKLIST_RE.findall(body), 1)
+        if CONSISTENCY_RE.search(row) and not BEHAVIOUR_RE.search(row)
+    ])
     return 0
 
 
