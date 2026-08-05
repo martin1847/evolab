@@ -28,7 +28,9 @@ git worktree add ../wt-<name> -b feat/<name> origin/<base>
 
 ## 收工核证四件套（SKILL §1.6 验收原则的操作化；四件套定义与实证在此）
 
-1. `git status -s` 干净（实证：执行 agent 屡次"声称完成没 commit"）。
+1. `git status -s` 干净（实证：执行 agent 屡次"声称完成没 commit"；外部席位 4 goal × 3 模型
+   台架复证 0/6 run 发现散在工作树的交付——**评审审合同不审过程卫生，这件永远归编排位**，
+   别为此往 goal 合同里塞自守门条款）。
 2. `git log origin/<base>..HEAD` 与声明一致（多了 = 夹带，少了 = 没交）。
 3. 独立复跑 test+lint——不吃 worker 转述的结果。
 4. 测试计数用 `grep -E 'passed|failed'`，别信被截断的点行。

@@ -18,26 +18,43 @@ UNRESOLVED = re.compile(
 )
 PLACEHOLDER = re.compile(r"<[^<>\n]+>")
 # WARN-class smell only: an acceptance row asserting INTERNAL agreement (table vs registry)
-# instead of observable behaviour is where same-source self-proof hides. Never blocks — the
-# gate validates shape, never oracle quality (see meta/truth_not_eq_checker_output.md).
-CHECKLIST_RE = re.compile(r"(?m)^\s*- \[ \] (.+)$")
+# instead of observable behaviour is where same-source self-proof hides. Never blocks — this
+# gate validates declaration shape and is never an oracle for oracle quality.
+DONE_WHEN_RE = re.compile(r"(?ms)^##+ +Done[ -]?when.*?(?=^##+ |\Z)")
+ROW_RE = re.compile(r"(?ms)^\s*- \[ \] (.+?)(?=^\s*[-*] |\Z)")
 CONSISTENCY_RE = re.compile(
-    r"一致|相同|匹配|同步|自洽|漂移|比对|对比|in sync|consistent|matches|drift", re.IGNORECASE
+    r"一致|相同|等同|等价|镜像|匹配|同步|自洽|漂移|比对|对比"
+    r"|in ?sync|consistent|matches?|mirrors?|identical|equals?|equivalent|drift",
+    re.IGNORECASE,
 )
-BEHAVIOUR_RE = re.compile(
-    r"行为|实际|观察|运行|执行|调用|发出|变红|红|绿|输出|探针|exit|rc\b|stdout|stderr|emit|frame|probe",
+# proof-shape, not vocabulary: a runnable command, an exit/return reading, or a named observation
+EVIDENCE_RE = re.compile(
+    r"`[^`\n]+`|\bexits? +\d|\brc *[=:]|返回 *\d|退出码|exit[- ]?code|stdout|stderr"
+    r"|--exit-code|变红|转红|观察到|observed|实测|真跑|探针|probe",
     re.IGNORECASE,
 )
 
 
 def warn(rows):
     for number, row in rows:
+        first = " ".join(row.split())[:60]
         print(
-            f"WARN: preflight: Done-when 第 {number} 条断言内部自洽而没有可观察行为 — "
-            f"坏样本打在承诺面了吗？{row[:60]} "
+            f"WARN: preflight: Done-when 第 {number} 条断言内部一致而未给可观察证据 — "
+            f"坏样本打在承诺面了吗？{first} "
             "Read: cto-orchestration/references/review-dispatch.md §goal-review 仪器第 5 问.",
             file=sys.stderr,
         )
+
+
+def smelly_rows(body):
+    section = DONE_WHEN_RE.search(body)
+    if not section:
+        return []
+    return [
+        (number, row)
+        for number, row in enumerate(ROW_RE.findall(section.group(0)), 1)
+        if CONSISTENCY_RE.search(row) and not EVIDENCE_RE.search(row)
+    ]
 
 
 def fail(message):
@@ -64,11 +81,7 @@ def main():
         return fail("replace every placeholder with the probe actually run and its observed result")
     if UNRESOLVED.match(probe) or UNRESOLVED.match(observed):
         return fail("the cheapest refutation must be run before dispatch; unresolved/N/A is not evidence")
-    warn([
-        (number, row)
-        for number, row in enumerate(CHECKLIST_RE.findall(body), 1)
-        if CONSISTENCY_RE.search(row) and not BEHAVIOUR_RE.search(row)
-    ])
+    warn(smelly_rows(body))
     return 0
 
 
