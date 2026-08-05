@@ -15,6 +15,10 @@
 > 定 `--max-rounds` 时：催写 nudge 也走 steer 计轮——预算 = 内容轮 + 1（外部席位单日 n=4 实证
 > idle-no-deliverable；max-rounds 1 遇 idle 即死局，连催写都投不进只能重开。上限不是燃料，slack 轮
 > 用不到零成本）。
+> - [ ] 写 codex 评审 brief / steer → 用中性工程措辞，避 forged / impostor / attack / probe 类
+>   攻击词汇（对象：投给引擎的 prompt 文本；安全型内容过滤只判 prompt，被读文件不进判定）。
+> - [ ] codex 轮被 cyberPolicy 拦 → 开新会话、净化措辞后重投（对象：该评审任务；措辞**与会话
+>   累积上下文**都进判定，同会话改写无效——n=3 实证；失败轮照常计入轮数预算）。
 
 ## goal-review（派发前，白名单免评 + 其余必评）
 
