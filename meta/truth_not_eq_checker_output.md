@@ -74,8 +74,9 @@ footer 里的说明文本——**随手探针同病，且不在"高风险 checke
 3. **机制看不见自己**：门检查不了"自己有没有被跑过"，锁保护不了"锁文件被自家清理删掉"，
    声明门验不了声明的真伪。自指盲区是结构性的，加码同类机制解决不了。
 
-所以「Workflow outside, intelligence inside」在我们屋里是三句：
-**Workflow outside, intelligence inside — and intelligence periodically attacks the workflow.**
+所以「Workflow outside, intelligence inside」在我们屋里定稿为四短语（NS-1）：
+**Deterministic workflow outside, bounded intelligence inside, evidence at the boundary —
+and intelligence periodically attacks the workflow.**
 前两句让系统便宜地跑（确定性机制管流程/状态/验收，判断力只花在编不出来的地方），第三句让它
 不在跑的过程中悄悄烂掉：异构变异打承诺面、活体门抓措辞病、known-positive 校准探针、编排位
 对 SHIP 做变异复验。攻击的节律挂在既有触点上（评审轮、大版门、复盘），不新设仪式。

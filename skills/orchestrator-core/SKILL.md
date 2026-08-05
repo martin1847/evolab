@@ -1,6 +1,6 @@
 ---
 name: orchestrator-core
-version: 0.2.0
+version: 0.2.1
 description: "多智能体编排的领域无关内核（A² Supervisor 层的方法论抽象）。把编排者的操作系统从领域里剥出来：萃取式主上下文 + 按『要不要主上下文』切分派工 + 契约化派发 + 分层合并 + 对抗式异构验证 + 降认知负载。领域皮（CTO 写码 / 总编内容 / 未来任意领域）只贴一张薄角色表 + 完成定义，内核整套复用。适用于用户要求抽象编排模式、造新领域编排者、或问『多智能体架构怎么搭』。不要用于：单 agent 一次性小任务（无需内核）、纯文档初始化（用 repo-governance-bootstrap）。派工/评审/状态落盘的领域实现见各皮 skill（cto-orchestration / yangge-ops）。"
 metadata:
   distilled-from: ["cto-orchestration", "yangge-ops"]
@@ -20,6 +20,12 @@ metadata:
 
 **先编排，再工作**——编排是 agent 的操作系统：任务进来先过「派 or 不派」判据（§2），亲手执行是调度的一种结果，不是默认姿态。
 **编排者持有判断，不持有产物；持有薄的萃取上下文，不持有脏数据；把复杂度压进契约与合并，把简单留给主 session。**
+
+分层不变式一句：**Deterministic workflow outside, bounded intelligence inside, evidence at
+the boundary — and intelligence periodically attacks the workflow.**（确定性 workflow 在外，
+受约束的智能在内，边界用证据交接——智能定期反攻 workflow。）流程、状态、验收、重试写成
+确定性机制；判断力只花在编不出来的地方；层与层用证据交接、不用信任交接；机制本身会静默
+腐坏，须由智能定期以异源变异攻击。
 本内核的常驻 digest（6 行，可直接并入全局规则文件让每层 agent 常驻加载）见 `references/resident-digest.md`。
 
 ---
