@@ -175,6 +175,7 @@ out="$(run "$r")"; rc=$?
 np="$(cd "$r/../nasty dir's wt" && pwd -P)"
 assert_rc "$rc" 0 "Q/nasty path rc"
 assert_has "$out" "git -C $(printf '%q' "$np") branch backup" "Q/remedy shell-escapes the nasty path"
+assert_has "$out" "git -C $(printf '%q' "$np") reset --hard origin/main" "Q/reset half is escaped and ref-complete"
 
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]
