@@ -132,5 +132,49 @@ out="$(runaw "$r" "$aw" "$ft")"; rc=$?
 assert_rc "$rc" 0 "M/other-repo rc"
 assert_has "$out" "no terminal-but-uncleaned session" "M/other-repo filtered"
 
+# Case N — base checkout diverged from origin (post-squash shape) → warn only, exit 0
+r="$(mkrepo)"
+( cd "$r"
+  echo local > local.txt; git add -A; git commit -qm "local original (pre-squash)"
+  d2="$(mktemp -d)"; git clone -q "$(git remote get-url origin)" "$d2/c2"
+  cd "$d2/c2"; git config user.email t@t; git config user.name t
+  echo squashed > squashed.txt; git add -A; git commit -qm "squashed result"; git push -q origin main
+)
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "N/diverged base is warn-only rc"
+assert_has "$out" "diverged from origin/main" "N/diverged base checkout warned"
+rp="$(cd "$r" && pwd -P)"
+assert_has "$out" "git -C $(printf '%q' "$rp") branch backup" "N/remedy is scoped to the warned checkout"
+
+# Case O — base ahead-only (unpushed local work, origin unmoved) → NOT a divergence warn
+r="$(mkrepo)"
+( cd "$r"; echo wip > wip.txt; git add -A; git commit -qm "unpushed local work" )
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "O/ahead-only rc"
+assert_no "$out" "diverged from origin" "O/ahead-only does not warn (宁钝勿敏)"
+assert_has "$out" "base checkouts aligned" "O/aligned line present"
+
+# Case P — comparison impossible (origin gone) → UNKNOWN warn, rc 0, NEVER "aligned"
+r="$(mkrepo)"
+( cd "$r"; git remote remove origin; git update-ref -d refs/remotes/origin/main 2>/dev/null || true )
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "P/unknown comparison is warn-only rc"
+assert_has "$out" "divergence UNKNOWN" "P/unknown state warned"
+assert_no "$out" "base checkouts aligned" "P/no false aligned line"
+
+# Case Q — checkout path with space + quote → remedy renders as a valid shell escape
+r="$(mkrepo)"
+( cd "$r"
+  git worktree add -f "../nasty dir's wt" main -q 2>/dev/null || git worktree add -f "../nasty dir's wt" main
+  echo local > local.txt; git add -A; git commit -qm "local original"
+  d2="$(mktemp -d)"; git clone -q "$(git remote get-url origin)" "$d2/c2"
+  cd "$d2/c2"; git config user.email t@t; git config user.name t
+  echo squashed > sq.txt; git add -A; git commit -qm "squashed"; git push -q origin main
+)
+out="$(run "$r")"; rc=$?
+np="$(cd "$r/../nasty dir's wt" && pwd -P)"
+assert_rc "$rc" 0 "Q/nasty path rc"
+assert_has "$out" "git -C $(printf '%q' "$np") branch backup" "Q/remedy shell-escapes the nasty path"
+
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

@@ -27,6 +27,9 @@
      README 背景（不 fire 的散文是净负债）。
 4. **上下文治理**：关交付完的会话 + **扫孤儿**（见 SKILL §5「孤儿扫」纪律：`docker ps`/`ps`/后台 job + compose
    trap/finally + repro 禁裸 `while True`）+ **worktree 核对**（已合分支的 worktree 必清 `git worktree remove`）+
+   **base 对齐**（squash 集成仓的长驻 checkout：base 分支与 origin 分叉〔ahead 且 behind〕→ 核实
+   ahead 内容已被 squash 合并后 backup ref + `reset --hard origin/<base>`；真未合并的工作先救——
+   retro-check 1b 只检测告警，reset 归编排者）+
    **敞口清单**（=下会话入口）。
 5. **治理同步（与 memory 更新同级、不可省）**：文档归档（→ `orchestration/archive/` + 索引行）+
    **ACTIVE_CONTEXT 整篇重写**（非追加，~60 行）+ **roadmap 翻状态** + **决策队列先清再刷**（若用

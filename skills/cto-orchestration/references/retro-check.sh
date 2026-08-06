@@ -37,7 +37,7 @@ fi
 # 1) stray LINKED worktrees on already-merged branches (excludes the main checkout)
 echo "1) worktree 核对 (已合分支无孤儿; 主 checkout 豁免):"
 if [ -n "$BASE" ] && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
-  git -C "$REPO" fetch -q origin "$BASE" 2>/dev/null || true
+  if git -C "$REPO" fetch -q origin "$BASE" 2>/dev/null; then FETCH_OK=1; else FETCH_OK=0; fi
   TOP="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)"
   stray=0; cur="" br=""
   # iterate via a here-string so the loop runs in THIS shell (can bump $stray)
@@ -52,6 +52,42 @@ if [ -n "$BASE" ] && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
     esac
   done <<< "$(git -C "$REPO" worktree list --porcelain 2>/dev/null)"
   if [ "$stray" -gt 0 ]; then fail "$stray stray linked worktree(s) on merged branches — remove them"; else ok "no linked worktree on a merged branch"; fi
+
+  # 1b) base checkouts diverged from origin (post-squash shape: local side keeps the
+  # pre-squash originals, upstream has the squashed result — ff can never happen again).
+  # Detection + warn ONLY: the reset is the orchestrator's call (rescue真未合并的工作 first).
+  # Ahead-only (unpushed local work, origin未动) deliberately does NOT warn — 宁钝勿敏.
+  # A comparison that CANNOT run (fetch failed / ref missing) is UNKNOWN, never "aligned".
+  div=0; unknown=0; seen=0
+  while IFS= read -r line; do
+    case "$line" in
+      worktree\ *) cur="${line#worktree }";;
+      branch\ *) br="${line#branch refs/heads/}"
+        if [ "$br" = "$BASE" ]; then
+          seen=$((seen+1))
+          if [ "$FETCH_OK" = 1 ] && counts="$(git -C "$REPO" rev-list --left-right --count "origin/$BASE...$br" 2>/dev/null)"; then
+            read -r behind ahead <<< "$counts"
+            if [ "${ahead:-0}" -gt 0 ] && [ "${behind:-0}" -gt 0 ]; then
+              # printf %q: the remedy is meant to be copy-pasted — literal quote-wrapping
+              # is not a shell escape (a path containing a quote breaks out of it)
+              qcur="$(printf '%q' "$cur")"; qref="$(printf '%q' "origin/$BASE")"
+              echo "  [warn] base checkout '$cur' diverged from origin/$BASE (ahead $ahead / behind $behind) — squash-stale? verify content is merged, then: git -C $qcur branch backup/pre-realign && git -C $qcur reset --hard $qref"
+              div=$((div+1))
+            fi
+          else
+            echo "  [warn] base checkout '$cur': cannot compare with origin/$BASE (fetch failed / ref missing) — divergence UNKNOWN"
+            unknown=$((unknown+1))
+          fi
+        fi;;
+    esac
+  done <<< "$(git -C "$REPO" worktree list --porcelain 2>/dev/null)"
+  if [ $((div+unknown)) -gt 0 ]; then
+    warn "$div diverged / $unknown UNKNOWN base checkout(s) — align after verifying (backup ref first)"
+  elif [ "$seen" -eq 0 ]; then
+    ok "no checkout on base branch '$BASE' to compare"
+  else
+    ok "base checkouts aligned with origin/$BASE"
+  fi
 fi
 
 # 2) ACTIVE_CONTEXT rewritten today
