@@ -78,6 +78,7 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
 | `ACCESS.local` | 本机·含密 | 写时脱敏；gitignored 永不提交 | gitignore + 提交前 redaction sweep |
 | `INDEX` | 慢·traffic cop | 只放链接——超过一行说明的内容 = 放错了地方 | 死链门 |
 | `NORTH_STAR`（可选） | 最慢·方向 | 仅 maintainer 修订、semver 版本化（细则在模板注）；ADR 记历史、它记方向 | 原则带稳定 NS-ID 被评审 brief/门禁引用（没人检查的原则是注释）；与 accepted ADR 冲突不择边、升级 maintainer |
+| `governance/` GOV 正典（可选·演化项） | 慢·活规则书 | 每域一份 `GOV-NNN-<slug>.md`、随实证**增订原篇**（日期戳节）。域路由按**更新契约**判，不按主题：会原地演进的现行可执行规则 → GOV；只被 supersede 的定格裁决与理由 → ADR；冻结证据快照 → audit；在飞协调物 → orchestration；混合体拆开各归其主、互挂指针 | `docs/governance/INDEX.md` 持域登记表 + 路由判据句 + 维护协议（新域先查表——已有域增订原篇、无域才立新号）；根 `docs/INDEX.md` 只挂一行链接（traffic-cop 契约不变）；goal/评审 brief 与门禁的 Read 指针在 GOV 持有该现行规则时指 GOV，否则指实际 owner |
 
 细则（判据级；模板全文见 `references/templates.md`）：
 - **Roadmap 三桶初始化即建**：active 单文件 inline `Status:`；deferred 一项一文件
@@ -90,6 +91,9 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
   根因；**活体 auth smoke 先跑并读失败模式**）已固化在模板注释。建文件即写进 `.gitignore`。
 - **治理目录值得 local-only git 化**（尤其多子仓 umbrella）：无 remote 本地 git 管 `docs/`，换来变更
   历史 + 误删恢复 + 派工漂移审计（无版本时 agent 误删关键 docs 不可恢复）；加 remote 前先 secrets sweep。
+- **GOV 正典不入最小骨架**：bootstrap 不建空 `docs/governance/`；第一条会被反复引用的
+  判据/SOP 出现时 → 建 `docs/governance/INDEX.md` + `docs/governance/GOV-001-<slug>.md`
+  （此前该判据散在时间目录与 archive 里长不出主线，就是该建的信号）。
 - **伞仓（umbrella）场景三件套**：①`NORTH_STAR.md` 放伞仓 `docs/`，子仓 AGENTS.md 指向它（按 NS-ID
   引用）；②AGENTS.md 覆盖检查——每个含自有 `.git` 的一级子仓必须有根 AGENTS.md（Tier-1 活跃仓用
   `PROJECT_AGENT.md` 全量宪法，维护型仓用 templates.md 的 **minimal 变体** <60 行即达标），一行
