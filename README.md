@@ -37,7 +37,7 @@ Evolab 是 **阳哥进化论** 的 AI 方法论 / skill / 工具栈合集，会�
 | --- | --- |
 | **`skills/`** | 可直接装进 Claude Code 的 skill。当前：`orchestrator-core`（**编排内核**——领域无关的多智能体编排不变式，cto/总编等皆是它的一张皮）、`cto-orchestration`（**旗舰皮**——多 agent 写码编排）、`repo-governance-bootstrap`（文档治理 + repo 工程门初始化）、`agent-mail`（编排者间信箱总线，cto 的可选伴随）、`observability-standard`（可观测性）、`git-workflow-standard`（Git 协作 SOP）、`agent-backend-standard`（agent/后端工程手册 + 四语言 gate 接口）、`agent-frontend-standard`（agent/前端工程手册——设计系统契约 / 类型端到端 / 视觉验证环）、`source-coding-discipline`（写码纪律的 skill 形态，给不支持条件 rules 的 agent，如 codex）。后续更多。 |
 | **`templates/`** | 协作设定模板 `CLAUDE.md.example`（人格 + 方法论）+ `rules/coding.md`（写码纪律真源，`paths:` 条件加载）。项目治理骨架（AGENTS.md / ADR / roadmap）由 `repo-governance-bootstrap` skill 生成，不在此重复。 |
-| **`meta/`** | 元认知：可逆性分配 agency（agency-by-reversibility）、验证诚实性（verification-honesty）、先测再加（measure-before-more）、结构而非自律（structure-not-discipline）、协议而非屏幕（protocol-not-screen）、异构冷评审（heterogeneous-cold-review）、条件先于动作（condition-before-action）、真相≠检查器输出（truth_not_eq_checker_output）、先数面再治点（surface-before-points）、配置接线与治理（wiring）。**灵魂层**——我是怎么想的。 |
+| **`meta/`** | 元认知：可逆性分配 agency（agency-by-reversibility）、验证诚实性（verification-honesty）、先测再加（measure-before-more）、结构而非自律（structure-not-discipline）、协议而非屏幕（protocol-not-screen）、异构冷评审（heterogeneous-cold-review）、条件先于动作（condition-before-action）、真相≠检查器输出（truth_not_eq_checker_output）、先数面再治点（surface-before-points）、杠杆线（leverage-line）、配置接线与治理（wiring）。**灵魂层**——我是怎么想的。 |
 
 ## 用起来
 

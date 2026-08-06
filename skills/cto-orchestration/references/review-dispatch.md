@@ -67,8 +67,9 @@ Evidence bar: every finding cites file:line (not inference from naming); blocker
 needs a probe or failing test that reproduces it. Rate each finding with confidence (0-1).
 Write your review to <REVIEW_codex.md 绝对路径> with severity-tagged findings
 (blocker/major/minor/nit; pre-existing bugs not introduced by this diff tagged PRE-EXISTING —
-record, don't block) and a final verdict (approve / request-changes) + a one-line tally up front.
-Cap nits at 5, mention the rest as a count.
+record, don't block) and a final verdict (approve / request-changes) + a one-line tally up front;
+the tally line must include `new-blocking: <N>` (blocking findings FIRST raised this round — the
+leverage-line triage consumes this field). Cap nits at 5, mention the rest as a count.
 Calibration: only findings that affect correctness or the stated requirements can block;
 speculative hardening / style go to advisory.
 Read-only review: do NOT modify code or commit.
@@ -80,10 +81,16 @@ Read-only review: do NOT modify code or commit.
 Round <N> re-review: commit <sha> addresses your findings — <逐条一句话>.
 Verify each is properly closed — especially <上轮 HIGH 的修复自身的新风险，例如
 "recovery path 自身是否 race-safe（恢复 vs 迟到的协调器 finally 双跑？）">,
-and confirm no other changes snuck in. Append "Round <N>" verdict to <REVIEW_codex.md>.
+and confirm no other changes snuck in. Append "Round <N>" verdict to <REVIEW_codex.md>,
+tally line including `new-blocking: <N>` (blocking findings FIRST raised this round).
 Read-only.
 ```
 
+- [ ] review-loop 续派任何一轮前 → 先过**杠杆线分诊**（对象：该 review-loop 会话）：①逐轮
+  新增 blocking 计数衰减（内容轮 ≥3 且最近两轮不升、各 ≤1）②本轮 remedy 撤销上轮 remedy
+  引入的行（同一 finding 文本逆转）③同一「评审轴 + 路径簇」连续 ≥3 轮出 finding——任一命中 →
+  本轮不续派，转编排者杠杆账（SKILL §2）；裁定续派 = 显式追加预算并在 ledger 记账
+  （范式见 `meta/leverage-line.md`）。
 - **复审轮只审封闭性**（上轮 finding 是否真闭 + 修复引入的新洞 + 无夹带改动），别让同一会话重扫全量——
   受控实验（arXiv 2603.12123）：同会话对同一改动评第二遍不是更严、是**加投机噪声**（精度反降）；
   要全新全面评审就起 fresh session。每轮点名"上一轮修复可能引入的新洞"——4 轮抓 4 个真问题是常态。

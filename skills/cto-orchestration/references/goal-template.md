@@ -18,13 +18,17 @@ build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 radius（A/B 实测 ~1/3 token、1 回合 vs 6+；动态分发/无测试警告 grep 不产出）。未装
 （command not found）或无索引：**非 blocker**，直接回退 grep/通读，不停下问。>
 
-> 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行（preflight 门默认校验）；普通 bugfix、机械改动和纯研究删除它、派发加 `--no-preflight`。
+> 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行（preflight 门默认校验）；普通 bugfix、机械改动和纯研究删除它、派发加 `--no-preflight`——**新增防御层/复杂度的 goal 除外：该行必留且含存在性探针（见下方防御性前提行）**。
 Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only falsifier actually run> => <observed result>
 <!-- Preflight 探针命令锚 repo 根（只扫子目录会漏兄弟目录的真实调用方，前提假则 goal 塌）；
      贴出的结果只是声明——goal-review 评审须复跑探针，不采信贴出值（预计算结果会诱导评审
      不复跑） -->
 
 Optional absence-evidence gate (delete unless the decision relies on not observing X): known-positive probe: <how the detector proves it can see X>; otherwise report UNKNOWN.
+
+- [ ] 本 goal 新增防御层 / 复杂度（新校验、新隔离、新配置矩阵）→ 上方 Value gate / Preflight
+  行须含「该威胁或需求场景在本架构真实存在」的实证探针——只证机制**能做**不构成**需要做**
+  （复杂度按证据升级；范式见 `meta/leverage-line.md`）。
 
 ## Pre-triage hypotheses (verify, don't trust)
 
