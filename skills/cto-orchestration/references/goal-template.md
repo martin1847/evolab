@@ -66,6 +66,11 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - [ ] 凡含「部署/配置生效后重测」步骤：先写**生效前置确认**（命令 + 期望值）再测；测量探针打
   **运行时真源**（DB 行 / 活进程 / 线上 endpoint），不拿构建 SHA、镜像 tag 等**代理指标**下生效
   结论（代理指标会误判打断正确 worker；缺前置确认则 worker 自己发明等待、对已完成部署空转）。
+- [ ] 测量/评测类 Done-when → 附**噪声处置口径**（对象：含测量/评测的 Done-when 各条）：开测前
+  先定环境性失败的剔除类别及各类的判定证据（env ≠ 能力，事后新增类别无效）；报告保留
+  total / included / excluded 计数与每条 excluded 行及原因；已落定结论的测量批次禁整批重跑，
+  整批环境性失效（全部行命中预设剔除类别、或 included 数低于口径下限）→ 允许重测一批且
+  报告保留两批数据。
 - 普通非 review-loop 长跑可按需写时长 / 成本预算；耗尽仍未达成 = 保持任务 active + STOP and report。
   review-loop 的轮数预算只由 runtime `--max-rounds`（会话 meta）强制，本 GOAL 不复制轮数。
 - 鉴权/会话/用户数据相关改动：验证须覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 / 未登录），
@@ -85,6 +90,8 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 - **存疑协议**：goal 没写明的事项标 `NEEDS-CLARIFICATION: <具体问题>` 停下问，**禁止合理化猜测**
   （猜而不问是 goal 执行最常见的静默失败）；需要超 scope 改动、或同一路径连败两次：STOP and
   report（blocked + 已试过什么），不自行扩权、别硬耕。
+- **自证止损**（对象：已由本次会话工具结果落定的 Done-when / claim）：落定后允许至多 1 轮
+  确认性复跑；确认未改变结论 → 不再启动新一轮重跑，STOP and report。
 - 遵守仓库自身规则（AGENTS.md / 项目声明的影响分析工具等）。
 - 点名本仓适用的工程规范 skill 并要求执行 agent 开工前加载（观测/后端/git 等）——**名单来自该仓
   AGENTS.md 的声明，本模板不硬编码任何具体规范**（编排与规范各自独立可用，不耦合）。
