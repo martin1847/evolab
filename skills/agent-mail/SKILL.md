@@ -106,7 +106,7 @@ agentmail roster                                    # 打印名册
 
 收信/名册仍可裸查（`ls`/`cat` inbox、registry 随意）；**发信必须走 `agentmail send`**——size gate、
 精简警告、原子投递全在 helper 里，Write/Edit 直写收件人 inbox = 绕过全部 gate + 手写 frontmatter
-易错（2026-07-10 实证：多封直写信，其一 `from:` 写错）。已接 `mail-guard.py` hook 的席位由 hook
+易错。已接 `mail-guard.py` hook 的席位由 hook
 硬拦（PreToolUse，见 `hooks.json`）；未接的席位靠此条纪律。
 
 ## 接入（新席位，两步，本 skill 自包含——不依赖任何编排 skill 的清单）

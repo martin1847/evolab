@@ -24,13 +24,11 @@ git worktree add ../wt-<name> -b feat/<name> origin/<base>
 - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主
   checkout、非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout
   **显式指到新 worktree**，可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。
-  实证：审计跑在落后 70 commit 的主 checkout、把已被某 PR 删净的子系统报成"待删"，靠对 origin 重核才在派删除前抓出。
 
-## 收工核证四件套（SKILL §1.6 验收原则的操作化；四件套定义与实证在此）
+## 收工核证四件套（SKILL §1.6 验收原则的操作化；四件套定义在此）
 
-1. `git status -s` 干净（实证：执行 agent 屡次"声称完成没 commit"；外部席位 4 goal × 3 模型
-   台架复证 0/6 run 发现散在工作树的交付——**评审审合同不审过程卫生，这件永远归编排位**，
-   别为此往 goal 合同里塞自守门条款）。
+1. `git status -s` 干净（执行 agent 常"声称完成没 commit"；**评审审合同不审过程卫生，
+   这件永远归编排位**——别为此往 goal 合同里塞自守门条款）。
 2. `git log origin/<base>..HEAD` 与声明一致（多了 = 夹带，少了 = 没交）。
 3. 独立复跑 test+lint——不吃 worker 转述的结果。
 4. 测试计数用 `grep -E 'passed|failed'`，别信被截断的点行。

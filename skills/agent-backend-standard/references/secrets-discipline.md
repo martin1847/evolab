@@ -13,8 +13,8 @@
 
 1. **值/元数据物理分离**:说明文档(如 `ACCESS.local.md`)只留元数据 + 秘密**名字** + gotcha
    ——agent 可整读、零遮蔽工序;值进纯 `KEY=VALUE` 的 env 文件(如 `ACCESS.local.env`,
-   gitignored + `chmod 600`)。混排文档做遮蔽是失手温床(实证:regex 遮蔽漏盖普通
-   key:value 行,5 组凭证进 transcript)。**命名刻意不入 `.env` 家族**:dotenv 生态会
+   gitignored + `chmod 600`)。混排文档做遮蔽是失手温床(regex 遮蔽会漏盖普通
+   key:value 行,凭证直进 transcript)。**命名刻意不入 `.env` 家族**:dotenv 生态会
    自动加载 `.env*` 进每个 dev 进程(与"值只在显式 source 时进子进程"相悖),且
    `ACCESS.local.md↔.env` 同词干让分离结构写在文件名上、deny 锚精确不误伤构建用
    `.env`;gitignore 仍同时盖 `.env*` 作生态兜底。
@@ -26,8 +26,8 @@
 4. **金丝雀纪律(MUST,血价最高)**:任何秘密防护面(遮蔽脚本/deny 规则/redaction hook)
    上线或变更后,必须用**假数据金丝雀跑全矩阵**(Read / 各 Bash display 形态 / 正控注入),
    全绿才允许真密文进该路径。注意 settings permissions 默认**会话重启才加载**——改完先
-   金丝雀验加载,勿假设即时生效(实证:deny 配好未验加载、拿真文件测"预期被拒",
-   21 值全量进 transcript,被迫全库轮换)。
+   金丝雀验加载,勿假设即时生效(deny 配好未验加载就拿真文件测"预期被拒",一旦没拦,
+   全部真值进 transcript、被迫全库轮换)。
 
 ## 2. 失效模式(同构识别)
 

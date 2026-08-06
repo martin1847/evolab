@@ -12,7 +12,7 @@
 1. **交付清单**：shipped / parked / 残留。
 2. **过程×结果四象限**（每个收口单元落唯一一格，禁「上线=好」塌缩）：好程好果=**实力赢**(固化做法) ·
    坏程好果=**走运**(别奖励、补过程洞) · 好程坏果=**倒霉**(别改流程) · 坏程坏果=**实力输**(改)。
-   判「走运」即使 shipped 也标 outcome 星号 + 点出过程缺口（实证：PR 已交但 GUI 仅手动测试计划未跑 → 不给满分）。
+   判「走运」即使 shipped 也标 outcome 星号 + 点出过程缺口。
 3. **教训分层沉淀**（系统方法论见内核 `orchestrator-core/references/self-evolution.md`，此步为其操作化、自包含可跑）：
    - **分诊落层**：五问追根，**追问停在哪层、教训就落哪层**——事实（路径/凭据/执行路径）→ ACCESS/docs；
      本项目情景教训 → memory（带 **Why + How-to-apply + provenance**〔哪次事故立的〕，memory 只留指针
@@ -24,7 +24,7 @@
      retire 原件，corpus 总量不增；总量没减 = 复制不是晋升）。retro 只**提议**，改 spec 由主理人**裁定**
      （提议/批准分离，防按一次性事件堆规则）。
    - **淘汰同轮做**：会在动手那一刻 fire 的才留正文；hook 已强制的收成一行指针；从不 fire 的删或降
-     README 背景（不 fire 的散文是净负债，实证：三条早已写清的规则同日全部没在决策点应用）。
+     README 背景（不 fire 的散文是净负债）。
 4. **上下文治理**：关交付完的会话 + **扫孤儿**（见 SKILL §5「孤儿扫」纪律：`docker ps`/`ps`/后台 job + compose
    trap/finally + repro 禁裸 `while True`）+ **worktree 核对**（已合分支的 worktree 必清 `git worktree remove`）+
    **敞口清单**（=下会话入口）。
@@ -45,7 +45,6 @@ roadmap、DECISION_QUEUE 和 MEMORY 只给 warning，exit 仍可为 0，需按�
   环境文档是 gitignored 的本地 SoT。
 - 重复 / 矛盾的 memory 合并或删除；已过时的 workstream 状态更新。
 - MEMORY.md 索引 ≤40 行，按类型分组（iron rules / active / completed / reference）。
-- 实证：某项目 30 条 memory 含多个 100+ 行巨型文件，新 session 读入全是噪声。
 
 ## session 切换决策（步骤 7 展开）
 

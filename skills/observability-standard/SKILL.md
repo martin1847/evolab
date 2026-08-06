@@ -63,7 +63,7 @@ description: 生产级可观测性与工程规范,适用于**所有后端服务*
 
 ## 强制生效(让规范咬人,而非形式化)
 
-**没有 gate 的规范 = 形式化,必然漂移**——靠人工对照清单的规范,会在"没测试看的地方"悄悄烂掉,埋点的洞恰好出现在没人 gate 的模块(实证见 §9)。**强制手段是采纳可观测性的一等交付物,不是事后补丁。** 立规范必须同时立 gate(机制按栈替换):
+**没有 gate 的规范 = 形式化,必然漂移**——靠人工对照清单的规范,会在"没测试看的地方"悄悄烂掉,埋点的洞恰好出现在没人 gate 的模块(见 §9)。**强制手段是采纳可观测性的一等交付物,不是事后补丁。** 立规范必须同时立 gate(机制按栈替换):
 - **conformance 测试断 span 覆盖 + parent 正确,且会变红**:进程内捕获 span(语言的进程内 span 捕获器,见 references 附录 C),断言每条新 LLM/工具/检索/领域决策路径**发出领域 span 且 parent 正确**;**必带负例探针**(删 span / 断 parent → 测试变红),只测 happy-path 不强制任何东西。
 - **统一接口**:仓库声明 `observability_conformance_command` + `observability_conformance_paths`;命令复用 `references/conformance-profile-v2.json` 与 `scripts/observability_conformance.py`,覆盖 resource/tenant、GenAI 字段、parent+async/streaming、默认无内容、vendor/legacy static guard,并拒绝 `run.id` 等高基数 metric label;profile 声明的 forbidden prefix 扫完整 snapshot(含 events)。IaC 只执行 command、按 paths 触发、消费 exit code/result,不得复制字段 oracle(见 references §9.5)。
 - **gate 真在 CI 跑、能 fail build**:workflow 放工具识别的位置(GitHub Actions 只跑**仓库根** `.github/workflows/`)、paths 覆盖、**无 `|| true`/soft-fail**;**在真 PR 上验证 gate 确实触发**,别假设。

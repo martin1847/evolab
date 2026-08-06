@@ -25,8 +25,8 @@ agent 并行 fan-out 子任务 / 工具时,守连接池 / 并发上限(呼应 II
 ## 4. 事件循环不阻塞(async 运行时的承重条)<!-- trunk:事件循环不阻塞 -->
 
 **原则(语言无关)**:async 运行时的事件循环 / reactor 线程**绝不跑阻塞 IO / CPU 密集**——阻塞 IO →
-线程池、CPU 密集 → 进程池、跨核 → 多 worker。**一个阻塞调用能卡死整个 loop 上的全部并发**(实证:某
-agent 服务一处阻塞调用冻住整条事件循环)。Node(单线程 loop)/ Java(virtual-thread pinning)同病,原则通用。
+线程池、CPU 密集 → 进程池、跨核 → 多 worker。**一个阻塞调用能卡死整个 loop 上的全部并发**。
+Node(单线程 loop)/ Java(virtual-thread pinning)同病,原则通用。
 
 **五层门禁(结构通用,按接入成本排序;呼应 §9「立规范必须同时立 gate」)**:
 1. **静态 lint**:async 函数内的阻塞调用直接 lint 红,不可豁免。
