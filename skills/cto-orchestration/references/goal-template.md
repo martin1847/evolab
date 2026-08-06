@@ -28,7 +28,7 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 
 - [ ] 本 goal 新增防御层 / 复杂度（新校验、新隔离、新配置矩阵）→ 上方 Value gate / Preflight
   行须含「该威胁或需求场景在本架构真实存在」的实证探针——只证机制**能做**不构成**需要做**
-  （复杂度按证据升级；范式见 `meta/leverage-line.md`）。
+  （复杂度按证据升级）。
 
 ## Pre-triage hypotheses (verify, don't trust)
 
