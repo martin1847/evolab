@@ -74,7 +74,7 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
 | ADR | 只增·决策史 | 不可变；翻案标 `superseded by`、不删；1-2 页对未来开发者说全句 | 4 态状态机；组件 ADR 带 Owner/Sunset/Review-by |
 | module FOR/NOT FOR | 慢·边界 | 随触及它的代码**同一 commit** 更新 | 边界冲突显式上报（宪法 §3） |
 | roadmap | 中·映射层 | 只映射外部任务 SoT、不复制状态（任务状态是高频信息，天然不属于常驻 docs；两套账本必烂一套） | 三桶 + 6 态词汇；沿用外部 ID |
-| `ACTIVE_CONTEXT` | 快·快照 | 收口**整篇重写** ~60 行，快照非日志（当日志 append 必冻结腐烂） | freshness 门 + 收口三同步（宪法 §6） |
+| `ACTIVE_CONTEXT` | 快·快照 | 收口**整篇重写** ~60 行，快照非日志（当日志 append 会冻结腐烂） | freshness 门 + 收口三同步（宪法 §6） |
 | `ACCESS.local` | 本机·含密 | 写时脱敏；gitignored 永不提交 | gitignore + 提交前 redaction sweep |
 | `INDEX` | 慢·traffic cop | 只放链接——超过一行说明的内容 = 放错了地方 | 死链门 |
 | `NORTH_STAR`（可选） | 最慢·方向 | 仅 maintainer 修订、semver 版本化（细则在模板注）；ADR 记历史、它记方向 | 原则带稳定 NS-ID 被评审 brief/门禁引用（没人检查的原则是注释）；与 accepted ADR 冲突不择边、升级 maintainer |
