@@ -80,6 +80,9 @@ duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原
   验证深度按**门的严重度**分档（DENY 全套 / WARN 减项），表在 implementation-discipline。
 - **golden 参照物先过已知阳性**：收编好结果 run 里的组件（SQL / 配方 / 模板）前，行级复现它真能产出期望阳性——run 得高分不是证据（功劳可能记错组件），byte-fidelity 只证抄得像。
 - **代验不冒充真验**：不 mock 正在验证的边界；交付明确写已验证、未验证与剩余风险。
+- **多主体轴**：可见性/授权/内容随 actor 变化（本人 / 同租户他人 / 跨租户 / 角色）的功能，验收须
+  列 actor 矩阵、至少覆盖 owner + 一个非 owner 视角；单视角验收结论标 `UNKNOWN`——这类盲区
+  当事人提不出问题，只有清单覆盖得住。
 
 具体旗标、stale-edit、验证顺序与失败模式按需读 `references/implementation-discipline.md`。
 

@@ -79,6 +79,8 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
   review-loop 的轮数预算只由 runtime `--max-rounds`（会话 meta）强制，本 GOAL 不复制轮数。
 - 鉴权/会话/用户数据相关改动：验证须覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 / 未登录），
   不得只测新鲜快乐态（见 frontend-verify「状态形状矩阵」）。
+- 可见性/授权/内容随 actor 变化的改动：验收段另列 **actor 矩阵**（覆盖门槛与单视角结论语义见
+  主干 §3「多主体轴」，本模板不复述其值；不适用则显式写 `N/A`——留空 = 静默跳过）。
 
 ## Guardrails
 
