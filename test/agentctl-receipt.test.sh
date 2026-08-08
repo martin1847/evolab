@@ -51,7 +51,10 @@ mk_session() { # $1 name  $2 declared-deliverable ("" = none)  [$3 cwd]
 }
 
 token() { ctl identity token "$1"; }
-publish() { ctl identity publish "$1" --armed "$(token "$1")" 2>&1; }
+# --round is REQUIRED by the publisher since R3 (an unfenced publish is refused): these
+# sessions carry no `round=` in their meta, so the round they conclude is the writer's own
+# 0 normalisation — the value passed here is exactly what the fence compares against.
+publish() { ctl identity publish "$1" --armed "$(token "$1")" --round 0 2>&1; }
 
 rec_field() { # $1 session  $2 dotted field — "" absent, "null" JSON null
   python3 - "$WATCH_RUN_DIR/$1.terminal.json" "$2" <<'PY'
@@ -253,7 +256,7 @@ chk_eq "R4 arrange: a prior COMPLETE record exists" "delivered" "$(rec_field r4 
 # no race — the barrier file is the proof the window was entered at all.
 BARRIER="$SANDBOX/barrier-r4"
 printf 'round two output — larger, different bytes\n' > "$WT/report.md"
-AGENTCTL_PUBLISH_BARRIER="$BARRIER" ctl identity publish r4 --armed "$(token r4)" >/dev/null 2>&1
+AGENTCTL_PUBLISH_BARRIER="$BARRIER" ctl identity publish r4 --armed "$(token r4)" --round 0 >/dev/null 2>&1
 krc=$?
 chk_eq "R4 arrange: the publisher died on the seam (SIGKILL = 137)" 137 "$krc"
 chk_eq "R4 PROOF THE WINDOW WAS EXERCISED: the barrier was reached" 1 \
@@ -271,7 +274,7 @@ chk_eq "R4 the reader still calls the prior record delivered" "True" "$(view_fie
 # same seam with NO prior record: the reader must see NOTHING, and know why
 mk_session r4b report.md
 BARRIER2="$SANDBOX/barrier-r4b"
-AGENTCTL_PUBLISH_BARRIER="$BARRIER2" ctl identity publish r4b --armed "$(token r4b)" >/dev/null 2>&1
+AGENTCTL_PUBLISH_BARRIER="$BARRIER2" ctl identity publish r4b --armed "$(token r4b)" --round 0 >/dev/null 2>&1
 chk_eq "R4 no-prior-record: the barrier was reached" 1 "$([ -s "$BARRIER2" ] && echo 1 || echo 0)"
 chk_eq "R4 no-prior-record: no record was published at all" 0 \
   "$([ -e "$WATCH_RUN_DIR/r4b.terminal.json" ] && echo 1 || echo 0)"
@@ -593,7 +596,7 @@ mk_session r9 report.md
 printf 'produced before the stop race\n' > "$WT/report.md"
 armed="$(token r9)"
 rm -f "$WATCH_RUN_DIR/r9.duplex.meta"          # ONLY the meta, exactly the reviewer's probe
-out="$(ctl identity publish r9 --armed "$armed" 2>&1)"; prc=$?
+out="$(ctl identity publish r9 --armed "$armed" --round 0 2>&1)"; prc=$?
 chk_eq "R9 DAMAGE ORACLE: a publish with no session meta NEVER exits zero" 1 \
   "$([ "$prc" != 0 ] && echo 1 || echo 0)"
 chk_eq "R9 the refusal uses the WS1 unknown exit class (2)" 2 "$prc"
@@ -621,7 +624,7 @@ rm -f "$WATCH_RUN_DIR/r9.terminal.json"
 # PAIRED GREEN: with meta intact the same publish succeeds and delivers
 mk_session r9b report.md
 printf 'intact lane\n' > "$WT/report.md"
-out="$(ctl identity publish r9b --armed "$(token r9b)" 2>&1)"; prc=$?
+out="$(ctl identity publish r9b --armed "$(token r9b)" --round 0 2>&1)"; prc=$?
 chk_eq "R9 PAIRED GREEN: an intact lane publishes and exits 0" 0 "$prc"
 chk_contains "R9 PAIRED GREEN: with reason=OK" "reason=OK" "$out"
 chk_eq "R9 PAIRED GREEN: phase=delivered" "delivered" "$(rec_field r9b phase)"

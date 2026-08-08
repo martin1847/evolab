@@ -377,7 +377,7 @@ box = {}
 
 
 def publisher():
-    box["publish"] = m.IdentityStore(run, "f1").publish_terminal(armed)
+    box["publish"] = m.IdentityStore(run, "f1").publish_terminal(armed, "0")
 
 
 def replacer():
@@ -423,7 +423,7 @@ store.transition("start")
 armed = store.token()
 store.transition("replace")
 before = json.dumps(store.load()[0], sort_keys=True)
-klass, _ = store.publish_terminal(armed)
+klass, _ = store.publish_terminal(armed, "0")
 print("class", klass)
 print("marker_exists", os.path.exists(store.marker_path))
 print("record_untouched", before == json.dumps(store.load()[0], sort_keys=True))
@@ -582,7 +582,10 @@ chk_eq "F5 DAMAGE ORACLE: no replacement frame was sent either" 1 \
   "$(grep -c '"method":"turn/start"' "$SANDBOX/f5a.log")"
 chk_eq "F5 the watcher armed before the refused replace is still valid" "$TOK5" \
   "$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity token f5a)"
-pubrc="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity publish f5a --armed "$TOK5" >/dev/null 2>&1; echo $?)"
+# --round is REQUIRED by the publisher since R3: pass the round this session is really
+# on, so the probe still exercises the identity fence rather than the missing one.
+F5RND="$(sed -n 's/^round=//p' "$WATCH_RUN_DIR/f5a.duplex.meta")"
+pubrc="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity publish f5a --armed "$TOK5" --round "${F5RND:-0}" >/dev/null 2>&1; echo $?)"
 chk_eq "F5 and that armed watcher can still publish its conclusion" 0 "$pubrc"
 rm -f "$WATCH_RUN_DIR/f5a.terminal.json"
 bash "$AGENTCTL" stop f5a >/dev/null 2>&1
@@ -716,7 +719,7 @@ box = {}
 
 
 def publisher():
-    box["publish"] = m.IdentityStore(run, "g1").publish_terminal(armed)
+    box["publish"] = m.IdentityStore(run, "g1").publish_terminal(armed, "0")
 
 
 def stop_then_restart():
@@ -916,7 +919,7 @@ box = {}
 
 
 def publisher():
-    box["publish"] = m.IdentityStore(run, "h1").publish_terminal(armed)
+    box["publish"] = m.IdentityStore(run, "h1").publish_terminal(armed, "0")
 
 
 pub = threading.Thread(target=publisher); pub.start()

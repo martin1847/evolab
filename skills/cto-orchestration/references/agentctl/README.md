@@ -16,7 +16,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 agentctl start  <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [engine args…]
 agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]
 agentctl status <session>      # one-shot typed verdict（exit code = 结论）
-agentctl watch  <session>      # 阻塞至终态；run_in_background 挂起
+agentctl watch  <session> [--inline]   # 阻塞至终态；run_in_background 挂起（默认 supervised，见下）
 agentctl stop   <session>      # 结束 + 按进程组收割整棵树 + 清控制态（events/rc/stderr 留作尸检）
 agentctl capabilities [--json]  # 运行时生成的三引擎能力契约（路由与本表同源，唯一真源）
 ```
@@ -31,6 +31,20 @@ agentctl capabilities [--json]  # 运行时生成的三引擎能力契约（路�
   `=== … ===` 行之后追加最后一行 `EXIT=<n>`——包装层（管道 / 后台 harness）吞掉进程退出码时仍可解析；
   文案与 exit code 均不变。`status` 读到 RUNNING 而**无存活 watcher**（pid 文件缺失、或进程已亡）追加
   一行 `note: no watcher armed — arm: agentctl watch <S>`：只提醒不代挂，typed 行与 exit code 不动。
+- **supervised watch（默认）**：感知环（classify 轮询）跑在 tmux 里的独立会话 `<session>-watchd`，
+  宿主侧 `agentctl watch` 只是**哑等待者**——只读围栏过的终态记录，自己不 classify、不重算。
+  被外部 TERM 后原地重挂即从记录恢复同一 class + exit（重挂不再是一轮重算）。守护环用
+  `$RUN/<s>.watch.super.json` 发租约（pid@start-time + identity token + 轮次 + 心跳 mtime）；
+  日志 `$RUN/<s>.watch.super.log`，退役/被围栏拒绝时的遗言落 `$RUN/<s>.watch.super.exit`
+  并由等待者原样转述。生命周期绑 attempt：`start` / `stop` / `steer --replace` 退役并回收守护环，
+  普通 `steer`（同 attempt、下一轮）保留它。**降级只在守护结构性不可能时发生且响亮告警**：无 tmux /
+  run 目录不可写 / **本等待者自己起的**那个 pane 在 arm 窗口内没发租约（这三种情况下守护环在此环境
+  根本跑不起来，宁可失去抗杀性也不能拒绝观测）——降级前先回收自己起的那个 pane，stderr 明说
+  "NOT kill-resilient"。**同名 `<s>-watchd` 已存在却没有本 identity 的租约 = 不可判，不是降级理由**：
+  等待者返回四态机④ `12 SUPERVISOR-LOST reason=unknown`，detail 点名 rogue/wedged watchd 与清理指引
+  （`tmux kill-session -t <s>-watchd` 后重挂），绝不静默 inline——一个空转的同名会话曾因此长期抹掉
+  canonical 入口的抗杀收益（评审 F-05）。`--inline` 仍是显式兼容旗标，语义 = 未引入守护环之前的
+  进程内轮询（不落非 DONE 记录，被杀即丢本轮结论）。
 - **输出有界**：status/watch 只回 typed 一行 + ≤600 字符摘要；引擎 raw 全量只落
   `$RUN/<s>.duplex.events.jsonl`（单条 raw transcript 可达百 KB 级，回显会炸编排者上下文——
   摘要有界是本控制面的硬设计）。
@@ -79,7 +93,8 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
 - **preflight 门默认开**：启动引擎前调 `../goal-preflight.py` 校验 goal 里
   `Preflight: <probe> => <observed result>` 存在且已解占位，未过即拒发、不起引擎；
   `--no-preflight` 显式豁免（豁免类别的判据归 SKILL.md §1）。
-- **watcher 被外部杀（TERM）= 预期可恢复态**：收到 killed 通知即重挂，stateless 零状态损失。
+- **watcher 被外部杀（TERM）= 预期可恢复态**：收到 killed 通知即重挂——supervised 模式下感知环在
+  tmux 里没被碰过，重挂只是重新读记录，连本轮结论都不丢（下线期间算出的终态照样在盘上等着）。
   归因看 tombstone：trap 在退出前落 `$RUN/<s>.watch.tombstone.jsonl`（ts / signal / ppid /
   uptime——发送方沙箱内不可见，事后只有这一行可查）。宿主一次事件会成批收割全部后台 watcher，
   且 killed 通知本身可能随会话一起丢——`status` 对 RUNNING+无 watcher 的会话自动打死亡归因行、
@@ -107,6 +122,7 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
 | 9 BUDGET-EXHAUSTED | review-loop 轮数上限（steer 计轮） | 转人工裁决 |
 | 10 RUNNING | 瞬时态（status 一次性查询用） | 继续等 |
 | 11 STALLED-STREAM（duplex）| events 流停滞超窗（默认 12min，`AGENT_WATCH_STALL_MINS` 调、0 关）且引擎自身 lifecycle 帧无未配对在飞工作（tool_use/结果、command、后台任务、item——按引擎配对；进程年龄载不动请求边界，流才是主信号）且 pane 树无年轻子进程否决——「在想」与「挂死」由此分辨 | 先从 checkout/commits 抢救成果，再 stop；探针任一不确定按 RUNNING 处理（宁钝勿敏） |
+| 12 SUPERVISOR-LOST（watch only）| 本轮**没有**围栏通过的终态记录，且感知守护环无法被证明在跑：`reason=dead`（进程没了）/ `reason=unknown`（租约缺失·损坏·陈旧·**租约没有 start-time**·pid 复用嫌疑·`ps` 探针本身不可用·**等待者自己那次 canonical 读超时**·**同名 `<s>-watchd` 在占名却没有本 identity 的租约（rogue/wedged）**·记录 torn/corrupt/不可读且守护环不可证活） | 重挂 `agentctl watch`（重建守护环）或 `agentctl status` 取一次性判定；detail 点名 rogue-watchd 时先 `tmux kill-session -t <s>-watchd` 再重挂；**绝不按任何业务结论消费**——12 说的是"判不出"，不是"完成"也不是"失败" |
 
 新增 typed MESSAGE 行（**exit 码契约不变**，三类都映射到既有失败 / UNKNOWN 出口）：
 
@@ -116,8 +132,41 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
 | `STALE-INCARNATION` | `attempt_id` 相同但 `process_incarnation`（pid@start-time）不同 = pid 复用 / 换进程 | 同上 | 同上；说明有 impostor 或未走 resume 的重启 |
 | `IDENTITY-UNKNOWN` | 活跃记录缺 / 损坏 / 无法解析、stamp 缺字段、start-time 信号取不到 | 2（既有失败出口，**永不映射成 0**） | 身份不可判定就不许收货：`agentctl stop` 后重启建立新 attempt |
 
+**supervised 等待者判定状态机（唯一合同，按优先级）**——三条以外没有第四种走向，判不出一律有界 typed 12，
+永不映射成 0：
+
+| 优先级 | 输入 | 输出 |
+|---|---|---|
+| ① | 当前 identity **且**当前 round 的有效终态记录存在 | 该记录的 class + exit（终态优先：守护环「刚发布完就退出」不得被读成死亡） |
+| ② | 无有效终态记录，且结构化证据证明守护环在跑（租约新鲜 + pid@start-time 对得上 + `ps` 探针自证可用） | 继续等（10 RUNNING 期间绝不误报死亡或终态） |
+| ③ | 无有效终态记录，且证据证明守护环已死 | `12 SUPERVISOR-LOST reason=dead` |
+| ④ | 无有效终态记录，且证据缺失 / 损坏 / 陈旧 / 不可判（含 pid 复用嫌疑与"租约无 start-time"、canonical 读自身超时、rogue 同名 watchd 占名无租约、记录 torn/corrupt/不可读且守护环不可证活） | `12 SUPERVISOR-LOST reason=unknown`，有界返回 |
+
+租约陈旧窗按守护环**自己记录的 classify 预算**推导（`max(4×poll, 120s, statusTimeout+60s)`）：
+`AGENT_WATCH_STATUS_TIMEOUT=300` 的合法慢 classify 在第 121 秒**不**判 12（评审 F-06）。
+**停滞判定权只在轮询等待者手里，且只由它自己的 poll 计数产生，不由任何时钟产生**（评审 R2 F-03 /
+R3 F-03）：轮询等待者每轮对租约内容取 checksum，连续采样内容没动才算 wedged。计的是**已流逝
+interval，不是采样数**——n 次连续采样只能证明 n−1 个 interval 过去了（第一次采样只是立基线），所以
+`需要采样数 = max(2, ⌈陈旧窗 ÷ 本等待者 poll 间隔⌉) + 1`。300s 预算（窗 360s）配 60s poll：第 6 次采样
+只覆盖 300s，**不判**；第 7 次覆盖 360s，才判（评审 R3 F-02——把采样数当 interval 数会提前 60 秒
+误杀一个仍在预算内的慢 classify）。纯计数、不读任何时钟，双向时钟跳变都动不了它。
+**一次性读者**（`status`、挂载读、单发 `duplexctl watch-state`）没有自己的 poll 历史，因此**没有任何
+年龄类判据**：它对租约只核**结构**——schema（数值有限且过下限）、identity 围栏、pid + start-time——
+核不过照样 typed 12，核得过就是 alive，**永不因为"租约看起来旧"判 12**。此前它退回"租约 mtime 相对
+文件系统时钟的年龄"（`fs_now` 探针），同一时钟域并不等于同一侧：整机时钟在租约写后前跳，两个 mtime
+分居跳变两侧，一个 pid/start-time 全对的新鲜租约照样被判 wedged（评审 R3 F-03）。该探针已删除。
+**已知限制（如实记）**：① 停滞判定权在轮询 waiter——`status` / 单发读**发现不了** wedged 守护环，
+只会说 alive；要判停滞就得挂 `agentctl watch`（它本来就是唯一会被 12 打断的那条路径）。
+② 自钟版发现 wedge 需要 N 轮自身 poll，比"一次读就判"慢一个窗口；外层 cap（`MAX×2+24` 轮）仍是兜底。
+
+记录不可读**但守护环可证活** → 走 ②（它可能正在写）。活跃身份缺 / 损坏时等待者在挂载即
+`IDENTITY-UNKNOWN` exit 2，连守护环都不建（没有身份就没有可发布的结论）。
+
 - **attempt 身份三元组**：`session_id`（跨轮稳定）/ `attempt_id`（start 与 `--replace` 各换新）/
   `process_incarnation`（`pid@start-time`，pid 单独不够——会复用；tmux 名更不够——会重名）。
+  pane pid 取不到时 `process_incarnation` 为 null，此时**改由 `incarnation_epoch` 兜底**（每次
+  transition 铸的一次性值，随记录与终态 marker 一起落盘）：两个都"取不到"的生命因此不相等，
+  两者都没有的历史记录拿到永不自等的 nonce——不可判一律 fail closed。
   唯一活跃记录写在 `$RUN/<s>.identity.d/active.json`，mkstemp 同目录 + fsync + `os.replace` 原子落盘。
   **提交点 = "该帧真要发出去"的那一刻，且在帧之前**：`start` 在首个 goal 帧前；omp `--replace`
   （`abort_and_prompt` 本身就是替换帧）在该帧前；**codex `--replace` 在引擎接受 interrupt 且被中断
@@ -131,7 +180,7 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   什么都不发布。**身份的每一次变更（transition / 事件采信 / marker 发布）共用一把稳定的 per-session
   锁**（`$RUN/<s>.identity.lock`，放 run 目录所以跨 clear/重建仍是同一 inode）：token 比对、记录改写、
   marker 落盘同在一个临界区内完成，中间没有让并发 replace 挤进来、再被发布者旧副本盖回去的窗口。
-- 所有身份读写只走一个抽象（`identity.py` / `duplexctl identity {token,show,start,replace,resume,publish,receipt,clear}`）；
+- 所有身份读写只走一个抽象（`identity.py` / `duplexctl identity {token,show,start,replace,resume,publish,receipt,watermark,clear}`）；
   `duplexctl identity show <s>` 读活跃记录，`identity receipt <s>` 读**唯一终态记录**（围栏判定 +
   结构化 reason，exit 0 = delivered / 3 = 未交付）——给下游与人的读 API。
 - BLOCKED 归属：footer 让 worker 把 `$RUN/<s>.identity.d/blocked-stamp.txt` 的内容作为 `BLOCKED.md`
@@ -145,15 +194,52 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   死亡也当完成事件推送——仍唤醒编排者，status 复核 + re-arm 零信息丢失）> 自研轮询卡死但活着
   （零通知，沉默与"还在跑"同形 = 编排者失明）。判据不是"会不会失败"，而是**失败时响不响**——会被
   收割的 watcher 比会卡死的轮询器可靠；自研通知通道投产前先拿已知阳性证明它会响。
-- **终态记录 = 交付回执（唯一一份，不存在第二份权威）**：算出 DONE 的观察者落
+- **终态记录 = 交付回执（唯一一份，不存在第二份权威）**：算出终态的观察者落
   `$RUN/<s>.terminal.json`——同一个文件既是 WS1 围栏 stamp 又是 WS2 delivery receipt，字段：
-  `schemaVersion / completedAt(RFC3339) / rc / deliverable / reason / sessionId / attemptId /
-  processIncarnation / identity{…,seq}`；交付成立时再加
+  `schemaVersion / completedAt(RFC3339) / rc / class / round / detail / deliverable / reason /
+  sessionId / attemptId / processIncarnation / identity{…,seq}`；交付成立时再加
   `phase:"delivered" / engineOutcome:"completed" / deliverables[{path,sha256,size}] / gitHead`
   （合法 JSON）——纯文件系统等待与事后恢复真相都不依赖"当时有人在听"，通知进程全被
   收割也不丢。生命周期 = 存在即"本轮已完成"：`start` / `steer`（新轮）/ `stop` 都清除（连同发布中断
-  残留的 `.<s>.terminal.json-*.tmp`）；status 单读只在已声明 deliverable（门背书）时落盘，未声明的由
-  watch 双稳读落。
+  残留的 `.<s>.terminal.json-*.tmp`）。**steer 的清除发生在 duplexctl 的 round 提交点**——writer flock
+  内、reader 确认之后、round 计数器推进的同一刻，不在 shell 里预清：被拒的 steer（引擎已退出 / 输入流
+  被污染 / 评审预算封顶）根本没开新轮，就不许销毁任何已挂载等待者尚未读到的结论（评审 R2 F-02：预清
+  曾让失败的 steer 抹掉同伴的唯一结论，慢等待者回 12、快等待者回 2）。status 单读只在已声明
+  deliverable（门背书）时落盘，未声明的由 watch 双稳读落。
+- **八个 watch 终态类逐一落盘**（supervised 感知环发布，原子 temp+rename，唯一 canonical reader =
+  `duplexctl watch-state`）：`0 DONE / 2 FAILED|AGENT-DEAD / 4 WAITING-INPUT / 5 STALLED-EXTERNAL /
+  6 IDLE-NO-DELIVERABLE / 7 WATCH-TIMEOUT / 8 ENGINE-SILENT / 11 STALLED-STREAM`。
+  **`10 RUNNING` 明确非终态、永不落记录**。`class` 是 exit code 的纯函数（**不从散文里解析**），
+  两者对不上即判定不可信；`round` 是轮次围栏：发布时轮次已经翻页 → 拒绝写（typed `STALE-ROUND`），
+  读取时轮次不匹配 → 拒绝采信。absent / torn / corrupt / 非常规文件（symlink、fifo）/ 不可读 /
+  陈旧（跨 attempt·跨 incarnation·跨 round）**一律不作业务结论**，走状态机 ②/④。
+  **消费/交付语义**：`0 DONE` 是本轮持久事实，报出后仍留盘（既有合同：纯文件等待者与事后回执都靠它）；
+  其余七类是**本次观测回合**的结论——被等待者报出后轮转为 `<s>.terminal.consumed.json`（**交付而非销毁**，
+  取证留全），于是下一次 `agentctl watch` 是"接着看"、不是无限重放上一回合的 WATCH-TIMEOUT。轮转
+  **不改变已挂载等待者读到的结论**：canonical reader 收 `--armed-seq`（等待者挂载时看到的**发布序号
+  水位**，取自 `duplexctl identity watermark`），凡 `identity.seq > 本等待者水位` 的记录，即使已被同伴
+  取走也照样是本等待者的答案——两个挂在同一守护环上的等待者对同一终态**必收敛到同一 typed 结论，
+  八类皆然**（评审 F-02：曾出现快等待者 `FAILED 2`、慢等待者 `SUPERVISOR-LOST 12`）。**先后由持久化
+  序号定，不由时间戳定**：早先用"记录 mtime ≥ 等待者挂载时刻"，两端都是可跳的墙钟，时钟回拨后一个
+  刚挂载的等待者会被当成已挂载同伴、把已消费的业务结论**重放**给它（评审 R2 F-03——这比 12 降级更
+  严重）。**水位按 attempt 定界**：`publishSeq` 每次 `start` / `replace` 归零（`resume` 同 attempt 继承），
+  而上一个 attempt 的 live / consumed 记录会留在盘上（失败的 `steer --replace` 就是这形状——替换身份先
+  提交、帧后发失败，轮次没翻、旧记录全在）。取全盘最大值会让退役 attempt 的 `seq=1` 把新等待者的水位
+  抬到 1，新 attempt 的**第一个**结论也是 `seq=1`，于是同伴报 `FAILED 2`、这个等待者判"我挂载前就结束了"
+  掉进 `SUPERVISOR-LOST 12`——同一终态又裂成 2/12（评审 R3 F-01）。因此只有**当前 attempt** 戳记的记录
+  进水位、参与已挂载比较；身份围栏切断跨 attempt 的一切采信面，排序水位不是例外。
+  没被报出（等待者中途被杀）的记录原地不动，下一个等待者照常恢复它——丢的
+  方向永远是"多重放一次"，不是"少一个结论"。
+  **轮次围栏两端一致，且两端都是必填**：daemon / status / `--inline` 三个发布者一律把"classify 之前
+  捕获的轮次"传给写者，公共 CLI `duplexctl identity publish` 的 `--round` **必填**（省略即 typed 拒绝、
+  不落盘、无回执）——可选的围栏等于没有围栏，省略时写者会拿"publish 那一刻的 meta 轮次"盖戳，把上一轮
+  结论变成本轮 DONE（评审 R2 F-01）。读端对称：`class` 与 `round` 是 canonical reader 的**必需 schema
+  字段**，缺任一即坏记录、走状态机 ④，**不再有"没有 class 且 rc=0 就当 legacy DONE"和"没有 round 就跳过
+  轮次围栏"这两条兼容路**。round-less legacy meta 的 0 归一只发生在**写端**（写者读 meta 时的事实），
+  永不发生在读端补缺——读端补缺等于替别人的记录猜围栏。
+  **进程生命围栏在 pid 信号取不到时也成立**：活跃记录每次 transition 都铸一枚 `incarnationEpoch`
+  并随记录发布，`resume` 前后两个"取不到 pane pid"的生命因此**不相等**——不可判即 fail closed，
+  旧生命的 DONE 一律走 ④（评审 F-03）。
 - **`phase=delivered` ≠ 已验证**：它只表示"运行时终态 + 已声明产物的证据被观察并算过哈希"，
   **不表示** reviewed / verified / E2E 通过 / merged / deployed。回执自己不是验收，任何"已验证"结论
   必须另有独立来源。

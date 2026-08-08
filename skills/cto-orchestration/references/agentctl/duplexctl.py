@@ -29,10 +29,12 @@ import argparse
 import fcntl
 import glob as globmod
 import json
+import math
 import os
 import select
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 from typing import NoReturn
@@ -1281,6 +1283,32 @@ def send_frame(args: argparse.Namespace) -> int:
             with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(str(offset_box["v"]))
             os.replace(tmp, sess.sent_offset)
+            # THE terminal-record rotation point. A new round is now a durable fact, so the
+            # previous round's conclusion — live or already delivered to a peer — is no longer
+            # anybody's answer and must not be replayed by the next waiter.
+            #
+            # It happens HERE, and not in `agentctl steer` before this call, because a steer
+            # that never reaches this point opened no round: it delivered nothing, the meta
+            # still says round N, and the conclusion it would have destroyed is still the one
+            # every attached waiter is entitled to. Pre-clearing unlinked both records before
+            # duplexctl even ran, so a REFUSED steer (engine already exited, tainted stream,
+            # budget) silently destroyed a conclusion a peer waiter had not read yet and that
+            # waiter came back SUPERVISOR-LOST 12 while its peer had reported FAILED 2 —
+            # exactly the divergence the delivery rule exists to prevent (review R2 F-02).
+            # Same flock, same commit instant as the round bump: no waiter can observe the new
+            # round with the old round's record still adoptable, or the reverse.
+            for spent in (os.path.join(sess.run, f"{sess.name}.terminal.json"),
+                          os.path.join(sess.run, f"{sess.name}.terminal.consumed.json")):
+                try:
+                    os.unlink(spent)
+                except OSError:
+                    pass
+            for debris in globmod.glob(os.path.join(sess.run,
+                                                    f".{sess.name}.terminal.json-*.tmp")):
+                try:
+                    os.unlink(debris)
+                except OSError:
+                    pass
             # offset journal (append-only, no frame bodies — offsets and timestamps
             # only): raw events alone cannot reconstruct where a mid-turn steer
             # rotated the window, so post-mortem replay (test/corpus/) needs this
@@ -1555,6 +1583,36 @@ ROUTES = {name: {cell["route"]: cell["impl"] for cell in caps.values() if cell["
 PROJECTORS = {name: rec["projector"] for name, rec in PROVIDERS.items()}
 
 
+# The watch lane's published contract, same spirit as the capability table: ONE table, read by
+# `agentctl capabilities` and by nothing that also holds a second opinion.
+WATCH_LANE = {
+    "mode": "supervised",
+    "sensing": "tmux session <session>-watchd runs `agentctl watch-daemon` — the classify "
+               "polling loop lives where the worker already survives host reaping",
+    "waiter": "`agentctl watch <session>` blocks reading ONLY the fenced terminal record; "
+              "killing it loses nothing, re-running it recovers the same class + exit",
+    "terminalClasses": sorted(identity.TERMINAL_CLASSES),
+    "recordLifetime": "every published class — DONE and the seven non-DONE ones alike — stays "
+                      "readable for the whole life of its round+attempt and is never consumed "
+                      "by the waiter that reports it, so any number of attached waiters read "
+                      "the same typed conclusion. start / steer / stop clear it.",
+    "typedLost": "12 SUPERVISOR-LOST — no fenced conclusion and the supervisor cannot be shown "
+                 "to be running (reason=dead) or cannot be judged at all (reason=unknown: lease "
+                 "or record torn/corrupt/stale, lease without a start-time, pid recycled, probe "
+                 "unusable, the waiter's own read timed out, or a rogue <session>-watchd holds "
+                 "the singleton name without leasing). Never DONE, always bounded.",
+    "legacyFlag": "--inline: run the sensing loop in the waiter process (pre-supervised "
+                  "behaviour). No supervisor, no non-DONE persistence — a killed `--inline` "
+                  "watch loses its round's conclusion, which is exactly what supervision fixes.",
+    "degradation": "automatic fallback to the --inline loop happens ONLY when supervision is "
+                   "structurally impossible here (no tmux, an unwritable run dir, or a pane "
+                   "that exited without leasing) and is announced loudly on stderr. A live "
+                   "<session>-watchd that published no lease is undecidable, not a licence to "
+                   "sense inline: the waiter returns 12 SUPERVISOR-LOST with the rogue-watchd "
+                   "detail and the cleanup instruction.",
+}
+
+
 def capability_document() -> dict:
     """The published machine contract. Exactly `{state}` for supported/experimental and
     exactly `{state, note}` for degraded (names the degradation) and unsupported (names the
@@ -1603,6 +1661,12 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
             if cell.get("note"):
                 print(f"  {engine}.{name} [{cell['state']}] {cell['note']}")
     print(f"\nstates: {' / '.join(CAPABILITY_STATES)}")
+    print("\nwatch lane (engine-independent — how `agentctl watch` senses and what it "
+          "degrades to):")
+    for key in ("mode", "sensing", "waiter", "typedLost", "legacyFlag", "degradation"):
+        print(f"  {key.ljust(head - 2)} {WATCH_LANE[key]}")
+    print(f"  {'persisted'.ljust(head - 2)} terminal classes "
+          f"{WATCH_LANE['terminalClasses']} (10 RUNNING is not terminal and is never recorded)")
     return 0
 
 
@@ -1700,7 +1764,13 @@ def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
     ONE alarm per process: each verb arms at entry and clears in a finally, no nesting.
     The handler writes and _exit()s IN-SIGNAL on purpose — raising would be swallowed
     by classify's `except OSError` arms (TimeoutError IS an OSError), and unwinding
-    normally would have to traverse the very code that is stuck."""
+    normally would have to traverse the very code that is stuck.
+
+    The typed exit is PER VERB. `watch-state` is not an engine query at all — it is the
+    waiter's canonical read of the record and of supervisor liveness — so its timeout is an
+    UNDECIDABLE read (12 SUPERVISOR-LOST), never the business class 8 ENGINE-SILENT. It used
+    to inherit the `send timeout` branch verbatim and hand the host a business terminal for a
+    read that never completed, with no terminal record anywhere (review F-04)."""
     stderr_log = os.path.join(run_dir, f"{name}.duplex.stderr.log")
     if verb == "classify":
         msg = (
@@ -1715,6 +1785,16 @@ def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
             f"inspect {stderr_log} and agentctl status, then agentctl stop + restart with the "
             "engine's resume args if it stays stuck\n"
         ).encode("utf-8")
+    elif verb == "watch-state":
+        # the four-state machine's ④: evidence unobtainable ⇒ bounded typed 12, never a
+        # business conclusion. Same vocabulary the reader itself prints, so the host cannot
+        # tell a timed-out read from any other undecidable one — because it must not.
+        msg = (
+            f"SUPERVISOR-LOST: reason=unknown the waiter's canonical read timed out after "
+            f"{secs}s (AGENT_WATCH_STATUS_TIMEOUT) — neither the terminal record nor "
+            f"supervisor liveness could be read, so nothing may be concluded for this round; "
+            f"re-run `agentctl watch` to re-establish the sensing loop\n"
+        ).encode("utf-8")
     else:
         msg = (
             f"ENGINE-SILENT: send timeout after {secs}s — the frame never went out: the writer "
@@ -1722,6 +1802,7 @@ def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
             "and agentctl status, then agentctl stop + restart with the engine's resume args if "
             "it stays stuck\n"
         ).encode("utf-8")
+    code = SUPERVISOR_LOST if verb == "watch-state" else 8
 
     def fire(_signum, _frame):
         # undo the ONE piece of durable state an _exit() would strand: a write-intent
@@ -1742,12 +1823,12 @@ def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
             os.write(1, msg)
         except Exception:
             # fd 1 closed / EPIPE: the verdict is the only output that matters, so
-            # try stderr, then give up — the typed exit 8 still carries the meaning.
+            # try stderr, then give up — the typed exit still carries the meaning.
             try:
                 os.write(2, msg)
             except Exception:
                 pass
-        os._exit(8)
+        os._exit(code)
     signal.signal(signal.SIGALRM, fire)
     signal.alarm(secs)
 
@@ -1758,6 +1839,371 @@ def cmd_classify(args: argparse.Namespace) -> int:
         return classify(Session(args.run_dir, args.session))
     finally:
         signal.alarm(0)
+
+
+# ── supervised watch: the supervisor lease and the waiter's canonical read ────────────
+# Split of duties since the host started reaping background tasks every few minutes: the
+# SENSING loop (classify polling) runs as a supervisor inside tmux — the one place in this lane
+# that demonstrably survives the reaper — and `agentctl watch` on the host degrades to a dumb
+# waiter that only ever reads what the supervisor published. A killed waiter therefore loses
+# nothing: re-running it recovers the conclusion instead of restarting the classification.
+#
+# The waiter needs exactly two facts and this module is the ONE place that derives them: is
+# there a fenced terminal conclusion for the current attempt+round (identity.terminal_verdict),
+# and — only if there is not — is the supervisor demonstrably alive.
+SUPERVISOR_EXITS = {0, 2, 4, 5, 6, 7, 8, 11}   # every terminal class a watch may report
+WAIT_MORE = 10                                  # supervisor alive, no conclusion yet: keep waiting
+SUPERVISOR_LOST = 12                            # dead, or undecidable — never DONE, always bounded
+PROCEED_TO_ARM = 13                             # arm-mode only, never leaves the waiter
+# A lease older than this is a wedged supervisor, not a live one. The window is derived, never
+# a bare constant: the supervisor renews the lease BEFORE it classifies, and one classify may
+# legitimately block for the WHOLE control-plane timeout the operator granted it
+# (AGENT_WATCH_STATUS_TIMEOUT, up to an hour). A floor of 120s therefore called a supervisor
+# wedged at second 121 of a supported 300s classify — a false SUPERVISOR-LOST for a session
+# that was fine (review F-06). stale_after = max(4*poll, floor, the classify budget the
+# SUPERVISOR itself recorded + slack), so only a supervisor that has overrun every bound it
+# was given can read as wedged.
+LEASE_STALE_FLOOR = 120
+LEASE_STALE_SLACK = 60          # renewal cadence + fs timestamp granularity, on top of the budget
+
+
+def lease_path(run_dir: str, name: str) -> str:
+    return os.path.join(run_dir, f"{name}.watch.super.json")
+
+
+def supervisor_session(name: str) -> str:
+    """tmux session that hosts the supervisor. Its OWN session, never a window of the worker's:
+    an extra window would keep the worker session alive after the engine pane died and silently
+    disable classify's `no rc + no tmux session ⇒ AGENT-DEAD` branch."""
+    return f"{name}-watchd"
+
+
+def write_lease(run_dir: str, name: str, payload: dict) -> None:
+    """Publish the supervisor's liveness fact. Same tmp+rename discipline as every other record
+    in this lane — a waiter must never read half a lease and call it a wedge."""
+    path = lease_path(run_dir, name)
+    tmp = os.path.join(run_dir, f".{name}.watch.super.json-{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, sort_keys=True)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+# The lease's numeric fields are a SCHEMA, not free-form JSON. `read_lease` used to demand
+# only a JSON object, and the reader then called float() on whatever it found: the STRING
+# "Infinity" converts happily, `stale_after` became inf, and a lease with a correct pid and
+# start-time could impersonate a live supervisor forever — the waiter kept returning "keep
+# waiting" until its own outer cap (~2h) bypassed it (review R2 F-04). Damaged evidence is the
+# four-state machine's ④: the lease is refused WHOLE, and the waiter gets typed 12 at once.
+# Floors, not just finiteness: a freshness budget of 0 or -1 seconds is not a budget either.
+LEASE_NUMBERS = {"pollSecs": 0.0, "statusTimeout": 0.0, "maxPolls": -1.0, "iter": -1.0}
+
+
+def lease_schema_damage(lease: dict) -> str:
+    """"" when every numeric field PRESENT is a finite number above its floor, else why not.
+
+    An absent field is not damage — a legacy lease carries fewer of them and the reader has a
+    documented default for the two that size its window. A present one that is a string, a
+    bool, a NaN or an infinity is damage: it cannot be compared, so nothing derived from it
+    can be either, and a budget nobody can compare is not a softer budget."""
+    for key, floor in LEASE_NUMBERS.items():
+        if key not in lease:
+            continue
+        value = lease[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"`{key}` is {value!r}, not a number"
+        if not math.isfinite(value):
+            return f"`{key}` is {value!r}, not a finite number"
+        if value <= floor:
+            return f"`{key}` is {value!r}, not above {floor:g}"
+    return ""
+
+
+def read_lease(run_dir: str, name: str) -> tuple[dict | None, str]:
+    """(lease, why). A non-regular file (symlink, fifo) is refused like every other piece of
+    session state: the run dir is the boundary, a link out of it is someone else's file.
+
+    The lease's mtime is deliberately NOT returned. It used to be, as the reference point for a
+    one-shot age check, and it is exactly the datum no reader can verify: an mtime is only
+    meaningful against a clock that did not step between the write and the read (review R3
+    F-03). What survives is what the bytes themselves state."""
+    path = lease_path(run_dir, name)
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None, f"no supervisor lease at {path}"
+    if not stat.S_ISREG(st.st_mode):
+        return None, f"supervisor lease {path} is not a regular file"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lease = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return None, f"supervisor lease {path} is unreadable or unparseable ({exc})"
+    if not isinstance(lease, dict):
+        return None, f"supervisor lease {path} is not a JSON object"
+    damage = lease_schema_damage(lease)
+    if damage:
+        return None, (f"supervisor lease {path} is damaged: {damage} — a liveness budget "
+                      "that cannot be compared proves nothing about the supervisor")
+    return lease, ""
+
+
+def ps_start_times(pids: list[str]) -> dict[str, str] | None:
+    """{pid: start-time} from ONE ps snapshot, or None when the PROBE ITSELF is broken.
+
+    The caller always passes its own pid as a known positive: "the daemon is not in the list"
+    only means death if the list can be trusted to contain a process we KNOW is running.
+    Without that control a missing `ps` would read as "the supervisor died" for every session
+    on the box."""
+    probe = subprocess.run(["ps", "-o", "pid=,lstart=", "-p", ",".join(pids)],
+                           capture_output=True, text=True, check=False)
+    if probe.returncode not in (0, 1):
+        return None
+    out = {}
+    for line in probe.stdout.splitlines():
+        pid, _, started = line.strip().partition(" ")
+        if pid.isdigit():
+            out[pid] = started.strip()
+    return out
+
+
+def supervisor_liveness(run_dir: str, name: str, token: str, unchanged: int = 0,
+                        reader_poll: float = 0.0) -> tuple[str, str]:
+    """(state, detail) with state in `alive` | `dead` | `unknown`. `unknown` is not a softer
+    `alive`: both it and `dead` return the same typed SUPERVISOR-LOST exit, because a waiter
+    that cannot prove the sensing loop is running must not keep waiting on it.
+
+    `unchanged` + `reader_poll` are the POLLING waiter's own clock: how many of its OWN
+    consecutive polls have now seen a byte-identical lease, and how far apart those polls are.
+    A waiter that supplies them is judged by counting, never by any clock — that is what makes
+    the verdict that can abort a live watch immune to a host clock step in either direction
+    (review R2 F-03).
+
+    A ONE-SHOT reader (`status`, the arm read, a single `duplexctl watch-state`) has no poll
+    history and therefore NO STALL VERDICT AT ALL: for it the lease is evidence of structure —
+    schema, identity fence, pid + start-time — and never of age. It used to subtract the lease
+    mtime from a probe file's mtime ("the filesystem's clock"), which keeps both sides in one
+    clock domain but not on one side of a clock STEP: a whole-host jump forward after the last
+    renewal aged a perfectly fresh lease past its window and returned 12 for a live supervisor
+    (review R3 F-03). Stall is a claim about elapsed time, no one-shot read can make it from
+    evidence it can verify, and 12 is a verdict that kills a live watch — so the authority to
+    make it belongs to the self-clocking poller alone."""
+    lease, why = read_lease(run_dir, name)
+    if lease is None:
+        return "unknown", why
+    if lease.get("identityToken") != token:
+        # Name the FENCE, not just the mismatch, and name it HERE: the supervisor may not have
+        # reached its next lease renewal yet, so waiting for its exit note would be a race. The
+        # host learns the same typed class publish would have refused it with.
+        got = str(lease.get("identityToken") or "")
+        parts, now = got.split("/"), token.split("/")
+        klass = (identity.STALE_INCARNATION if len(parts) == 3 and parts[1] == now[1]
+                 else identity.STALE_ATTEMPT)
+        return "unknown", (f"{klass}: the supervisor sensing this session armed under a retired "
+                           f"identity ('{got or '-'}' ≠ active '{token}') — no terminal "
+                           "conclusion published, and nothing it computes under that identity "
+                           "may ever be adopted")
+    pid = str(lease.get("pid") or "")
+    if not pid.isdigit():
+        return "unknown", "supervisor lease carries no pid"
+    snapshot = ps_start_times([pid, str(os.getpid())])
+    if snapshot is None or str(os.getpid()) not in snapshot:
+        return "unknown", ("the process probe cannot see our own pid — `ps` is unusable here, "
+                           "so supervisor liveness is undecidable")
+    if pid not in snapshot:
+        return "dead", f"supervisor pid {pid} is gone and published no conclusion"
+    started = lease.get("pidStart")
+    if not isinstance(started, str) or not started:
+        # No start-time in the lease means there is NO evidence separating our supervisor from
+        # a stranger that inherited its pid: same-pid alone used to read as alive (review F-07).
+        # PID-reuse suspicion is the four-state machine's ④, not a softer alive.
+        return "unknown", (f"supervisor lease records no start-time for pid {pid} — the pid "
+                           "alone cannot be told apart from a recycled one, so liveness is "
+                           "undecidable")
+    if snapshot[pid] != started:
+        return "unknown", (f"supervisor pid {pid} started '{snapshot[pid]}' ≠ recorded "
+                           f"'{started}' — the pid was recycled, this is not our supervisor")
+    poll = float(lease.get("pollSecs") or 0)          # schema-checked in read_lease: finite
+    if unchanged <= 0 or reader_poll <= 0:
+        return "alive", (f"supervisor pid {pid} alive (lease structurally intact and fenced to "
+                         f"this identity), iteration {lease.get('iter')} — a one-shot read "
+                         "makes no staleness claim; only a polling waiter's own poll count is "
+                         "admissible evidence of a stalled sensing loop")
+    budget = float(lease.get("statusTimeout") or 0)
+    # the supervisor's OWN recorded classify budget wins over ours: it is the process that
+    # forwards AGENT_WATCH_STATUS_TIMEOUT to classify, and a waiter started with a different
+    # env must not shorten a window the sensing loop was legitimately granted.
+    if budget <= 0:
+        budget = float(status_timeout())
+    stale_after = max(4 * poll, float(LEASE_STALE_FLOOR), budget + LEASE_STALE_SLACK)
+    # THE reader's own clock, and it counts INTERVALS, not samples. `stale_after` is
+    # denominated in seconds because the supervisor's budget is, so covering it takes
+    # ceil(stale_after / reader_poll) elapsed intervals — and n consecutive samples of an
+    # unmoved lease bound only n-1 of them, because the FIRST sample establishes the baseline
+    # and proves no elapsed time whatsoever. Reading the sample count as an interval count
+    # fired the wedge one whole interval early: with a 300s classify budget (360s window) and a
+    # 60s waiter poll, the 6th sample declared 12 after 300 observed seconds, inside the
+    # tolerance a legitimately slow classify is entitled to (review R3 F-02). The floor of 2
+    # intervals keeps a single missed renewal from being a wedge. Nothing here reads a clock,
+    # so nothing here can be moved by one.
+    intervals = max(2, math.ceil(stale_after / reader_poll))
+    need = intervals + 1
+    if unchanged >= need:
+        return "unknown", (f"supervisor pid {pid} is alive but its lease has not moved across "
+                           f"{unchanged - 1} elapsed intervals of this waiter's own polls "
+                           f"(>= {intervals} intervals of {reader_poll:g}s, i.e. {need} "
+                           f"consecutive polls, to cover the {int(budget)}s classify budget it "
+                           "recorded) — wedged, not sensing")
+    return "alive", (f"supervisor pid {pid} alive, lease unmoved across {unchanged - 1} of the "
+                     f"{intervals} intervals this waiter must observe, iteration "
+                     f"{lease.get('iter')}")
+
+
+def watch_state(args: argparse.Namespace) -> int:
+    """The waiter's ONE read. Priority is the contract, not an implementation detail:
+
+      1. a valid fenced terminal record wins — "the supervisor died" must never overwrite a
+         conclusion it published on its way out;
+      2. no conclusion + a demonstrably live supervisor ⇒ keep waiting;
+      3. no conclusion + anything else (dead, wedged, pid recycled, lease or record torn,
+         corrupt, stale, unreadable) ⇒ typed SUPERVISOR-LOST, bounded, never DONE.
+
+    `--arm` is the same read taken BEFORE a supervisor is established: a conclusion already on
+    disk IS this invocation's answer (that is exactly the recovery path a killed waiter takes),
+    and only when there is none does the caller go on to establish the sensing loop.
+
+    `--armed-seq` is the delivery watermark the reading waiter captured when it armed
+    (`identity watermark`). It widens rule 1 by exactly one case: a conclusion that was already
+    DELIVERED to a peer waiter still counts for a waiter that was attached when it was
+    published, so two waiters on one supervisor cannot disagree about the same terminal event
+    (review F-02). Attachment is a comparison of persisted publish sequences within ONE
+    attempt, never of clocks and never across the identity fence.
+
+    `--lease-unchanged` + `--poll` are the polling waiter's own clock, and the ONLY input that
+    can produce rule 3's wedge case: how many of ITS consecutive polls have seen an unmoved
+    lease, and how far apart they are. Without them the read makes no staleness claim at all —
+    see `supervisor_liveness`."""
+    run, name = args.run_dir, args.session
+    sess = Session(run, name)
+    if not sess.meta:
+        print(f"SESSION-GONE: no duplex state for '{name}' ({sess.meta_path}) — the session was "
+              "stopped or cleaned while this waiter was attached")
+        return 1
+    store = identity.IdentityStore(run, name)
+    _rec, id_status = store.load()
+    if id_status != identity.STATUS_OK:
+        # identity is the fence every later decision leans on; without it nothing may be
+        # concluded AND nothing may be armed (a supervisor with no identity could publish
+        # nothing anyway). Same fail-closed exit both surfaces already use.
+        print(f"IDENTITY-UNKNOWN: active identity record is {id_status} ({store.path})"
+              f"{' — ' + store.corrupt_reason if store.corrupt_reason else ''} — no state may be "
+              "adopted or concluded; agentctl stop, then restart to establish a new attempt")
+        return 2
+    state, rc, detail = store.terminal_verdict(armed_seq=args.armed_seq)
+    if state == "ok":
+        print(detail)
+        return rc
+    if args.arm:
+        if state == "unusable":
+            print(f"note: ignoring unusable terminal evidence — {detail}")
+        return PROCEED_TO_ARM
+    live, why = supervisor_liveness(run, name, store.token(),
+                                    unchanged=args.lease_unchanged, reader_poll=args.poll)
+    if live == "alive":
+        print(f"RUNNING: {why}"
+              + (f" (terminal evidence present but not adoptable — {detail})"
+                 if state == "unusable" else ""))
+        return WAIT_MORE
+    print(f"SUPERVISOR-LOST: reason={'dead' if live == 'dead' else 'unknown'} {why}"
+          + (f"; terminal evidence present but not adoptable — {detail}"
+             if state == "unusable" else "")
+          + " — the sensing loop cannot be shown to be running and published no conclusion for "
+            "this round; re-run `agentctl watch` to re-establish it, or `agentctl status` for a "
+            "one-shot verdict"
+          # a refusal the supervisor could not publish (stale attempt / round / a failed write)
+          # must still reach the host: silence there is how a fenced-out watcher went dark.
+          + last_words(run, name))
+    return SUPERVISOR_LOST
+
+
+def last_words(run_dir: str, name: str) -> str:
+    """The supervisor's exit note, if it left one — bounded, and diagnostics ONLY: the typed
+    exit above it is the contract. It exists because the interesting deaths are the ones with
+    nothing to publish (a fenced-out attempt, a refused write), and those used to be invisible
+    from the host the moment sensing moved off it."""
+    try:
+        with open(os.path.join(run_dir, f"{name}.watch.super.exit"), encoding="utf-8") as fh:
+            note = fh.read(1200).strip()
+    except OSError:
+        return ""
+    return f"\nsupervisor's last words: {note}" if note else ""
+
+
+def cmd_watch_state(args: argparse.Namespace) -> int:
+    arm_watchdog(args.run_dir, args.session, status_timeout(), "watch-state")
+    try:
+        return watch_state(args)
+    except Exception as exc:      # noqa: BLE001 — a crashed reader is undecidable, not a verdict
+        print(f"SUPERVISOR-LOST: reason=unknown the waiter's read failed ({exc!r}) — no "
+              "conclusion may be inferred from a failed read")
+        return SUPERVISOR_LOST
+    finally:
+        signal.alarm(0)
+
+
+def cmd_watch_lease(args: argparse.Namespace) -> int:
+    """Renew the supervisor's liveness lease. Called by the supervisor itself once per poll, and
+    doubles as its identity check: a supervisor whose arm-time token no longer matches the active
+    record has been retired (stop, --replace, resume) and MUST stop sensing — its next conclusion
+    would be refused at publish anyway, and a retired lease would keep waiters attached to a
+    supervisor that can never speak for them."""
+    store = identity.IdentityStore(args.run_dir, args.session)
+    token = store.token()
+    if args.armed and args.armed != token:
+        # name the FENCE that retired it, in the same vocabulary publish would have used — the
+        # host reads this line, and "retired" alone does not say whether an attempt rotated
+        # under the supervisor or the process incarnation did.
+        armed_parts, now_parts = args.armed.split("/"), token.split("/")
+        if len(armed_parts) != 3:
+            klass = identity.UNKNOWN
+        elif armed_parts[1] == now_parts[1]:
+            klass = identity.STALE_INCARNATION
+        else:
+            klass = identity.STALE_ATTEMPT
+        print(f"{klass}: the active identity rotated under this supervisor (armed "
+              f"'{args.armed}' ≠ now '{token}') — sensing stops, no terminal conclusion "
+              "published, no delivery receipt")
+        return 3
+    pid = str(args.pid or os.getpid())
+    snapshot = ps_start_times([pid]) or {}
+    started = snapshot.get(pid, "")
+    if not started:
+        # A lease whose pid carries no start-time is not a weaker lease, it is an UNFENCEABLE
+        # one: the reader could not tell our supervisor from a stranger that recycled the pid,
+        # so it refuses the lease anyway (supervisor_liveness). Failing HERE turns that into a
+        # loud stop with a reason instead of a sensing loop no waiter can ever adopt.
+        print("SUPERVISOR-UNFENCEABLE: `ps` returned no start-time for supervisor pid "
+              f"{pid} — the liveness lease would carry no incarnation evidence and every "
+              "waiter would have to refuse it; sensing stops, no terminal conclusion "
+              "published, no delivery receipt")
+        return 3
+    write_lease(args.run_dir, args.session,
+                {"schemaVersion": identity.SCHEMA_VERSION,
+                 "pid": pid,
+                 "pidStart": started,
+                 "identityToken": token,
+                 "tmux": supervisor_session(args.session),
+                 "round": (Session(args.run_dir, args.session).meta.get("round") or "0"),
+                 "pollSecs": args.poll,
+                 # the classify budget THIS supervisor runs with — the reader sizes its
+                 # stale-lease window from it so a legitimately slow classify is never a wedge
+                 "statusTimeout": status_timeout(),
+                 "maxPolls": args.max_polls,
+                 "iter": args.iter,
+                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    return 0
 
 
 def cmd_identity(args: argparse.Namespace) -> int:
@@ -1780,6 +2226,15 @@ def cmd_identity(args: argparse.Namespace) -> int:
         view = store.receipt_view()
         print(json.dumps(view, ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if view.get("delivered") else 3
+    if args.op == "watermark":
+        # the delivery watermark a waiter captures as it ARMS: the highest publish sequence
+        # THIS ATTEMPT already has on disk. Everything above it was published while this waiter
+        # was attached, everything at or below it belonged to an episode that ended before it
+        # existed. A persisted counter, so the comparison survives a host clock step (review R2
+        # F-03); attempt-scoped, because the counter restarts at 0 on every start/replace while
+        # the previous attempt's records stay on disk (review R3 F-01).
+        print(store.delivery_watermark())
+        return 0
     if args.op in ("start", "replace", "resume"):
         try:
             rec = store.transition(args.op)
@@ -1789,8 +2244,19 @@ def cmd_identity(args: argparse.Namespace) -> int:
               f"{rec.get('processIncarnation') or 'UNESTABLISHED'}")
         return 0
     if args.op == "publish":
+        if args.round is None:
+            # REQUIRED, not defaulted. This is the one identity surface outside this process,
+            # so an omitted round here is not "the caller does not care": it is an unfenced
+            # write, and the writer would then stamp the record with whatever round the meta
+            # had reached by publish time — publishing the round the caller CONCLUDED as the
+            # round a steer has since opened (review R2 F-01). Refuse the publish instead.
+            print(f"{identity.UNKNOWN}: `identity publish` requires --round (the round the "
+                  "conclusion was computed for, captured BEFORE classify) — an unfenced "
+                  "publish is refused: no terminal conclusion published, no delivery receipt")
+            return 2
         try:
-            klass, detail = store.publish_terminal(args.armed, rc=args.rc)
+            klass, detail = store.publish_terminal(args.armed, args.round, rc=args.rc,
+                                                   detail=args.detail)
         except identity.IdentityPersistError as exc:
             print(f"IDENTITY-UNKNOWN: reason={identity.PUBLISH_INTERRUPTED} {exc} — no "
                   "terminal conclusion published")
@@ -1835,11 +2301,46 @@ def main() -> None:
 
     p_id = sub.add_parser("identity", help="attempt-identity record (the one state abstraction)")
     p_id.add_argument("op", choices=["token", "show", "start", "replace", "resume",
-                                     "publish", "receipt", "clear"])
+                                     "publish", "receipt", "watermark", "clear"])
     p_id.add_argument("session")
     p_id.add_argument("--armed", default="", help="arm-time identity token (publish)")
     p_id.add_argument("--rc", type=int, default=0)
+    p_id.add_argument("--round", default=None,
+                      help="round the conclusion was computed for: the round fence. REQUIRED "
+                           "for publish — an unfenced publish is refused, never defaulted")
+    p_id.add_argument("--detail", default="",
+                      help="human line the concluding observer printed (diagnostics only)")
     p_id.set_defaults(func=cmd_identity)
+
+    p_ws = sub.add_parser("watch-state", help="the supervised waiter's ONE read: fenced terminal "
+                                              "record, else supervisor liveness")
+    p_ws.add_argument("session")
+    p_ws.add_argument("--arm", action="store_true",
+                      help="arm-time read (before a supervisor is established)")
+    p_ws.add_argument("--armed-seq", type=int, default=-1, dest="armed_seq",
+                      help="the delivery watermark this waiter captured when it armed "
+                           "(`identity watermark`): a conclusion already delivered to a peer "
+                           "still counts for a waiter attached when it was published. Absent "
+                           "(-1) = a one-shot reader, which was attached to nothing")
+    p_ws.add_argument("--lease-unchanged", type=int, default=0, dest="lease_unchanged",
+                      help="consecutive polls of THIS waiter that saw an unmoved supervisor "
+                           "lease — the reader's own clock, and the only admissible evidence "
+                           "of a wedge (n polls bound n-1 elapsed intervals)")
+    p_ws.add_argument("--poll", type=float, default=0.0,
+                      help="this waiter's poll interval, seconds (pairs with "
+                           "--lease-unchanged; without both, the read is one-shot and derives "
+                           "no staleness from the lease at all)")
+    p_ws.set_defaults(func=cmd_watch_state)
+
+    p_wl = sub.add_parser("watch-lease", help="renew the supervisor liveness lease (supervisor "
+                                              "internal; also its identity-rotation check)")
+    p_wl.add_argument("session")
+    p_wl.add_argument("--armed", default="", help="arm-time identity token of the supervisor")
+    p_wl.add_argument("--pid", default="", help="supervisor pid (defaults to this process)")
+    p_wl.add_argument("--poll", type=float, default=0.0, help="supervisor poll interval, seconds")
+    p_wl.add_argument("--max-polls", type=int, default=0, dest="max_polls")
+    p_wl.add_argument("--iter", type=int, default=0, help="current poll iteration")
+    p_wl.set_defaults(func=cmd_watch_lease)
 
     p_cap = sub.add_parser("capabilities", help="runtime-generated provider capability contract")
     p_cap.add_argument("--json", action="store_true", help="stable machine shape")

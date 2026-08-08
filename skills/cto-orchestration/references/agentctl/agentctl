@@ -5,7 +5,7 @@
 #                   [--no-preflight] [engine args...]
 #   agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d|--deliverable G]
 #   agentctl status <session>            # one-shot typed state (exit = verdict)
-#   agentctl watch  <session>            # block until terminal; typed exits (vocabulary below)
+#   agentctl watch  <session> [--inline]  # block until terminal; typed exits (vocabulary below)
 #   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
 #
@@ -24,6 +24,9 @@
 #   0 DONE / 1 SESSION-GONE / 2 FAILED|AGENT-DEAD / 3 send-unconfirmed / 4 WAITING-INPUT
 #   / 5 STALLED-EXTERNAL / 6 IDLE-NO-DELIVERABLE / 7 WATCH-TIMEOUT / 8 ENGINE-SILENT
 #   / 9 BUDGET-EXHAUSTED / 11 STALLED-STREAM (stagnant stream + no tool child — salvage, then stop)
+#   / 12 SUPERVISOR-LOST (watch only: no fenced conclusion AND the sensing supervisor cannot be
+#     shown to be running — never DONE, always bounded; see the supervised-watch block below)
+# `agentctl watch-daemon <session>` is INTERNAL: the sensing loop tmux runs for supervised watch.
 set -uo pipefail
 # $0 may be a PATH symlink (~/.local/bin convenience installs) — follow the link chain
 # before dirname, else CTL resolves beside the symlink and every engine name goes unknown.
@@ -33,6 +36,7 @@ while [ -L "$SELF" ]; do
   case "$link" in /*) SELF="$link" ;; *) SELF="$(dirname "$SELF")/$link" ;; esac
 done
 HERE="$(cd "$(dirname "$SELF")" && pwd)"
+SELFABS="$HERE/$(basename "$SELF")"   # the supervisor pane relaunches this exact script
 DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 CTL="$HERE/duplexctl.py"
 PY="${AGENTCTL_PYTHON:-python3}"
@@ -42,7 +46,7 @@ meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
   echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [engine args...]" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]" >&2
-  echo "       agentctl status <session> | watch <session> | stop <session> [cwd] | capabilities [--json]" >&2
+  echo "       agentctl status <session> | watch <session> [--inline] | stop <session> [cwd] | capabilities [--json]" >&2
   exit 1
 }
 
@@ -122,13 +126,24 @@ reap_tree() { # $1 pane_pid (== pgid)  $2 expected leader lstart ("" = pid read 
 # later same-name session or round is a durable false DONE). JSON goes through python
 # (quotes/backslashes in globs stay parseable, F3) with tmp+rename (no torn read, F7);
 # the meta re-check right before publish keeps a racing stop from resurrecting a marker.
-# Publication is FENCED by attempt identity, and every identity file operation lives in ONE
-# place (duplexctl's identity module): the marker is stamped with the ACTIVE identity and the
-# record is re-read immediately before the write, so a watcher armed under attempt A can never
-# publish a terminal conclusion for attempt B. Refusal prints the typed stale class, writes
-# nothing, and returns 2 — an ambiguous identity is never allowed to read as DONE.
-publish_terminal_marker() { # $1 session — stdout: typed line on refusal; rc 2 = refused
-  "$PY" "$CTL" --run-dir "$DIR" identity publish "$1" --armed "$ARMED_ID"
+# Publication is FENCED by attempt identity AND by round, at BOTH ends, and every identity file
+# operation lives in ONE place (duplexctl's identity module): the marker is stamped with the
+# ACTIVE identity and the record is re-read immediately before the write, so a watcher armed
+# under attempt A can never publish a terminal conclusion for attempt B. Refusal prints the
+# typed stale class, writes nothing, and returns 2 — an ambiguous identity is never allowed to
+# read as DONE.
+# The ROUND half is why this helper takes it as an argument instead of letting the writer read
+# "now": every caller here concludes about the round it captured BEFORE classify, and a publish
+# that omitted `--round` let the writer stamp whatever round the meta had reached by then — a
+# plain steer landing between classify and publish turned the previous round's conclusion into
+# the new round's DONE (review F-01). Empty normalizes to 0, the same default the writer uses,
+# so a round-less legacy meta is not a permanent refusal.
+publish_terminal_marker() { # $1 session  $2 round concluded — stdout: typed line; rc 2 = refused
+  "$PY" "$CTL" --run-dir "$DIR" identity publish "$1" --armed "$ARMED_ID" --round "${2:-0}"
+}
+
+session_round() { # $1 session — the round a conclusion computed NOW would be about
+  local r; r="$(meta_get "$1" round)"; printf '%s' "${r:-0}"
 }
 
 identity_token() { # $1 session — opaque arm-time snapshot ("" = legacy session, unfenced)
@@ -226,7 +241,11 @@ cmd_start() {
   # leftover temp would otherwise make the NEXT attempt read PUBLISH_INTERRUPTED forever.
   # The temp name is session- and purpose-scoped (`.<s>.terminal.json-*.tmp`), so this glob can
   # never reach a sibling session's state.
-  rm -f "$RC" "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp; : > "$EV"; : > "$ERR"
+  rm -f "$RC" "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp \
+        "$DIR/$S.terminal.consumed.json"; : > "$EV"; : > "$ERR"
+  # a reclaimed name must not inherit the PREVIOUS life's sensing loop either: an orphan
+  # supervisor would keep classifying under a lease this attempt never wrote.
+  retire_supervisor "$S"
   # a reclaimed name must not inherit its predecessor's authority: if the old identity cannot
   # be dropped, REFUSE to start rather than run a session over someone else's record
   if ! CLEAR_OUT="$(identity_clear "$S")"; then
@@ -308,10 +327,20 @@ cmd_steer() {
   case "$(lane_of "$S")" in
     duplex)
       [ "$MODE" = -f ] && { [ -e "$ARG" ] || { echo "ERR: file not found: $ARG" >&2; exit 1; }; }
-      # a steer opens a new round: DONE is no longer a fact. Pre-clearing is the safe
-      # direction — a missing marker sends waiters back to status (which re-writes it if
-      # still DONE); a stale marker is a durable false DONE (review F1①).
-      rm -f "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp
+      # The terminal record is NOT cleared here. A steer opens a new round and the previous
+      # round's conclusion stops being a fact — but only if the steer actually lands. Clearing
+      # before delivery meant a REFUSED steer (engine already exited, tainted stream, budget
+      # cap) destroyed a conclusion that was still every attached waiter's answer, and the
+      # peer that had not read yet came back SUPERVISOR-LOST 12 against its peer's FAILED 2
+      # (review R2 F-02). duplexctl now unlinks both records inside commit_round_state — the
+      # same writer flock, the same instant the round counter moves — so the record dies with
+      # the round it belonged to and not one moment earlier (review F1① still holds: no
+      # window exists where the new round is durable and the old record is still adoptable).
+      # `--replace` mints a NEW attempt, so the running supervisor is armed under an identity
+      # that is about to become stale: retire it here rather than leave a loop that can only
+      # discover its own irrelevance on its next lease renewal. A plain steer keeps it — same
+      # attempt, next round, and the record it just cleared is the only thing that was stale.
+      [ "$VERB" = replace ] && retire_supervisor "$S" "agentctl steer --replace is opening a new attempt"
       # -d rides duplexctl: applied atomically (key-scoped meta_update) only after a
       # successful delivery — the shell grep+mv snapshot could roll back a concurrent
       # sender's round counter (review S2 2026-07-19)
@@ -325,17 +354,19 @@ cmd_status() {
   S="${1:?usage: agentctl status <session>}"
   case "$(lane_of "$S")" in
     duplex)
-      # snapshot the identity BEFORE classify: the publish below re-reads the record and
-      # refuses if it rotated in between, so a conclusion computed under one attempt can
-      # never be published under another (TOCTOU window closed).
+      # snapshot the identity AND the round BEFORE classify: the publish below re-reads both
+      # and refuses if either rotated in between, so a conclusion computed under one attempt —
+      # or for a round a steer has since closed — can never be published as the current one
+      # (TOCTOU window closed at both ends).
       ARMED_ID="$(identity_token "$S")"
+      RND="$(session_round "$S")"
       msg="$("$PY" "$CTL" --run-dir "$DIR" classify "$S")"; rc=$?
       [ -n "$msg" ] && printf '%s\n' "$msg"   # a died classify says it all on stderr
       # one-shot status persists DONE only when the deliverable gate vouched for it —
       # a bare idle read at a turn boundary must not become durable truth (review F6);
       # sessions without a declared deliverable get their marker from watch's 2-stable read.
       if [ "$rc" = 0 ] && [ -n "$(meta_get "$S" deliverable)" ]; then
-        pmsg="$(publish_terminal_marker "$S")"; prc=$?
+        pmsg="$(publish_terminal_marker "$S" "$RND")"; prc=$?
         [ -n "$pmsg" ] && printf '%s\n' "$pmsg"
         # a refused publish means THIS verdict is not ours to publish: never report OK
         [ "$prc" = 0 ] || rc=2
@@ -381,8 +412,312 @@ watch_exit() { # $1 rc
   echo "EXIT=$1"; exit "$1"
 }
 
+# ── supervised watch ──────────────────────────────────────────────────────────────────
+# The host reaps orchestrator-side background tasks (field 2026-08-08: ≥6 kills in 40min, two
+# parallel sessions), so a sensing loop that lives in one is structurally unreliable — and every
+# non-DONE conclusion it had computed died with it, because only DONE was ever persisted. The
+# loop therefore moves into tmux, the one place in this lane the reaper demonstrably does not
+# reach (the worker panes rode out the same kill waves untouched), and `agentctl watch` becomes a
+# DUMB WAITER over the fenced terminal record: it re-derives nothing, so killing it costs a
+# re-run and never a conclusion. `--inline` keeps the pre-supervised in-process loop for a caller
+# that wants no supervisor — and accepts losing its round's conclusion to a kill.
+#
+# The waiter's whole contract, in priority order (duplexctl watch-state is the ONE reader):
+#   1. a valid fenced terminal record for this attempt+round ⇒ report its class + exit;
+#   2. no record + the supervisor is demonstrably sensing ⇒ keep waiting;
+#   3. anything else ⇒ 12 SUPERVISOR-LOST, bounded, never DONE.
+supervisor_of() { printf '%s-watchd\n' "$1"; }   # its OWN tmux session, never a worker window
+
+# The supervisor inherits nothing from tmux's environment handling: every knob it needs is
+# spelled into the pane command, so the sensing loop cannot silently run with different bounds
+# than the operator asked for (and a test sandbox's fake PATH reaches it).
+supervisor_env() {
+  local out="AGENT_WATCH_DIR=$(q "$DIR") " k v
+  for k in PATH AGENTCTL_PYTHON AGENT_WATCH_POLL_SECS AGENT_WATCH_MAX_POLLS \
+           AGENT_WATCH_SILENT_POLLS AGENT_WATCH_STATUS_TIMEOUT AGENT_WATCH_STALL_MINS \
+           AGENTCTL_REAP_GRACE AGENTCTL_PUBLISH_BARRIER TMPDIR; do
+    eval "v=\${$k:-}"
+    [ -n "$v" ] && out="$out$k=$(q "$v") "
+  done
+  printf '%s' "$out"
+}
+
+# Retirement is part of the identity lifecycle, not housekeeping: a supervisor that outlived its
+# attempt would keep sensing a round it may no longer speak for. Its late conclusions are refused
+# by the publish fence even if this kill loses the race — belt AND braces, because the fence is
+# the one that has to hold.
+retire_supervisor() { # $1 session  [$2 why — left as the supervisor's last words for a waiter]
+  local sup pane i
+  sup="$(supervisor_of "$1")"
+  if tmux has-session -t "=$sup" 2>/dev/null; then
+    pane="$(tmux display-message -p -t "=$sup:" '#{pane_pid}' 2>/dev/null)"
+    tmux kill-session -t "=$sup" 2>/dev/null
+    reap_tree "$pane" "" >/dev/null 2>&1
+  fi
+  # the lease is removed LAST and re-removed: a renewal already in flight when the kill landed
+  # can recreate it a moment later, and a lease outliving its supervisor is exactly the evidence
+  # a later waiter would misread as "someone is sensing".
+  i=0
+  while [ "$i" -lt 20 ]; do
+    rm -f "$DIR/$1.watch.super.json" "$DIR"/".$1.watch.super.json-"*.tmp 2>/dev/null
+    [ -e "$DIR/$1.watch.super.json" ] || break
+    sleep 0.1; i=$((i+1))
+  done
+  rm -f "$DIR/$1.watch.super.exit" 2>/dev/null
+  # A waiter may still be attached. Retirement by an explicit lifecycle action is not a mystery
+  # death, and it must not read as one: leave the cause where `watch-state` relays it.
+  [ -n "${2:-}" ] && super_note "$1" \
+    "SUPERVISOR-RETIRED: $2 — sensing stopped, no terminal conclusion published"
+  return 0
+}
+
+watch_state() { # $1 session  [$2 --arm] — stdout: the reader's line; rc = the typed verdict
+  # ARMED_SEQ (the delivery watermark this waiter saw when it armed) is what lets the canonical
+  # reader hand an already DELIVERED conclusion to a waiter that was attached when it was
+  # published, while a waiter that arms afterwards gets the sensing loop instead of a replay —
+  # see deliver_conclusion. It is a persisted publish counter, not a timestamp: attachment must
+  # not be decidable by a clock that can step (review R2 F-03), and it is scoped to the current
+  # attempt so a retired attempt's records cannot arm this waiter above the new attempt's first
+  # conclusion (review R3 F-01).
+  # LEASE_SAME is this waiter's OWN sample count over an unmoved supervisor lease, and POLL is
+  # how far apart those samples are — the reader's self-clock, and the ONLY evidence that can
+  # produce a wedge verdict. Only the polling wait loop maintains them; one-shot reads pass
+  # nothing and therefore get no staleness verdict at all (review R3 F-03).
+  "$PY" "$CTL" --run-dir "$DIR" watch-state "$1" \
+    ${ARMED_SEQ:+--armed-seq "$ARMED_SEQ"} \
+    ${LEASE_SAME:+--lease-unchanged "$LEASE_SAME" --poll "$POLL"} ${2:+"$2"}
+}
+
+# Delivery of a non-DONE conclusion, and the one rule that makes it safe.
+#
+#   * DONE (rc 0) is exempt entirely: "the record exists ⇒ this round is done" is a published
+#     contract (pure-file waiters, post-mortems, `identity receipt`), so it stays under
+#     `<s>.terminal.json` until start/steer/stop.
+#   * every other class is an EPISODE outcome. Once it has been REPORTED to a host, the record
+#     rotates to `<s>.terminal.consumed.json` — otherwise the next `agentctl watch` would replay
+#     a delivered WATCH-TIMEOUT forever instead of sensing again, and the operator's re-arm IS
+#     the "keep watching" instruction.
+#
+# The rule the rotation used to break (review F-02): rotating is DELIVERY, not destruction. The
+# canonical reader still adopts the rotated record for every waiter that was already ATTACHED
+# when it was published (`--armed-seq` vs the record's `identity.seq` — two persisted counters,
+# never two timestamps: review R2 F-03), so two waiters on the same supervisor cannot come back
+# with different typed answers to the same terminal event — the probe that broke this returned
+# FAILED 2 to the fast waiter and SUPERVISOR-LOST 12 to the slow one. A waiter that arms AFTER a
+# conclusion was delivered is a new episode by definition and gets the sensing loop again, not
+# the replay.
+# Rotation happens AFTER the print: a kill in that window leaves the record in place — a replay
+# for the next waiter, never a lost conclusion.
+deliver_conclusion() { # $1 session  $2 reported rc
+  # ONLY a class this waiter actually read OFF the record is deliverable. 12 SUPERVISOR-LOST and
+  # 1 SESSION-GONE are verdicts about the absence of an adoptable record — rotating one away
+  # would delete evidence the waiter explicitly refused to trust (and could destroy a record a
+  # later reader might legitimately adopt).
+  case "$2" in 2|4|5|6|7|8|11) ;; *) return 0;; esac
+  [ -f "$DIR/$1.terminal.json" ] || return 0        # already delivered by an attached peer
+  [ "$(watch_state "$1" --arm >/dev/null 2>&1; echo $?)" = "$2" ] || return 0
+  mv -f "$DIR/$1.terminal.json" "$DIR/$1.terminal.consumed.json" 2>/dev/null
+  return 0
+}
+
+# The supervisor's last words, for the waiter to relay: a refusal nobody may publish must not
+# become a refusal nobody hears about either (that is how a stale-attempt watcher went silent).
+super_note() { # $1 session  $2 text
+  printf '%s\n' "$2" > "$DIR/$1.watch.super.exit.tmp" 2>/dev/null \
+    && mv "$DIR/$1.watch.super.exit.tmp" "$DIR/$1.watch.super.exit" 2>/dev/null
+  return 0
+}
+
+# Establishing the sensing loop has THREE outcomes, and the difference is the whole of decision
+# 6 after review F-05: an automatic degrade to in-process sensing is only ever allowed when
+# supervision is STRUCTURALLY impossible here, never when it is merely undecidable.
+#   0 — a supervisor for THIS identity is sensing.
+#   1 — structural: no tmux, an unwritable run dir, or OUR pane exited without ever leasing.
+#       Nothing about waiting longer can fix it, and refusing to observe would be worse than
+#       observing without kill-resilience — so the caller degrades to --inline, LOUDLY.
+#   2 — undecidable: a live `<session>-watchd` is squatting the singleton name and published no
+#       lease for this identity. That is a rogue or wedged supervisor, not a broken environment:
+#       sensing inline underneath it re-opens every event this workstream closed (an idle
+#       same-name session used to disable kill-resilience for good, review F-05). The caller
+#       must return the four-state machine's ④ — typed 12 unknown — and say how to clear it.
+# STDOUT of 1 and 2 is the diagnosis; the caller prints it.
+ensure_supervisor() { # $1 session
+  local sup cmd cwd tries i probe mine
+  sup="$(supervisor_of "$1")"
+  watch_state "$1" >/dev/null 2>&1
+  [ "$?" = 10 ] && return 0        # already sensing under the current identity — attach, don't fork
+  command -v tmux >/dev/null 2>&1 || {
+    echo "no tmux on PATH — the sensing loop has nowhere to live"; return 1; }
+  # The run dir carries the lease AND the terminal record: unwritable, no supervisor can ever
+  # report anything, and the arm window would only be ten seconds of waiting for that fact.
+  probe="$DIR/.$1.super.wprobe.$$"
+  if ! ( : > "$probe" ) 2>/dev/null; then
+    echo "run dir $DIR is not writable — no lease and no terminal record can be published"
+    return 1
+  fi
+  rm -f "$probe"
+  # Retire ONLY what is provably not ours: a live -watchd session with no lease yet is a
+  # supervisor still starting up (very likely another waiter's, one second ahead of us), and
+  # killing it would turn the singleton into a thrash — two concurrent waiters would take turns
+  # murdering each other's sensing loop and each publish once (probed: two supervisors, two
+  # publishes). Anything else — a lease from another identity, or lease residue with no session
+  # — is dead weight and goes.
+  if ! tmux has-session -t "=$sup" 2>/dev/null || [ -s "$DIR/$1.watch.super.json" ]; then
+    retire_supervisor "$1"
+  fi
+  cwd="$(meta_get "$1" cwd)"; [ -d "$cwd" ] || cwd="$DIR"
+  cmd="$(supervisor_env)exec bash $(q "$SELFABS") watch-daemon $(q "$1") >> $(q "$DIR/$1.watch.super.log") 2>&1"
+  # tmux's session-name uniqueness IS the singleton claim (server-side, atomic), so WHO WON THE
+  # NAME is also the honest answer to "whose supervisor is this?" — a later has-session poll is
+  # not: it cannot tell our own pane from a stranger's.
+  mine=1
+  if ! tmux new-session -d -s "$sup" -c "$cwd" "$cmd" 2>/dev/null; then
+    # Losing the race is not an error: the winner's supervisor is the one we wanted to exist —
+    # but it is NOT ours, and if it never leases we may not conclude anything about it.
+    mine=0
+    tmux has-session -t "=$sup" 2>/dev/null || {
+      echo "tmux refused to create session '$sup' and no session by that name exists"; return 1; }
+  fi
+  # readiness is OBSERVED, never assumed: the supervisor publishes its lease before it senses
+  # anything, so the lease appearing is the proof that the pane really ran our command.
+  tries="${AGENTCTL_SUPERVISOR_ARM_TRIES:-50}"; i=0
+  while [ "$i" -lt "$tries" ]; do
+    [ -s "$DIR/$1.watch.super.json" ] && return 0
+    sleep 0.2; i=$((i+1))
+  done
+  if [ "$mine" = 1 ]; then
+    # We claimed the name and our own pane still published nothing: the sensing verb cannot run
+    # in this environment. Retire what we created — it is ours to kill, and leaving a leaseless
+    # pane behind would make the NEXT waiter read it as a rogue — then degrade loudly.
+    retire_supervisor "$1"
+    echo "the '$sup' pane this waiter started published no lease within the arm window — the sensing verb cannot run in this environment (see $DIR/$1.watch.super.log)"
+    return 1
+  fi
+  echo "tmux session '$sup' already existed and published no supervisor lease for this identity within the arm window — a rogue or wedged watchd is holding the singleton name (it may belong to another run dir, or predate this attempt). It is NOT retired automatically: killing a session this waiter cannot identify is the one move that could murder a healthy supervisor. Inspect it with 'tmux attach -t $sup', then 'tmux kill-session -t $sup' and re-run 'agentctl watch $1'"
+  return 2
+}
+
+# One conclusion point for both modes. Daemon: publish through the fenced writer and stop —
+# a refused publish publishes NOTHING and leaves the refusal where the waiter reads it.
+# Inline: the pre-supervised behaviour, byte for byte (DONE publishes, everything else prints).
+sense_conclude() { # $1 rc  $2 message
+  local rc="$1" msg="$2" pmsg prc
+  if [ "$SL_MODE" = daemon ]; then
+    pmsg="$("$PY" "$CTL" --run-dir "$DIR" identity publish "$SL_S" --armed "$ARMED_ID" \
+            --rc "$rc" --round "$RND" --detail "$msg" 2>&1)"; prc=$?
+    if [ "$prc" != 0 ]; then
+      printf '[%s] conclusion %s NOT published: %s\n' "$SL_S" "$rc" "$pmsg"
+      super_note "$SL_S" "$pmsg"; exit 3
+    fi
+    printf '[%s] published %s — %s\n%s\n' "$SL_S" "$rc" "$msg" "$pmsg"; exit 0
+  fi
+  if [ "$rc" = 0 ]; then
+    # same round fence as the daemon: $RND is the round captured BEFORE this classify
+    pmsg="$(publish_terminal_marker "$SL_S" "$RND")"; prc=$?
+    [ -n "$pmsg" ] && msg="$msg
+$pmsg"
+    [ "$prc" = 0 ] || rc=2   # armed under another identity: publish nothing, report the class
+  fi
+  echo "=== [$SL_S] $msg ==="; watch_exit "$rc"
+}
+
+# THE sensing loop — the only thing in this lane that calls classify in a loop. Unchanged in
+# substance since the pre-supervised watcher; what changed is WHERE it runs and that every
+# terminal class it computes is persisted, not just DONE.
+sense_loop() { # $1 session  $2 inline|daemon — never returns
+  SL_S="$1"; SL_MODE="$2"
+  local idle=0 silent=0 tmo=0 i=1 msg rc lease
+  RND="$(session_round "$1")"   # set before any conclude path can be reached (MAX=0 corner)
+  while [ "$i" -le "$MAX" ]; do
+    if [ "$SL_MODE" = daemon ]; then
+      # renew liveness BEFORE sensing, and let the renewal double as the identity check: a
+      # supervisor whose attempt rotated must stop sensing rather than compute a verdict it
+      # could never publish — and must say WHICH fence retired it.
+      if ! lease="$("$PY" "$CTL" --run-dir "$DIR" watch-lease "$SL_S" --armed "$ARMED_ID" \
+                    --pid $$ --poll "$POLL" --max-polls "$MAX" --iter "$i" 2>&1)"; then
+        printf '%s\n' "$lease"; super_note "$SL_S" "$lease"; exit 3
+      fi
+    fi
+    # the round the verdict below is ABOUT, captured before classify: publish refuses it if a
+    # steer opened the next round in between (the conclusion would describe a finished round).
+    RND="$(session_round "$SL_S")"
+    msg="$("$PY" "$CTL" --run-dir "$DIR" classify "$SL_S")"; rc=$?
+    case "$rc" in
+      10)
+        case "$msg" in *"no output since last steer"*) silent=$((silent+1));; *) silent=0;; esac
+        if [ "$silent" -ge "$SILENT_MAX" ]; then
+          sense_conclude 8 "ENGINE-SILENT at $(date '+%H:%M:%S') — steer delivered but no engine output ~2min; inspect $DIR/$SL_S.duplex.stderr.log"
+        fi
+        idle=0; tmo=0 ;;
+      0|6)
+        # stability: require 2 consecutive terminal reads — a turn boundary right
+        # before an auto-consumed queued message must not read as terminal.
+        idle=$((idle+1)); silent=0; tmo=0
+        [ "$idle" -ge 2 ] && sense_conclude "$rc" "$msg" ;;
+      8)
+        # classify's own control-plane timeout — transient lock/engine contention is
+        # possible, so require 2 consecutive reads before killing the watch (mirrors
+        # the idle stability rule; review: a single 8 must not fell the watcher when
+        # watch's own ENGINE-SILENT needs 8 consecutive silent polls).
+        tmo=$((tmo+1)); idle=0; silent=0
+        [ "$tmo" -ge 2 ] && sense_conclude 8 "$msg" ;;
+      *) sense_conclude "$rc" "$msg" ;;
+    esac
+    [ $((i % 12)) -eq 0 ] && echo "[$SL_S] heartbeat iter $i $(date '+%H:%M:%S') — $msg"
+    # sleep backgrounded + wait: `wait` is signal-interruptible; a bare foreground sleep
+    # defers a trapped TERM until it finishes (probed 2026-07-23: 14s) — the tombstone
+    # would lose the race against a TERM→KILL grace window.
+    i=$((i+1)); sleep "$POLL" & wait $!
+  done
+  sense_conclude 7 "WATCH TIMEOUT — engine still active; re-run watch or investigate"
+}
+
+# The dumb wait: read the fenced record, never re-derive it. Bounded by construction — the
+# supervisor self-terminates at its own poll budget, so twice that budget plus slack is only
+# reachable by a supervisor that is alive and no longer concluding anything.
+#
+# This loop is also the waiter's OWN CLOCK, and the ONLY holder of stall authority in the
+# lane. "The supervisor is wedged" used to be `now - lease.mtime > budget`, which is an
+# assertion about somebody's wall clock: a clock step forward turned a perfectly fresh lease
+# into a false SUPERVISOR-LOST 12 and killed a live watch (review R2 F-03 / R3 F-03). What
+# this loop can observe without any clock is whether the lease MOVED between two of its own
+# polls, so it counts consecutive polls over a byte-identical lease and hands that count to
+# the canonical reader, which sizes the threshold from the supervisor's recorded budget. Note
+# the count is SAMPLES: n consecutive samples bound n-1 elapsed intervals, and the reader
+# converts. cksum over the lease content is the movement test: every renewal bumps `iter`, so
+# an unchanged checksum means the sensing loop did not renew.
+lease_mark() { # $1 session — "" when there is no readable lease
+  cksum < "$DIR/$1.watch.super.json" 2>/dev/null
+}
+
+wait_for_terminal() { # $1 session
+  local i=1 cap msg rc mark
+  cap=$(( MAX * 2 + 24 ))
+  LEASE_MARK=""; LEASE_SAME=""
+  while [ "$i" -le "$cap" ]; do
+    mark="$(lease_mark "$1")"
+    if [ -z "$mark" ]; then LEASE_SAME=""            # no lease to have watched
+    elif [ "$mark" = "$LEASE_MARK" ]; then LEASE_SAME=$(( ${LEASE_SAME:-0} + 1 ))
+    else LEASE_SAME=1; LEASE_MARK="$mark"; fi
+    msg="$(watch_state "$1")"; rc=$?
+    if [ "$rc" != 10 ]; then
+      echo "=== [$1] $msg ==="; deliver_conclusion "$1" "$rc"; watch_exit "$rc"
+    fi
+    [ $((i % 12)) -eq 0 ] && echo "[$1] heartbeat iter $i $(date '+%H:%M:%S') — $msg"
+    i=$((i+1)); sleep "$POLL" & wait $!
+  done
+  echo "=== [$1] SUPERVISOR-LOST: reason=unknown the supervisor is alive but concluded nothing in $cap waiter polls (its own budget is $MAX polls) — inspect $DIR/$1.watch.super.log ==="
+  watch_exit 12
+}
+
 cmd_watch() {
-  S="${1:?usage: agentctl watch <session>}"
+  S=""; MODE=supervised
+  while [ "$#" -gt 0 ]; do case "$1" in
+    --inline) MODE=inline; shift;;
+    -*) echo "ERR: unknown watch option '$1'" >&2; usage;;
+    *) [ -n "$S" ] && { echo "ERR: watch takes exactly one session" >&2; usage; }; S="$1"; shift;;
+  esac; done
+  [ -n "$S" ] || usage
   [ "$(lane_of "$S")" = duplex ] || { echo "ERR: unknown session '$S'" >&2; exit 1; }
   WPID="$DIR/$S.duplex.watch.pid"
   echo $$ > "$WPID"; trap 'rm -f "$WPID"' EXIT
@@ -404,47 +739,55 @@ cmd_watch() {
   # arm-time identity snapshot: this watcher may only ever publish a conclusion for the
   # identity it armed under (re-verified inside publish, immediately before the write).
   ARMED_ID="$(identity_token "$S")"
+  # arm-time DELIVERY WATERMARK, for the delivery rule: the highest publish sequence THIS
+  # ATTEMPT already has on disk. Anything published above it belongs to this waiter's episode
+  # even if a peer waiter reports (and rotates) it first; anything at or below it ended before
+  # this waiter armed. A persisted counter rather than a timestamp — a host clock that steps
+  # backwards used to make a freshly armed waiter look attached and replay a spent class at it
+  # (review R2 F-03) — and scoped to the current attempt, because the counter restarts at 0 on
+  # every start/replace while the retired attempt's records stay on disk (review R3 F-01).
+  ARMED_SEQ="$("$PY" "$CTL" --run-dir "$DIR" identity watermark "$S" 2>/dev/null)"
+  [ -n "${ARMED_SEQ:-}" ] || ARMED_SEQ=0
   echo "=== [$S] DUPLEX-WATCH ARMED at $(date '+%H:%M:%S') (stateless — safe to kill and re-run) ==="
-  idle=0; silent=0; tmo=0; i=1
-  while [ "$i" -le "$MAX" ]; do
-    msg="$("$PY" "$CTL" --run-dir "$DIR" classify "$S")"; rc=$?
-    case "$rc" in
-      10)
-        case "$msg" in *"no output since last steer"*) silent=$((silent+1));; *) silent=0;; esac
-        if [ "$silent" -ge "$SILENT_MAX" ]; then
-          echo "=== [$S] ENGINE-SILENT at $(date '+%H:%M:%S') — steer delivered but no engine output ~2min; inspect $DIR/$S.duplex.stderr.log ==="
-          watch_exit 8
-        fi
-        idle=0; tmo=0 ;;
-      0|6)
-        # stability: require 2 consecutive terminal reads — a turn boundary right
-        # before an auto-consumed queued message must not read as terminal.
-        idle=$((idle+1)); silent=0; tmo=0
-        if [ "$idle" -ge 2 ]; then
-          if [ "$rc" = 0 ]; then
-            pmsg="$(publish_terminal_marker "$S")"; prc=$?
-            [ -n "$pmsg" ] && msg="$msg
-$pmsg"
-            [ "$prc" = 0 ] || rc=2   # armed under another identity: publish nothing, report the class
-          fi
-          echo "=== [$S] $msg ==="; watch_exit "$rc"
-        fi ;;
-      8)
-        # classify's own control-plane timeout — transient lock/engine contention is
-        # possible, so require 2 consecutive reads before killing the watch (mirrors
-        # the idle stability rule; review: a single 8 must not fell the watcher when
-        # watch's own ENGINE-SILENT needs 8 consecutive silent polls).
-        tmo=$((tmo+1)); idle=0; silent=0
-        if [ "$tmo" -ge 2 ]; then echo "=== [$S] $msg ==="; watch_exit 8; fi ;;
-      *) echo "=== [$S] $msg ==="; watch_exit "$rc" ;;
-    esac
-    [ $((i % 12)) -eq 0 ] && echo "[$S] heartbeat iter $i $(date '+%H:%M:%S') — $msg"
-    # sleep backgrounded + wait: `wait` is signal-interruptible; a bare foreground sleep
-    # defers a trapped TERM until it finishes (probed 2026-07-23: 14s) — the tombstone
-    # would lose the race against a TERM→KILL grace window.
-    i=$((i+1)); sleep "$POLL" & wait $!
-  done
-  echo "=== [$S] WATCH TIMEOUT — engine still active; re-run watch or investigate ==="; watch_exit 7
+  [ "$MODE" = inline ] && sense_loop "$S" inline    # never returns
+  # arm-time read: a conclusion already on disk is this invocation's answer (that IS the
+  # recovery path a killed waiter takes), unless a previous waiter already delivered it.
+  msg="$(watch_state "$S" --arm)"; rc=$?
+  case "$rc" in
+    13) [ -n "$msg" ] && printf '%s\n' "$msg" ;;
+    *)  echo "=== [$S] $msg ==="; deliver_conclusion "$S" "$rc"; watch_exit "$rc" ;;
+  esac
+  sup_why="$(ensure_supervisor "$S")"; sup_rc=$?
+  if [ "$sup_rc" = 2 ]; then
+    # undecidable, NOT a licence to sense inline: the four-state machine's ④.
+    echo "=== [$S] SUPERVISOR-LOST: reason=unknown $sup_why ==="
+    watch_exit 12
+  fi
+  if [ "$sup_rc" != 0 ]; then
+    echo "NOTE: the tmux watch supervisor for '$S' is structurally impossible here — $sup_why. Falling back to the in-process --inline sensing loop: this watch is NOT kill-resilient (an external TERM loses this round's conclusion) and persists no non-DONE class." >&2
+    sense_loop "$S" inline
+  fi
+  echo "[$S] supervised: sensing runs in tmux session $(supervisor_of "$S") (log $DIR/$S.watch.super.log); this waiter only reads the fenced terminal record"
+  wait_for_terminal "$S"
+}
+
+cmd_watch_daemon() { # INTERNAL — the sensing loop, launched by ensure_supervisor inside tmux
+  S="${1:?usage: agentctl watch-daemon <session>}"
+  [ "$(lane_of "$S")" = duplex ] || { echo "ERR: unknown session '$S'" >&2; exit 1; }
+  POLL="${AGENT_WATCH_POLL_SECS:-15}"; MAX="${AGENT_WATCH_MAX_POLLS:-240}"
+  SILENT_MAX="${AGENT_WATCH_SILENT_POLLS:-8}"
+  ARMED_ID="$(identity_token "$S")"
+  rm -f "$DIR/$S.watch.super.exit"
+  echo "=== [$S] WATCH-SUPERVISOR armed at $(date '+%H:%M:%S') pid $$ — the host waiter reads only what this publishes ==="
+  # the lease goes out BEFORE any sensing: the arming waiter blocks on exactly this file, so it
+  # must mean "the pane really ran our command", not "a pane exists".
+  if ! out="$("$PY" "$CTL" --run-dir "$DIR" watch-lease "$S" --armed "$ARMED_ID" --pid $$ \
+              --poll "$POLL" --max-polls "$MAX" --iter 0 2>&1)"; then
+    printf '%s\n' "$out"; super_note "$S" "$out"; exit 3
+  fi
+  trap 'super_note "$S" "SUPERVISOR-KILLED: the sensing loop was signalled before it concluded — no terminal conclusion published"; exit 143' TERM
+  trap 'super_note "$S" "SUPERVISOR-KILLED: the sensing loop was interrupted before it concluded — no terminal conclusion published"; exit 130' INT
+  sense_loop "$S" daemon
 }
 
 cmd_stop() {
@@ -456,6 +799,10 @@ cmd_stop() {
       # a dead pane and #{pane_pid} reports an exited, recyclable pid (review S1); dead
       # or no pane falls back to the recorded pid+lstart fingerprint (workers adopted
       # by PID 1 keep the pgid — the leak class).
+      # the sensing supervisor goes down FIRST: it must not keep classifying — nor publish a
+      # conclusion — for a session whose control state is being torn out from under it. Its
+      # authority dies with the attempt anyway (identity_clear below), this just stops the work.
+      retire_supervisor "$S"
       live="$(tmux display-message -p -t "=$S:" '#{pane_dead} #{pane_pid}' 2>/dev/null)"
       live_pg=""; case "$live" in "0 "*) live_pg="${live#0 }";; esac
       meta_pg="$(meta_get "$S" pane_pid)"; meta_ls="$(meta_get "$S" pane_lstart)"
@@ -483,7 +830,8 @@ cmd_stop() {
       rm -f "$DIR/$S.duplex.in" "$DIR/$S.duplex.meta" "$DIR/$S.duplex.round-started" \
             "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" "$DIR/$S.duplex.sent-offset" \
             "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" \
-            "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp 2>/dev/null
+            "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp \
+            "$DIR/$S.terminal.consumed.json" 2>/dev/null
       # the attempt is over: its authority should die with the control state. A refused clear
       # must be SAID OUT LOUD — the session is down but its identity still holds authority, so
       # a same-name restart would be refused rather than silently inheriting it.
@@ -515,6 +863,7 @@ cmd_stop() {
       # no lane meta: clean bare tmux AND orphan duplex claims (crash residue like a
       # stray fifo/write-intent) — this IS the recovery path the start error advertises
       cleaned=0; reap_rc=0
+      retire_supervisor "$S"
       if tmux has-session -t "=$S" 2>/dev/null; then
         live="$(tmux display-message -p -t "=$S:" '#{pane_dead} #{pane_pid}' 2>/dev/null)"
         live_pg=""; case "$live" in "0 "*) live_pg="${live#0 }";; esac
@@ -524,7 +873,8 @@ cmd_stop() {
       for f in "$DIR/$S.duplex.in" "$DIR/$S.duplex.wlock" "$DIR/$S.duplex.prompt" \
                "$DIR/$S.duplex.sent-offset" "$DIR/$S.duplex.round-started" \
                "$DIR/$S.duplex.write-intent" "$DIR/$S.duplex.watch.pid" \
-               "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp; do
+               "$DIR/$S.terminal.json" "$DIR"/".$S.terminal.json-"*.tmp \
+               "$DIR/$S.terminal.consumed.json"; do
         [ -e "$f" ] && { rm -f "$f"; cleaned=1; }
       done
       # orphan identity must not outlive the residue it belonged to
@@ -540,6 +890,7 @@ cmd_stop() {
 
 case "${1:-}" in
   start)  shift; cmd_start "$@" ;;
+  watch-daemon) shift; cmd_watch_daemon "$@" ;;
   steer)  shift; cmd_steer "$@" ;;
   status) shift; cmd_status "$@" ;;
   watch)  shift; cmd_watch "$@" ;;

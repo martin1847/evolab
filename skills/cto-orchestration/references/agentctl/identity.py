@@ -73,7 +73,22 @@ STATUS_CORRUPT = "corrupt"
 OK = "OK"
 STALE_ATTEMPT = "STALE-ATTEMPT"
 STALE_INCARNATION = "STALE-INCARNATION"
+STALE_ROUND = "STALE-ROUND"
 UNKNOWN = "IDENTITY-UNKNOWN"
+
+# ── terminal classes (supervised watch) ──────────────────────────────────────────────
+# The class of a terminal conclusion is a pure FUNCTION OF THE EXIT CODE, never parsed out of
+# the human line: prose is diagnostics, the exit code is the contract. A record whose `class`
+# and `rc` disagree with this map is undecidable evidence and is refused at the read boundary.
+# `10 RUNNING` is deliberately absent — it is not a terminal state and can never be published.
+TERMINAL_CLASSES = {0: "DONE", 2: "FAILED", 4: "WAITING-INPUT", 5: "STALLED-EXTERNAL",
+                    6: "IDLE-NO-DELIVERABLE", 7: "WATCH-TIMEOUT", 8: "ENGINE-SILENT",
+                    11: "STALLED-STREAM"}
+# how much of classify's human line the record carries — bounded, diagnostics only
+DETAIL_MAX = 600
+# Printed beside a delivered conclusion, NEVER stored in the record: a terminal record must make
+# no claim about verification, and a substring reader cannot tell a negated claim from a claim.
+DELIVERED_CAVEAT = (" (delivered ≠ verified: runtime terminal + hashed artifact evidence only)")
 
 # ── receipt vocabulary (workstream 2) ────────────────────────────────────────────────
 # The STRUCTURAL reason channel. Every non-delivered / refused outcome carries exactly one of
@@ -93,7 +108,7 @@ PUBLISH_INTERRUPTED = "PUBLISH_INTERRUPTED"
 # non-delivered outcome too, and its reason is the class that refused it
 REASONS = frozenset({OK, NO_DELIVERABLE_DECLARED, MISSING, UNREADABLE, SYMLINK, DIRECTORY,
                      GLOB, OVERSIZED_HASH_SKIPPED, IDENTITY_UNKNOWN, PUBLISH_INTERRUPTED,
-                     STALE_ATTEMPT, STALE_INCARNATION})
+                     STALE_ATTEMPT, STALE_INCARNATION, STALE_ROUND})
 # the ONLY two reasons that still deliver: full evidence, or a bounded-cost honest label
 DELIVERING_REASONS = frozenset({OK, OVERSIZED_HASH_SKIPPED})
 
@@ -178,6 +193,25 @@ def _proc_start_time(pid: str) -> str:
     except OSError:
         return ""
     return probe.stdout.strip() if probe.returncode == 0 else ""
+
+
+def _incarnation_slot(incarnation, epoch) -> str:
+    """The third field of an identity token — and the ONE place that answers "is this the same
+    process life?" when the pid signal itself was never obtainable.
+
+    A session whose pane pid could not be read has `processIncarnation = None`. That used to
+    collapse to a literal `-` on both sides of every comparison, so two DIFFERENT lives of the
+    same attempt (a `resume` between them) produced the SAME token and the older life's DONE was
+    adopted after the resume — undecidable evidence read as a match (review F-03). The record
+    therefore also carries `incarnationEpoch`: a nonce minted by EVERY transition, which is
+    durable, comparable across processes, and changes exactly when the process life does. A
+    record from before this field existed has neither signal, so it gets a per-call nonce and
+    matches nothing, including itself — undecidable identity fails closed, never equal."""
+    if isinstance(incarnation, str) and incarnation:
+        return incarnation
+    if isinstance(epoch, str) and epoch:
+        return f"?{epoch}"                      # no "/" — token arity is load-bearing
+    return f"?undecidable-{uuid.uuid4().hex}"
 
 
 def _read_regular(path: str) -> str:
@@ -494,6 +528,10 @@ class IdentityStore:
         self.stamp_path = os.path.join(self.dir, "blocked-stamp.txt")
         self.meta_path = os.path.join(run_dir, f"{name}.duplex.meta")
         self.marker_path = os.path.join(run_dir, f"{name}.terminal.json")
+        # where the terminal record goes once a waiter has REPORTED a non-DONE class: still
+        # this round's conclusion (and its forensics), just no longer the thing a fresh
+        # `agentctl watch` replays instead of sensing — see terminal_verdict/_delivered_for
+        self.consumed_path = os.path.join(run_dir, f"{name}.terminal.consumed.json")
 
     # ── capture ──────────────────────────────────────────────────────────────────────
     def capture_incarnation(self) -> tuple[str | None, str]:
@@ -568,7 +606,8 @@ class IdentityStore:
     @staticmethod
     def _token_of(rec: dict) -> str:
         return "{}/{}/{}".format(rec["sessionId"], rec["attemptId"],
-                                 rec.get("processIncarnation") or "-")
+                                 _incarnation_slot(rec.get("processIncarnation"),
+                                                   rec.get("incarnationEpoch")))
 
     def token(self) -> str:
         """Opaque snapshot of the ACTIVE record, taken when an observer ARMS. Deliberately
@@ -606,21 +645,53 @@ class IdentityStore:
         return stamp if isinstance(stamp, dict) else {}
 
     @staticmethod
-    def validate_marker_schema(marker: dict) -> tuple[bool, str]:
+    def marker_token(marker: dict) -> str:
+        """The marker's identity triple in the SAME shape `token()` produces for the active
+        record — including the epoch an unestablished incarnation falls back to. Comparing
+        these two strings is exactly the comparison `publish_terminal` makes before it writes,
+        so a reader that uses it accepts precisely what the publisher was allowed to publish:
+        same session, same attempt, same process life. A record published before
+        `incarnationEpoch` existed, with no pid signal either, is undecidable and gets a nonce
+        that matches nothing (`_incarnation_slot`) — the null/null pair is NOT a match.
+        (`classify_stamp` answers a DIFFERENT question — may FOREIGN evidence be adopted — and
+        rightly refuses an unestablished incarnation there.)"""
+        stamp = IdentityStore.marker_stamp(marker)
+        return "{}/{}/{}".format(stamp.get("sessionId") or marker.get("sessionId") or "",
+                                 stamp.get("attemptId") or "",
+                                 _incarnation_slot(stamp.get("processIncarnation"),
+                                                   stamp.get("incarnationEpoch")))
+
+    @staticmethod
+    def validate_marker_schema(marker: dict, require_incarnation: bool = True) -> tuple[bool, str]:
         """Schema gate run BEFORE any classification and before ANY record mutation. Evidence
         that fails it is undecidable, not a decision: a marker whose stamp omitted `seq` used
         to classify OK and mutate the ledger with the key 'attempt#None' (cold review R1).
-        `rc` gets a strict int test on purpose — in Python `False == 0`."""
+        `rc` gets a strict int test on purpose — in Python `False == 0`.
+
+        `require_incarnation=False` is for the ONE caller that fences on `marker_token` instead
+        (the supervised waiter): a session whose pane pid was never obtainable has a null
+        incarnation in BOTH the active record and everything published under it, and refusing
+        the field there would make the publisher write records its own reader always rejects.
+        It still demands ONE decidable process-life signal — `processIncarnation` or the
+        `incarnationEpoch` every transition mints — because a stamp carrying neither cannot be
+        told apart from a stamp of a DIFFERENT life of the same attempt (review F-03)."""
         rc = marker.get("rc")
         if isinstance(rc, bool) or not isinstance(rc, int):
             return False, f"marker rc {rc!r} is not an int (a bool is not an exit code)"
         stamp = IdentityStore.marker_stamp(marker)
         if not stamp:
             return False, "marker carries no identity stamp (legacy artifact)"
-        for field in ("attemptId", "processIncarnation"):
+        fields = ("attemptId", "processIncarnation") if require_incarnation else ("attemptId",)
+        for field in fields:
             value = stamp.get(field)
             if not isinstance(value, str) or not value:
                 return False, f"marker stamp {field} is missing or not a non-empty string"
+        if not require_incarnation:
+            if not isinstance(stamp.get("processIncarnation"), (str, type(None))):
+                return False, "marker stamp processIncarnation is neither a string nor null"
+            if not (stamp.get("processIncarnation") or stamp.get("incarnationEpoch")):
+                return (False, "marker stamp carries neither a process incarnation nor an "
+                        "incarnation epoch — which process life published it is undecidable")
         seq = stamp.get("seq")
         if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
             return (False, f"marker stamp seq {seq!r} is missing or not a non-negative int — "
@@ -656,6 +727,178 @@ class IdentityStore:
             return (STALE_INCARNATION,
                     f"evidence incarnation '{got_inc}' ≠ active '{active_inc}'")
         return OK, f"attempt {got_attempt} + incarnation matched the active record"
+
+    def terminal_verdict(self, armed_seq: int = -1) -> tuple[str, int, str]:
+        """THE canonical read of the terminal record for a waiter: (state, exit, detail) with
+        state in `absent` | `unusable` | `ok`. `ok` is the ONLY state whose exit may be reported
+        as this session's business result.
+
+        `armed_seq` is the delivery watermark the reading waiter captured when it ARMED (see
+        `delivery_watermark`; -1 = it captured none). It only ever matters for a record that
+        has already been DELIVERED — rotated to `<s>.terminal.consumed.json` by the waiter that
+        reported it, so the operator's next `agentctl watch` senses again instead of replaying
+        a spent WATCH-TIMEOUT. A delivered record is still THIS round's conclusion for every
+        waiter that was ALREADY ATTACHED when it was published, and refusing it there is what
+        made two waiters on one supervisor disagree — fast waiter FAILED 2, slow waiter
+        SUPERVISOR-LOST 12 (review F-02). "Already attached" is decided by the record's
+        persisted publish sequence against that watermark, never by comparing timestamps.
+
+        Every non-`ok` outcome is deliberately collapsed into `unusable` with a reason in the
+        detail: absent-vs-torn-vs-forged-vs-stale differ in forensics, never in authority. The
+        gates, in order — each one has cost a real false conclusion somewhere in this lane:
+        non-regular file or unparseable bytes (a symlink out of the run dir is someone else's
+        file, a torn read is not a verdict), the WS1 schema gate, class↔exit agreement (prose
+        never names the class, so a record whose two authoritative fields disagree is forged or
+        corrupt), the attempt+incarnation fence, and the round fence."""
+        status, marker = self.read_terminal_marker()
+        if status == STATUS_ABSENT:
+            delivered = self._delivered_for(armed_seq)
+            if delivered is None:
+                return "absent", 0, f"no terminal record at {self.marker_path}"
+            status, marker, path = STATUS_OK, delivered, self.consumed_path
+        else:
+            path = self.marker_path
+        if status == STATUS_CORRUPT:
+            return ("unusable", 0,
+                    f"terminal record {path} is unreadable or unparseable")
+        valid, why = self.validate_marker_schema(marker, require_incarnation=False)
+        if not valid:
+            return "unusable", 0, f"terminal record fails the schema gate — {why}"
+        rc = marker["rc"]                       # int-checked by the schema gate above
+        klass = marker.get("class")
+        if not isinstance(klass, str) or not klass:
+            # `class` is a REQUIRED field of this read, not a compatibility option. It used to
+            # be reconstructed for a class-less record with rc=0 ("only a legacy DONE may omit
+            # it"), which made the one structured field the minimum reader contract asks for
+            # optional: any record that lost it — truncated, hand-edited, or written by a
+            # publisher that predates the supervised lane — was completed to DONE by the
+            # READER (review R2 F-01). A record that cannot state its own class is damaged
+            # evidence, and damaged evidence is the four-state machine's ④, never a verdict.
+            return ("unusable", 0, "terminal record carries no `class` field — the class is a "
+                    "required part of the record schema, never reconstructed by the reader")
+        if TERMINAL_CLASSES.get(rc) != klass:
+            return ("unusable", 0, f"terminal record class {klass!r} does not match exit {rc} "
+                    f"(expected {TERMINAL_CLASSES.get(rc)!r}) — undecidable evidence")
+        active = self.token()
+        got = self.marker_token(marker)
+        if got != active:
+            # same comparison publish_terminal makes, so the reader accepts exactly what the
+            # writer was permitted to write. A record from another attempt, another process
+            # incarnation, or an unestablishable identity (whose token is a nonce) lands here.
+            klass_of = (STALE_INCARNATION if got.split("/")[:2] == active.split("/")[:2]
+                        else STALE_ATTEMPT)
+            return ("unusable", 0, f"{klass_of}: record identity '{got}' ≠ active '{active}'")
+        got_round = marker.get("round")
+        if got_round is None or not str(got_round).strip():
+            # Same rule as `class`, for the same reason. The round stamp is what scopes a
+            # conclusion to the episode it describes, so a record without one is not "unfenced
+            # but usable", it is unreadable evidence. Normalising a missing round to 0 HERE
+            # would hand the next round a conclusion no writer ever fenced; the 0
+            # normalisation of a round-less legacy meta belongs at the WRITE, where the value
+            # is a fact about this session rather than a guess about someone else's record.
+            return ("unusable", 0, "terminal record carries no `round` stamp — the round fence "
+                    "is a required part of the record schema, never supplied by the reader")
+        now_round = (_meta_read(self.meta_path).get("round") or "0").strip()
+        if str(got_round).strip() != now_round:
+            return ("unusable", 0, f"{STALE_ROUND}: record concluded round {got_round}, the "
+                    f"session is on round {now_round}")
+        text = marker.get("detail") or klass
+        if marker.get("phase") == PHASE_DELIVERED:
+            text += DELIVERED_CAVEAT
+        return "ok", rc, text
+
+    def _delivered_for(self, armed_seq: int) -> dict | None:
+        """The already-delivered record, IF this reader was attached when it was published.
+
+        Order comes from the PERSISTED publish sequence, never from a clock. Every record
+        carries the monotone `identity.seq` that its publish bumped in the active identity
+        record, and a waiter captures the watermark it can already see at arm time
+        (`delivery_watermark`). "Published after I armed" is therefore `seq > armed_seq`: two
+        durable counters on one identity record, immune to a host clock stepping in either
+        direction. The rule this replaces compared the rotated file's mtime with the reader's
+        arm instant — both wall clock — so a clock that stepped BACK after a conclusion was
+        delivered made a freshly armed waiter look like an attached peer and replayed a spent
+        business class at it, which is a stronger error than any 12 (review R2 F-03).
+
+        The comparison is only meaningful INSIDE one sequence domain, so the record must be
+        from the current attempt before its seq is compared at all (`_seq_domain`) — a record
+        minted under a retired attempt is not "an earlier conclusion of this episode", it is
+        someone else's counter (review R3 F-01).
+
+        A reader with no watermark (`armed_seq < 0` — a one-shot `duplexctl watch-state`) never
+        adopts one: it cannot have been attached to anything."""
+        if armed_seq < 0:
+            return None
+        domain = self._seq_domain()
+        if not domain:
+            return None
+        try:
+            marker = json.loads(_read_regular(self.consumed_path))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(marker, dict):
+            return None
+        if self._marker_seq_domain(marker) != domain:
+            return None
+        seq = self.marker_stamp(marker).get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq <= armed_seq:
+            return None
+        return marker
+
+    def _seq_domain(self) -> str:
+        """`session/attempt` — the identity the persisted publish sequence belongs to, or ""
+        when there is no usable active record.
+
+        This is deliberately NARROWER than `token()` and deliberately WIDER than the session:
+        `publishSeq` is reset to 0 by `start` and `replace` (both mint a new attempt) and
+        carried across `resume` (same attempt, new process life), so the attempt is exactly the
+        span over which two seq values are comparable."""
+        rec, status = self.load()
+        if status != STATUS_OK or rec is None:
+            return ""
+        return "{}/{}".format(rec["sessionId"], rec["attemptId"])
+
+    @staticmethod
+    def _marker_seq_domain(marker: dict) -> str:
+        stamp = IdentityStore.marker_stamp(marker)
+        return "{}/{}".format(stamp.get("sessionId") or marker.get("sessionId") or "",
+                              stamp.get("attemptId") or "")
+
+    def delivery_watermark(self) -> int:
+        """The highest publish sequence THIS ATTEMPT can ALREADY show, for a waiter to capture
+        as it arms. Everything at or below it belongs to an episode that was over before the
+        waiter existed; everything above it was published while the waiter was attached.
+
+        Only records stamped with the CURRENT attempt count. The sequence is per-attempt and
+        restarts at 0 on every `start`/`replace`, while the records of the previous attempt
+        survive the rotation (a failed `steer --replace` commits the new identity and leaves
+        the old live/consumed records in place). Taking the max over all of them let a retired
+        attempt's `seq=1` arm a waiter at watermark 1, so the NEW attempt's first conclusion —
+        also `seq=1` — read as "published before you attached": a peer waiter reported FAILED 2
+        and this one fell through to SUPERVISOR-LOST 12 on the same terminal event (review R3
+        F-01). The identity fence must cut every cross-attempt inference, and an ordering
+        watermark is not an exception to it.
+
+        An unreadable, unstamped or foreign record contributes 0, and that is safe rather than
+        lenient: a record whose stamp seq cannot be read also fails the schema gate in
+        `terminal_verdict`, so adopting it can only ever yield `unusable`, never a class."""
+        domain = self._seq_domain()
+        if not domain:
+            return 0
+        top = 0
+        for path in (self.marker_path, self.consumed_path):
+            try:
+                marker = json.loads(_read_regular(path))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(marker, dict):
+                continue
+            if self._marker_seq_domain(marker) != domain:
+                continue
+            seq = self.marker_stamp(marker).get("seq")
+            if not isinstance(seq, bool) and isinstance(seq, int) and seq > top:
+                top = seq
+        return top
 
     # ── the one lock ─────────────────────────────────────────────────────────────────
     @contextlib.contextmanager
@@ -804,6 +1047,12 @@ class IdentityStore:
                 rec["attemptId"] = uuid.uuid4().hex
             rec["processIncarnation"] = incarnation
             rec["incarnationSignal"] = signal
+            # Minted by EVERY transition, including the ones whose pid signal is unobtainable:
+            # this is the only durable evidence that start/replace/resume opened a NEW process
+            # life, and without it two null incarnations of the same attempt compare equal
+            # (review F-03). It is never inherited — not even by `resume`, which is precisely
+            # the transition that must invalidate the previous life's published records.
+            rec["incarnationEpoch"] = uuid.uuid4().hex
             self._write(rec)
             self._write_blocked_stamp(rec)
             return rec
@@ -1013,7 +1262,8 @@ class IdentityStore:
                 view[field] = marker[field]
         return view
 
-    def publish_terminal(self, armed_token: str, rc: int = 0) -> tuple[str, str]:
+    def publish_terminal(self, armed_token: str, round_, rc: int = 0,
+                         detail: str = "") -> tuple[str, str]:
         """Publish the ONE terminal record — WS1 fence stamp and WS2 delivery receipt in the
         same file. Returns (verdict, detail); the record is written only on OK, and `detail`
         carries the structural `reason=` machine line.
@@ -1025,10 +1275,25 @@ class IdentityStore:
         attempt B, and cannot resurrect A by writing back a record it read before the
         comparison.
 
+        `rc` is the FULL typed exit of the concluding observer, not just DONE: the supervised
+        watch lane publishes every terminal class through this one writer, so `class` is
+        derived from `rc` via TERMINAL_CLASSES and an rc outside that map is refused rather
+        than written. `round_` is the round the caller CONCLUDED (captured before it classified)
+        — the round fence: a steer that opened the next round between classify and publish makes
+        the conclusion stale, and staleness must be refused at the write, not discovered later.
+        It has NO default and the comparison is UNCONDITIONAL. It used to be optional, and an
+        optional fence is no fence: `duplexctl identity publish` — the one identity surface for
+        callers outside this process — could omit it, and the writer then stamped the record
+        with whatever round the meta had reached by publish time, i.e. published a round-1
+        conclusion as round 2's DONE (review R2 F-01).
+
         `phase=delivered` is set ONLY when the engine outcome is rc=0 AND the deliverable gate
         was DECLARED and satisfied by hashed evidence. Every other case publishes the terminal
         record WITHOUT phase — with a typed reason — so no session is ever vacuously
         delivered, and the existing outcome classes are untouched."""
+        if rc not in TERMINAL_CLASSES:
+            return UNKNOWN, (f"reason={IDENTITY_UNKNOWN} exit {rc!r} is not a terminal class "
+                             f"({sorted(TERMINAL_CLASSES)}) — nothing published")
         with self._locked():
             if not os.path.exists(self.meta_path):
                 # The lane is gone (a racing stop, or state someone removed), so the current
@@ -1061,6 +1326,15 @@ class IdentityStore:
                                f"publish (armed '{armed_token or '-'}' ≠ now '{current}') — "
                                "no terminal conclusion published, no delivery receipt")
             meta = _meta_read(self.meta_path)
+            now_round = (meta.get("round") or "0").strip()
+            if str(round_).strip() != now_round:
+                # the conclusion describes a round that is already over: a steer rotated the
+                # deliverable epoch and the sent-offset between classify and publish, so the
+                # verdict is about frames the NEXT round no longer owns. Refuse at the write —
+                # a stale conclusion on disk is a false conclusion for whoever reads it next.
+                return STALE_ROUND, (f"reason={STALE_ROUND} conclusion was computed for round "
+                                     f"{round_} but the session is on round {now_round} — no "
+                                     "terminal conclusion published, no delivery receipt")
             declared, cwd = meta.get("deliverable", ""), meta.get("cwd", "")
             entries, reason, why = deliverable_evidence(cwd, declared)
             delivered = rc == 0 and reason in DELIVERING_REASONS
@@ -1070,6 +1344,11 @@ class IdentityStore:
             marker = {"schemaVersion": SCHEMA_VERSION,
                       "completedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                       "rc": rc,
+                      # class is derived from rc, never from the human line; round scopes the
+                      # conclusion so the next round's reader refuses it without re-deriving
+                      "class": TERMINAL_CLASSES[rc],
+                      "round": now_round,
+                      "detail": (detail or "")[:DETAIL_MAX],
                       "deliverable": declared,
                       "reason": reason,
                       # the receipt view of the triple (spec field names) and the WS1 fence
@@ -1081,17 +1360,26 @@ class IdentityStore:
                       "identity": {"sessionId": rec["sessionId"],
                                    "attemptId": rec["attemptId"],
                                    "processIncarnation": rec.get("processIncarnation"),
+                                   # the process-life fence for records whose pid signal was
+                                   # never obtainable — see _incarnation_slot
+                                   "incarnationEpoch": rec.get("incarnationEpoch"),
                                    "seq": seq}}
             if delivered:
                 marker["phase"] = PHASE_DELIVERED
                 marker["engineOutcome"] = ENGINE_COMPLETED
                 marker["deliverables"] = entries
                 marker["gitHead"] = git_head(cwd)
+            published = (f"terminal record published ({self.marker_path}) "
+                         f"{self.receipt_line(marker, reason)} — {why}")
+            # the record carries the SAME lines the concluding observer would have printed
+            # (classify's verdict, then the receipt machine line) — a waiter that recovers this
+            # record after the observer is gone reproduces its output, not a summary of it.
+            # The delivered caveat is deliberately NOT stored: the record must make no claim
+            # about verification, not even a negated one (a reader grepping the record for
+            # "verified" must come up empty), so it is re-derived from `phase` when printed.
+            marker["detail"] = f"{marker['detail']}\n{published}" if marker["detail"] else published
             self._atomic_json(self.marker_path, marker)
-            return OK, (f"terminal record published ({self.marker_path}) "
-                        f"{self.receipt_line(marker, reason)} — {why}"
-                        + (" (delivered ≠ verified: runtime terminal + hashed artifact "
-                           "evidence only)" if delivered else ""))
+            return OK, published + (DELIVERED_CAVEAT if delivered else "")
 
     def clear(self) -> None:
         """Drop this session's identity state so a stopped or freshly claimed name inherits
