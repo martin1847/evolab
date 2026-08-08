@@ -314,6 +314,30 @@ chk_contains "C2 watch machine tail line" "EXIT=11" "$out"
 chk_contains "C2 watch prints STALLED-STREAM" "STALLED-STREAM" "$out"
 unset FAKE_PS_FILE
 
+echo "== D. stop-time sentinel: events growing past the terminal marker is said out loud =="
+
+# marker then later events growth → SENTINEL on stderr (advisory, stop still succeeds)
+seed_session snA claude "$WT" 70000
+ev snA '{"type":"result","is_error":false,"result":"done"}'
+printf '{"stamp":"x"}\n' > "$WATCH_RUN_DIR/snA.terminal.json"
+python3 -c 'import os,sys,time; os.utime(sys.argv[1], (time.time()-30,)*2)' "$WATCH_RUN_DIR/snA.terminal.json"
+out="$(bash "$AGENTCTL" stop snA 2>&1)"
+chk_contains "D1 late-growing events trigger the sentinel" "SENTINEL" "$out"
+chk_contains "D1 sentinel points at the replay corpus" "replay corpus" "$out"
+
+# marker fresh relative to events → silent
+seed_session snB claude "$WT" 70000
+ev snB '{"type":"result","is_error":false,"result":"done"}'
+printf '{"stamp":"x"}\n' > "$WATCH_RUN_DIR/snB.terminal.json"
+out="$(bash "$AGENTCTL" stop snB 2>&1)"
+chk_not_contains "D2 in-window flush stays silent" "SENTINEL" "$out"
+
+# no marker (stopping a live session) → silent
+seed_session snC claude "$WT" 70000
+ev snC '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
+out="$(bash "$AGENTCTL" stop snC 2>&1)"
+chk_not_contains "D3 no terminal marker → no sentinel" "SENTINEL" "$out"
+
 { kill "$QPID" "$TPID"; wait "$QPID" "$TPID"; } 2>/dev/null
 rm -rf "$SANDBOX"
 summary

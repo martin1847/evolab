@@ -460,6 +460,19 @@ cmd_stop() {
       live_pg=""; case "$live" in "0 "*) live_pg="${live#0 }";; esac
       meta_pg="$(meta_get "$S" pane_pid)"; meta_ls="$(meta_get "$S" pane_lstart)"
       tmux kill-session -t "=$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
+      # false-DONE sentinel: events that kept growing AFTER the terminal marker mean
+      # the round concluded while the engine still spoke — the silent-misfire class
+      # made loud at the one point every session passes through. +2s prices in the
+      # marker-write vs final-flush race. Advisory only; the events copy is the
+      # replay-corpus candidate (test/corpus/, local-only).
+      MARKER="$DIR/$S.terminal.json"; EVF="$DIR/$S.duplex.events.jsonl"
+      if [ -f "$MARKER" ] && [ -f "$EVF" ]; then
+        mm="$(stat -f %m "$MARKER" 2>/dev/null || stat -c %Y "$MARKER" 2>/dev/null)"
+        em="$(stat -f %m "$EVF" 2>/dev/null || stat -c %Y "$EVF" 2>/dev/null)"
+        if [ -n "$mm" ] && [ -n "$em" ] && [ "$em" -gt $((mm + 2)) ]; then
+          echo "SENTINEL: events grew $((em - mm))s past the terminal marker — possible false-DONE window or unknown continuation; keep $EVF and consider the replay corpus" >&2
+        fi
+      fi
       # control state goes down BEFORE the reap: the terminal-marker guard (meta
       # re-check right before publish) prices in a µs kill→cleanup gap, and a
       # grace-long reap in between would stretch it to seconds (review S3). Trade-off:
