@@ -112,5 +112,28 @@ run_check "$goal"
 chk_eq "GATE PRECEDENCE: a hard failure still rejects" 1 "$rc"
 chk_not_contains "GATE PRECEDENCE: and the advisory does not speak over it" "断言内部一致" "$out"
 
+# [F1] inline （…）/(…) annotation on the keyword and a full-width colon are legitimate
+# declaration shapes — rejecting them taught goal authors to move load-bearing notes
+# off the line (field friction, upstream seat)
+printf 'Preflight（编排者已实跑；worker 复跑）: query metrics => 3 rows observed\n' > "$goal"
+run_check "$goal"
+chk_eq "[F1] annotated keyword accepted" 0 "$rc"
+
+printf 'Preflight (orchestrator ran): query metrics => 3 rows observed\n' > "$goal"
+run_check "$goal"
+chk_eq "[F1] ascii-paren annotation accepted" 0 "$rc"
+
+printf 'Preflight：query metrics => 3 rows observed\n' > "$goal"
+run_check "$goal"
+chk_eq "[F1] full-width colon accepted" 0 "$rc"
+
+printf 'Preflight: a probe => 1 row\nPreflight（re）: b probe => 2 rows\n' > "$goal"
+run_check "$goal"
+chk_eq "[F1] exactly-one still enforced across the widened shape" 1 "$rc"
+
+printf 'Preflight（编排者已实跑）: <cheapest probe> => <observed result>\n' > "$goal"
+run_check "$goal"
+chk_eq "[F1] placeholder still rejected behind an annotation" 1 "$rc"
+
 rm -rf "$SANDBOX"
 summary

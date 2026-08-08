@@ -9,7 +9,11 @@ import re
 import sys
 
 
-LINE_RE = re.compile(r"(?mi)^.*?\bPreflight:\s*(.*?)\s*=>\s*(.*?)\s*$")
+# the keyword tolerates an inline （…）/(…) annotation and a full-width colon —
+# `Preflight（编排者已实跑）: probe => result` is a legitimate declaration, and
+# rejecting it taught goal authors to move load-bearing notes away from the line
+LINE_RE = re.compile(
+    r"(?mi)^.*?\bPreflight(?:\s*[（(][^）)\n]*[）)])?\s*[:：]\s*(.*?)\s*=>\s*(.*?)\s*$")
 UNRESOLVED = re.compile(
     r"^(?:(?:result|observed|status)\s*:\s*)?"
     r"(?:no|not[ -]?run|pending|todo|tbd|unknown|unverified|n/?a)"
