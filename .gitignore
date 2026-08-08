@@ -20,3 +20,6 @@ ACCESS.local.*
 .env*
 meta/draft/
 docs/orchestration/
+
+# real-stream replay corpus — REAL events may carry sensitive content; local-only, never pushed
+test/corpus/
