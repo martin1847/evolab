@@ -13,13 +13,15 @@ must read RUNNING — an IDLE there is a false-DONE window on record. At a resul
 prefix followed by nothing (EOF tail): a success result must read IDLE (DONE has
 to stay reachable) and an error result must read ERROR.
 
-Replay window: the true sent-offset sits at a steer boundary the raw stream cannot
-name (steer inputs are not echoed into events), so each result is projected within
-ITS OWN TURN — frames after the most recent `system/init` before it. This
-approximates production's since-last-steer window from below; background-task
-snapshots are re-announced inside auto-continued turns on the observed corpus, so
-per-turn accounting stays faithful. A cross-round replay at offset 0 would let an
-old round's un-retired task state mask a current-round false DONE (cold review).
+Replay window — two modes:
+  - EVIDENCE mode: a `<file>.sent-journal` sidecar (offsets + timestamps only, no
+    frame bodies; the runtime appends it on every round-state commit) names the
+    TRUE production offset for each verdict; violations are hard failures.
+  - ADVISORY mode (no sidecar — historical captures): a mid-turn steer rotates the
+    window invisibly in the raw stream, so no offset can be reconstructed (cold
+    review round 2: per-turn guessing can mask a production false DONE behind
+    pre-steer snapshots). The file is replayed per-turn, reported `[unknown]`,
+    and NEVER counts as gate-green.
 
 Corpus files are REAL streams and may carry sensitive content: the corpus dir is
 gitignored/local-only, and this driver prints verdicts + line numbers, never frame
@@ -78,6 +80,22 @@ def check_file(d, path: str) -> int:
         print(f"  [skip] {os.path.basename(path)}: not a claude-shaped stream")
         return 0
 
+    offsets = None
+    journal_path = path + ".sent-journal"
+    if os.path.isfile(journal_path):
+        offsets = []
+        try:
+            with open(journal_path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    off = json.loads(line).get("offset")
+                    if isinstance(off, int):
+                        offsets.append(off)
+        except (OSError, json.JSONDecodeError, AttributeError):
+            offsets = None  # corrupt sidecar = no evidence — drop to advisory
+
     result_ids = [k for k, (_i, f) in enumerate(parsed) if f.get("type") == "result"]
     violations = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -96,16 +114,21 @@ def check_file(d, path: str) -> int:
                     break
                 if is_sys(frame, "task_notification"):
                     seen_note = True
-            # this result's own turn: frames after the most recent init before it
-            start_line = 0
-            for j in range(k - 1, -1, -1):
-                jj, frame = parsed[j]
-                if is_sys(frame, "init"):
-                    start_line = jj + 1
-                    break
+            prefix_end = sum(len(raw) for raw in raw_lines[: lineno + 1])
+            if offsets is not None:
+                # evidence mode: the latest journalled rotation at or before this prefix
+                sent_bytes = max((o for o in offsets if o <= prefix_end), default=0)
+            else:
+                # advisory mode: this result's own turn (after the most recent init)
+                start_line = 0
+                for j in range(k - 1, -1, -1):
+                    jj, frame = parsed[j]
+                    if is_sys(frame, "init"):
+                        start_line = jj + 1
+                        break
+                sent_bytes = sum(len(raw) for raw in raw_lines[:start_line])
             with open(events_path, "wb") as out:
                 out.writelines(raw_lines[: lineno + 1])
-            sent_bytes = sum(len(raw) for raw in raw_lines[:start_line])
             with open(sent_path, "w", encoding="utf-8") as out:
                 out.write(str(sent_bytes))
             state, _detail = d.project_claude(ReplaySession(events_path, sent_path))
@@ -125,9 +148,14 @@ def check_file(d, path: str) -> int:
                           f"result projects {state}, not IDLE — DONE unreachable")
                     violations += 1
     checked = len(result_ids)
+    if offsets is None:
+        print(f"  [unknown] {os.path.basename(path)}: no sent-journal sidecar — "
+              f"{checked} prefix(es) replayed per-turn, {violations} suspect(s); "
+              "advisory only, not gate evidence")
+        return 0
     tag = "[ok]" if not violations else "[FAIL]"
-    print(f"  {tag} {os.path.basename(path)}: {checked} result prefix(es) replayed, "
-          f"{violations} violation(s)")
+    print(f"  {tag} {os.path.basename(path)}: {checked} result prefix(es) replayed "
+          f"at journalled offsets, {violations} violation(s)")
     return violations
 
 

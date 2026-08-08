@@ -15,6 +15,17 @@ echo "== replay-corpus =="
 
 sandbox_new
 
+mkjournal() { # $1 fixture  $2... rotation points as "after line N" (0 = stream start)
+  python3 - "$@" <<'PY'
+import json, sys
+lines = open(sys.argv[1], "rb").readlines()
+with open(sys.argv[1] + ".sent-journal", "w") as out:
+    for arg in sys.argv[2:]:
+        off = sum(len(l) for l in lines[: int(arg)])
+        out.write(json.dumps({"ts": 0, "offset": off}) + "\n")
+PY
+}
+
 # known-bad: a result with NO pending-task accounting, then a harness-automatic
 # continuation (task_notification before the next init) — the projection reads IDLE
 # at that prefix, which is exactly the false-DONE window the gate must flag
@@ -26,6 +37,7 @@ cat > "$SANDBOX/bad.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"text","text":"continued"}]}}
 {"type":"result","is_error":false,"result":"final"}
 EOF
+mkjournal "$SANDBOX/bad.jsonl" 0
 out="$(python3 "$DRIVER" "$SANDBOX/bad.jsonl" 2>&1)"; rc=$?
 chk_eq "known-bad stream goes RED" 1 "$rc"
 chk_contains "violation names the false-DONE window" "false-DONE window" "$out"
@@ -41,6 +53,7 @@ cat > "$SANDBOX/good.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"text","text":"continued"}]}}
 {"type":"result","is_error":false,"result":"final"}
 EOF
+mkjournal "$SANDBOX/good.jsonl" 0
 out="$(python3 "$DRIVER" "$SANDBOX/good.jsonl" 2>&1)"; rc=$?
 chk_eq "known-good stream stays GREEN" 0 "$rc"
 
@@ -62,6 +75,7 @@ cat > "$SANDBOX/xround.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"text","text":"continued"}]}}
 {"type":"result","is_error":false,"result":"final"}
 EOF
+mkjournal "$SANDBOX/xround.jsonl" 0 2
 out="$(python3 "$DRIVER" "$SANDBOX/xround.jsonl" 2>&1)"; rc=$?
 chk_eq "cross-round pollution goes RED under per-turn windows" 1 "$rc"
 
@@ -71,6 +85,7 @@ cat > "$SANDBOX/noinit.jsonl" <<'EOF'
 {"type":"result","is_error":false,"result":"done"}
 {"type":"system","subtype":"task_notification","task_id":"t2","status":"completed"}
 EOF
+mkjournal "$SANDBOX/noinit.jsonl" 0
 out="$(python3 "$DRIVER" "$SANDBOX/noinit.jsonl" 2>&1)"; rc=$?
 chk_eq "notification without a later init is not auto-continuation" 0 "$rc"
 
@@ -79,8 +94,29 @@ cat > "$SANDBOX/finalerr.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}
 {"type":"result","is_error":true,"result":"turn failed"}
 EOF
+mkjournal "$SANDBOX/finalerr.jsonl" 0
 out="$(python3 "$DRIVER" "$SANDBOX/finalerr.jsonl" 2>&1)"; rc=$?
 chk_eq "final error result stays green (ERROR, not forced IDLE)" 0 "$rc"
+
+# mid-turn steer (cold review round 2): the steer rotates the window INSIDE a turn,
+# invisibly in raw events — only the journalled offset exposes the production IDLE
+cat > "$SANDBOX/midturn.jsonl" <<'EOF'
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"t1","description":"pre-steer"}]}
+{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}
+{"type":"result","is_error":false,"result":"done"}
+{"type":"system","subtype":"task_notification","task_id":"t1","status":"completed"}
+{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"continued"}]}}
+{"type":"result","is_error":false,"result":"final"}
+EOF
+mkjournal "$SANDBOX/midturn.jsonl" 0 2
+out="$(python3 "$DRIVER" "$SANDBOX/midturn.jsonl" 2>&1)"; rc=$?
+chk_eq "mid-turn steer exposed by the journalled offset → RED" 1 "$rc"
+
+rm "$SANDBOX/midturn.jsonl.sent-journal"
+out="$(python3 "$DRIVER" "$SANDBOX/midturn.jsonl" 2>&1)"; rc=$?
+chk_eq "same stream without sidecar exits 0 (advisory)" 0 "$rc"
+chk_contains "sidecar-less replay is UNKNOWN, never gate-green" "[unknown]" "$out"
 
 # corpus sweep (local-only)
 corpus_found=0
@@ -88,7 +124,8 @@ for f in ./corpus/*.jsonl; do
   [ -e "$f" ] || continue
   corpus_found=1
   out="$(python3 "$DRIVER" "$f" 2>&1)"; rc=$?
-  chk_eq "corpus green: $(basename "$f")" 0 "$rc"
+  chk_eq "corpus holds: $(basename "$f")" 0 "$rc"
+  case "$out" in *"[ok]"*|*"[unknown]"*|*"[skip]"*) _record "corpus verdict labelled: $(basename "$f")" 1;; *) _record "corpus verdict labelled: $(basename "$f")" 0 "no [ok]/[unknown]/[skip] label";; esac
 done
 [ "$corpus_found" = 0 ] && echo "  [skip] no corpus files (test/corpus/ is local-only by design)"
 

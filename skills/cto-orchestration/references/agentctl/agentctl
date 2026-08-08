@@ -491,7 +491,7 @@ cmd_stop() {
       CLEAR_OUT="$(identity_clear "$S")" || ID_RC=1
       [ "$ID_RC" = 0 ] || echo "WARN: identity state was NOT cleared for '$S' — $CLEAR_OUT" >&2
       consume_tombstone "$S"
-      echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc"
+      echo "removed duplex control state; kept for post-mortem: $DIR/$S.duplex.events.jsonl, .stderr.log, .rc, .sent-journal (replay-corpus sidecar)"
       if [ -n "$live_pg" ]; then reap_tree "$live_pg" ""
       else reap_tree "$meta_pg" "$meta_ls"; fi
       REAP_RC=$?

@@ -1281,6 +1281,18 @@ def send_frame(args: argparse.Namespace) -> int:
             with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(str(offset_box["v"]))
             os.replace(tmp, sess.sent_offset)
+            # offset journal (append-only, no frame bodies — offsets and timestamps
+            # only): raw events alone cannot reconstruct where a mid-turn steer
+            # rotated the window, so post-mortem replay (test/corpus/) needs this
+            # sidecar to project each verdict at its TRUE production offset. Best
+            # effort: a failed journal write must never fail the steer itself.
+            try:
+                with open(os.path.join(sess.run, f"{sess.name}.duplex.sent-journal"),
+                          "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"ts": time.time(),
+                                         "offset": offset_box["v"]}) + "\n")
+            except OSError:
+                pass
 
     if engine == "codex":
         thread = sess.meta.get("thread") or die("no threadId in meta — handshake incomplete")

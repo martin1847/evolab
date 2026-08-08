@@ -232,6 +232,9 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 out="$(bash "$AGENTCTL" status rxG 2>&1)"; rc=$?
 chk_eq "post-steer turn 2 DONE" 0 "$rc"
+# every round-state commit journals its offset (replay-corpus sidecar): goal + steer = 2
+chk_eq "sent-journal has one entry per rotation" 2 "$(wc -l < "$WATCH_RUN_DIR/rxG.duplex.sent-journal" | tr -d ' ')"
+chk_contains "journal entries carry offsets, no frame bodies" '"offset"' "$(cat "$WATCH_RUN_DIR/rxG.duplex.sent-journal")"
 
 # claude --replace is refused with the honest path, never silently degraded —
 # and a refused steer must NOT touch the deliverable gate (R2 regression)
