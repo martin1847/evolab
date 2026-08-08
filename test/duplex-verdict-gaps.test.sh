@@ -134,7 +134,59 @@ sed 's/^70000     1 03:25:01$/70000     1 garbage/' "$SANDBOX/ps-wedged.txt" > "
 export FAKE_PS_FILE="$SANDBOX/ps-badroot.txt"
 ps_classify stF
 chk_eq "B5 malformed root row → RUNNING (unparsable is not evidence)" 10 "$rc"
+
+# R2 major mutation: the ROOT parses but a REACHABLE young tool's etime is malformed —
+# dropping it silently would leave only old rows and manufacture a false 11
+{ cat "$SANDBOX/ps-wedged.txt"; echo "70005 70003 garbage"; } > "$SANDBOX/ps-badchild.txt"
+export FAKE_PS_FILE="$SANDBOX/ps-badchild.txt"
+ps_classify stF
+chk_eq "B5b malformed reachable child row → RUNNING (poisoned probe reads alive)" 10 "$rc"
 export FAKE_PS_FILE="$SANDBOX/ps-wedged.txt"
+
+# R2 blocker mutation: a long request served INSIDE an old persistent helper spawns no
+# new process — the tree is identical to B1's wedge. The stream must carry the alive
+# signal: an UNMATCHED tool_use (no tool_result yet) keeps RUNNING despite the old tree.
+seed_session stM claude "$WT" 70000
+ev stM '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"mcp_query"}]}}'
+age_events stM 1200
+ps_classify stM
+chk_eq "B11 unmatched tool_use (in-process MCP call) → RUNNING despite wedge-shaped tree" 10 "$rc"
+
+# ...and once the tool_result lands (matched), the same stale+old-tree state stalls
+ev stM '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]}}'
+age_events stM 1200
+ps_classify stM
+chk_eq "B12 matched lifecycle + stale + old tree → STALLED-STREAM 11 (incident shape)" 11 "$rc"
+
+# unmatched command_lifecycle is in-flight work too
+seed_session stN claude "$WT" 70000
+ev stN '{"type":"command_lifecycle","command_uuid":"c1","state":"started"}'
+age_events stN 1200
+ps_classify stN
+chk_eq "B13 unmatched command_lifecycle → RUNNING" 10 "$rc"
+
+# pending background task with a long-silent stream: harness will re-invoke — alive
+seed_session stO claude "$WT" 70000
+ev stO '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"tb1","description":"long gate"}]}'
+ev stO '{"type":"assistant","message":{"content":[{"type":"text","text":"spawned"}]}}'
+age_events stO 1200
+ps_classify stO
+chk_eq "B14 pending background task → RUNNING despite silence" 10 "$rc"
+
+# codex: an unmatched item/started (running command) is in-flight; matched items with a
+# stale stream and an old tree stall (a wedged engine dies mid-turn by definition,
+# so an open turn alone must not veto)
+seed_session cxS codex "$WT" 70000
+ev cxS '{"method":"turn/started","params":{"turn":{"id":"turn-1"}}}'
+ev cxS '{"method":"item/started","params":{"item":{"id":"i1"}}}'
+age_events cxS 1200
+ps_classify cxS
+chk_eq "B15 codex unmatched item/started → RUNNING" 10 "$rc"
+
+ev cxS '{"method":"item/completed","params":{"item":{"id":"i1"}}}'
+age_events cxS 1200
+ps_classify cxS
+chk_eq "B16 codex matched items + stale + old tree → STALLED-STREAM 11" 11 "$rc"
 
 # real-process sanity: a quiescent pane with ZERO descendants still stalls,
 # and a just-spawned real child (younger than any silence) keeps alive

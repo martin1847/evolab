@@ -767,9 +767,11 @@ def parse_etime(text: str) -> float:
 
 def pane_descendants(root_pid: int) -> list[tuple[int, float]] | None:
     """(pid, age_seconds) for every descendant of the pane pid, from ONE ps snapshot.
-    None on ANY probe uncertainty — ps failing, or the root pid absent from a
-    successful snapshot (died/reused) — and the caller must read None as alive:
-    a broken probe concluding 'stalled' is exactly the false verdict this guards."""
+    None on ANY probe uncertainty — ps failing, the root pid absent from a successful
+    snapshot (died/reused), or a MALFORMED row reachable from the root (a dropped young
+    tool must not make the remaining old rows read as 'quiet') — and the caller must
+    read None as alive: a broken probe concluding 'stalled' is exactly the false
+    verdict this guards."""
     try:
         proc = subprocess.run(["ps", "-axo", "pid=,ppid=,etime="],
                               capture_output=True, text=True, timeout=5)
@@ -777,17 +779,23 @@ def pane_descendants(root_pid: int) -> list[tuple[int, float]] | None:
         return None
     if proc.returncode != 0:
         return None
-    children: dict[int, list[tuple[int, float]]] = {}
+    children: dict[int, list[tuple[int, float | None]]] = {}
     root_seen = False
     for line in proc.stdout.splitlines():
         parts = line.split(None, 2)
         if len(parts) != 3:
             continue
         try:
-            pid, ppid, age = int(parts[0]), int(parts[1]), parse_etime(parts[2])
+            pid, ppid = int(parts[0]), int(parts[1])
         except ValueError:
             continue
+        try:
+            age: float | None = parse_etime(parts[2])
+        except ValueError:
+            age = None  # keep the node — reachability decides if this poisons the probe
         if pid == root_pid:
+            if age is None:
+                return None  # the root row itself is malformed — probe poisoned
             root_seen = True
         children.setdefault(ppid, []).append((pid, age))
     if not root_seen:
@@ -799,30 +807,89 @@ def pane_descendants(root_pid: int) -> list[tuple[int, float]] | None:
         for pid, age in children.get(queue.pop(), ()):
             if pid not in seen:
                 seen.add(pid)
+                if age is None:
+                    return None
                 out.append((pid, age))
                 queue.append(pid)
     return out
 
 
+def claude_inflight(sess: Session, frames: list[dict]) -> bool:
+    """True = structured evidence of in-flight work (or ambiguity): an UNMATCHED
+    tool_use (no tool_result yet — covers long MCP calls served INSIDE an old
+    persistent helper, where the process tree carries no request boundary at all),
+    an unmatched command_lifecycle, or pending background tasks."""
+    open_tools: set[str] = set()
+    open_cmds: set[str] = set()
+    for frame in frames:
+        ftype = frame.get("type")
+        if ftype in ("assistant", "user"):
+            for item in (frame.get("message") or {}).get("content") or []:
+                if not isinstance(item, dict):
+                    continue
+                if ftype == "assistant" and item.get("type") == "tool_use" and item.get("id"):
+                    open_tools.add(item["id"])
+                elif ftype == "user" and item.get("type") == "tool_result" \
+                        and item.get("tool_use_id"):
+                    open_tools.discard(item["tool_use_id"])
+        elif ftype == "command_lifecycle":
+            cid = frame.get("command_uuid")
+            if cid and frame.get("state") == "started":
+                open_cmds.add(cid)
+            elif cid:
+                open_cmds.discard(cid)
+    return bool(open_tools or open_cmds or claude_pending_background_tasks(frames))
+
+
+def codex_inflight(sess: Session, frames: list[dict]) -> bool:
+    """True = an unmatched item/started on OUR thread (a running command/tool), or a
+    pending native ask. An open turn alone is NOT in-flight evidence: a wedged engine
+    dies mid-turn by definition, and a healthy in-turn engine streams item/delta
+    frames that keep the events file fresh anyway."""
+    ours = sess.meta.get("thread")
+    open_items: set[str] = set()
+    for frame in frames:
+        method = frame.get("method", "")
+        params = frame.get("params") or {}
+        if ours and params.get("threadId") not in (None, ours):
+            continue
+        item_id = (params.get("item") or {}).get("id")
+        if method == "item/started" and item_id:
+            open_items.add(item_id)
+        elif method == "item/completed" and item_id:
+            open_items.discard(item_id)
+    return bool(open_items)
+
+
+def omp_inflight(sess: Session, frames: list[dict]) -> bool:
+    """omp's liveness is probed live: every classify sends get_state, and any answer
+    lands in the events file and refreshes it. A stale file therefore already means
+    the probe went unanswered — no extra frame evidence exists to consult."""
+    return False
+
+
+ENGINE_INFLIGHT = {"claude": claude_inflight, "codex": codex_inflight, "omp": omp_inflight}
 STALL_SLACK_SECS = 60.0
 
 
-def stream_stalled(sess: Session) -> tuple[bool, str]:
+def stream_stalled(sess: Session, engine: str) -> tuple[bool, str]:
     """A RUNNING projection that is likely a wedged stream, not a thinking model.
-    Both legs required, and every ambiguity reads as ALIVE (宁钝勿敏 — the honest
+    ALL legs required, and every ambiguity reads as ALIVE (宁钝勿敏 — the honest
     fallback for a truly dead session is WATCH-TIMEOUT, never a premature verdict):
 
       - the events file has not grown/moved for AGENT_WATCH_STALL_MINS minutes
         (default 12; <=0 disables). Live engines keep the file fresh — streamed
         thinking/progress frames, and omp answers the get_state probe itself;
-      - no descendant of the pane is YOUNGER than the silence (plus slack):
-        in-flight work spawns around/after the last frame (the tool_use/lifecycle
-        frame lands as the tool starts), while wrapper chains and persistent MCP
-        helpers predate it — so helper-rich trees cannot mask a wedge, and a long
-        quiet foreground tool, younger than the silence by construction, keeps the
-        session alive. (A flat descendant-count threshold was refuted live in
-        review: real panes carry 8-14 wrapper/helper descendants, which made the
-        stall verdict unreachable.)"""
+      - the engine's OWN lifecycle frames show no unmatched in-flight work
+        (tool_use/tool_result, command_lifecycle, background tasks, item/started —
+        per-engine matchers above). Process age cannot carry a request boundary
+        (a long call served inside an old persistent helper is tree-identical to a
+        wedge — review round 2, live-probed), so the stream is the primary signal;
+      - the process-tree probe is a pure VETO: a descendant younger than the
+        silence (plus slack) = in-flight work = alive; an uncertain probe = alive.
+        Only a fully-parsed subtree with nothing young lets the verdict through.
+        (A flat descendant-count threshold was refuted live in review: real panes
+        carry 8-14 wrapper/MCP helper descendants.)"""
     raw = os.environ.get("AGENT_WATCH_STALL_MINS", "12")
     try:
         mins = float(raw)
@@ -836,6 +903,15 @@ def stream_stalled(sess: Session) -> tuple[bool, str]:
         return False, ""
     if silence < mins * 60:
         return False, ""
+    inflight = ENGINE_INFLIGHT.get(engine)
+    if inflight is None:
+        return False, ""
+    try:
+        sent = int(open(sess.sent_offset, encoding="utf-8").read().strip())
+    except (OSError, ValueError):
+        sent = 0
+    if inflight(sess, complete_frames_from(sess, sent)):
+        return False, ""
     pane = str(sess.meta.get("pane_pid", ""))
     if not pane.isdigit():
         return False, ""
@@ -844,9 +920,9 @@ def stream_stalled(sess: Session) -> tuple[bool, str]:
         return False, ""
     if any(age <= silence + STALL_SLACK_SECS for _pid, age in descendants):
         return False, ""
-    return True, (f"no new frame for {int(silence // 60)}min and no in-flight work "
-                  f"under the pane ({len(descendants)} descendant(s), all older than "
-                  "the silence)")
+    return True, (f"no new frame for {int(silence // 60)}min, no unmatched in-flight "
+                  f"lifecycle in the stream, and nothing young under the pane "
+                  f"({len(descendants)} descendant(s))")
 
 
 def classify(sess: Session) -> int:
@@ -982,7 +1058,7 @@ def classify(sess: Session) -> int:
         print(f"FAILED: engine reported an error result (turn failed, engine still alive) — {detail}")
         return 2
     if state == "RUNNING":
-        stalled, why = stream_stalled(sess)
+        stalled, why = stream_stalled(sess, engine)
         if stalled:
             print(f"STALLED-STREAM: {why} — engine likely wedged mid-round; salvage "
                   "work from the checkout/commits first, then agentctl stop "
