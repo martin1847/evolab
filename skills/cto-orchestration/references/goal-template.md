@@ -1,11 +1,10 @@
 # GOAL — <一句话任务名>（<implementation | research-only | hotfix>）
 
 > Owner: omp. Worktree `<abs path>`, branch `<feat/...>`（cut from latest origin/<base> @ <sha>）.
-> Reviewer: codex（after commits; diff 口径 three-dot `origin/<base>...HEAD`；flag only findings
-> that affect correctness or the stated requirements——no bar-raising，拔高式 review 必驱动
-> over-engineering）. Commits stay LOCAL — pushing requires
-> <用户名> approval. 本 goal 中所有“先读路径”和“交付物路径”必须写绝对路径，尤其跨伞仓/子仓；
-> 不要求证明命令内部每个参数都绝对化。如属研究：RESEARCH ONLY — no code changes, no commits.
+> Reviewer: codex（after commits; diff 口径 three-dot `origin/<base>...HEAD`；评审行为契约归
+> review-dispatch，本模板不复述）. Commits stay LOCAL — pushing requires <用户名> approval.
+> 本 goal 中所有"先读路径"和"交付物路径"必须写绝对路径，尤其跨伞仓/子仓；不要求证明命令
+> 内部每个参数都绝对化。如属研究：RESEARCH ONLY — no code changes, no commits.
 
 ## Context (read first)
 
@@ -13,22 +12,14 @@
 "ground truth：与假设矛盾时事实赢">
 <凭据/环境入口给**绝对路径**（如 `ACCESS.local.md`——worker cwd 在 worktree，相对搜找不到）；
 build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
-<可选（实现/评审类默认保留）：worktree 就绪后先 `codegraph init`（中型仓实测秒级），此后代码
-定位 / blast radius 优先 `codegraph explore "<符号或问题>"`——一条命令拿源码+调用路径+blast
-radius（A/B 实测 ~1/3 token、1 回合 vs 6+；动态分发/无测试警告 grep 不产出）。未装
-（command not found）或无索引：**非 blocker**，直接回退 grep/通读，不停下问。>
+<可选（实现/评审类默认保留）：worktree 就绪先 `codegraph init`，代码定位 / blast radius 优先
+`codegraph explore "<符号或问题>"`；未装或无索引 = **非 blocker**，回退 grep/通读，不停下问。>
 
-> 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行（preflight 门默认校验）；普通 bugfix、机械改动和纯研究删除它、派发加 `--no-preflight`——**新增防御层/复杂度的 goal 除外：该行必留且含存在性探针（见下方防御性前提行）**。
+> 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行（preflight 门默认校验
+> 其形态）；普通 bugfix、机械改动和纯研究删除它、派发加 `--no-preflight`——新增防御层/复杂度
+> 的 goal 除外：该行必留且含存在性探针（见场景条款）。探针命令锚 repo 根——只扫子目录会漏
+> 兄弟目录的真实调用方，前提假则 goal 塌。
 Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only falsifier actually run> => <observed result>
-<!-- Preflight 探针命令锚 repo 根（只扫子目录会漏兄弟目录的真实调用方，前提假则 goal 塌）；
-     贴出的结果只是声明——goal-review 评审须复跑探针，不采信贴出值（预计算结果会诱导评审
-     不复跑） -->
-
-Optional absence-evidence gate (delete unless the decision relies on not observing X): known-positive probe: <how the detector proves it can see X>; otherwise report UNKNOWN.
-
-- [ ] 本 goal 新增防御层 / 复杂度（新校验、新隔离、新配置矩阵）→ 上方 Value gate / Preflight
-  行须含「该威胁或需求场景在本架构真实存在」的实证探针——只证机制**能做**不构成**需要做**
-  （复杂度按证据升级）。
 
 ## Pre-triage hypotheses (verify, don't trust)
 
@@ -63,24 +54,30 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
 ## Done when（完成判定 — 每条绑定证明命令，逐条须有**本次会话工具结果**级证据，非记忆中的旧结果；验证范围匹配声明范围）
 
 - [ ] <可验证后置条件 + **证明命令与预期输出**（如 "`npm test` exits 0"）——写成只看输出即可机械判
-  pass/fail 的形态（两个评审独立判得同一结论；harness 原生完成判定器如 Claude Code `/goal` 可直接消费这种条件）>
+  pass/fail 的形态（两个评审独立判得同一结论；harness 原生完成判定器可直接消费）>
 - [ ] 回归测试绿、独立复跑 test+lint 干净；单测过 ≠ 端到端成立。
 - [ ] 本 goal 定义验收仪器 → 只写**要看见什么损害**与观察面，不写用什么机制看（对象：Done-when 各条）
   ——机制归实现者：机制写死 = 把编排者的模型错误烘进合同，抹掉实现者那次独立抽样。
-- [ ] 凡含「部署/配置生效后重测」步骤：先写**生效前置确认**（命令 + 期望值）再测；测量探针打
-  **运行时真源**（DB 行 / 活进程 / 线上 endpoint），不拿构建 SHA、镜像 tag 等**代理指标**下生效
-  结论（代理指标会误判打断正确 worker；缺前置确认则 worker 自己发明等待、对已完成部署空转）。
-- [ ] 测量/评测类 Done-when → 附**噪声处置口径**（对象：含测量/评测的 Done-when 各条）：开测前
-  先定环境性失败的剔除类别及各类的判定证据（env ≠ 能力，事后新增类别无效）；报告保留
-  total / included / excluded 计数与每条 excluded 行及原因；已落定结论的测量批次禁整批重跑，
-  整批环境性失效（全部行命中预设剔除类别、或 included 数低于口径下限）→ 允许重测一批且
-  报告保留两批数据。
-- 普通非 review-loop 长跑可按需写时长 / 成本预算；耗尽仍未达成 = 保持任务 active + STOP and report。
-  review-loop 的轮数预算只由 runtime `--max-rounds`（会话 meta）强制，本 GOAL 不复制轮数。
-- 鉴权/会话/用户数据相关改动：验证须覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 / 未登录），
-  不得只测新鲜快乐态（见 frontend-verify「状态形状矩阵」）。
-- 可见性/授权/内容随 actor 变化的改动：验收段另列 **actor 矩阵**（覆盖门槛与单视角结论语义见
-  主干 §3「多主体轴」，本模板不复述其值；不适用则显式写 `N/A`——留空 = 静默跳过）。
+
+## 场景条款（逐条判命中：命中 → 保留并实例化进上方对应节；未命中 → 整条删）
+
+- [ ] 决策依赖「没观测到 X」→ 加 absence-evidence gate：known-positive probe 先证探测器看得见 X，
+  否则结论只能是 `UNKNOWN`。
+- [ ] 新增防御层 / 复杂度（新校验、新隔离、新配置矩阵）→ Value gate / Preflight 行须含「该威胁
+  或需求场景在本架构真实存在」的实证探针——只证机制**能做**不构成**需要做**（复杂度按证据升级）。
+- [ ] 含「部署/配置生效后重测」步骤 → 先写**生效前置确认**（命令 + 期望值）再测；测量探针打
+  **运行时真源**（DB 行 / 活进程 / 线上 endpoint），不拿构建 SHA、镜像 tag 等代理指标下生效结论
+  （缺前置确认则 worker 自己发明等待、对已完成部署空转）。
+- [ ] 测量/评测类 Done-when → 附**噪声处置口径**：开测前先定环境性失败的剔除类别及判定证据
+  （事后新增类别无效）；报告保留 total / included / excluded 计数与逐行原因；已落定批禁整批重跑，
+  整批环境性失效才允许重测一批、两批数据都留。
+- [ ] 鉴权/会话/用户数据相关改动 → 验证覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 /
+  未登录），不得只测新鲜快乐态（见 frontend-verify「状态形状矩阵」）。
+- [ ] 涉及长耗时外部作业 → 写**等待配方**：禁止阻塞 sleep >60s，改有判据的短轮询（命令 + 达成
+  条件），连续 N 次未达成 → STOP and report（缺配方则 worker 自创长 sleep 顶穿 watcher 窗口）。
+- [ ] 改动带功能旗标 → 写旗标门控：<flag 名，默认 ON/OFF + 理由>。
+- [ ] 普通非 review-loop 长跑 → 按需写时长/成本预算；耗尽仍未达成 = 保持任务 active + STOP and
+  report。review-loop 的轮数预算只由 runtime `--max-rounds` 强制，本 GOAL 不复制轮数。
 
 ## Guardrails
 
@@ -88,11 +85,8 @@ Optional absence-evidence gate (delete unless the decision relies on not observi
   code, no format changes.
 - 禁止删 / 改 / 跳过测试、断言或 grader，禁止压制错误顶替修 root cause——测试集对执行者只读
   （成功标准"红→绿"最易被 game）。
-- 旗标门控：<flag 名，默认 ON/OFF + 理由>。
-- **等待配方**（goal 涉及长耗时外部作业时写明，缺则 worker 自己发明一个）：禁止阻塞 sleep >60s；
-  改**有判据的短轮询**（命令 + 达成条件），连续 N 次未达成 → STOP and report（否则 worker 自创
-  长 sleep 顶穿 watcher 窗口 → 成串假 TIMEOUT）。
-- **动手前理解门**：复述 / 立即开工 / BLOCKED 协议由 runtime 在每次 goal 投递时固定追加，本 GOAL 不复制（高风险任务升级为先交 mini-plan：goal 里显式要求先产出 plan 文件再动手）。
+- 复述 / 立即开工 / BLOCKED 协议由 runtime 固定追加，本 GOAL 不复制；高风险任务升级为先交
+  mini-plan（goal 里显式要求先产出 plan 文件再动手）。
 - **存疑协议**：goal 没写明的事项标 `NEEDS-CLARIFICATION: <具体问题>` 停下问，**禁止合理化猜测**
   （猜而不问是 goal 执行最常见的静默失败）；需要超 scope 改动、或同一路径连败两次：STOP and
   report（blocked + 已试过什么），不自行扩权、别硬耕。
