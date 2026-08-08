@@ -73,6 +73,14 @@ ev bgC '{"type":"result","is_error":false,"result":"done"}'
 run_classify bgC
 chk_eq "A5 unknown task status stays pending → RUNNING" 10 "$rc"
 
+# a task entry with no task_id can never be retired — malformed accounting must read
+# RUNNING, never a premature DONE
+seed_session bgD claude "$WT"
+ev bgD '{"type":"system","subtype":"background_tasks_changed","tasks":[{"description":"id-less"}]}'
+ev bgD '{"type":"result","is_error":false,"result":"done"}'
+run_classify bgD
+chk_eq "A6 malformed background-task entry stays pending → RUNNING" 10 "$rc"
+
 echo "== B. STALLED-STREAM: stagnant stream + no in-flight descendant =="
 
 age_events() { # $1 session  $2 seconds-ago (sub-minute precision touch can't give)
@@ -187,6 +195,78 @@ ev cxS '{"method":"item/completed","params":{"item":{"id":"i1"}}}'
 age_events cxS 1200
 ps_classify cxS
 chk_eq "B16 codex matched items + stale + old tree → STALLED-STREAM 11" 11 "$rc"
+
+# R3-1 blocker mutation: tool_use opened BEFORE a steer — the sent-offset rotates past
+# it, but lifecycle must pair across the WHOLE stream, not the post-steer window
+seed_session stP claude "$WT" 70000
+ev stP '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu9","name":"mcp_query"}]}}'
+wc -c < "$WATCH_RUN_DIR/stP.duplex.events.jsonl" | tr -d ' ' > "$WATCH_RUN_DIR/stP.duplex.sent-offset"
+ev stP '{"type":"assistant","message":{"content":[{"type":"text","text":"post-steer chatter"}]}}'
+age_events stP 1200
+ps_classify stP
+chk_eq "B17 pre-steer open tool survives sent-offset rotation → RUNNING" 10 "$rc"
+
+# R3-2 pairing ambiguities: each must read alive, never 11
+seed_session stQ claude "$WT" 70000
+ev stQ '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"x"}]}}'
+ev stQ '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"x"}]}}'
+ev stQ '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]}}'
+age_events stQ 1200
+ps_classify stQ
+chk_eq "B18 duplicate tool_use id collapsing to closed → RUNNING (ambiguous)" 10 "$rc"
+
+seed_session stR claude "$WT" 70000
+ev stR '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"no-id"}]}}'
+age_events stR 1200
+ps_classify stR
+chk_eq "B19 id-less tool_use → RUNNING (unpairable)" 10 "$rc"
+
+seed_session stS claude "$WT" 70000
+ev stS '{"type":"command_lifecycle","command_uuid":"c9","state":"started"}'
+ev stS '{"type":"command_lifecycle","command_uuid":"c9","state":"failed"}'
+age_events stS 1200
+ps_classify stS
+chk_eq "B20 unknown command_lifecycle state → RUNNING (not a clean close)" 10 "$rc"
+
+seed_session stT claude "$WT" 70000
+ev stT '{"type":"assistant","message":{"content":[{"type":"text","text":"quiet"}]}}'
+printf 'this is not json\n' >> "$WATCH_RUN_DIR/stT.duplex.events.jsonl"
+age_events stT 1200
+ps_classify stT
+chk_eq "B21 undecodable complete line → RUNNING (junk is ambiguity, not silence)" 10 "$rc"
+
+# R3-3 ps snapshot mutations: malformed pid/ppid and short rows poison the whole probe
+{ cat "$SANDBOX/ps-wedged.txt"; echo "bad 70001 00:01"; } > "$SANDBOX/ps-badpid.txt"
+export FAKE_PS_FILE="$SANDBOX/ps-badpid.txt"
+ps_classify stF
+chk_eq "B22 malformed pid row → RUNNING" 10 "$rc"
+{ cat "$SANDBOX/ps-wedged.txt"; echo "70005 bad 00:01"; } > "$SANDBOX/ps-badppid.txt"
+export FAKE_PS_FILE="$SANDBOX/ps-badppid.txt"
+ps_classify stF
+chk_eq "B23 malformed ppid row → RUNNING" 10 "$rc"
+{ cat "$SANDBOX/ps-wedged.txt"; echo "70005 70001"; } > "$SANDBOX/ps-short.txt"
+export FAKE_PS_FILE="$SANDBOX/ps-short.txt"
+ps_classify stF
+chk_eq "B24 short row → RUNNING" 10 "$rc"
+export FAKE_PS_FILE="$SANDBOX/ps-wedged.txt"
+
+# codex thread scoping: with our thread in meta, a foreign completion must not close
+# our item, and an UNSCOPED completion is ambiguity — both alive
+seed_session cxT codex "$WT" 70000
+printf 'thread=thread-1\n' >> "$WATCH_RUN_DIR/cxT.duplex.meta"
+ev cxT '{"method":"item/started","params":{"threadId":"thread-1","item":{"id":"i7"}}}'
+ev cxT '{"method":"item/completed","params":{"threadId":"thread-9","item":{"id":"i7"}}}'
+age_events cxT 1200
+ps_classify cxT
+chk_eq "B25 foreign-thread completion does not close our item → RUNNING" 10 "$rc"
+
+seed_session cxU codex "$WT" 70000
+printf 'thread=thread-1\n' >> "$WATCH_RUN_DIR/cxU.duplex.meta"
+ev cxU '{"method":"item/started","params":{"threadId":"thread-1","item":{"id":"i8"}}}'
+ev cxU '{"method":"item/completed","params":{"item":{"id":"i8"}}}'
+age_events cxU 1200
+ps_classify cxU
+chk_eq "B26 unscoped completion while scoping required → RUNNING (ambiguous)" 10 "$rc"
 
 # real-process sanity: a quiescent pane with ZERO descendants still stalls,
 # and a just-spawned real child (younger than any silence) keeps alive

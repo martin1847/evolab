@@ -593,8 +593,12 @@ def claude_pending_background_tasks(frames: list[dict]) -> list[str]:
         if sub == "background_tasks_changed":
             tasks = frame.get("tasks")
             if isinstance(tasks, list):
-                pending = {t["task_id"]: True for t in tasks
-                           if isinstance(t, dict) and t.get("task_id")}
+                # an entry without a task_id can never be retired — the sentinel keeps
+                # it pending forever, so a malformed entry reads RUNNING, never DONE
+                pending = {}
+                for i, task in enumerate(tasks):
+                    tid = task.get("task_id") if isinstance(task, dict) else None
+                    pending[tid or f"<malformed#{i}>"] = True
         elif sub in ("task_updated", "task_notification"):
             tid = frame.get("task_id")
             status = ((frame.get("patch") or {}).get("status")
@@ -779,23 +783,22 @@ def pane_descendants(root_pid: int) -> list[tuple[int, float]] | None:
         return None
     if proc.returncode != 0:
         return None
-    children: dict[int, list[tuple[int, float | None]]] = {}
+    children: dict[int, list[tuple[int, float]]] = {}
     root_seen = False
     for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
         parts = line.split(None, 2)
         if len(parts) != 3:
-            continue
+            return None  # short row in a fixed-format snapshot — probe poisoned
         try:
             pid, ppid = int(parts[0]), int(parts[1])
+            age = parse_etime(parts[2])
         except ValueError:
-            continue
-        try:
-            age: float | None = parse_etime(parts[2])
-        except ValueError:
-            age = None  # keep the node — reachability decides if this poisons the probe
+            # a malformed ppid/pid/etime cannot be proven unrelated to the pane's
+            # subtree, so the whole snapshot is uncertainty (review round 3)
+            return None
         if pid == root_pid:
-            if age is None:
-                return None  # the root row itself is malformed — probe poisoned
             root_seen = True
         children.setdefault(ppid, []).append((pid, age))
     if not root_seen:
@@ -807,18 +810,43 @@ def pane_descendants(root_pid: int) -> list[tuple[int, float]] | None:
         for pid, age in children.get(queue.pop(), ()):
             if pid not in seen:
                 seen.add(pid)
-                if age is None:
-                    return None
                 out.append((pid, age))
                 queue.append(pid)
     return out
 
 
+def complete_frames_integrity(sess: Session) -> tuple[list[dict], bool]:
+    """All frames from COMPLETE lines from the stream START, plus a clean flag —
+    False when any complete non-empty line failed to decode. Junk the stall path
+    cannot read must count as ambiguity (alive), never as silence."""
+    try:
+        with open(sess.events, "rb") as fh:
+            blob = fh.read()
+    except OSError:
+        return [], False
+    body, nl, _tail = blob.rpartition(b"\n")
+    if not nl:
+        return [], True
+    frames: list[dict] = []
+    clean = True
+    for line in body.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            frames.append(json.loads(line))
+        except json.JSONDecodeError:
+            clean = False
+    return frames, clean
+
+
 def claude_inflight(sess: Session, frames: list[dict]) -> bool:
-    """True = structured evidence of in-flight work (or ambiguity): an UNMATCHED
+    """True = structured evidence of in-flight work OR ambiguity: an UNMATCHED
     tool_use (no tool_result yet — covers long MCP calls served INSIDE an old
     persistent helper, where the process tree carries no request boundary at all),
-    an unmatched command_lifecycle, or pending background tasks."""
+    an unmatched command_lifecycle, pending background tasks, or ANY lifecycle
+    frame the matcher cannot pair cleanly (missing id, duplicate start, unknown
+    command state) — tri-state collapsed to alive, per the stall contract."""
     open_tools: set[str] = set()
     open_cmds: set[str] = set()
     for frame in frames:
@@ -827,36 +855,56 @@ def claude_inflight(sess: Session, frames: list[dict]) -> bool:
             for item in (frame.get("message") or {}).get("content") or []:
                 if not isinstance(item, dict):
                     continue
-                if ftype == "assistant" and item.get("type") == "tool_use" and item.get("id"):
-                    open_tools.add(item["id"])
+                if ftype == "assistant" and item.get("type") == "tool_use":
+                    tid = item.get("id")
+                    if not tid or tid in open_tools:
+                        return True  # id-less or duplicate start: cannot pair — alive
+                    open_tools.add(tid)
                 elif ftype == "user" and item.get("type") == "tool_result" \
                         and item.get("tool_use_id"):
                     open_tools.discard(item["tool_use_id"])
         elif ftype == "command_lifecycle":
             cid = frame.get("command_uuid")
-            if cid and frame.get("state") == "started":
+            state = frame.get("state")
+            if not cid or state not in ("started", "completed"):
+                return True  # unpairable lifecycle transition — alive
+            if state == "started":
+                if cid in open_cmds:
+                    return True
                 open_cmds.add(cid)
-            elif cid:
+            else:
                 open_cmds.discard(cid)
     return bool(open_tools or open_cmds or claude_pending_background_tasks(frames))
 
 
 def codex_inflight(sess: Session, frames: list[dict]) -> bool:
-    """True = an unmatched item/started on OUR thread (a running command/tool), or a
-    pending native ask. An open turn alone is NOT in-flight evidence: a wedged engine
-    dies mid-turn by definition, and a healthy in-turn engine streams item/delta
-    frames that keep the events file fresh anyway."""
+    """True = an unmatched item/started on OUR thread (a running command/tool), or
+    any pairing ambiguity. An open turn alone is NOT in-flight evidence: a wedged
+    engine dies mid-turn by definition, and a healthy in-turn engine streams
+    item/delta frames that keep the events file fresh anyway. When session meta
+    names our thread, frames WITHOUT a threadId are ambiguous (a foreign completion
+    must not close our item); without meta, no scoping is possible — pair as-is."""
     ours = sess.meta.get("thread")
     open_items: set[str] = set()
     for frame in frames:
         method = frame.get("method", "")
-        params = frame.get("params") or {}
-        if ours and params.get("threadId") not in (None, ours):
+        if method not in ("item/started", "item/completed"):
             continue
+        params = frame.get("params") or {}
+        tid = params.get("threadId")
+        if ours:
+            if tid is None:
+                return True  # unscoped lifecycle frame while scoping is required — alive
+            if tid != ours:
+                continue
         item_id = (params.get("item") or {}).get("id")
-        if method == "item/started" and item_id:
+        if not item_id:
+            return True
+        if method == "item/started":
+            if item_id in open_items:
+                return True
             open_items.add(item_id)
-        elif method == "item/completed" and item_id:
+        else:
             open_items.discard(item_id)
     return bool(open_items)
 
@@ -906,11 +954,11 @@ def stream_stalled(sess: Session, engine: str) -> tuple[bool, str]:
     inflight = ENGINE_INFLIGHT.get(engine)
     if inflight is None:
         return False, ""
-    try:
-        sent = int(open(sess.sent_offset, encoding="utf-8").read().strip())
-    except (OSError, ValueError):
-        sent = 0
-    if inflight(sess, complete_frames_from(sess, sent)):
+    # lifecycle pairs across the WHOLE stream, never the sent-offset window: the
+    # offset rotates on every steer and can cut across an operation opened before
+    # it (review round 3 — the forgotten open tool_use re-enabled the false 11).
+    frames, clean = complete_frames_integrity(sess)
+    if not clean or inflight(sess, frames):
         return False, ""
     pane = str(sess.meta.get("pane_pid", ""))
     if not pane.isdigit():
