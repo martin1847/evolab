@@ -87,7 +87,7 @@ value_gate='Value gate: <existing gap → incremental value>; Preflight: <cheape
 chk_eq "goal has exactly one conditional value-gate line" 1 "$(grep -cF "$value_gate" "$GOAL")"
 chk_contains "value gate targets uncertain expensive direction" "高不确定方向准备进入昂贵设计/实现" "$goal_body"
 chk_contains "value gate requires probe before dispatch" "先跑最便宜证伪" "$goal_body"
-chk_contains "ordinary work deletes value gate" "普通 bugfix、机械改动和纯研究删除它" "$goal_body"
+chk_contains "forensic/mechanical work deletes value gate" "取证 / 机械改动和纯研究删除它" "$goal_body"
 chk_not_contains "goal has no fixed Existing coverage field" "Existing coverage:" "$goal_body"
 chk_not_contains "goal has no fixed Incremental value field" "Incremental value:" "$goal_body"
 chk_not_contains "goal has no fixed Cheapest falsification field" "Cheapest falsification" "$goal_body"

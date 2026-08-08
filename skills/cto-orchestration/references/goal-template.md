@@ -3,8 +3,8 @@
 > Owner: omp. Worktree `<abs path>`, branch `<feat/...>`（cut from latest origin/<base> @ <sha>）.
 > Reviewer: codex（after commits; diff 口径 three-dot `origin/<base>...HEAD`；评审行为契约归
 > review-dispatch，本模板不复述）. Commits stay LOCAL — pushing requires <用户名> approval.
-> 本 goal 中所有"先读路径"和"交付物路径"必须写绝对路径，尤其跨伞仓/子仓；不要求证明命令
-> 内部每个参数都绝对化。如属研究：RESEARCH ONLY — no code changes, no commits.
+> 本 goal 中所有“先读路径”和“交付物路径”必须写绝对路径，尤其跨伞仓/子仓；
+> 不要求证明命令内部每个参数都绝对化。如属研究：RESEARCH ONLY — no code changes, no commits.
 
 ## Context (read first)
 
@@ -16,7 +16,7 @@ build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 `codegraph explore "<符号或问题>"`；未装或无索引 = **非 blocker**，回退 grep/通读，不停下问。>
 
 > 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行（preflight 门默认校验
-> 其形态）；普通 bugfix、机械改动和纯研究删除它、派发加 `--no-preflight`——新增防御层/复杂度
+> 其形态）；取证 / 机械改动和纯研究删除它、派发加 `--no-preflight`——新增防御层/复杂度
 > 的 goal 除外：该行必留且含存在性探针（见场景条款）。探针命令锚 repo 根——只扫子目录会漏
 > 兄弟目录的真实调用方，前提假则 goal 塌。
 Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only falsifier actually run> => <observed result>
@@ -70,14 +70,15 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
   （缺前置确认则 worker 自己发明等待、对已完成部署空转）。
 - [ ] 测量/评测类 Done-when → 附**噪声处置口径**：开测前先定环境性失败的剔除类别及判定证据
   （事后新增类别无效）；报告保留 total / included / excluded 计数与逐行原因；已落定批禁整批重跑，
-  整批环境性失效才允许重测一批、两批数据都留。
-- [ ] 鉴权/会话/用户数据相关改动 → 验证覆盖**状态形状矩阵**（新鲜登录 / 过期会话 / 贫数据账号 /
-  未登录），不得只测新鲜快乐态（见 frontend-verify「状态形状矩阵」）。
+  整批环境性失效（全部行命中预设剔除类别、或 included 数低于口径下限）才允许重测一批、
+  两批数据都留。
+- [ ] 鉴权/会话/用户数据相关改动 → 验证覆盖**状态形状矩阵**，不得只测新鲜快乐态；矩阵成员与
+  制造方法见 frontend-verify「状态形状矩阵」，本模板不复制。
 - [ ] 涉及长耗时外部作业 → 写**等待配方**：禁止阻塞 sleep >60s，改有判据的短轮询（命令 + 达成
   条件），连续 N 次未达成 → STOP and report（缺配方则 worker 自创长 sleep 顶穿 watcher 窗口）。
 - [ ] 改动带功能旗标 → 写旗标门控：<flag 名，默认 ON/OFF + 理由>。
-- [ ] 普通非 review-loop 长跑 → 按需写时长/成本预算；耗尽仍未达成 = 保持任务 active + STOP and
-  report。review-loop 的轮数预算只由 runtime `--max-rounds` 强制，本 GOAL 不复制轮数。
+- [ ] 普通非 review-loop 长跑且有明确时长/成本上限 → 写明该预算；耗尽仍未达成 = 保持任务
+  active + STOP and report。review-loop 轮数预算只由 runtime `--max-rounds` 强制，本 GOAL 不复制轮数。
 
 ## Guardrails
 
