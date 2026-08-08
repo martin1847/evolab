@@ -316,27 +316,83 @@ unset FAKE_PS_FILE
 
 echo "== D. stop-time sentinel: events growing past the terminal marker is said out loud =="
 
-# marker then later events growth → SENTINEL on stderr (advisory, stop still succeeds)
-seed_session snA claude "$WT" 70000
-ev snA '{"type":"result","is_error":false,"result":"done"}'
-printf '{"stamp":"x"}\n' > "$WATCH_RUN_DIR/snA.terminal.json"
-python3 -c 'import os,sys,time; os.utime(sys.argv[1], (time.time()-30,)*2)' "$WATCH_RUN_DIR/snA.terminal.json"
-out="$(bash "$AGENTCTL" stop snA 2>&1)"
-chk_contains "D1 late-growing events trigger the sentinel" "SENTINEL" "$out"
-chk_contains "D1 sentinel points at the replay corpus" "replay corpus" "$out"
+set_mtimes() { # $1 session  $2 marker-age-secs  $3 events-age-secs (ago from now)
+  python3 - "$WATCH_RUN_DIR/$1.terminal.json" "$2" "$WATCH_RUN_DIR/$1.duplex.events.jsonl" "$3" <<'PY'
+import os, sys, time
+now = time.time()
+os.utime(sys.argv[1], (now - float(sys.argv[2]),) * 2)
+os.utime(sys.argv[3], (now - float(sys.argv[4]),) * 2)
+PY
+}
+run_stop() { # $1 session [$2 PATH-prepend dir] — splits stdout/stderr, captures rc
+  if [ -n "${2:-}" ]; then
+    s_out="$(PATH="$2:$PATH" bash "$AGENTCTL" stop "$1" 2>"$SANDBOX/stop-err")"; s_rc=$?
+  else
+    s_out="$(bash "$AGENTCTL" stop "$1" 2>"$SANDBOX/stop-err")"; s_rc=$?
+  fi
+  s_err="$(cat "$SANDBOX/stop-err")"
+}
+mksn() { # $1 session — seed + marker + result frame
+  seed_session "$1" claude "$WT" 70000
+  ev "$1" '{"type":"result","is_error":false,"result":"done"}'
+  printf '{"stamp":"x"}\n' > "$WATCH_RUN_DIR/$1.terminal.json"
+}
 
-# marker fresh relative to events → silent
-seed_session snB claude "$WT" 70000
-ev snB '{"type":"result","is_error":false,"result":"done"}'
-printf '{"stamp":"x"}\n' > "$WATCH_RUN_DIR/snB.terminal.json"
-out="$(bash "$AGENTCTL" stop snB 2>&1)"
-chk_not_contains "D2 in-window flush stays silent" "SENTINEL" "$out"
+# late-growing events → SENTINEL on STDERR only; stop rc untouched
+mksn snA; set_mtimes snA 30 0
+run_stop snA
+chk_eq "D1 stop rc stays 0 with sentinel firing" 0 "$s_rc"
+chk_contains "D1 sentinel fires on stderr" "SENTINEL" "$s_err"
+chk_not_contains "D1 sentinel does not pollute stdout" "SENTINEL" "$s_out"
+chk_contains "D1 sentinel points at the replay corpus" "replay corpus" "$s_err"
 
-# no marker (stopping a live session) → silent
+# +2s boundary: delta=2 silent, delta=3 fires (the flush-race allowance is exact)
+mksn snB; set_mtimes snB 100 98
+run_stop snB
+chk_eq "D2 delta=2 stop rc 0" 0 "$s_rc"
+chk_not_contains "D2 delta=2 stays silent (flush race priced in)" "SENTINEL" "$s_err"
+mksn snB2; set_mtimes snB2 100 97
+run_stop snB2
+chk_contains "D2b delta=3 fires" "SENTINEL" "$s_err"
+
+# no marker (stopping a live session) → silent, rc 0
 seed_session snC claude "$WT" 70000
 ev snC '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
-out="$(bash "$AGENTCTL" stop snC 2>&1)"
-chk_not_contains "D3 no terminal marker → no sentinel" "SENTINEL" "$out"
+run_stop snC
+chk_eq "D3 no-marker stop rc 0" 0 "$s_rc"
+chk_not_contains "D3 no terminal marker → no sentinel" "SENTINEL" "$s_err"
+
+# stat dialect matrix: BSD-shaped, GNU-shaped (failed -f pollutes stdout — the
+# poisoning shape), and both-broken. Fires on both working dialects; broken probe
+# degrades SILENTLY and must never touch stop's rc.
+STATBIN="$SANDBOX/statbin"; mkdir -p "$STATBIN"
+cat > "$STATBIN/stat" <<'FAKESTAT'
+#!/bin/sh
+mode="${FAKE_STAT_MODE:?}"; flag="$1"; file="$3"
+real() { python3 -c 'import os,sys; print(int(os.path.getmtime(sys.argv[1])))' "$1"; }
+case "$mode:$flag" in
+  bsd:-f) real "$file";;
+  bsd:*)  echo "stat: illegal option" >&2; exit 1;;
+  gnu:-c) real "$file";;
+  gnu:*)  printf 'File: "junk"\n    ID: 100 Namelen: 255\n'; exit 1;;
+  *)      printf 'garbage\n'; exit 1;;
+esac
+FAKESTAT
+chmod +x "$STATBIN/stat"
+
+for dialect in bsd gnu; do
+  mksn "sn_$dialect"; set_mtimes "sn_$dialect" 30 0
+  export FAKE_STAT_MODE="$dialect"
+  run_stop "sn_$dialect" "$STATBIN"
+  chk_eq "D4 $dialect dialect stop rc 0" 0 "$s_rc"
+  chk_contains "D4 $dialect dialect sentinel fires" "SENTINEL" "$s_err"
+done
+mksn snZ; set_mtimes snZ 30 0
+export FAKE_STAT_MODE=broken
+run_stop snZ "$STATBIN"
+chk_eq "D5 broken stat probes keep stop rc 0" 0 "$s_rc"
+chk_not_contains "D5 broken probes degrade silently, never a false sentinel" "SENTINEL" "$s_err"
+unset FAKE_STAT_MODE
 
 { kill "$QPID" "$TPID"; wait "$QPID" "$TPID"; } 2>/dev/null
 rm -rf "$SANDBOX"

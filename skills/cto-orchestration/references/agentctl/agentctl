@@ -460,19 +460,21 @@ cmd_stop() {
       live_pg=""; case "$live" in "0 "*) live_pg="${live#0 }";; esac
       meta_pg="$(meta_get "$S" pane_pid)"; meta_ls="$(meta_get "$S" pane_lstart)"
       tmux kill-session -t "=$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
-      # false-DONE sentinel: events that kept growing AFTER the terminal marker mean
-      # the round concluded while the engine still spoke — the silent-misfire class
-      # made loud at the one point every session passes through. +2s prices in the
-      # marker-write vs final-flush race. Advisory only; the events copy is the
-      # replay-corpus candidate (test/corpus/, local-only).
-      MARKER="$DIR/$S.terminal.json"; EVF="$DIR/$S.duplex.events.jsonl"
-      if [ -f "$MARKER" ] && [ -f "$EVF" ]; then
-        mm="$(stat -f %m "$MARKER" 2>/dev/null || stat -c %Y "$MARKER" 2>/dev/null)"
-        em="$(stat -f %m "$EVF" 2>/dev/null || stat -c %Y "$EVF" 2>/dev/null)"
-        if [ -n "$mm" ] && [ -n "$em" ] && [ "$em" -gt $((mm + 2)) ]; then
-          echo "SENTINEL: events grew $((em - mm))s past the terminal marker — possible false-DONE window or unknown continuation; keep $EVF and consider the replay corpus" >&2
-        fi
-      fi
+      # false-DONE sentinel, part 1: capture the terminal marker's mtime BEFORE the
+      # cleanup below deletes it; the events side is sampled AFTER the reap (part 2)
+      # — a straggler child holding the events fd can write between the kill and the
+      # reap, and sampling early missed exactly that target class. stat dialects are
+      # probed SEPARATELY and validated numeric: a failed dialect's stdout must never
+      # leak into the arithmetic (GNU `stat -f` prints filesystem status to stdout
+      # and still fails, poisoning a shared command substitution).
+      stat_mtime() { # $1 file — prints epoch seconds, or nothing on probe failure
+        sm_v="$(stat -f %m "$1" 2>/dev/null)"
+        case "$sm_v" in ''|*[!0-9]*) sm_v="$(stat -c %Y "$1" 2>/dev/null)";; esac
+        case "$sm_v" in ''|*[!0-9]*) return 1;; esac
+        printf '%s\n' "$sm_v"
+      }
+      SENT_MM=""
+      [ -f "$DIR/$S.terminal.json" ] && SENT_MM="$(stat_mtime "$DIR/$S.terminal.json" || true)"
       # control state goes down BEFORE the reap: the terminal-marker guard (meta
       # re-check right before publish) prices in a µs kill→cleanup gap, and a
       # grace-long reap in between would stretch it to seconds (review S3). Trade-off:
@@ -493,6 +495,18 @@ cmd_stop() {
       if [ -n "$live_pg" ]; then reap_tree "$live_pg" ""
       else reap_tree "$meta_pg" "$meta_ls"; fi
       REAP_RC=$?
+      # false-DONE sentinel, part 2 (advisory — must never change stop's rc): with the
+      # tree fully reaped nothing can write the events file anymore, so THIS is the
+      # honest sampling point. events growing >2s past the marker = the round was
+      # concluded while the engine still spoke (silent-misfire class made loud); +2s
+      # prices in the marker-write vs final-flush race. The copy is the replay-corpus
+      # candidate (test/corpus/, local-only).
+      if [ -n "$SENT_MM" ] && [ -f "$DIR/$S.duplex.events.jsonl" ]; then
+        SENT_EM="$(stat_mtime "$DIR/$S.duplex.events.jsonl" || true)"
+        if [ -n "$SENT_EM" ] && [ "$SENT_EM" -gt $((SENT_MM + 2)) ]; then
+          echo "SENTINEL: events grew $((SENT_EM - SENT_MM))s past the terminal marker — possible false-DONE window or unknown continuation; keep $DIR/$S.duplex.events.jsonl and consider the replay corpus" >&2
+        fi
+      fi
       # a refused identity clear is a real failure of stop's contract, even though the engine
       # and its process group are gone: the caller must know the name is not free to reuse
       [ "$ID_RC" = 0 ] || exit 1
