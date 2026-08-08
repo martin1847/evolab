@@ -23,6 +23,7 @@
 # + mkfifo claim); a cross-lane photo-finish is recovered by `agentctl stop`, not machinery. Typed exit vocabulary shared with the round lane:
 #   0 DONE / 1 SESSION-GONE / 2 FAILED|AGENT-DEAD / 3 send-unconfirmed / 4 WAITING-INPUT
 #   / 5 STALLED-EXTERNAL / 6 IDLE-NO-DELIVERABLE / 7 WATCH-TIMEOUT / 8 ENGINE-SILENT
+#   / 9 BUDGET-EXHAUSTED / 11 STALLED-STREAM (stagnant stream + no tool child — salvage, then stop)
 set -uo pipefail
 # $0 may be a PATH symlink (~/.local/bin convenience installs) — follow the link chain
 # before dirname, else CTL resolves beside the symlink and every engine name goes unknown.

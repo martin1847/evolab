@@ -106,6 +106,7 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
 | 8 ENGINE-SILENT（duplex）| steer 已投递、引擎 ~2min 零输出 | 查 stderr.log；必要时 stop+resume |
 | 9 BUDGET-EXHAUSTED | review-loop 轮数上限（steer 计轮） | 转人工裁决 |
 | 10 RUNNING | 瞬时态（status 一次性查询用） | 继续等 |
+| 11 STALLED-STREAM（duplex）| events 流停滞超窗（默认 12min，`AGENT_WATCH_STALL_MINS` 调、0 关）且 pane 进程树无工具子进程——「在想」与「挂死」由此分辨 | 先从 checkout/commits 抢救成果，再 stop；探针任一不确定按 RUNNING 处理（宁钝勿敏） |
 
 新增 typed MESSAGE 行（**exit 码契约不变**，三类都映射到既有失败 / UNKNOWN 出口）：
 

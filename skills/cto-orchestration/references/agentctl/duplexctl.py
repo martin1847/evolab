@@ -6,7 +6,7 @@ tmux supervisor pane:  bash -c 'exec 3<>IN.FIFO; ENGINE <&3 >> EVENTS 2>> ERR; e
 This tool is the ONLY writer to the fifo (flock-serialized) and the only reader
 that interprets EVENTS. It never touches the pane; terminal truth is the typed
 exit code (same vocabulary as the round lane):
-  0 DONE / 2 FAILED|AGENT-DEAD / 4 WAITING-INPUT / 5 STALLED-EXTERNAL
+  0 DONE / 2 FAILED|AGENT-DEAD / 4 WAITING-INPUT / 5 STALLED-EXTERNAL / 11 STALLED-STREAM
   / 6 IDLE-NO-DELIVERABLE / 10 RUNNING
 Output is BOUNDED by design: raw engine output stays in EVENTS; classify prints
 one typed line + a <=600-char summary (the 147KB single-line agent_end replay
@@ -575,6 +575,35 @@ def project_omp(sess: Session) -> tuple[str, str]:
     return "IDLE", "isStreaming=false, queue empty"
 
 
+CLAUDE_TASK_TERMINAL = ("completed", "failed", "killed", "cancelled", "stopped", "error")
+
+
+def claude_pending_background_tasks(frames: list[dict]) -> list[str]:
+    """Background-task ids still in flight per the harness's own accounting.
+    `background_tasks_changed` carries the FULL live set (authoritative snapshot —
+    each one replaces the previous set); a later `task_updated`/`task_notification`
+    with a terminal status retires its id. An unknown status keeps the id pending:
+    the safe failure mode is RUNNING (watch keeps polling, WATCH-TIMEOUT bounds it),
+    never a premature DONE."""
+    pending: dict[str, bool] = {}
+    for frame in frames:
+        if frame.get("type") != "system":
+            continue
+        sub = frame.get("subtype")
+        if sub == "background_tasks_changed":
+            tasks = frame.get("tasks")
+            if isinstance(tasks, list):
+                pending = {t["task_id"]: True for t in tasks
+                           if isinstance(t, dict) and t.get("task_id")}
+        elif sub in ("task_updated", "task_notification"):
+            tid = frame.get("task_id")
+            status = ((frame.get("patch") or {}).get("status")
+                      if sub == "task_updated" else frame.get("status"))
+            if tid in pending and status in CLAUDE_TASK_TERMINAL:
+                del pending[tid]
+    return sorted(pending)
+
+
 def project_claude(sess: Session) -> tuple[str, str]:
     # State comes ONLY from complete frames that landed AFTER the last steer:
     # a queued steer consumed at the next turn boundary leaves the PREVIOUS
@@ -599,6 +628,16 @@ def project_claude(sess: Session) -> tuple[str, str]:
             # a structured ask frame ("Permission denied" on a file is an error, not a
             # question — review R2). Interactive asks ride BLOCKED.md instead.
             return "ERROR", summary or "result is_error=true"
+        # a result frame ends the TURN, not necessarily the round: with background
+        # tasks pending the harness auto re-invokes the engine — no steer involved —
+        # so this idle is a gap between turns, not terminal (field incident: DONE
+        # fired in that gap and the orchestrator tore down the environment the
+        # engine's backgrounded verification was still using).
+        pending = claude_pending_background_tasks(frames)
+        if pending:
+            shown = ", ".join(pending[:3]) + ("…" if len(pending) > 3 else "")
+            return ("RUNNING", f"turn ended but {len(pending)} background task(s) "
+                    f"pending ({shown}) — harness auto-continues; not terminal")
         return "IDLE", summary or last.get("subtype", "result")
     return "RUNNING", f"last frame type={last.get('type')}"
 
@@ -708,6 +747,69 @@ def delivered_receipt(store) -> dict | None:
     if klass != identity.OK:
         return None
     return store.delivered_receipt(marker)
+
+
+def pane_descendant_count(root_pid: int) -> int | None:
+    """Descendant-process count under the pane pid from ONE ps snapshot.
+    None = probe failed — the caller must treat that as alive, never as stalled."""
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,ppid="],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    children: dict[int, list[int]] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+    seen: set[int] = set()
+    queue = [root_pid]
+    while queue:
+        for kid in children.get(queue.pop(), ()):
+            if kid not in seen:
+                seen.add(kid)
+                queue.append(kid)
+    return len(seen)
+
+
+def stream_stalled(sess: Session) -> tuple[bool, str]:
+    """A RUNNING projection that is likely a wedged stream, not a thinking model.
+    Both legs required, and every ambiguity reads as ALIVE (宁钝勿敏 — the honest
+    fallback for a truly dead session is WATCH-TIMEOUT, never a premature verdict):
+
+      - the events file has not grown/moved for AGENT_WATCH_STALL_MINS minutes
+        (default 12; <=0 disables). Live engines keep the file fresh — streamed
+        thinking/progress frames, and omp answers the get_state probe itself;
+      - the pane's process tree has no descendant beyond the engine itself
+        (pane shell → engine = ≤1 descendant; a running tool is the engine's own
+        child, i.e. a SECOND descendant, and keeps the session alive — engines
+        that hold a persistent helper child simply never stall, the safe side)."""
+    raw = os.environ.get("AGENT_WATCH_STALL_MINS", "12")
+    try:
+        mins = float(raw)
+    except ValueError:
+        mins = 12.0
+    if mins <= 0:
+        return False, ""
+    try:
+        age = time.time() - os.path.getmtime(sess.events)
+    except OSError:
+        return False, ""
+    if age < mins * 60:
+        return False, ""
+    pane = str(sess.meta.get("pane_pid", ""))
+    if not pane.isdigit():
+        return False, ""
+    count = pane_descendant_count(int(pane))
+    if count is None or count > 1:
+        return False, ""
+    return True, (f"no new frame for {int(age // 60)}min and no tool child under "
+                  f"the pane (descendants={count})")
 
 
 def classify(sess: Session) -> int:
@@ -843,6 +945,12 @@ def classify(sess: Session) -> int:
         print(f"FAILED: engine reported an error result (turn failed, engine still alive) — {detail}")
         return 2
     if state == "RUNNING":
+        stalled, why = stream_stalled(sess)
+        if stalled:
+            print(f"STALLED-STREAM: {why} — engine likely wedged mid-round; salvage "
+                  "work from the checkout/commits first, then agentctl stop "
+                  "(AGENT_WATCH_STALL_MINS tunes the window; 0 disables)")
+            return 11
         print(f"RUNNING: {detail}")
         return 10
     ok, hit = deliverable_fresh(sess)
