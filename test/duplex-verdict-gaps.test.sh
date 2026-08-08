@@ -6,9 +6,11 @@
 #     must NOT read DONE (the orchestrator tore down an environment the engine's
 #     backgrounded verification was still using).
 #  B. RUNNING could not tell "thinking" from "wedged": stagnant events stream AND
-#     no descendant beyond the engine under the pane = STALLED-STREAM 11. Both
-#     legs required; every ambiguity (fresh stream, tool child, no pane_pid,
+#     no pane descendant YOUNGER than the silence = STALLED-STREAM 11 (in-flight
+#     work spawns around the last frame; wrapper/MCP helper trees predate it).
+#     Both legs required; every ambiguity (fresh stream, young child, no pane_pid,
 #     probe failure, disabled window) reads ALIVE — 宁钝勿敏.
+#  C. the shipped agentctl status/watch surface preserves rc 11 end to end.
 #
 # Harness: no engines, no real tmux — classify driven on hand-built session state
 # (same stance as duplexctl-timeout.test.sh).
@@ -71,46 +73,114 @@ ev bgC '{"type":"result","is_error":false,"result":"done"}'
 run_classify bgC
 chk_eq "A5 unknown task status stays pending → RUNNING" 10 "$rc"
 
-echo "== B. STALLED-STREAM: stagnant stream + no descendant beyond the engine =="
+echo "== B. STALLED-STREAM: stagnant stream + no in-flight descendant =="
 
-# quiescent pane shape: a bare process with zero descendants (pane→engine, engine idle)
-/bin/sleep 300 >/dev/null 2>&1 & QPID=$!
-seed_session stA claude "$WT" "$QPID"
-ev stA '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
-touch -t 202001010000 "$WATCH_RUN_DIR/stA.duplex.events.jsonl"
-run_classify stA
-chk_eq "B1 stagnant + quiescent pane → STALLED-STREAM 11" 11 "$rc"
+age_events() { # $1 session  $2 seconds-ago (sub-minute precision touch can't give)
+  python3 -c 'import os,sys,time; os.utime(sys.argv[1], (time.time()-float(sys.argv[2]),)*2)' \
+    "$WATCH_RUN_DIR/$1.duplex.events.jsonl" "$2"
+}
+
+# fake ps: full control of topology + etimes. A flat descendant-count threshold was
+# refuted against LIVE panes in review (codex 11-14, claude 8 wrapper/MCP descendants),
+# so these fixtures model the REAL provider tree: pane shell -> wrapper -> node ->
+# engine + persistent helper, and in-flight work is told apart by AGE, not by count.
+PSBIN="$SANDBOX/psbin"; mkdir -p "$PSBIN"
+cat > "$PSBIN/ps" <<'FAKEPS'
+#!/bin/sh
+[ -n "${FAKE_PS_RC:-}" ] && exit "$FAKE_PS_RC"
+cat "${FAKE_PS_FILE:?}"
+FAKEPS
+chmod +x "$PSBIN/ps"
+ps_classify() { # $1 session (uses exported FAKE_PS_FILE / FAKE_PS_RC)
+  out="$(PATH="$PSBIN:$PATH" python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" classify "$1" 2>&1)"; rc=$?
+}
+
+# wedged provider tree: every descendant far older than the silence (day-form etime
+# exercises the parser); root present in the snapshot
+cat > "$SANDBOX/ps-wedged.txt" <<'PS'
+70000     1 03:25:01
+70001 70000 03:25:00
+70002 70001 03:25:00
+70003 70002 1-02:00:00
+70004 70002 03:20:00
+PS
+seed_session stF claude "$WT" 70000
+ev stF '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
+age_events stF 1200
+export FAKE_PS_FILE="$SANDBOX/ps-wedged.txt"; unset FAKE_PS_RC
+ps_classify stF
+chk_eq "B1 wedged helper-rich tree (all older than silence) → STALLED-STREAM 11" 11 "$rc"
 chk_contains "B1 verdict names salvage-then-stop" "salvage" "$out"
 chk_contains "B1 verdict names the tunable" "AGENT_WATCH_STALL_MINS" "$out"
 
-# alive guard: a running tool is the engine's child (2nd descendant of the pane) —
-# outer bash = pane shell, inner bash = engine, sleep = tool (`; true` defeats exec)
-bash -c 'bash -c "/bin/sleep 300; true"; true' >/dev/null 2>&1 & TPID=$!
-seed_session stB claude "$WT" "$TPID"
-ev stB '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
-touch -t 202001010000 "$WATCH_RUN_DIR/stB.duplex.events.jsonl"
-run_classify stB
-chk_eq "B2 tool child under the engine keeps RUNNING" 10 "$rc"
+# same tree + one YOUNG in-flight tool under the engine → alive
+{ cat "$SANDBOX/ps-wedged.txt"; echo "70005 70003 00:30"; } > "$SANDBOX/ps-tool.txt"
+export FAKE_PS_FILE="$SANDBOX/ps-tool.txt"
+ps_classify stF
+chk_eq "B2 young in-flight tool keeps RUNNING despite old helpers" 10 "$rc"
 
-# alive guard: fresh stream (thinking model keeps the file moving) → never stalls
+# probe failure legs: each must read ALIVE, never stalled
+export FAKE_PS_FILE="$SANDBOX/ps-wedged.txt" FAKE_PS_RC=1
+ps_classify stF
+chk_eq "B3 ps non-zero exit → RUNNING (probe failure reads alive)" 10 "$rc"
+unset FAKE_PS_RC
+
+grep -v '^70000 ' "$SANDBOX/ps-wedged.txt" > "$SANDBOX/ps-noroot.txt"
+export FAKE_PS_FILE="$SANDBOX/ps-noroot.txt"
+ps_classify stF
+chk_eq "B4 root pid absent from snapshot (died/reused) → RUNNING" 10 "$rc"
+
+sed 's/^70000     1 03:25:01$/70000     1 garbage/' "$SANDBOX/ps-wedged.txt" > "$SANDBOX/ps-badroot.txt"
+export FAKE_PS_FILE="$SANDBOX/ps-badroot.txt"
+ps_classify stF
+chk_eq "B5 malformed root row → RUNNING (unparsable is not evidence)" 10 "$rc"
+export FAKE_PS_FILE="$SANDBOX/ps-wedged.txt"
+
+# real-process sanity: a quiescent pane with ZERO descendants still stalls,
+# and a just-spawned real child (younger than any silence) keeps alive
+/bin/sleep 300 >/dev/null 2>&1 & QPID=$!
+seed_session stG claude "$WT" "$QPID"
+ev stG '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
+age_events stG 1200
+run_classify stG
+chk_eq "B6 real quiescent pane (no descendants) → STALLED-STREAM 11" 11 "$rc"
+
+bash -c '/bin/sleep 300; true' >/dev/null 2>&1 & TPID=$!
+seed_session stH claude "$WT" "$TPID"
+ev stH '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
+age_events stH 1200
+run_classify stH
+chk_eq "B7 real young child under the pane → RUNNING" 10 "$rc"
+
+# alive guards: fresh stream / no pane_pid / disabled window
 seed_session stC claude "$WT" "$QPID"
 ev stC '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
 run_classify stC
-chk_eq "B3 fresh stream stays RUNNING" 10 "$rc"
+chk_eq "B8 fresh stream stays RUNNING" 10 "$rc"
 
-# alive guard: no pane_pid recorded → probe unavailable → alive
 seed_session stD claude "$WT"
 ev stD '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
-touch -t 202001010000 "$WATCH_RUN_DIR/stD.duplex.events.jsonl"
+age_events stD 1200
 run_classify stD
-chk_eq "B4 no pane_pid → RUNNING (probe ambiguity reads alive)" 10 "$rc"
+chk_eq "B9 no pane_pid → RUNNING (probe ambiguity reads alive)" 10 "$rc"
 
-# disable switch: 0 turns the window off entirely
 seed_session stE claude "$WT" "$QPID"
 ev stE '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
-touch -t 202001010000 "$WATCH_RUN_DIR/stE.duplex.events.jsonl"
+age_events stE 1200
 out="$(AGENT_WATCH_STALL_MINS=0 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" classify stE 2>&1)"; rc=$?
-chk_eq "B5 AGENT_WATCH_STALL_MINS=0 disables the stall verdict" 10 "$rc"
+chk_eq "B10 AGENT_WATCH_STALL_MINS=0 disables the stall verdict" 10 "$rc"
+
+echo "== C. wrapper surface: agentctl status/watch pass 11 through =="
+
+out="$(PATH="$PSBIN:$PATH" bash "$AGENTCTL" status stF 2>&1)"; rc=$?
+chk_eq "C1 agentctl status exits 11" 11 "$rc"
+chk_contains "C1 status prints STALLED-STREAM" "STALLED-STREAM" "$out"
+
+out="$(PATH="$PSBIN:$PATH" bash "$AGENTCTL" watch stF 2>&1)"; rc=$?
+chk_eq "C2 agentctl watch exits 11" 11 "$rc"
+chk_contains "C2 watch machine tail line" "EXIT=11" "$out"
+chk_contains "C2 watch prints STALLED-STREAM" "STALLED-STREAM" "$out"
+unset FAKE_PS_FILE
 
 { kill "$QPID" "$TPID"; wait "$QPID" "$TPID"; } 2>/dev/null
 rm -rf "$SANDBOX"

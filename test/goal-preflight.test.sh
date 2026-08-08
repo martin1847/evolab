@@ -135,5 +135,15 @@ printf 'Preflight（编排者已实跑）: <cheapest probe> => <observed result>
 run_check "$goal"
 chk_eq "[F1] placeholder still rejected behind an annotation" 1 "$rc"
 
+# the annotation surface itself is part of the declaration — a placeholder hiding
+# there is just as unresolved (cold-review catch on the first widening)
+printf 'Preflight（<编排者补跑>）: query metrics => 3 rows observed\n' > "$goal"
+run_check "$goal"
+chk_eq "[F1] placeholder INSIDE full-width annotation rejected" 1 "$rc"
+
+printf 'Preflight (<orchestrator note>): query metrics => 3 rows observed\n' > "$goal"
+run_check "$goal"
+chk_eq "[F1] placeholder INSIDE ascii annotation rejected" 1 "$rc"
+
 rm -rf "$SANDBOX"
 summary

@@ -749,32 +749,62 @@ def delivered_receipt(store) -> dict | None:
     return store.delivered_receipt(marker)
 
 
-def pane_descendant_count(root_pid: int) -> int | None:
-    """Descendant-process count under the pane pid from ONE ps snapshot.
-    None = probe failed — the caller must treat that as alive, never as stalled."""
+def parse_etime(text: str) -> float:
+    """ps etime ([[dd-]hh:]mm:ss) → seconds. Raises ValueError on a malformed field."""
+    text = text.strip()
+    days = 0
+    if "-" in text:
+        day_part, text = text.split("-", 1)
+        days = int(day_part)
+    parts = [int(p) for p in text.split(":")]
+    if not 2 <= len(parts) <= 3:
+        raise ValueError(text)
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    hours, minutes, seconds = parts
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def pane_descendants(root_pid: int) -> list[tuple[int, float]] | None:
+    """(pid, age_seconds) for every descendant of the pane pid, from ONE ps snapshot.
+    None on ANY probe uncertainty — ps failing, or the root pid absent from a
+    successful snapshot (died/reused) — and the caller must read None as alive:
+    a broken probe concluding 'stalled' is exactly the false verdict this guards."""
     try:
-        out = subprocess.run(["ps", "-axo", "pid=,ppid="],
-                             capture_output=True, text=True, timeout=5).stdout
+        proc = subprocess.run(["ps", "-axo", "pid=,ppid=,etime="],
+                              capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return None
-    children: dict[int, list[int]] = {}
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) != 2:
+    if proc.returncode != 0:
+        return None
+    children: dict[int, list[tuple[int, float]]] = {}
+    root_seen = False
+    for line in proc.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) != 3:
             continue
         try:
-            pid, ppid = int(parts[0]), int(parts[1])
+            pid, ppid, age = int(parts[0]), int(parts[1]), parse_etime(parts[2])
         except ValueError:
             continue
-        children.setdefault(ppid, []).append(pid)
+        if pid == root_pid:
+            root_seen = True
+        children.setdefault(ppid, []).append((pid, age))
+    if not root_seen:
+        return None
+    out: list[tuple[int, float]] = []
     seen: set[int] = set()
     queue = [root_pid]
     while queue:
-        for kid in children.get(queue.pop(), ()):
-            if kid not in seen:
-                seen.add(kid)
-                queue.append(kid)
-    return len(seen)
+        for pid, age in children.get(queue.pop(), ()):
+            if pid not in seen:
+                seen.add(pid)
+                out.append((pid, age))
+                queue.append(pid)
+    return out
+
+
+STALL_SLACK_SECS = 60.0
 
 
 def stream_stalled(sess: Session) -> tuple[bool, str]:
@@ -785,10 +815,14 @@ def stream_stalled(sess: Session) -> tuple[bool, str]:
       - the events file has not grown/moved for AGENT_WATCH_STALL_MINS minutes
         (default 12; <=0 disables). Live engines keep the file fresh — streamed
         thinking/progress frames, and omp answers the get_state probe itself;
-      - the pane's process tree has no descendant beyond the engine itself
-        (pane shell → engine = ≤1 descendant; a running tool is the engine's own
-        child, i.e. a SECOND descendant, and keeps the session alive — engines
-        that hold a persistent helper child simply never stall, the safe side)."""
+      - no descendant of the pane is YOUNGER than the silence (plus slack):
+        in-flight work spawns around/after the last frame (the tool_use/lifecycle
+        frame lands as the tool starts), while wrapper chains and persistent MCP
+        helpers predate it — so helper-rich trees cannot mask a wedge, and a long
+        quiet foreground tool, younger than the silence by construction, keeps the
+        session alive. (A flat descendant-count threshold was refuted live in
+        review: real panes carry 8-14 wrapper/helper descendants, which made the
+        stall verdict unreachable.)"""
     raw = os.environ.get("AGENT_WATCH_STALL_MINS", "12")
     try:
         mins = float(raw)
@@ -797,19 +831,22 @@ def stream_stalled(sess: Session) -> tuple[bool, str]:
     if mins <= 0:
         return False, ""
     try:
-        age = time.time() - os.path.getmtime(sess.events)
+        silence = time.time() - os.path.getmtime(sess.events)
     except OSError:
         return False, ""
-    if age < mins * 60:
+    if silence < mins * 60:
         return False, ""
     pane = str(sess.meta.get("pane_pid", ""))
     if not pane.isdigit():
         return False, ""
-    count = pane_descendant_count(int(pane))
-    if count is None or count > 1:
+    descendants = pane_descendants(int(pane))
+    if descendants is None:
         return False, ""
-    return True, (f"no new frame for {int(age // 60)}min and no tool child under "
-                  f"the pane (descendants={count})")
+    if any(age <= silence + STALL_SLACK_SECS for _pid, age in descendants):
+        return False, ""
+    return True, (f"no new frame for {int(silence // 60)}min and no in-flight work "
+                  f"under the pane ({len(descendants)} descendant(s), all older than "
+                  "the silence)")
 
 
 def classify(sess: Session) -> int:

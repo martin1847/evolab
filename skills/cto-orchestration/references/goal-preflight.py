@@ -13,7 +13,7 @@ import sys
 # `Preflight（编排者已实跑）: probe => result` is a legitimate declaration, and
 # rejecting it taught goal authors to move load-bearing notes away from the line
 LINE_RE = re.compile(
-    r"(?mi)^.*?\bPreflight(?:\s*[（(][^）)\n]*[）)])?\s*[:：]\s*(.*?)\s*=>\s*(.*?)\s*$")
+    r"(?mi)^.*?\bPreflight(\s*[（(][^）)\n]*[）)])?\s*[:：]\s*(.*?)\s*=>\s*(.*?)\s*$")
 UNRESOLVED = re.compile(
     r"^(?:(?:result|observed|status)\s*:\s*)?"
     r"(?:no|not[ -]?run|pending|todo|tbd|unknown|unverified|n/?a)"
@@ -80,8 +80,10 @@ def main():
     matches = LINE_RE.findall(body)
     if len(matches) != 1:
         return fail(f"expected exactly one 'Preflight: <probe> => <observed result>' line; found {len(matches)}")
-    probe, observed = (part.strip() for part in matches[0])
-    if not probe or not observed or PLACEHOLDER.search(probe + observed):
+    note, probe, observed = (part.strip() for part in matches[0])
+    # the annotation is part of the declaration — a placeholder hiding there is
+    # just as unresolved as one in the probe/result halves
+    if not probe or not observed or PLACEHOLDER.search(note + probe + observed):
         return fail("replace every placeholder with the probe actually run and its observed result")
     if UNRESOLVED.match(probe) or UNRESOLVED.match(observed):
         return fail("the cheapest refutation must be run before dispatch; unresolved/N/A is not evidence")

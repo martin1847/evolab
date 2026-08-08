@@ -5,7 +5,7 @@
 #                   [--no-preflight] [engine args...]
 #   agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d|--deliverable G]
 #   agentctl status <session>            # one-shot typed state (exit = verdict)
-#   agentctl watch  <session>            # block until terminal; typed exit 0-8
+#   agentctl watch  <session>            # block until terminal; typed exits (vocabulary below)
 #   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
 #
