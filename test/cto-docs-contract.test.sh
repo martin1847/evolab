@@ -105,6 +105,17 @@ chk_not_contains "goal row carries no clause summary (identity freeze)" "身份�
 chk_not_contains "goal row carries no clause summary (blinding)" "盲化" "$goal_body"
 chk_not_contains "skill routing row carries no clause summary (identity freeze)" "身份冻结" "$skill_body"
 chk_not_contains "skill routing row carries no clause summary (blinding)" "盲化" "$skill_body"
+# structural boundary (vocabulary denylists cannot catch paraphrase): the scenario row is pinned
+# byte-exact, its successor row must stay adjacent (nothing squeezed inside the row), and the
+# file-wide checkbox census is pinned — inserting ANY new operational row forces a deliberate
+# test update instead of sliding in silently.
+meas_row1='- [ ] 测量/评测类 Done-when（对比判定 / 命中率 / 基准 / 评测报告）→ 读 measurement-protocol.md，'
+meas_row2='  七条款逐条对照实例化进本 goal（细则该文件单源，本模板不复制）。'
+chk_eq "goal measurement row line 1 is byte-exact and unique" 1 "$(grep -cF -- "$meas_row1" "$GOAL")"
+chk_eq "goal measurement row line 2 is byte-exact and unique" 1 "$(grep -cF -- "$meas_row2" "$GOAL")"
+meas_ctx="$(grep -A2 -F -- "$meas_row1" "$GOAL")"
+chk_contains "goal measurement row has no interior additions" "- [ ] 鉴权/会话/用户数据相关改动" "$meas_ctx"
+chk_eq "goal checkbox census is pinned" 13 "$(grep -c '^- \[ \]' "$GOAL")"
 # structural completeness: exactly seven numbered clauses, one load-bearing invariant pinned each.
 chk_eq "protocol has exactly seven numbered clauses" 7 "$(grep -cE '^[0-9]+\. \*\*' "$MEAS")"
 chk_contains "c1 freezes instrument identity per batch" "禁与旧批合并" "$meas_body"
