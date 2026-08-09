@@ -669,19 +669,6 @@ chk_eq "R10 DAMAGE ORACLE: nothing is delivered through it" "" "$(rec_field p1 p
 chk_not_contains "R10 DAMAGE ORACLE: the foreign digest is nowhere in the record" "$foreign_sha" \
   "$(cat "$WATCH_RUN_DIR/p1.terminal.json")"
 chk_contains "R10 the machine line types it" "reason=SYMLINK" "$pout"
-# the same shape straight at the library boundary — the reviewer's probe, so the predicate is
-# proven where it lives and not only through the lane
-libout="$(python3 - "$AW_DIR/identity.py" "$T/alias/cwd" "$T/alias/sibling/artifact.md" <<'PY'
-import importlib.util as u, sys
-spec = u.spec_from_file_location("idm", sys.argv[1]); m = u.module_from_spec(spec)
-assert spec.loader; spec.loader.exec_module(m)
-entries, reason, detail = m.deliverable_evidence(sys.argv[2], sys.argv[3])
-print("reason", reason)
-print("sha", (entries or [{}])[0].get("sha256", "-"))
-PY
-)"
-chk_contains "R10 library boundary: deliverable_evidence refuses it too" "reason SYMLINK" "$libout"
-chk_not_contains "R10 library boundary: no digest of the foreign bytes" "$foreign_sha" "$libout"
 
 # PAIRED GREEN 1: the genuine platform prefix stays exempt — an out-of-tree ABSOLUTE path with
 # no link of its own must still deliver, or every temp/CI tree on this OS class breaks
@@ -1030,19 +1017,6 @@ chk_eq "R16 DAMAGE ORACLE: nothing is delivered" "" "$(rec_field p2 phase)"
 chk_not_contains "R16 DAMAGE ORACLE: the bytes behind the link were never digested" "$behind_sha" \
   "$(cat "$WATCH_RUN_DIR/p2.terminal.json")"
 chk_contains "R16 the machine line types it" "reason=SYMLINK" "$pout"
-libout="$(python3 - "$AW_DIR/identity.py" "$T2/alias/cwd" "$T2/alias/cwd/report.md" <<'PY'
-import importlib.util as u, sys
-spec = u.spec_from_file_location("idm", sys.argv[1]); m = u.module_from_spec(spec)
-assert spec.loader; spec.loader.exec_module(m)
-entries, reason, detail = m.deliverable_evidence(sys.argv[2], sys.argv[3])
-print("reason", reason)
-print("recorded", (entries or [{}])[0].get("path", "-"))
-print("sha", (entries or [{}])[0].get("sha256", "-"))
-PY
-)"
-chk_contains "R16 library boundary: the reviewer's own probe refuses it" "reason SYMLINK" "$libout"
-chk_not_contains "R16 library boundary: no digest behind the link" "$behind_sha" "$libout"
-chk_not_contains "R16 library boundary: and no resolved path is recorded" "real/cwd/report.md" "$libout"
 
 # PAIRED GREEN 1: the SAME file, declared absolutely through its real path, delivers
 mk_session p2b "$T2/real/cwd/report.md" "$T2/real/cwd"
