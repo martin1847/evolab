@@ -2718,7 +2718,7 @@ def cmd_supervisor_retire(args: argparse.Namespace) -> int:
         # is an `rm` shim that samples the run dir at the instant the lease disappears — so
         # swapping in os.unlink() here would silently change observable behaviour, which this
         # refactor is not allowed to do.
-        _rm_f(path, *globmod.glob(os.path.join(run, f".{name}.watch.super.json-*.tmp")))
+        _rm_f(path, *globmod.glob(globmod.escape(os.path.join(run, f".{name}.watch.super.json-")) + "*.tmp"))
         if not os.path.exists(path):
             break
         _sleep(0.1)
@@ -2879,7 +2879,8 @@ def _control_state_paths(run_dir: str, name: str) -> list[str]:
     # literal `.<session>.terminal.json-*.tmp` when nothing matched, and the executed argv is
     # part of teardown's observable behaviour, so the no-match case must argue it too
     pattern = os.path.join(run_dir, f".{name}.terminal.json-*.tmp")
-    paths.extend(sorted(globmod.glob(pattern)) or [pattern])
+    escaped = globmod.escape(os.path.join(run_dir, f".{name}.terminal.json-")) + "*.tmp"
+    paths.extend(sorted(globmod.glob(escaped)) or [pattern])
     paths.append(os.path.join(run_dir, f"{name}.terminal.consumed.json"))
     return paths
 
@@ -2968,7 +2969,7 @@ def cmd_stop_residue(args: argparse.Namespace) -> int:
         if os.path.lexists(path):
             _rm_f(path)
             cleaned = True
-    for debris in sorted(globmod.glob(os.path.join(run, f".{name}.terminal.json-*.tmp"))):
+    for debris in sorted(globmod.glob(globmod.escape(os.path.join(run, f".{name}.terminal.json-")) + "*.tmp")):
         _rm_f(debris)
         cleaned = True
     # orphan identity must not outlive the residue it belonged to
