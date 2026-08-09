@@ -109,7 +109,7 @@ duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原
 | 前端真实验证、状态形状矩阵、浏览器委派 | `references/frontend-verify.md` |
 | 评审 brief、ledger、收敛 | `references/review-dispatch.md` |
 | 基线与收工四件套 | `references/dispatch-baseline.md` |
-| 测量协议（测量/评测类 goal：身份冻结 / 三态真值表 / 盲化） | `references/measurement-protocol.md` |
+| 测量/评测类 goal 的测量协议 | `references/measurement-protocol.md` |
 | agentctl 命令面、duplex 机制、steering、guard wiring | `references/agentctl/README.md` |
 | 电在回路：承重规则下沉强制层、DENY 三件套、下沉判据 | `references/shock-in-the-loop.md` |
 | 主理人决策队列 | `references/decision-queue.md` |

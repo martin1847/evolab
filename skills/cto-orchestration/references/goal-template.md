@@ -69,8 +69,7 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
   **运行时真源**（DB 行 / 活进程 / 线上 endpoint），不拿构建 SHA、镜像 tag 等代理指标下生效结论
   （缺前置确认则 worker 自己发明等待、对已完成部署空转）。
 - [ ] 测量/评测类 Done-when（对比判定 / 命中率 / 基准 / 评测报告）→ 读 measurement-protocol.md，
-  七条款逐条对照实例化进本 goal（身份冻结 / 三态真值表恒定分母 / 评判盲化 / 噪声处置与重跑
-  纪律——细则该文件单源，本模板不复制）。
+  七条款逐条对照实例化进本 goal（细则该文件单源，本模板不复制）。
 - [ ] 鉴权/会话/用户数据相关改动 → 验证覆盖**状态形状矩阵**，不得只测新鲜快乐态；矩阵成员与
   制造方法见 frontend-verify「状态形状矩阵」，本模板不复制。
 - [ ] 涉及长耗时外部作业 → 写**等待配方**：禁止阻塞 sleep >60s，改有判据的短轮询（命令 + 达成
