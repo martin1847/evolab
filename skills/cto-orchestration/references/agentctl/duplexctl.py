@@ -2594,6 +2594,7 @@ def cmd_watch_wait(args: argparse.Namespace) -> int:
     poll, maxp = args.poll, args.max_polls
     cap = maxp * 2 + 24
     mark_seen, same = b"", 0
+    graced = False
     i = 1
     while i <= cap:
         mark = _lease_mark(run, name)
@@ -2605,6 +2606,16 @@ def cmd_watch_wait(args: argparse.Namespace) -> int:
             same, mark_seen = 1, mark
         rc, msg = _read_state(run, name, armed_seq=args.armed_seq,
                               lease_unchanged=same, poll=poll)
+        if rc == SUPERVISOR_LOST and not graced and "supervisor's last words" not in msg:
+            # retirement race: the killer writes the last-words note a beat AFTER the sensing
+            # process dies, so a LOST read inside that gap would report a mysterious death
+            # with no cause. ONE grace poll turns a mid-retirement read into the noted
+            # verdict; a real crash (no note ever) just repeats LOST one poll later.
+            graced = True
+            cap += 1                            # the deferred re-read must happen even when the
+            i += 1                              # grace lands on the final budgeted poll —
+            _sleep(poll)                        # bounded: one extra iteration, once, ever
+            continue
         if rc != WAIT_MORE:
             print(f"=== [{name}] {msg} ===")
             deliver_conclusion(run, name, rc, args.armed_seq, same, poll)
