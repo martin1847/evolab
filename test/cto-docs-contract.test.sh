@@ -23,6 +23,12 @@ retro_body="$(cat "$RETRO")"
 readme_body="$(cat ../skills/cto-orchestration/references/agentctl/README.md)"
 
 echo "== cto docs contract =="
+# white-box coupling ban (owner ruling 2026-08-09): tests drive the CLI. Dynamically loading the
+# runtime modules to poke internals freezes the internal ABI and taxes every restructure; the
+# probes never caught a field bug. Sanctioned consumers only: ws3/probe.py (fake-engine wire
+# mechanism), replay-corpus.py (consumes the shipped projector as the single source of truth).
+wb_offenders="$(grep -rl 'spec_from_file_location' . 2>/dev/null | sed 's|^\./||' | grep -v '__pycache__' | grep -vE '^(replay-corpus\.py|duplex-fixtures/ws3/probe\.py|cto-docs-contract\.test\.sh)$' || true)"
+chk_eq "white-box dynamic-load stays banned outside sanctioned consumers" "" "$wb_offenders"
 chk_contains "unified surface is agentctl" "agentctl start|steer|status|watch|stop" "$skill_body"
 # WS3: the provider capability matrix is RUNTIME-generated. The main skill keeps the control
 # principle and a pointer; the wire-level truth is asserted against duplexctl's one table.
