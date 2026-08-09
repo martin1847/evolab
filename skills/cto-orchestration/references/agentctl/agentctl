@@ -454,6 +454,21 @@ retire_supervisor() { # $1 session  [$2 why — left as the supervisor's last wo
     tmux kill-session -t "=$sup" 2>/dev/null
     reap_tree "$pane" "" >/dev/null 2>&1
   fi
+  # A waiter may still be attached. Retirement by an explicit lifecycle action is not a mystery
+  # death, and it must not read as one: leave the cause where `watch-state` relays it.
+  #
+  # The note goes out BEFORE the lease comes off, and that order is the contract, not tidiness:
+  # the missing lease IS the evidence that produces the waiter's typed 12, so anything meant to
+  # ride that verdict has to be on disk before the evidence appears. Written the other way
+  # round, a waiter polling in between got a correct 12 with no cause at all. Writing here is
+  # safe: the pane was reaped above and reap_tree returns only on an empty process group, so
+  # the supervisor's own signal note can no longer land after ours.
+  if [ -n "${2:-}" ]; then
+    super_note "$1" "SUPERVISOR-RETIRED: $2 — sensing stopped, no terminal conclusion published"
+  else
+    # no cause to leave — and a predecessor's last words are not this retirement's
+    rm -f "$DIR/$1.watch.super.exit" 2>/dev/null
+  fi
   # the lease is removed LAST and re-removed: a renewal already in flight when the kill landed
   # can recreate it a moment later, and a lease outliving its supervisor is exactly the evidence
   # a later waiter would misread as "someone is sensing".
@@ -463,11 +478,6 @@ retire_supervisor() { # $1 session  [$2 why — left as the supervisor's last wo
     [ -e "$DIR/$1.watch.super.json" ] || break
     sleep 0.1; i=$((i+1))
   done
-  rm -f "$DIR/$1.watch.super.exit" 2>/dev/null
-  # A waiter may still be attached. Retirement by an explicit lifecycle action is not a mystery
-  # death, and it must not read as one: leave the cause where `watch-state` relays it.
-  [ -n "${2:-}" ] && super_note "$1" \
-    "SUPERVISOR-RETIRED: $2 — sensing stopped, no terminal conclusion published"
   return 0
 }
 

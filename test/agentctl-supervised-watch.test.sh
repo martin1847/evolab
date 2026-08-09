@@ -576,6 +576,62 @@ chk_not_contains "M14 a retired supervisor never yields a DONE" "=== [m14r] DONE
 sw_clean
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
+echo "== M14b: the retirement note is published BEFORE the lease it explains disappears =="
+sw_sandbox
+# A waiter's typed 12 is produced by ONE observation: no lease. Retirement used to unlink the
+# lease first and write its last words afterwards, so a waiter reading inside that window got a
+# correct 12 with NO cause — safe, but a mystery death is exactly what the note exists to
+# prevent, and the M14 relay assertions above went flaky (which teaches re-running to green).
+# The window is too short to hit by polling, so this pins the WORST observation instant: an
+# `rm` shim looks at the run dir the moment the lease is unlinked, and runs the canonical
+# reader out of process — the read `agentctl watch` would have made had it polled right then.
+#
+# What is asserted is the ORDER (note on disk before the evidence that triggers the verdict),
+# never which verdict the reader reaches: a conclusion published before the retirement landed
+# outranks supervisor loss by design (`watch_state` priority 1), so pinning 12 here would be
+# pinning a race. The reader is kept for the oracle below — whatever verdict it gives, a
+# SUPERVISOR-LOST in this window must never be a bare one.
+cat > "$BIN/rm" <<'EOF'
+#!/usr/bin/env bash
+tgt=""
+for a in "$@"; do case "$a" in *.watch.super.json) tgt="$a";; esac; done
+/bin/rm "$@"; rc=$?
+if [ -n "$tgt" ] && [ -n "${RETIRE_PROBE_LOG:-}" ]; then
+  d="${tgt%/*}"; s="${tgt##*/}"; s="${s%.watch.super.json}"
+  { if [ -s "$d/$s.watch.super.exit" ]; then
+      printf 'note-present: %s\n' "$(cat "$d/$s.watch.super.exit")"
+    else printf 'note-absent\n'; fi
+    python3 "$RETIRE_PROBE_CTL" --run-dir "$d" watch-state "$s" 2>&1; echo "rc=$?"
+  } >> "$RETIRE_PROBE_LOG"
+fi
+exit "$rc"
+EOF
+chmod +x "$BIN/rm"
+seed m14o 70000; running m14o
+mkfifo "$WATCH_RUN_DIR/m14o.duplex.in" 2>/dev/null || true
+export AGENT_WATCH_MAX_POLLS=1000
+watch_bg m14o "$SANDBOX/m14o.w.log"
+await "[ -s '$WATCH_RUN_DIR/m14o.watch.super.json' ]" 100
+PROBE="$SANDBOX/m14o.probe.log"
+RETIRE_PROBE_LOG="$PROBE" RETIRE_PROBE_CTL="$DUPLEXCTL" \
+  bash "$AGENTCTL" steer m14o -m "start over" --replace >/dev/null 2>&1
+wait "$WPID_BG" 2>/dev/null
+probe="$(cat "$PROBE" 2>/dev/null)"
+chk_contains "M14b the last words are already on disk when the lease is unlinked" \
+  "note-present" "$probe"
+chk_not_contains "M14b DAMAGE ORACLE: the lease never vanishes ahead of the note" \
+  "note-absent" "$probe"
+chk_contains "M14b and they name the lifecycle action that retired the loop" \
+  "SUPERVISOR-RETIRED" "$probe"
+chk_contains "M14b and the verb responsible" "--replace" "$probe"
+chk_contains "M14b and state that nothing was concluded" "no terminal conclusion published" \
+  "$probe"
+chk_eq "M14b DAMAGE ORACLE: no SUPERVISOR-LOST read in that window is left without last words" \
+  "$(printf '%s\n' "$probe" | grep -c 'SUPERVISOR-LOST')" \
+  "$(printf '%s\n' "$probe" | grep -c "supervisor's last words")"
+sw_clean
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
 echo "== legacy --inline: the pre-supervised loop is still exactly available =="
 sw_sandbox
 seed lg 70000
