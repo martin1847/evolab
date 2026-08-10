@@ -23,6 +23,16 @@ import sys
 import threading
 import time
 
+# Real `codex app-server` rejects ANY extra CLI arg with a clap usage error before it speaks a
+# single frame (field 2026-08-10: agentctl appended --model to argv, launch died on the spot).
+# A fake that ignores sys.argv erases that rejection and makes the pinned-argv invariant
+# structurally untestable — so mirror it here (cold review M-1).
+if sys.argv[1:] != ["app-server"]:
+    sys.stderr.write(
+        "error: unexpected argument found: %s\n" % " ".join(sys.argv[1:] or ["<none>"]))
+    sys.exit(2)
+
+
 emit_lock = threading.Lock()
 state = {"active": None, "turns": 0, "cancelled": set()}
 

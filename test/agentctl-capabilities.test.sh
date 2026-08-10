@@ -412,7 +412,11 @@ export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
 # ── every provider launches under its DECLARED name and pinned argv ──────────────────────
 for e in omp claude codex; do
   export FAKE_PROVIDER_LOG="$SANDBOX/$e.log"
-  out="$(bash "$AGENTCTL" start "$e" "b_$e" "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+  # codex is the extra_argv=0 lane: --model must ride the PROTOCOL. The negative assertion
+  # below only bites if the start actually carries one (a --model-free start asserts nothing).
+  MDL=""; [ "$e" = codex ] && MDL="--model gpt-fake"
+  # shellcheck disable=SC2086 -- deliberate split: MDL is a literal two-token flag, or empty
+  out="$(bash "$AGENTCTL" start "$e" "b_$e" "$WT" --goal "$SANDBOX/goal.md" $MDL 2>&1)"; rc=$?
   chk_eq "C8 BEHAVIOUR: '$e' is a launchable provider name (start rc0)" 0 "$rc"
   chk_eq "C8 BEHAVIOUR: the goal frame really reached the $e engine" 1 \
     "$([ -s "$SANDBOX/$e.log" ] && echo 1 || echo 0)"
@@ -421,6 +425,10 @@ for e in omp claude codex; do
     "$(cat "$FAKE_TMUX_LAUNCH_LOG")"
   chk_contains "C8 BEHAVIOUR: and with the argv its spec pins" \
     "$(probe spec "$e" argv | awk '{print $NF}')" "$(cat "$FAKE_TMUX_LAUNCH_LOG")"
+  if [ "$e" = codex ]; then
+    chk_not_contains "C8 BEHAVIOUR: and NOTHING else — codex argv stays pinned, --model rides the protocol" \
+      "--model" "$(cat "$FAKE_TMUX_LAUNCH_LOG")"
+  fi
 done
 
 # ── omp: queuedSteer / midTurnSteer / replaceTurn each emit their declared frame ──────────
