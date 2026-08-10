@@ -16,12 +16,98 @@
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
 # extraction would be fragile in a guard.
-import sys, json, re, os
+import sys, json, re, os, subprocess
 
 
 def checker_error(message):
     sys.stderr.write(f"CHECKER-ERROR: {message}\n")
     return 2
+
+
+# ── rule (7) benign-prune support ────────────────────────────────────────────────────────
+# CLOSED SYNTAX. The benign fast path opens only when the WHOLE command text is ONE simple
+# prune call: `git [-C <path>] worktree prune [--dry-run|-v|--verbose]`. Matched on the RAW
+# command (never the quote-stripped view), separators are [ \t] only. Everything else fails
+# to match and falls through to the normal DENY+marker path — chains (`;` `&&` `||` `|`),
+# newlines, command substitution, env prefixes, `cd`, a second `-C`, `--git-dir` /
+# `--work-tree` / `-c`, path globs / variables / escapes. Rejection is BY CONSTRUCTION: no
+# dangerous form is ever enumerated, so an unlisted one cannot slip through as "not matched
+# as dangerous" — it is simply not the shape we can vouch for.
+# `--expire <t>` is deliberately OUT of the shape: `worktree list --porcelain` computes its
+# `prunable` annotations with the DEFAULT expiry, so a custom expire can reap entries the
+# annotation never showed us (e.g. a half-finished `worktree add` whose directory still
+# exists). The evidence would not cover the action.
+_PRUNE_BARE = r"[A-Za-z0-9_@%+=:,./^-]+"  # no quote/glob/$/~/space/shell metachar
+_PRUNE_PATH = r"(?:'[^'\n]*'|\"[^\"\n$`\\!]*\"|" + _PRUNE_BARE + r")"
+_PRUNE_CMD = re.compile(
+    r"git[ \t]+(?:-C[ \t]+(?P<path>" + _PRUNE_PATH + r")[ \t]+)?worktree[ \t]+prune"
+    r"(?:[ \t]+(?:--dry-run|-v|--verbose))*")
+
+
+def _porcelain_prunable(repo):
+    """Paths of every prunable worktree entry, or None when the judgement is UNAVAILABLE.
+    Strict invariant: a `worktree <path>` line opens a segment, every other key belongs to
+    the segment above it, no key repeats. Any deviation (orphan `prunable`, duplicate or
+    valueless `worktree`, unknown key, undecodable byte) returns None -> caller denies."""
+    try:
+        proc = subprocess.run(["git", "-C", repo, "worktree", "list", "--porcelain"],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        text = proc.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    keys = ("worktree", "HEAD", "branch", "bare", "detached", "locked", "prunable")
+    cur, seen, prunable = None, set(), []
+    for line in text.split("\n"):
+        if not line:
+            cur, seen = None, set()
+            continue
+        key, _, value = line.partition(" ")
+        if key not in keys or key in seen:
+            return None
+        if key == "worktree":
+            if not value:
+                return None
+            cur, seen = value, {key}
+            continue
+        if cur is None:
+            return None  # attribute without an owning segment
+        seen.add(key)
+        if key == "prunable":
+            prunable.append(cur)
+    return prunable
+
+
+def _benign_prune(command, payload):
+    """True only when this prune provably has nothing to lose: closed syntax AND every
+    prunable entry's worktree path is already gone. Fail-closed everywhere else."""
+    m = _PRUNE_CMD.fullmatch(command.strip(" \t\r\n"))
+    if not m:
+        return False
+    # hook payload cwd only — the guard process's own cwd is NOT the shell's, so
+    # os.getcwd() must never stand in for it (it would judge the wrong repo).
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        cwd = None
+    arg = m.group("path")
+    if arg is None:
+        repo = cwd
+    else:
+        arg = arg[1:-1] if arg[0] in "'\"" else arg
+        if not arg:
+            return False
+        repo = arg if os.path.isabs(arg) else (os.path.join(cwd, arg) if cwd else None)
+    if not repo:
+        return False
+    prunable = _porcelain_prunable(repo)
+    if prunable is None:
+        return False
+    # lexists, not exists: a DANGLING SYMLINK is still something standing at that path.
+    return not any(os.path.lexists(p) for p in prunable)
 
 
 def main():
@@ -341,6 +427,33 @@ def main():
         destroy = [w for w in wts
                    if w.group(1) == "prune" or re.search(r"(?:^|\s)(?:--force|-f)\b", w.group(2))]
         if destroy:
+            # BENIGN PRUNE FAST PATH (field 2026-08-10, seat A: a pure-metadata prune —
+            # every prunable entry's directory already gone — cost two DENY walls and a
+            # marker ritual for zero possible loss). Opens ONLY on the closed syntax above
+            # AND positive evidence from `worktree list --porcelain`; the marker is NOT
+            # touched, `remove --force` is unaffected.
+            # TOCTOU, accepted and unresolved: between our `list` and the shell's `prune`,
+            # a path we saw as gone could reappear (a `worktree add` landing in that exact
+            # window). Damage ceiling then = that entry's METADATA is reaped: worktree files
+            # and branch ref both survive, but the tree loses its git link (`git status`
+            # rc=128) and `git worktree repair` CANNOT rebuild it (measured, git 2.50.1) —
+            # recovery is manual re-add plus migrating uncommitted work. Accepted because
+            # the window is milliseconds AND it takes a vanished path reappearing inside it,
+            # while file bytes are never lost. No lock, no second look.
+            if _benign_prune(ti["command"], data):
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "permissionDecisionReason": (
+                            "cto-guard: benign `git worktree prune` — `git worktree list "
+                            "--porcelain` shows every prunable entry's worktree path is already "
+                            "gone, so this reaps dead metadata only (no files, no branch refs). "
+                            "Override marker untouched."
+                        ),
+                    }
+                }))
+                return 0
             # Auditable ONE-SHOT override (shock-in-the-loop §4 "override 有形"; gap hit
             # 2026-07-21: an already-approved prune had no path through this DENY). The marker
             # is consumed on use so it can never linger as a standing bypass; it lifts the DENY

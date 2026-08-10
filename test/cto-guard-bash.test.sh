@@ -213,6 +213,27 @@ run 'git -C "/repo with space" worktree remove --force wt'
 chk_eq "quoted -C path force remove denied" 2 "$RC"
 run 'git -c core.quotePath=false worktree prune'
 chk_eq "-c global-option prune denied" 2 "$RC"
+# benign prune: metadata-only prune auto-allows, everything unproven keeps the DENY.
+# Fixture: one prunable entry whose dir is GONE (nothing to lose) + one prunable entry
+# whose dir SURVIVES (`.git` removed, files still there = a real target).
+WT="$G8ROOT/wt"; mkdir -p "$WT"
+( git init -q "$WT/repo" && cd "$WT/repo" && git commit -q --allow-empty -m init \
+  && git worktree add -q "$WT/gone" && git worktree add -q "$WT/here" ) >/dev/null 2>&1
+rm -rf "$WT/gone"; rm -f "$WT/here/.git"
+run "git -C $WT/repo worktree prune"
+chk_eq "prune with a surviving prunable worktree stays denied" 2 "$RC"
+rm -rf "$WT/here"
+run "git -C $WT/repo worktree prune"
+chk_contains "metadata-only prune auto-allowed" "benign" "$OUT"
+run "git -C $WT/repo worktree prune && git -C $WT/other worktree prune"
+chk_eq "multi-repo prune chain is outside the closed syntax (denied)" 2 "$RC"
+# porcelain we cannot parse ⇒ judgement unavailable ⇒ deny (orphan `prunable`, no segment)
+FAKEGIT="$G8ROOT/fakegit"; mkdir -p "$FAKEGIT"
+{ echo '#!/bin/sh'; echo 'echo "prunable orphan"'; } > "$FAKEGIT/git"; chmod +x "$FAKEGIT/git"
+OLDPATH="$PATH"; PATH="$FAKEGIT:$PATH"
+run "git -C $WT/repo worktree prune"
+PATH="$OLDPATH"
+chk_eq "malformed porcelain denies (fail-closed)" 2 "$RC"
 
 # ── (8) cwd anchoring: umbrella workspaces deny unanchored git/gh; single-repo never fires ──
 GUARD_CWD="$UMB_ROOT"

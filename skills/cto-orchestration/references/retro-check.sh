@@ -166,6 +166,39 @@ if [ -d "$AWDIR" ] && [ -n "$TOP" ]; then
   if [ "$dead" -gt 0 ]; then fail "$dead 本仓终态会话未清 — agentctl stop 收口（引擎进程与控制态在泄漏）"
   else ok "no terminal-but-uncleaned session for this repo"; fi
   [ "$live" -gt 0 ] && warn "$live live/unknown session(s) of this repo still registered:$livenames — 逐个确认是有意长跑，其余 stop"
+  # FOREIGN tmux sessions — live sessions matching NO recorded session. The comparison set
+  # is EVERY recorded session (all repos, plus each `<s>-watchd` companion): filtering by
+  # this repo's cwd would report other seats' legitimate sessions as foreign. Field
+  # 2026-08-10: a seat with zero dispatch records read "clean up finished sessions" as a
+  # bare `tmux ls` sweep and killed 6+ sessions owned by other seats. So: WARN ONLY —
+  # never FAIL, never kill, and a session name is an exact string, never a shell pattern.
+  known=""
+  for m in "$AWDIR"/*.duplex.meta; do
+    [ -e "$m" ] || continue
+    known="$known$(basename "$m" .duplex.meta)
+$(basename "$m" .duplex.meta)-watchd
+"
+  done
+  if command -v tmux >/dev/null 2>&1; then
+    tse="$(mktemp)"; tsout="$(tmux list-sessions -F '#{session_name}' 2>"$tse")"; trc=$?
+    tsmsg="$(cat "$tse")"; rm -f "$tse"
+    if [ "$trc" != 0 ]; then
+      # no server = nobody home (silent); anything else is an UNCHECKED face, not a clean one
+      case "$tsmsg" in
+        *"no server running"*|*"error connecting to"*|*"no sessions"*) ;;
+        *) warn "CHECKER-ERROR: tmux list-sessions rc=$trc (${tsmsg:-no message}) — FOREIGN 面未检查，别当 clean";;
+      esac
+    else
+      foreign=""
+      while IFS= read -r sname; do
+        [ -n "$sname" ] || continue
+        # quote each name: a session name may contain spaces, so an unquoted list would
+        # read as more (or fewer) sessions than it names
+        printf '%s\n' "$known" | grep -qxF -- "$sname" || foreign="$foreign \"$sname\""
+      done < <(printf '%s\n' "$tsout")
+      [ -n "$foreign" ] && warn "FOREIGN:$foreign — tmux 会话不在任何记录会话中（可能属他人/他席位）：只报不杀，未经确认勿动"
+    fi
+  fi
 else echo "  [skip] no agentctl run dir / not a git repo"; fi
 
 echo "== result: $fails FAIL, $warns warn =="

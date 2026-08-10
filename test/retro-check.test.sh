@@ -177,5 +177,27 @@ assert_rc "$rc" 0 "Q/nasty path rc"
 assert_has "$out" "git -C $(printf '%q' "$np") branch backup" "Q/remedy shell-escapes the nasty path"
 assert_has "$out" "git -C $(printf '%q' "$np") reset --hard origin/main" "Q/reset half is escaped and ref-complete"
 
+# Case R — a live tmux session in NO record → FOREIGN warn, rc unchanged, session untouched.
+# Real tmux on a private socket (shim on PATH) so the machine's own sessions stay invisible.
+if command -v tmux >/dev/null 2>&1; then
+  rt="$(command -v tmux)"; ftd="$(mktemp -d)"
+  printf '#!/bin/sh\nexec %s -L rc-foreign-%s "$@"\n' "$rt" "$$" > "$ftd/tmux"; chmod +x "$ftd/tmux"
+  r="$(mkrepo)"; aw="$(mkaw)"
+  # tmux lists sessions alphabetically: the recorded pair sorts BEFORE the foreign one, so
+  # a broken record filter would prepend them and break the exact "FOREIGN: <name>" literal.
+  printf 'engine=omp\ncwd=/somewhere/else\n' > "$aw/rcf-arec.duplex.meta"
+  "$ftd/tmux" new-session -d -s rcf-arec sleep 300         # recorded → must NOT be flagged
+  "$ftd/tmux" new-session -d -s rcf-arec-watchd sleep 300  # its watcher → must NOT be flagged
+  "$ftd/tmux" new-session -d -s rcf-zforeign sleep 300     # nobody's record → FOREIGN
+  out="$(runaw "$r" "$aw" "$ftd")"; rc=$?
+  alive="$("$ftd/tmux" has-session -t "=rcf-zforeign" 2>/dev/null && echo ALIVE || echo GONE)"
+  "$ftd/tmux" kill-server >/dev/null 2>&1
+  assert_rc "$rc" 0 "R/foreign is warn-only"
+  assert_has "$out" 'FOREIGN: "rcf-zforeign"' "R/foreign named, recorded session+watchd excluded"
+  assert_has "$alive" "ALIVE" "R/foreign session left running (只报不杀)"
+else
+  echo "  [skip] no tmux — FOREIGN case skipped"
+fi
+
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]
