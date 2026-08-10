@@ -8,6 +8,7 @@
 #   agentctl watch  <session> [--inline]  # block until terminal; typed exits (vocabulary below)
 #   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
+#   agentctl inventory --dry-run         # read-only candidate overview (never kills anything)
 #
 # ONE lane, three engines (unified 2026-07-19): each runs its native duplex stdio protocol
 # long-lived in a tmux supervisor pane; steering is a protocol frame on the session fifo
@@ -44,6 +45,7 @@ usage() {
   echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [engine args...]" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]" >&2
   echo "       agentctl status <session> | watch <session> [--inline] | stop <session> [cwd] | capabilities [--json]" >&2
+  echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
   exit 1
 }
 
@@ -86,6 +88,30 @@ reap_tree() { # $1 pane_pid (== pgid)  $2 expected leader lstart ("" = pid read 
     return 1
   fi
   echo "reaped process group $pg (KILL)"
+}
+
+# Escaped children are OUTSIDE the pane's group by construction (setsid / double fork), so the
+# group-scoped reap above cannot see them and they outlive the stop (field 2026-08: one stop
+# left 32 MCP children, ~700MB, oldest 6 days). These two calls bracket the reap and REPORT
+# that gap on stderr — shared verbatim by both stop branches. They add NO signal of any kind:
+# the snapshot is evidence, never a kill list, a recycled pid is not a survivor, and a probe
+# that cannot answer prints [unknown] rather than letting silence read as clean. Judgement is
+# duplexctl's (thin-entry contract); the shell only brackets the reap with it.
+SURV_SNAP=""
+survivor_probe() { # $1 session  $2 pane pgid ("" = no pane to probe: no snapshot, no advisory)
+  SURV_SNAP=""
+  [ -n "${2:-}" ] || return 0
+  mkdir -p "$DIR" 2>/dev/null
+  SURV_SNAP="$DIR/.$1.stop-probe.json"
+  rm -f "$SURV_SNAP"
+  ctl stop-probe "$1" --pane-pid "$2" --snapshot "$SURV_SNAP" >/dev/null 2>&1 || true
+  return 0
+}
+survivor_advise() { # $1 session — stderr advisory only; never signals, never touches stop's rc
+  [ -n "$SURV_SNAP" ] || return 0
+  ctl stop-survivors "$1" --snapshot "$SURV_SNAP" || true
+  rm -f "$SURV_SNAP"; SURV_SNAP=""
+  return 0
 }
 
 # The BLOCKED.md footer IS the ask-user protocol: headless engines cannot prompt, so "on doubt,
@@ -410,6 +436,8 @@ cmd_stop() {
       live="$(tmux display-message -p -t "=$S:" '#{pane_dead} #{pane_pid}' 2>/dev/null)"
       live_pg=""; case "$live" in "0 "*) live_pg="${live#0 }";; esac
       meta_pg="$(meta_get "$S" pane_pid)"; meta_ls="$(meta_get "$S" pane_lstart)"
+      # snapshot BEFORE the kill: after it, the pane is gone and its escapees unattributable
+      survivor_probe "$S" "${live_pg:-$meta_pg}"
       tmux kill-session -t "=$S" 2>/dev/null && echo "killed tmux session $S" || echo "no tmux session $S"
       # Cleanup precedes the reap: the marker guard prices in a µs kill→cleanup gap, a grace-long
       # reap would stretch it to seconds (S3). The sentinel brackets the reap from INSIDE these two
@@ -418,6 +446,7 @@ cmd_stop() {
       if [ -n "$live_pg" ]; then reap_tree "$live_pg" ""
       else reap_tree "$meta_pg" "$meta_ls"; fi
       REAP_RC=$?
+      survivor_advise "$S"
       ctl stop-sentinel "$S" --token "$STOP_TOK"
       # a refused identity clear fails stop's contract: the name is not free to reuse
       [ "$ID_RC" = 0 ] || exit 1
@@ -429,7 +458,9 @@ cmd_stop() {
       if tmux has-session -t "=$S" 2>/dev/null; then
         live="$(tmux display-message -p -t "=$S:" '#{pane_dead} #{pane_pid}' 2>/dev/null)"
         live_pg=""; case "$live" in "0 "*) live_pg="${live#0 }";; esac
+        survivor_probe "$S" "$live_pg"
         tmux kill-session -t "=$S" 2>/dev/null; reap_tree "$live_pg" "" || reap_rc=1
+        survivor_advise "$S"
         echo "killed bare tmux session $S"; cleaned=1
       fi
       ctl stop-residue "$S" --killed "$cleaned" --reap-rc "$reap_rc"; exit $? ;;
@@ -446,6 +477,12 @@ case "${1:-}" in
             "") "$PY" "$CTL" capabilities ;;
             --json) "$PY" "$CTL" capabilities --json ;;
             *) echo "ERR: unknown capabilities option '$1' (only --json)" >&2; exit 1 ;;
+          esac ;;
+  # read-only by construction: the argument contract is refused HERE, before any probe runs
+  inventory) shift; case "${1:-}" in
+            --dry-run) [ "$#" -eq 1 ] || { echo "ERR: inventory takes nothing beyond --dry-run (got: ${*:2})" >&2; exit 1; }
+                       exec "$PY" "$CTL" --run-dir "$DIR" inventory --dry-run ;;
+            *) echo "ERR: inventory is read-only and is spelled 'agentctl inventory --dry-run'${1:+ — got '$1'}; there is no --apply" >&2; exit 1 ;;
           esac ;;
   stop)   shift; cmd_stop "$@" ;;
   ""|-h|--help) usage ;;

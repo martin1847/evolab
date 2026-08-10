@@ -819,6 +819,77 @@ def pane_descendants(root_pid: int) -> list[tuple[int, float]] | None:
     return out
 
 
+# ── escaped-descendant visibility ─────────────────────────────────────────────
+# reap_tree is process-GROUP scoped on purpose — one pgid we own, never a global kill — so a
+# child that setsid()s out of the pane's group is invisible to it and outlives the stop
+# (field 2026-08: one stop left 32 MCP children behind, ~700MB, oldest 6 days). What follows
+# makes that gap VISIBLE and nothing more: it never becomes a kill list, because the only
+# processes stop signals are the members of the one group it already owned.
+PS_IDENTITY_FMT = "pid=,ppid=,pgid=,lstart=,etime=,args="
+_LSTART_RE = re.compile(r"\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}")
+
+
+def ps_identity_rows() -> list[dict] | None:
+    """Every process as {pid, ppid, pgid, lstart, etime, cmd} from ONE ps snapshot, or None
+    on ANY probe uncertainty. Same discipline as pane_descendants: a row this parser cannot
+    read might BE the process the caller is about to reason about, so an unreadable row makes
+    the whole snapshot uncertainty instead of a shorter, confident-looking list."""
+    try:
+        proc = subprocess.run(["ps", "-axo", PS_IDENTITY_FMT],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    rows: list[dict] = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(None, 9)          # pid ppid pgid + 5 lstart fields + etime + argv
+        if len(parts) < 9:
+            return None
+        lstart = " ".join(parts[3:8])        # normalized here so both probes compare equal
+        if not _LSTART_RE.fullmatch(lstart):
+            return None
+        try:
+            pid, ppid, pgid = int(parts[0]), int(parts[1]), int(parts[2])
+            parse_etime(parts[8])
+        except ValueError:
+            return None
+        rows.append({"pid": pid, "ppid": ppid, "pgid": pgid, "lstart": lstart,
+                     "etime": parts[8], "cmd": parts[9] if len(parts) > 9 else ""})
+    return rows
+
+
+def escaped_descendants(root_pid: int) -> tuple[list[dict] | None, str]:
+    """(rows, why-not) — descendants of root_pid sitting OUTSIDE its process group, from one
+    snapshot. In-group descendants are excluded deliberately: those are exactly what the reap
+    owns, and reap_tree already reports its own survivors. None = the probe cannot answer."""
+    rows = ps_identity_rows()
+    if rows is None:
+        return None, "ps snapshot failed or unparseable"
+    kids: dict[int, list[dict]] = {}
+    root: dict | None = None
+    for row in rows:
+        if row["pid"] == root_pid:
+            root = row
+        kids.setdefault(row["ppid"], []).append(row)
+    if root is None:
+        return None, f"pane pid {root_pid} absent from a successful ps snapshot (already gone)"
+    out: list[dict] = []
+    seen: set[int] = set()
+    queue = [root_pid]
+    while queue:
+        for row in kids.get(queue.pop(), ()):
+            if row["pid"] in seen:
+                continue
+            seen.add(row["pid"])
+            queue.append(row["pid"])         # traverse THROUGH escapees: their kids escaped too
+            if row["pgid"] != root["pgid"]:
+                out.append(row)
+    return out, ""
+
+
 def complete_frames_integrity(sess: Session) -> tuple[list[dict], bool]:
     """All frames from COMPLETE lines from the stream START, plus a clean flag —
     False when any complete non-empty line failed to decode. Junk the stall path
@@ -3001,6 +3072,169 @@ def cmd_stop_residue(args: argparse.Namespace) -> int:
           file=sys.stderr)
     return 1
 
+
+ADVISORY_CMD_CLIP = 120     # advisory lines stay bounded; argv's head is the identifying part
+ADVISORY_MAX_ROWS = 8
+
+
+def cmd_stop_probe(args: argparse.Namespace) -> int:
+    """Pre-kill half of the escaped-descendant advisory: record who is ALREADY outside the
+    pane's process group. Evidence, not a target list — no signal is ever sent because of it."""
+    rows, why = escaped_descendants(args.pane_pid)
+    payload = {"root": args.pane_pid, "probe": "ok" if rows is not None else "failed",
+               "why": why, "procs": rows or []}
+    try:
+        with open(args.snapshot, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+    except OSError:
+        pass        # a probe we cannot even record reports itself: stop-survivors finds no file
+    return 0
+
+
+def cmd_stop_survivors(args: argparse.Namespace) -> int:
+    """Post-reap half. A survivor is a snapshot pid still alive under the SAME start time; a
+    recycled pid is NOT one and triggers nothing. Advisory in the strict sense: it never
+    changes stop's exit code, and a probe that cannot answer says [unknown] rather than
+    nothing — a broken probe reading as 'clean' is the false verdict this exists to prevent."""
+    def unknown(why: str) -> int:
+        print(f"ADVISORY: stop {args.session}: escaped-descendant probe [unknown] ({why}) — "
+              "survivors outside the pane's process group were NOT observable", file=sys.stderr)
+        return 0
+    try:
+        with open(args.snapshot, encoding="utf-8") as fh:
+            snap = json.load(fh)
+    except (OSError, ValueError):
+        return unknown("pre-kill snapshot missing or unreadable")
+    if snap.get("probe") != "ok":
+        return unknown(str(snap.get("why") or "pre-kill snapshot failed")[:ADVISORY_CMD_CLIP])
+    before = {str(p["pid"]): p for p in snap.get("procs", ())}
+    if not before:
+        return 0
+    # our own pid rides along as the known positive: "they are all gone" only means anything
+    # from a list that provably contains a process we KNOW is running (cf. ps_start_times).
+    me = str(os.getpid())
+    live = ps_start_times([me, *before])
+    if live is None or me not in live:
+        return unknown("post-reap re-probe unusable")
+    surv = [p for pid, p in sorted(before.items(), key=lambda kv: int(kv[0]))
+            if " ".join(live.get(pid, "").split()) == p["lstart"]]
+    if not surv:
+        return 0
+    shown = "; ".join(f"pid={p['pid']} age={p['etime']} cmd={p['cmd'][:ADVISORY_CMD_CLIP]}"
+                      for p in surv[:ADVISORY_MAX_ROWS])
+    more = f" [+{len(surv) - ADVISORY_MAX_ROWS} more]" if len(surv) > ADVISORY_MAX_ROWS else ""
+    print(f"ADVISORY: stop {args.session}: {len(surv)} descendant(s) escaped the pane's process "
+          f"group and survived the reap — NOT signalled (stop only ever signals the one pgid it "
+          f"owns): {shown}{more}", file=sys.stderr)
+    return 0
+
+
+# ── inventory ─────────────────────────────────────────────────────────────────
+# Two censuses nothing else owns: control state that drifted from tmux reality, and engine
+# processes PID 1 adopted (field 2026-08: 38 orphans, 12-19 days old, 2.2GiB, found by hand).
+# Every row is a CANDIDATE — something to look at, never something this tool acts on. There is
+# no --apply here or planned, and the verb refuses every spelling but `inventory --dry-run`.
+ENGINE_WRAPPER_HOSTS = ("node", "bun", "python", "python3")
+
+
+def engine_binaries() -> set[str]:
+    """The allowlist's engine half, DERIVED from the one provider table — a second,
+    hand-maintained engine list here IS the drift that rule exists to kill."""
+    return {rec["bin"] for rec in PROVIDERS.values()}
+
+
+def engine_match(cmd: str) -> str | None:
+    """Which declared matcher claims this argv, or None. Allowlist by basename only."""
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        argv = cmd.split()
+    if not argv:
+        return None
+    bins = engine_binaries()
+    head = os.path.basename(argv[0])
+    if head in bins:
+        return f"direct:{head}"
+    if head in ENGINE_WRAPPER_HOSTS:
+        for tok in argv[1:]:
+            if os.path.basename(tok) in bins:
+                return f"wrapper:{head}->{os.path.basename(tok)}"
+    return None
+
+
+def inventory_control(run: str) -> tuple[list[str], str]:
+    """(rows, why-unknown) for the control-state block. BOTH sources must succeed completely
+    before this block is allowed to report emptiness: a half-probed census reading as "clean"
+    is worse than one that says it does not know."""
+    try:
+        entries = os.listdir(run)
+    except FileNotFoundError:
+        entries = []                # a run dir that was never created IS zero records
+    except OSError as exc:
+        return [], f"run dir {run} unreadable ({exc.strerror})"
+    records = {n[: -len(".duplex.meta")] for n in entries if n.endswith(".duplex.meta")}
+    try:
+        probe = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                               capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [], f"tmux probe failed ({exc})"
+    if probe.returncode == 0:
+        live = {s.strip() for s in probe.stdout.splitlines() if s.strip()}
+    elif "no server running" in probe.stderr:
+        live = set()                # a server that was never started IS zero sessions
+    else:
+        return [], f"tmux list-sessions rc={probe.returncode}: {probe.stderr.strip()[:120]}"
+    rows = [f"{'record-without-tmux':<19}  {n}" for n in sorted(records - live)]
+    for name in sorted(live - records):
+        # attribution is a SIGNAL, not a guess: the name owns files in the run dir, it is a
+        # supervisor session, or its supervisor is up. Anything else is somebody else's shell
+        # and gets listed as unattributed rather than counted as an agentctl leak.
+        attributed = (any(e.startswith(f"{name}.") for e in entries)
+                      or name.endswith("-watchd") or f"{name}-watchd" in live)
+        label = "tmux-without-record" if attributed else "unattributed"
+        rows.append(f"{label:<19}  {name}")
+    return rows, ""
+
+
+def inventory_orphans() -> tuple[list[str], str]:
+    """(rows, why-unknown) for the PPID=1 engine census, from one ps snapshot."""
+    rows = ps_identity_rows()
+    if rows is None:
+        return [], "ps snapshot failed or unparseable"
+    out = []
+    for row in rows:
+        if row["ppid"] != 1:
+            continue
+        label = engine_match(row["cmd"])
+        if label is None:
+            continue
+        out.append(f"{'orphan-candidate':<19}  pid={row['pid']} age={row['etime']} "
+                   f"matcher={label} cmd={row['cmd'][:ADVISORY_CMD_CLIP]}")
+    return out, ""
+
+
+def cmd_inventory(args: argparse.Namespace) -> int:
+    """Read-only candidate overview. Nothing here signals anything, ever."""
+    bins = "|".join(sorted(engine_binaries()))
+    print("== agentctl inventory --dry-run — CANDIDATES only; nothing is signalled ==")
+    print(f"[matchers] direct: basename(argv[0]) in {{{bins}}} (from the provider table) · "
+          f"wrapper: {{{'|'.join(ENGINE_WRAPPER_HOSTS)}}} carrying one of those basenames")
+    print("[boundary] FP: any PPID=1 process merely WEARING an engine name (ChatGPT.app, a "
+          "login-launched interactive CLI) lands here — rows are candidates, not processes "
+          "this tool claims to own. FN: AGENTCTL_BIN_* overrides, renamed binaries and "
+          "undeclared wrappers are invisible to this list.")
+    for title, (rows, why) in (("control-state reconciliation", inventory_control(args.run_dir)),
+                               ("engine-orphan census (PPID=1)", inventory_orphans())):
+        print(f"-- {title} --")
+        if why:
+            print(f"[unknown] {title}: {why} — this block is NOT a clean bill")
+        elif not rows:
+            print("(none)")
+        else:
+            print("\n".join(rows))
+    return 0
+
+
 def _knob(var: str, fallback: str) -> str:
     """`${VAR:-fallback}`, verbatim: the shell used to expand these three watch knobs and pass
     them down, so the same empty-or-unset rule and the same failure on a non-numeric value
@@ -3185,6 +3419,27 @@ def main() -> None:
     p_res.add_argument("--reap-rc", type=int, default=0, dest="reap_rc",
                        help="exit code the shell's own reap produced")
     p_res.set_defaults(func=cmd_stop_residue)
+
+    p_probe = sub.add_parser("stop-probe", help="pre-kill snapshot of descendants ALREADY "
+                                                "outside the pane's process group")
+    p_probe.add_argument("session")
+    p_probe.add_argument("--pane-pid", type=int, required=True, dest="pane_pid")
+    p_probe.add_argument("--snapshot", required=True, help="where the pre-kill evidence lands")
+    p_probe.set_defaults(func=cmd_stop_probe)
+
+    p_surv = sub.add_parser("stop-survivors", help="post-reap re-probe; stderr advisory only — "
+                                                   "never a signal, never stop's rc")
+    p_surv.add_argument("session")
+    p_surv.add_argument("--snapshot", required=True)
+    p_surv.set_defaults(func=cmd_stop_survivors)
+
+    # --dry-run is REQUIRED, not defaulted: the read-only promise has to be spelled out by the
+    # caller, so no future flag can quietly turn this verb into one that acts.
+    p_inv = sub.add_parser("inventory", help="read-only candidate overview: control-state drift "
+                                             "+ PPID=1 engine orphans")
+    p_inv.add_argument("--dry-run", action="store_true", required=True, dest="dry_run",
+                       help="the ONLY accepted spelling; this verb never acts")
+    p_inv.set_defaults(func=cmd_inventory)
 
     args = parser.parse_args()
     sys.exit(args.func(args))
