@@ -861,6 +861,11 @@ def ps_identity_rows() -> list[dict] | None:
     return rows
 
 
+# The one "nothing to look at" reason, kept as a constant so the probe half can tell it apart
+# from a probe that tried and could not answer (m-1: [n/a] vs [unknown]).
+PANE_GONE_WHY = "pane pid {pid} absent from a successful ps snapshot (already gone)"
+
+
 def escaped_descendants(root_pid: int) -> tuple[list[dict] | None, str]:
     """(rows, why-not) — descendants of root_pid sitting OUTSIDE its process group, from one
     snapshot. In-group descendants are excluded deliberately: those are exactly what the reap
@@ -875,7 +880,7 @@ def escaped_descendants(root_pid: int) -> tuple[list[dict] | None, str]:
             root = row
         kids.setdefault(row["ppid"], []).append(row)
     if root is None:
-        return None, f"pane pid {root_pid} absent from a successful ps snapshot (already gone)"
+        return None, PANE_GONE_WHY.format(pid=root_pid)
     out: list[dict] = []
     seen: set[int] = set()
     queue = [root_pid]
@@ -3081,8 +3086,11 @@ def cmd_stop_probe(args: argparse.Namespace) -> int:
     """Pre-kill half of the escaped-descendant advisory: record who is ALREADY outside the
     pane's process group. Evidence, not a target list — no signal is ever sent because of it."""
     rows, why = escaped_descendants(args.pane_pid)
-    payload = {"root": args.pane_pid, "probe": "ok" if rows is not None else "failed",
-               "why": why, "procs": rows or []}
+    # "gone" is not "failed": nothing to look at is a different verdict from a probe that
+    # looked and could not answer, and stop-survivors renders the two with distinct tokens.
+    state = ("ok" if rows is not None
+             else "gone" if why == PANE_GONE_WHY.format(pid=args.pane_pid) else "failed")
+    payload = {"root": args.pane_pid, "probe": state, "why": why, "procs": rows or []}
     try:
         with open(args.snapshot, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
@@ -3096,17 +3104,23 @@ def cmd_stop_survivors(args: argparse.Namespace) -> int:
     recycled pid is NOT one and triggers nothing. Advisory in the strict sense: it never
     changes stop's exit code, and a probe that cannot answer says [unknown] rather than
     nothing — a broken probe reading as 'clean' is the false verdict this exists to prevent."""
-    def unknown(why: str) -> int:
-        print(f"ADVISORY: stop {args.session}: escaped-descendant probe [unknown] ({why}) — "
+    def note(token: str, why: str) -> int:
+        print(f"ADVISORY: stop {args.session}: escaped-descendant probe {token} ({why}) — "
               "survivors outside the pane's process group were NOT observable", file=sys.stderr)
         return 0
+
+    def unknown(why: str) -> int:
+        return note("[unknown]", why)
     try:
         with open(args.snapshot, encoding="utf-8") as fh:
             snap = json.load(fh)
     except (OSError, ValueError):
         return unknown("pre-kill snapshot missing or unreadable")
     if snap.get("probe") != "ok":
-        return unknown(str(snap.get("why") or "pre-kill snapshot failed")[:ADVISORY_CMD_CLIP])
+        # [n/a]: there was nothing to probe. [unknown] stays reserved for a probe that tried
+        # and could not answer, so the token an operator must not read as clean keeps its edge.
+        return note("[n/a]" if snap.get("probe") == "gone" else "[unknown]",
+                    str(snap.get("why") or "pre-kill snapshot failed")[:ADVISORY_CMD_CLIP])
     before = {str(p["pid"]): p for p in snap.get("procs", ())}
     if not before:
         return 0
@@ -3125,7 +3139,10 @@ def cmd_stop_survivors(args: argparse.Namespace) -> int:
     more = f" [+{len(surv) - ADVISORY_MAX_ROWS} more]" if len(surv) > ADVISORY_MAX_ROWS else ""
     print(f"ADVISORY: stop {args.session}: {len(surv)} descendant(s) escaped the pane's process "
           f"group and survived the reap — NOT signalled (stop only ever signals the one pgid it "
-          f"owns): {shown}{more}", file=sys.stderr)
+          f"owns): {shown}{more} [boundary] only escapees still inside the pane's process tree "
+          f"at snapshot time are enumerable; ones already reparented to PID 1 are invisible to "
+          f"this probe and its silence does not cover them — `agentctl inventory --dry-run` "
+          f"censuses that class", file=sys.stderr)
     return 0
 
 
@@ -3222,7 +3239,9 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     print("[boundary] FP: any PPID=1 process merely WEARING an engine name (ChatGPT.app, a "
           "login-launched interactive CLI) lands here — rows are candidates, not processes "
           "this tool claims to own. FN: AGENTCTL_BIN_* overrides, renamed binaries and "
-          "undeclared wrappers are invisible to this list.")
+          "undeclared wrappers are invisible to this list. FP (control block): a `-watchd`-"
+          "suffixed tmux name is attributed by naming convention alone, with no run-dir "
+          "cross-check, so it may over-report as tmux-without-record.")
     for title, (rows, why) in (("control-state reconciliation", inventory_control(args.run_dir)),
                                ("engine-orphan census (PPID=1)", inventory_orphans())):
         print(f"-- {title} --")
