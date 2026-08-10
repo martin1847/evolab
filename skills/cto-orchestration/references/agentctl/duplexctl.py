@@ -1305,8 +1305,8 @@ def send_frame(args: argparse.Namespace) -> int:
                     os.unlink(spent)
                 except OSError:
                     pass
-            for debris in globmod.glob(os.path.join(sess.run,
-                                                    f".{sess.name}.terminal.json-*.tmp")):
+            for debris in globmod.glob(globmod.escape(
+                    os.path.join(sess.run, f".{sess.name}.terminal.json-")) + "*.tmp"):
                 try:
                     os.unlink(debris)
                 except OSError:
