@@ -25,7 +25,8 @@
      （提议/批准分离，防按一次性事件堆规则）。
    - **淘汰同轮做**：会在动手那一刻 fire 的才留正文；hook 已强制的收成一行指针；从不 fire 的删或降
      README 背景（不 fire 的散文是净负债）。
-4. **上下文治理**：关交付完的会话 + **扫孤儿**（见 SKILL §5「孤儿扫」纪律：`docker ps`/`ps`/后台 job + compose
+4. **上下文治理**：关交付完的会话（**只清本席位派工记录 / agentctl 会话账内的**——tmux server 全席位共享，
+   不认识的名字一律不动；零派工记录 ≠ 全场可清）+ **扫孤儿**（见 SKILL §5「孤儿扫」纪律：`docker ps`/`ps`/后台 job + compose
    trap/finally + repro 禁裸 `while True`）+ **worktree 核对**（已合分支的 worktree 必清 `git worktree remove`）+
    **base 对齐**（squash 集成仓的长驻 checkout：base 分支与 origin 分叉〔ahead 且 behind〕→ 核实
    ahead 内容已被 squash 合并后 backup ref + `reset --hard origin/<base>`；真未合并的工作先救——
