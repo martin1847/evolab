@@ -182,7 +182,11 @@ cmd_start() {
     echo "ERR: $ENG duplex takes engine config via protocol (--model/--resume-thread only) — unrecognized argv: ${EXTRA[*]}" >&2
     rm -f "$FIFO" "$DIR/$S.duplex.meta"; exit 1
   fi
-  # extra_argv=0 providers still get EXTRA_Q: empty unless --model, the one shape they accept
+  # extra_argv=0: argv stays PINNED — model rides the protocol only (meta model= is consumed
+  # by the engine handshake, e.g. codex thread/start params). Appending --model to argv killed
+  # the launch outright: codex app-server rejects any CLI arg (field 2026-08-10, clap usage
+  # error before the engine ever spoke).
+  [ "$P_EXTRA_OK" = 1 ] || EXTRA_Q=""
   ECMD="$(q "$BIN")${P_ARGV:+ $P_ARGV}$EXTRA_Q"
   { printf 'engine=%s\ncwd=%s\n' "$ENG" "$CWD"
     [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"
