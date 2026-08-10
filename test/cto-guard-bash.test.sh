@@ -217,9 +217,16 @@ chk_eq "-c global-option prune denied" 2 "$RC"
 # Fixture: one prunable entry whose dir is GONE (nothing to lose) + one prunable entry
 # whose dir SURVIVES (`.git` removed, files still there = a real target).
 WT="$G8ROOT/wt"; mkdir -p "$WT"
-( git init -q "$WT/repo" && cd "$WT/repo" && git commit -q --allow-empty -m init \
+# identity inline: CI runners have no global user.email — a bare `git commit` dies silently
+# in the ()>/dev/null wrapper and the whole fixture degrades to an EMPTY repo, turning the
+# bad-sample DENY into a mystery benign ALLOW (CI red 2026-08-10, ubuntu green-locally trap)
+( git init -q "$WT/repo" && cd "$WT/repo" \
+  && git -c user.email=ci@test -c user.name=ci commit -q --allow-empty -m init \
   && git worktree add -q "$WT/gone" && git worktree add -q "$WT/here" ) >/dev/null 2>&1
 rm -rf "$WT/gone"; rm -f "$WT/here/.git"
+# known-positive precondition: the scenario must EXIST before its verdict means anything
+chk_eq "fixture probe: both worktrees are prunable to this git" 2 \
+  "$(git -C "$WT/repo" worktree list --porcelain 2>/dev/null | grep -c '^prunable ')"
 run "git -C $WT/repo worktree prune"
 chk_eq "prune with a surviving prunable worktree stays denied" 2 "$RC"
 rm -rf "$WT/here"
