@@ -362,7 +362,8 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）；⑨ 浏览器归属：`playwright-cli attach`
   带接管旗标（CDP / 浏览器扩展）→ DENY，正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
   见 [frontend-verify](../frontend-verify.md)）。①用剥引号视图，④用原始 cmd，⑤⑥⑧只认命令位（路径当参数
-  不拦）；⑨不解码引号（字面量进 shell 命令即拒，已接受的假阳性）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
+  不拦）；⑨判归一化后的 shell 执行面（与⑧同一套：剥引号 span + 去反斜杠，故转义写法照拦；
+  代价是字面量进 shell 命令即拒，已接受的假阳性）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：
   browser/E2E 派发含 `mcp__chrome-devtools` → DENY（逼 Playwright，P0a）；派发未显式钉 `model` 档 →
   DENY（P0c）；e2e-runner 派发 model 非便宜档 → DENY（P0d）；Pre·TaskStop|KillShell：目标 `.output`
