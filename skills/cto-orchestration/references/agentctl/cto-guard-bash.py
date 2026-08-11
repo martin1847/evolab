@@ -621,6 +621,14 @@ def main():
         # (review probes 2026-08-12: `attach A; attach B` rode one marker; `attach A; touch
         # <marker>` rebuilt a standing bypass right after consumption). Both shapes are refused
         # BEFORE the marker is touched, so a refused command never burns the principal's approval.
+        # BOUNDARY, accept-documented (orchestrator ruling 2026-08-12 after two review rounds):
+        # a regex cannot parse shell. Loop / brace expansion (`for u in a b; do … attach …; done`)
+        # still executes N attaches under one approval, and can re-arm the marker through an
+        # expansion this scan does not evaluate. Chasing shell semantics here is negative leverage
+        # and guard regexes are the repo's most error-prone surface. What the rule buys is that
+        # attaching is never the SILENT DEFAULT — a deliberately constructed loop is no longer
+        # "doing it by accident", which is the failure this gate exists to prevent. It is a speed
+        # bump on the default path, NOT a sandbox; do not read it as one.
         if len(re.findall(r"\battach\b", v9)) > 1 or marker in v9:
             sys.stderr.write(
                 "DENY: an attach override authorizes exactly ONE attach and the approved command "
