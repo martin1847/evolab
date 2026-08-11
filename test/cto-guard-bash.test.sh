@@ -356,12 +356,18 @@ run 'git status'
 chk_eq "non-dispatch silent" "" "$OUT"
 
 # checker controls: malformed/missing/broken must not collapse into a clean allow.
-# ── (10) browser ownership: Playwright's own isolated browser only, never the daily Chrome ──
+# ── (9) browser ownership: Playwright's own isolated browser only, never the daily Chrome ──
 # Bad samples = the two gated takeover flags; good samples = the isolated paths the rule steers to.
+# The last two bad samples are the SHELL-EXECUTED token surface: the shell eats backslash/quote
+# spans before exec, so a raw-byte match would let the identical takeover through (review 2026-08-12).
 run 'playwright-cli attach --extension=chrome'
 chk_eq "attach --extension denied" 2 "$RC"; chk_contains "extension deny names the isolated path" "playwright-cli open" "$ERR"
 run 'playwright-cli attach --cdp=http://localhost:9222'
 chk_eq "attach --cdp denied" 2 "$RC"
+run 'playwright\-cli attach --cdp=http://localhost:9222'
+chk_eq "backslash-escaped binary name still denied" 2 "$RC"
+run 'playwright-cli at\tach --extension=chrome'
+chk_eq "backslash-escaped subcommand still denied" 2 "$RC"
 run 'playwright-cli open https://example.com'
 chk_eq "isolated open allowed" 0 "$RC"; chk_eq "isolated open silent" "" "$ERR"
 run 'npx playwright test --project=chromium'

@@ -388,7 +388,7 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 | duplex 产帧 / 投影 / 路由 / 死亡路径 | ✅ hermetic | `test/agentctl-duplex.test.sh`：进程级 fake tmux + scriptable fake 引擎驱动真 fifo/flock/events 管线 |
 | duplex live | ✅ 生产实测 | 三引擎真跑全链；`test/e2e/agentctl-duplex.e2e.sh` 为 pre-release 门（start→watch→steer→watch→stop + 零残留） |
 | deliverable 门（exit 6 / freshness / 相对 glob） | ✅ | hermetic 对抗测试，两车道 |
-| guard ①-⑧ / P0a-P0d | ✅ | hermetic + `hook-deny-pointer` 自指门（DENY 指针目标真实性）；生产 fire 实证限 ③ 与 ⑧，其余面为 hermetic 覆盖 |
+| guard ①-⑨ / P0a-P0d | ✅ | hermetic + `hook-deny-pointer` 自指门（DENY 指针目标真实性）；生产 fire 实证限 ③ ⑧ ⑨，其余面为 hermetic 覆盖 |
 | BLOCKED.md 协议真 fire | ◯ 未 live 验 | footer 结构化自带；hermetic 有测例，live 实证仍缺 |
 
 ## cwd 锚定（多仓工作区）

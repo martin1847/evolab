@@ -597,10 +597,16 @@ def main():
     #      `--endpoint`/`--config` (may point at an isolated browser-server; UNKNOWN, left legal),
     #      indirection through a variable/wrapper, quoted-heredoc bodies (stripped from `raw`
     #      upstream), and any execution inside an omp/codex worker's own harness (different hook
-    #      set). Quoting is otherwise not decoded: echoing the literal is denied too — accepted
-    #      false positive, the recovery is "don't put it in a shell command".
-    if re.search(r"playwright-cli\b[^|;&]*\battach\b", raw) and re.search(
-            r"(?:^|\s)--(?:cdp|extension)\b", raw):
+    #      set). Echoing the literal is denied too — accepted false positive, the recovery is
+    #      "don't put it in a shell command".
+    #      Judge the SHELL-EXECUTED token surface, not the JSON spelling: the shell removes quote
+    #      and backslash spans before exec, so `playwright\-cli at\tach --cdp=…` and
+    #      `"playwright-cli" attach …` reach the same binary while a raw-byte match sees neither
+    #      (review probe 2026-08-12: both returned rc=0 against the first cut of this rule).
+    #      Same normalization rule (8) already uses for the git/gh anchor check.
+    v9 = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", raw).replace("\\", "")
+    if re.search(r"playwright-cli\b[^|;&]*\battach\b", v9) and re.search(
+            r"(?:^|\s)--(?:cdp|extension)\b", v9):
         sys.stderr.write(
             "DENY: `playwright-cli attach --cdp/--extension` takes over the principal's real "
             "browser — multi-agent contention with the user's own session hangs (bit us twice). "
