@@ -604,7 +604,10 @@ def main():
     #      `"playwright-cli" attach …` reach the same binary while a raw-byte match sees neither
     #      (review probe 2026-08-12: both returned rc=0 against the first cut of this rule).
     #      Same normalization rule (8) already uses for the git/gh anchor check.
-    v9 = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", raw).replace("\\", "")
+    # Line continuations FIRST: `--c\<newline>dp` is one token to the shell but a newline-split
+    # pair to a naive scan (review probe 2026-08-12 reached the takeover with rc=0).
+    v9 = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2",
+                re.sub(r"\\\r?\n", "", raw)).replace("\\", "")
     if re.search(r"playwright-cli\b[^|;&]*\battach\b", v9) and re.search(
             r"(?:^|\s)--(?:cdp|extension)\b", v9):
         # Attaching is not always wrong (principal's ruling 2026-08-12): an enterprise SSO login
@@ -614,6 +617,17 @@ def main():
         # stay gated is doing it silently by default. Same one-shot override as rule (7):
         # consumption IS the approval, so it can never linger as a standing bypass.
         marker = "/tmp/cto-allow-browser-attach"
+        # One approval authorizes ONE attach, and the approved command may not re-arm the marker
+        # (review probes 2026-08-12: `attach A; attach B` rode one marker; `attach A; touch
+        # <marker>` rebuilt a standing bypass right after consumption). Both shapes are refused
+        # BEFORE the marker is touched, so a refused command never burns the principal's approval.
+        if len(re.findall(r"\battach\b", v9)) > 1 or marker in v9:
+            sys.stderr.write(
+                "DENY: an attach override authorizes exactly ONE attach and the approved command "
+                "must not re-arm the marker. Fix: run a single `playwright-cli attach …` per "
+                "approval, and never `touch /tmp/cto-allow-browser-attach` inside it.\n"
+            )
+            return 2
         try:
             os.remove(marker)
             consumed = True
