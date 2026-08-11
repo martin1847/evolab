@@ -63,8 +63,9 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
 
 ## 场景条款（逐条判命中：命中 → 保留并实例化进上方对应节；未命中 → 整条删）
 
-- [ ] 决策依赖「没观测到 X」→ 加 absence-evidence gate：known-positive probe 先证探测器看得见 X，
-  否则结论只能是 `UNKNOWN`。
+- [ ] 决策**或 Value gate 前提**依赖「没观测到 X」（含「现无 / 不存在 / 没有机制拦」类断言）→ 加
+  absence-evidence gate：known-positive probe 先证探测器看得见 X，否则结论只能是 `UNKNOWN`；
+  队列 / 记忆 / 印象里的措辞不是实施状态证据（否定性断言各配自己的探针，正路径探针不覆盖它）。
 - [ ] 新增防御层 / 复杂度（新校验、新隔离、新配置矩阵）→ Value gate / Preflight 行须含「该威胁
   或需求场景在本架构真实存在」的实证探针——只证机制**能做**不构成**需要做**（复杂度按证据升级）。
 - [ ] 含「部署/配置生效后重测」步骤 → 先写**生效前置确认**（命令 + 期望值）再测；测量探针打
