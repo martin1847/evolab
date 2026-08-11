@@ -585,6 +585,32 @@ def main():
             )
             return 2
 
+    # (10) browser ownership: the agent drives Playwright's OWN isolated browser, never the
+    #      principal's daily Chrome/Edge. Same rule as P0a in cto-guard-agent.py — that one
+    #      guards the `mcp__chrome-devtools` channel; `playwright-cli attach --cdp/--extension`
+    #      is the same takeover through a shell command, which carries no tool token, so P0a is
+    #      dark on it. Only these two flags are gated (principal's scoping 2026-08-12): they are
+    #      the takeover pair, and `attach` is most tempting exactly when a login wall blocks the
+    #      isolated browser — the moment prose is weakest (P0a exists because Playwright-first
+    #      prose was already in place and the dispatch loaded chrome-devtools anyway).
+    #      Deliberately NOT covered, accept-documented rather than silently implied:
+    #      `--endpoint`/`--config` (may point at an isolated browser-server; UNKNOWN, left legal),
+    #      indirection through a variable/wrapper, quoted-heredoc bodies (stripped from `raw`
+    #      upstream), and any execution inside an omp/codex worker's own harness (different hook
+    #      set). Quoting is otherwise not decoded: echoing the literal is denied too — accepted
+    #      false positive, the recovery is "don't put it in a shell command".
+    if re.search(r"playwright-cli\b[^|;&]*\battach\b", raw) and re.search(
+            r"(?:^|\s)--(?:cdp|extension)\b", raw):
+        sys.stderr.write(
+            "DENY: `playwright-cli attach --cdp/--extension` takes over the principal's real "
+            "browser — multi-agent contention with the user's own session hangs (bit us twice). "
+            "Fix: drive Playwright's own isolated browser — `playwright-cli open <url>` (temp "
+            "profile), `-s=<name>` for parallel isolated sessions. Login wall? report BLOCKED or "
+            "ask for separate authorization; never take the daily browser. "
+            "Read: cto-orchestration/references/frontend-verify.md §工具选型 (浏览器归属).\n"
+        )
+        return 2
+
     return 0
 
 

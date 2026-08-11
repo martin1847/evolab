@@ -356,6 +356,17 @@ run 'git status'
 chk_eq "non-dispatch silent" "" "$OUT"
 
 # checker controls: malformed/missing/broken must not collapse into a clean allow.
+# ── (10) browser ownership: Playwright's own isolated browser only, never the daily Chrome ──
+# Bad samples = the two gated takeover flags; good samples = the isolated paths the rule steers to.
+run 'playwright-cli attach --extension=chrome'
+chk_eq "attach --extension denied" 2 "$RC"; chk_contains "extension deny names the isolated path" "playwright-cli open" "$ERR"
+run 'playwright-cli attach --cdp=http://localhost:9222'
+chk_eq "attach --cdp denied" 2 "$RC"
+run 'playwright-cli open https://example.com'
+chk_eq "isolated open allowed" 0 "$RC"; chk_eq "isolated open silent" "" "$ERR"
+run 'npx playwright test --project=chromium'
+chk_eq "playwright test run allowed" 0 "$RC"
+
 run ''
 chk_eq "empty command allowed" 0 "$RC"; chk_eq "empty command no stderr" "" "$ERR"
 tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
