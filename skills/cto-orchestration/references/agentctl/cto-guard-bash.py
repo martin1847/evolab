@@ -585,7 +585,7 @@ def main():
             )
             return 2
 
-    # (10) browser ownership: the agent drives Playwright's OWN isolated browser, never the
+    # (9) browser ownership: the agent drives Playwright's OWN isolated browser, never the
     #      principal's daily Chrome/Edge. Same rule as P0a in cto-guard-agent.py — that one
     #      guards the `mcp__chrome-devtools` channel; `playwright-cli attach --cdp/--extension`
     #      is the same takeover through a shell command, which carries no tool token, so P0a is

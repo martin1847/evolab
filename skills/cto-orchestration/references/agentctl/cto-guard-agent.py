@@ -109,8 +109,9 @@ def main():
             sys.stderr.write(
                 "DENY: browser/E2E subagent dispatched to load chrome-devtools MCP (`mcp__chrome-devtools...`) "
                 "— it attaches the user's real Chrome via CDP; multi-agent contention hangs (bit us twice). "
-                "Fix: use Playwright MCP (its OWN isolated Chromium): rewrite the ToolSearch to "
-                "`select:mcp__playwright__browser_navigate,...` and re-dispatch. (Prose mention like 'never "
+                "Fix: drive Playwright's OWN isolated browser instead — default is the browser CLI "
+                "(`playwright-cli open <url>`, temp profile); Playwright MCP is the headed/agentic-loop "
+                "exception. Rewrite the dispatch accordingly and re-dispatch. (Prose mention like 'never "
                 "use chrome-devtools' is fine — this fires only on the mcp__chrome-devtools tool token.) "
                 "Read: cto-orchestration/references/frontend-verify.md (Playwright-first).\n"
             )

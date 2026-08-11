@@ -48,8 +48,8 @@ skill 本质是 markdown + 几个脚本——**AI-native 装法：把下面这�
 > skills / 规则目录（Claude Code 放 `~/.claude/skills/`；其他 agent 放对应 rules / skills 目录）：
 > **必装** `cto-orchestration`（多 agent 编排旗舰皮）+ `orchestrator-core`（其领域无关内核，含常驻
 > digest 与 self-evolution 方法论）+ `repo-governance-bootstrap`（仓库治理）；
-> **写后端 / agent 服务**再加 `observability-standard` + `agent-backend-standard`；**多人协作仓库**再加
-> `git-workflow-standard`。装完确认每个 `SKILL.md` frontmatter 有 `name`、`references/` 一并到位、内链能解析。
+> **写后端 / agent 服务**再加 `observability-standard` + `agent-backend-standard`；**写前端**再加
+> `agent-frontend-standard`；**多人协作仓库**再加 `git-workflow-standard`。装完确认每个 `SKILL.md` frontmatter 有 `name`、`references/` 一并到位、内链能解析。
 > 再把 `templates/CLAUDE.md.example` 的协作设定**并入（merge、非覆盖）**我的规则文件；
 > 写码纪律 `templates/rules/coding.md` 则**symlink（勿拷贝）**到 `~/.claude/rules/coding.md`——
 > Claude Code 与 omp 共用这一份，`paths:` 条件加载只在碰源码文件时进 context；

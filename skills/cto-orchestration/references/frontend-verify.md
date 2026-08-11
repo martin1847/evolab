@@ -17,7 +17,7 @@
 
 **浏览器归属**：一律用 Playwright 自起的隔离浏览器（`playwright-cli open` 临时 profile，并行用
 `-s=<name>`）；**绝不接管主理人日常 Chrome/Edge**（多 agent 与用户争控制面，断连坑过两次）——登录墙
-挡住就报 BLOCKED 或请求单独授权。已下沉强制层（bash guard ⑽ · agent guard P0a），此处只是指针。
+挡住就报 BLOCKED 或请求单独授权。已下沉强制层（bash guard ⑨ · agent guard P0a），此处只是指针。
 
 ## 重复型 E2E：交付物 = `.spec.ts`，不是自建 runner
 
