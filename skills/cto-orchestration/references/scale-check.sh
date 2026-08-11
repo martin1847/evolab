@@ -13,6 +13,14 @@ if [ "$#" -lt 2 ]; then
   exit 2
 fi
 repo=$1; base=$2; shift 2
+# Argument ORDER is the mistake this gate actually sees (twice in one day, from the caller who
+# wrote the gate): `scale-check.sh <base-ref> HEAD` reached the git diff and came back as the
+# generic "git diff failed" — a correct UNKNOWN that teaches nothing. Name the misuse instead.
+if [ ! -d "$repo" ]; then
+  echo "scale-check: ERROR first argument must be <repo-abs-path>, and '$repo' is not a directory" >&2
+  echo "scale-check: usage: scale-check.sh <repo-abs-path> <base-ref> [test-prefix] [--refactor] (e.g. scale-check.sh \$PWD origin/main)" >&2
+  exit 2
+fi
 prefix="test/"; refactor=0
 for arg in "$@"; do
   case "$arg" in

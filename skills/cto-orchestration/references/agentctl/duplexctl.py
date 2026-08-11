@@ -2035,8 +2035,12 @@ def ps_start_times(pids: list[str]) -> dict[str, str] | None:
     only means death if the list can be trusted to contain a process we KNOW is running.
     Without that control a missing `ps` would read as "the supervisor died" for every session
     on the box."""
-    probe = subprocess.run(["ps", "-o", "pid=,lstart=", "-p", ",".join(pids)],
-                           capture_output=True, text=True, check=False)
+    try:
+        probe = subprocess.run(["ps", "-o", "pid=,lstart=", "-p", ",".join(pids)],
+                               capture_output=True, text=True, check=False, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None       # a probe that never answers is uncertainty, never an empty box:
+                          # `{}` would read as "nobody is alive" for every pid asked about
     if probe.returncode not in (0, 1):
         return None
     out = {}
@@ -3017,6 +3021,14 @@ def cmd_stop_sentinel(args: argparse.Namespace) -> int:
         os.unlink(sample)
     except OSError:
         pass
+    # The pre-kill snapshot dies with the stop that took it. `survivor_advise` unlinks it on
+    # the way past, so this only ever catches the one a KILLED stop left behind: nothing globs
+    # it (leading dot, not `*.duplex.meta`), so it used to be permanent. Never any earlier than
+    # this verb — the advisory that reads the snapshot runs between the reap and this call.
+    try:
+        os.unlink(os.path.join(run, f".{name}.stop-probe.json"))
+    except OSError:
+        pass
     events = os.path.join(run, f"{name}.duplex.events.jsonl")
     marker_mtime = None if handoff is None else _ascii_int(handoff)
     if handoff is None or not (handoff == _STOP_SAMPLE_NONE or marker_mtime is not None):
@@ -3058,6 +3070,12 @@ def cmd_stop_residue(args: argparse.Namespace) -> int:
             cleaned = True
     for debris in sorted(globmod.glob(globmod.escape(os.path.join(run, f".{name}.terminal.json-")) + "*.tmp")):
         _rm_f(debris)
+        cleaned = True
+    # a pre-kill snapshot whose stop never reached its advisory: same crash-residue class as
+    # the stray fifo above, and the branch that recovers a session with no lane meta left
+    snap = os.path.join(run, f".{name}.stop-probe.json")
+    if os.path.isfile(snap):
+        _rm_f(snap)
         cleaned = True
     # orphan identity must not outlive the residue it belonged to
     id_rc, clear_out = _identity_clear(run, name)
@@ -3262,6 +3280,20 @@ def _knob(var: str, fallback: str) -> str:
     return os.environ.get(var) or fallback
 
 
+class _StrictParser(argparse.ArgumentParser):
+    """One accepted spelling per flag, at EVERY level of this entry.
+
+    `allow_abbrev=False` on the top-level parser is not inherited: argparse builds each
+    subparser from `parser_class` with its own defaults, so `inventory --dry` was still
+    accepted after the obvious one-line fix. Carrying the setting on the class — which
+    `add_subparsers` reuses by default — is what makes the promise hold for the subcommands,
+    where every flag this tool actually takes lives."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
+
 def main() -> None:
     # Line-buffered on purpose: the long-running verbs (`watch-wait`, `sense-loop`) run with
     # stdout redirected to a log a live operator tails, and the shell `echo`s they replaced
@@ -3272,7 +3304,7 @@ def main() -> None:
             reconfigure(line_buffering=True)
         except ValueError:                      # stdout already detached / closed fd
             pass
-    parser = argparse.ArgumentParser(prog="duplexctl")
+    parser = _StrictParser(prog="duplexctl")
     parser.add_argument("--run-dir", default=os.environ.get("AGENT_WATCH_DIR", "/tmp/agent-watch-run"))
     sub = parser.add_subparsers(dest="cmd", required=True)
 

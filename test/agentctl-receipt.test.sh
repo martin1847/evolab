@@ -117,20 +117,37 @@ chk_eq "R1 mtime freshness alone never becomes a hash claim (hash ≠ empty)" 1 
   "$([ ${#actual} = 64 ] && echo 1 || echo 0)"
 chk_eq "R1 delivered is bounded: engineOutcome is the ONLY outcome claim" "completed" \
   "$(rec_field r1 engineOutcome)"
-# The CLAIM surface only: filesystem paths are excluded because a random sandbox name can
-# contain any substring (a `mktemp` name with "e2e" in it turned this into a false red while
-# re-verifying a mutation patch — the record was innocent, the tmpdir was not).
-claims_of() { # $1 session — record rendering with path-valued fields removed
-  python3 -c 'import json,sys
+# The CLAIM surface only. Machine identity is not a claim, and twice now it has spelled one: a
+# `mktemp` sandbox name carrying "e2e" (paths, popped below), and opaque hex — the ~250 random
+# hex characters of a record's ids, sha256 and gitHead spell it in about one run in twenty.
+claims_of() { # $1 session — record rendering with path- and identity-valued content removed
+  python3 -c 'import json, re, sys
 rec = json.load(open(sys.argv[1]))
 rec.pop("deliverable", None)
 for item in rec.get("deliverables") or []:
     item.pop("path", None)
-print(json.dumps(rec, sort_keys=True).lower())' "$WATCH_RUN_DIR/$1.terminal.json"
+text = json.dumps(rec, sort_keys=True).lower()
+text = text.replace(sys.argv[2].lower(), "<run-dir>")   # the human line embeds the record path
+print(re.sub(r"[0-9a-f]{8,}", "<opaque>", text))' \
+    "$WATCH_RUN_DIR/$1.terminal.json" "$WATCH_RUN_DIR"
 }
 chk_not_contains "R1 the record claims no review" "review" "$(claims_of r1)"
 chk_not_contains "R1 the record claims no verification" "verified" "$(claims_of r1)"
 chk_not_contains "R1 the record claims no E2E" "e2e" "$(claims_of r1)"
+# Instrument controls: a record whose human line REALLY claims E2E (`detail` — what duplexctl
+# fills from classify's verdict) must still trip it; an id that spells it must not.
+mk_session r1e report4.md
+printf 'delivered bytes\n' > "$WT/report4.md"
+ctl identity publish r1e --armed "$(token r1e)" --round 0 \
+  --detail 'ran the full e2e suite before concluding' >/dev/null
+chk_contains "R1 INSTRUMENT: a record that really claims E2E still trips the claim assertion" \
+  "e2e" "$(claims_of r1e)"
+python3 -c 'import json, sys
+rec = json.load(open(sys.argv[1])); rec["attemptId"] = "e2e" + rec["attemptId"][3:]
+rec["identity"]["attemptId"] = rec["attemptId"]; json.dump(rec, open(sys.argv[2], "w"))' \
+  "$WATCH_RUN_DIR/r1.terminal.json" "$WATCH_RUN_DIR/r1id.terminal.json"
+chk_not_contains "R1 INSTRUMENT: an id that happens to spell e2e is not a claim" \
+  "e2e" "$(claims_of r1id)"
 chk_contains "R1 the human line says delivered ≠ verified out loud" "delivered ≠ verified" "$out"
 chk_eq "R1 schemaVersion is stamped" "1" "$(rec_field r1 schemaVersion)"
 chk_eq "R1 the receipt triple matches the fence stamp (one record, two shapes)" \

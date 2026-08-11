@@ -398,6 +398,12 @@ done
 chk_eq "BT2 every illegal inventory spelling is a typed non-zero refusal" 1 "$bad_ok"
 chk_eq "BT2 a refusal reached no probe (no ps, no tmux)" "" "$(cat "$PROBE_AUDIT")"
 chk_eq "BT2 a refusal reached no signal surface" "" "$(cat "$KILL_AUDIT")"
+# --- 13b. the python entry keeps that promise too: argparse abbreviation is off per SUBPARSER
+# (`allow_abbrev=False` on the top-level parser is NOT inherited — the plausible one-line fix)
+r=0; python3 "$AW_DIR/duplexctl.py" --run-dir "$INVRUN" inventory --dry >/dev/null 2>&1 || r=$?
+chk_eq "BT2 duplexctl refuses the abbreviated spelling (inventory --dry)" 2 "$r"
+r=0; PATH="$INVBIN:$PATH" python3 "$AW_DIR/duplexctl.py" --run-dir "$INVRUN" inventory --dry-run >/dev/null 2>&1 || r=$?
+chk_eq "BT2 the declared spelling still runs the read-only scan" 0 "$r"
 
 orphan="$(spawn_orphan)"; /bin/sleep 0.5
 

@@ -154,6 +154,9 @@ cmd_start() {
     --max-rounds) MAX_ROUNDS="${2:?--max-rounds needs N}"; shift 2;;
     --resume-thread) RESUME_THREAD="${2:?--resume-thread needs an id}"; shift 2;;
     --model) MODEL="${2:?--model needs an id}"; EXTRA[${#EXTRA[@]}]="$1"; EXTRA[${#EXTRA[@]}]="$2"; MODEL_TOKENS=$((MODEL_TOKENS+2)); shift 2;;
+    # an empty value is not a model: without this the flag zeroes MODEL, meta gets no model=
+    # line, the pinned-argv rule drops the token, and the operator is told nothing at all
+    --model=) echo "ERR: --model= needs an id — pass --model <id>, or omit the flag to take the engine default" >&2; exit 1;;
     --model=*) MODEL="${1#*=}"; EXTRA[${#EXTRA[@]}]="$1"; MODEL_TOKENS=$((MODEL_TOKENS+1)); shift;;
     *) EXTRA[${#EXTRA[@]}]="$1"; shift;;
   esac; done
@@ -165,6 +168,15 @@ cmd_start() {
   [ -n "$GOAL" ] && [ -e "$GOAL" ] || { echo "ERR: --goal <file> required and must exist" >&2; exit 1; }
   if [ -n "$RESUME_THREAD" ] && [ "$P_RESUME_FLAG" != "--resume-thread" ]; then
     echo "ERR: --resume-thread only drives a provider whose resume capability declares it; '$ENG' does not — run 'agentctl capabilities' and read the resume note for $ENG" >&2; exit 1
+  fi
+  # --model with --resume-thread is not a supported pair, and a silent winner is the worst
+  # possible answer: the resume handshake sends the threadId alone (a thread keeps the model
+  # it was created with), so the requested model would be written to meta and then consumed
+  # by nobody. Refused HERE — at the parameter surface, before this start owns a fifo, a meta
+  # file, a tmux session or a handshake.
+  if [ -n "$RESUME_THREAD" ] && [ -n "$MODEL" ]; then
+    echo "ERR: --model cannot be combined with --resume-thread — a resumed thread keeps the model it was started with, so '$MODEL' would be dropped in silence: drop --model to resume thread '$RESUME_THREAD' on its own model, or drop --resume-thread to start a NEW thread on '$MODEL'" >&2
+    exit 1
   fi
   if [ "$PREFLIGHT" = 1 ]; then
     "$HERE/../goal-preflight.py" "$GOAL" || {
@@ -250,7 +262,12 @@ cmd_start() {
     echo "ERR: goal delivery failed — engine up but prompt not accepted; inspect then agentctl stop $S" >&2; exit 2; }
   echo "started $ENG → duplex session '$S' (cwd $CWD; tmux supervises, protocol steers)"
   echo "events : $EV (raw stays on disk; status/watch print bounded summaries only)"
-  echo "engine : $ENG — model/backend = engine default unless overridden in args:${EXTRA[*]:+ ${EXTRA[*]}}"
+  # What was REQUESTED, and by which route — never what took effect. The request reaches the
+  # engine two different ways (argv for the forwarding providers, meta + protocol for the
+  # pinned ones), and nothing here reads back the model the engine actually settled on.
+  REQ="${MODEL:+model=$MODEL}"
+  if [ "$P_EXTRA_OK" = 1 ] && [ "${#EXTRA[@]}" -gt 0 ]; then REQ="${REQ:+$REQ; }argv ${EXTRA[*]}"; fi
+  echo "engine : $ENG — requested: ${REQ:-nothing (engine defaults apply)}; the model/backend actually in effect is the engine's own and is not read back here"
   echo "next   : agentctl watch $S   (blocking, run_in_background)  |  agentctl status $S  (one-shot)"
 }
 

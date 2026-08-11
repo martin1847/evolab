@@ -350,6 +350,15 @@ bash "$AGENTCTL" stop cxV >/dev/null 2>&1
 # --resume-thread is codex-only
 out="$(bash "$AGENTCTL" start omp cxW "$WT" --goal "$SANDBOX/goal.md" --resume-thread x 2>&1)"; rc=$?
 chk_eq "resume-thread on omp refused" 1 "$rc"
+# --model with --resume-thread: the resume handshake sends the threadId alone, so the model
+# used to be written to meta and consumed by nobody. Refused before the start owns anything.
+out="$(bash "$AGENTCTL" start codex cxM "$WT" --goal "$SANDBOX/goal.md" \
+       --resume-thread old-thread-9 --model gpt-fake 2>&1)"; rc=$?
+refused=0
+case "$out" in *"ERR: --model cannot be combined"*"drop --resume-thread"*) [ "$rc" = 1 ] && refused=1;; esac
+chk_eq "model + resume-thread is refused rc1, naming both ways forward" 1 "$refused"
+chk_eq "the refusal owns nothing: no meta, no fifo, no lane state for that session" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^cxM\.' | tr '\n' ' ')"
 
 # active-turn window: default steer refused (no queue), --now = native turn/steer
 export FAKE_CODEX_GATE="$SANDBOX/cx-gate"
