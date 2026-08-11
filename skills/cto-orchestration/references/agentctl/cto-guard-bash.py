@@ -633,7 +633,8 @@ def main():
             sys.stderr.write(
                 "DENY: an attach override authorizes exactly ONE attach and the approved command "
                 "must not re-arm the marker. Fix: run a single `playwright-cli attach …` per "
-                "approval, and never `touch /tmp/cto-allow-browser-attach` inside it.\n"
+                "approval, and never `touch /tmp/cto-allow-browser-attach` inside it. "
+                "Read: cto-orchestration/references/frontend-verify.md\n"
             )
             return 2
         try:

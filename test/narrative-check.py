@@ -41,11 +41,7 @@ PATTERNS = [
 # Exemptions — TEMPORARY narrowing scaffolding for widening this gate onto pre-existing
 # files, NOT a long-term mechanism. Every line names its removal condition; an entry with
 # no owner and no exit is a bug. Matched as a repo-relative path suffix.
-EXEMPT = [
-    # 待编排位清理后移除本行 — the review-finding provenance in agentctl's README predates
-    # this gate's widening; the cleanup is the orchestrator's, not this gate's.
-    "skills/cto-orchestration/references/agentctl/README.md",
-]
+EXEMPT = []   # agentctl README cleaned 2026-08-12; keep this empty — a new entry means prose is winning
 
 
 def exempt(path: str) -> bool:
