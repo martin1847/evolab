@@ -126,8 +126,7 @@ rec = json.load(open(sys.argv[1]))
 rec.pop("deliverable", None)
 for item in rec.get("deliverables") or []:
     item.pop("path", None)
-text = json.dumps(rec, sort_keys=True).lower()
-text = text.replace(sys.argv[2].lower(), "<run-dir>")   # the human line embeds the record path
+text = json.dumps(rec, sort_keys=True).lower().replace(sys.argv[2].lower(), "<run-dir>")
 print(re.sub(r"[0-9a-f]{8,}", "<opaque>", text))' \
     "$WATCH_RUN_DIR/$1.terminal.json" "$WATCH_RUN_DIR"
 }
@@ -136,8 +135,7 @@ chk_not_contains "R1 the record claims no verification" "verified" "$(claims_of 
 chk_not_contains "R1 the record claims no E2E" "e2e" "$(claims_of r1)"
 # Instrument controls: a record whose human line REALLY claims E2E (`detail` — what duplexctl
 # fills from classify's verdict) must still trip it; an id that spells it must not.
-mk_session r1e report4.md
-printf 'delivered bytes\n' > "$WT/report4.md"
+mk_session r1e report.md   # the r1 bytes are already on disk, so this record delivers too
 ctl identity publish r1e --armed "$(token r1e)" --round 0 \
   --detail 'ran the full e2e suite before concluding' >/dev/null
 chk_contains "R1 INSTRUMENT: a record that really claims E2E still trips the claim assertion" \
