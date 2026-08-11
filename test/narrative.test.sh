@@ -40,11 +40,20 @@ out="$(python3 "$CHECK" "$T/good.md" 2>&1)"; assert_rc $? 0 "normative look-alik
 w "$T/fence.md" '正文干净' '```text' 'Why: 2026-07-10 e2e 全红（实证）。' '```' '尾部干净'
 out="$(python3 "$CHECK" "$T/fence.md" 2>&1)"; assert_rc $? 0 "fenced example exempt rc"
 
-# 4. the real tree is clean (tracked + untracked-not-ignored skill md)
-files="$(git -C "$REPO" ls-files --cached --others --exclude-standard 'skills/*.md' | sed "s|^|$REPO/|")"
-out="$(printf '%s\n' "$files" | xargs python3 "$CHECK" 2>&1)"; rc=$?
+# 4. the real tree is clean — the face is the GATE's (`--tree`), not this caller's pathspec:
+#    every skills/**/*.md including README.md, minus the declared exemptions.
+out="$(python3 "$CHECK" --tree "$REPO" 2>&1)"; rc=$?
 assert_rc "$rc" 0 "skills tree narrative-clean"
 [ -n "$out" ] && echo "$out"
+
+# 5. the widened face: a skill-internal README carrying review-finding provenance reds …
+mkdir -p "$T/skills/x/references/y"
+w "$T/skills/x/references/y/README.md" '判据正文' '取这个阈值是因为（评审 R2 F-03）曾误判' '尾部'
+out="$(python3 "$CHECK" "$T/skills/x/references/y/README.md" 2>&1)"
+assert_rc $? 1 "skill-internal README in the face"
+# … and a declared exemption is skipped instead (temporary scaffolding, listed with an owner)
+out="$(python3 "$CHECK" "$REPO/skills/cto-orchestration/references/agentctl/README.md" 2>&1)"
+assert_rc $? 0 "declared exemption skipped"
 
 rm -rf "$T"
 echo "== narrative: $pass passed, $fail failed =="

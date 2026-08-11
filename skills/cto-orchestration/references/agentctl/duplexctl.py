@@ -5,9 +5,8 @@ stdlib only, no daemon. One long-lived engine process per session runs under a
 tmux supervisor pane:  bash -c 'exec 3<>IN.FIFO; ENGINE <&3 >> EVENTS 2>> ERR; echo $? > RC'
 This tool is the ONLY writer to the fifo (flock-serialized) and the only reader
 that interprets EVENTS. It never touches the pane; terminal truth is the typed
-exit code (same vocabulary as the round lane):
-  0 DONE / 2 FAILED|AGENT-DEAD / 4 WAITING-INPUT / 5 STALLED-EXTERNAL / 11 STALLED-STREAM
-  / 6 IDLE-NO-DELIVERABLE / 10 RUNNING
+exit code, whose vocabulary is defined ONCE in TYPED_STATES below and published by
+`agentctl states` — this docstring keeps no copy of it.
 Output is BOUNDED by design: raw engine output stays in EVENTS; classify prints
 one typed line + a <=600-char summary (the 147KB single-line agent_end replay
 going into the orchestrator context was a field-reported token bomb).
@@ -51,6 +50,61 @@ if _HERE not in sys.path:
 import identity  # noqa: E402  (needs the path above)
 
 SUMMARY_CHARS = 600
+
+
+# ── typed state vocabulary ────────────────────────────────────────────────────
+# The ONE definition of every typed state this lane can hand an orchestrator. Every typed
+# exit in this file returns one of these constants — a bare integer literal is never a
+# verdict — and `agentctl states` is GENERATED from the table below, so a state cannot
+# appear in the lane without appearing in the published vocabulary.
+#
+# DISPOSITION IS NOT HERE. What an orchestrator should DO about a state is judgement that
+# moves with the workflow; only what the runtime OBSERVED is a runtime fact.
+#
+# Untyped exits are deliberately absent — plumbing, not states: 1 usage/environment error,
+# 3 a verb-local refusal (no correlated ack, refused lease, refused publish), 13 the
+# waiter-internal arm handshake, 130/143 signals, and the ARM_* supervisor-arm decisions.
+EXIT_DONE = 0
+EXIT_FAILED = 2
+EXIT_WAITING_INPUT = 4
+EXIT_STALLED_EXTERNAL = 5
+EXIT_IDLE_NO_DELIVERABLE = 6
+EXIT_WATCH_TIMEOUT = 7
+EXIT_ENGINE_SILENT = 8
+EXIT_BUDGET_EXHAUSTED = 9
+EXIT_RUNNING = 10
+EXIT_STALLED_STREAM = 11
+EXIT_SUPERVISOR_LOST = 12
+
+TYPED_STATE_SCHEMA_VERSION = 1
+TYPED_STATES: tuple[tuple[int, str, str], ...] = (
+    (EXIT_DONE, "DONE",
+     "engine idle or exited rc=0, and any declared deliverable is fresh for this round"),
+    (EXIT_FAILED, "FAILED|AGENT-DEAD",
+     "the engine errored or exited non-zero, or its pane is gone with no rc, or this "
+     "round's identity is undecidable"),
+    (EXIT_WAITING_INPUT, "WAITING-INPUT",
+     "the agent is asking: a BLOCKED.md fresh for this attempt, or a question frame from "
+     "the engine (UI chrome filtered)"),
+    (EXIT_STALLED_EXTERNAL, "STALLED-EXTERNAL",
+     "the turn or the process died on a backend quota/auth error"),
+    (EXIT_IDLE_NO_DELIVERABLE, "IDLE-NO-DELIVERABLE",
+     "the engine reads terminal but the deliverable it declared did not appear this round"),
+    (EXIT_WATCH_TIMEOUT, "WATCH-TIMEOUT",
+     "the sensing loop exhausted its poll budget while the engine was still active"),
+    (EXIT_ENGINE_SILENT, "ENGINE-SILENT",
+     "a control-plane operation or the steered engine produced no output within its bound"),
+    (EXIT_BUDGET_EXHAUSTED, "BUDGET-EXHAUSTED",
+     "the review loop reached --max-rounds; the steer was refused before delivery"),
+    (EXIT_RUNNING, "RUNNING",
+     "non-terminal: the engine is working — a status snapshot, or the waiter keeps waiting"),
+    (EXIT_STALLED_STREAM, "STALLED-STREAM",
+     "the event stream stopped past its window with no unmatched in-flight lifecycle frame "
+     "and nothing young under the pane"),
+    (EXIT_SUPERVISOR_LOST, "SUPERVISOR-LOST",
+     "no fenced terminal record for this attempt+round, and the sensing supervisor cannot "
+     "be shown to be running (reason=dead) or cannot be judged at all (reason=unknown)"),
+)
 
 
 # ── session file layout ───────────────────────────────────────────────────────
@@ -101,7 +155,7 @@ def check_review_budget(sess: Session, text: str) -> None:
     if round_n >= max_rounds:
         print(f"BUDGET-EXHAUSTED: review-loop '{sess.name}' reached max-rounds={max_rounds} (current round={round_n})",
               file=sys.stderr)
-        sys.exit(9)
+        sys.exit(EXIT_BUDGET_EXHAUSTED)
     if round_n >= 2 and not any(l.startswith("SHIP-BLOCKING:") and l.split(":", 1)[1].strip()
                                 for l in text.splitlines()):
         die(f"review-loop continuation lease missing for round {round_n + 1}; add an independent "
@@ -395,13 +449,13 @@ def write_frame(sess: Session, frame: str, on_ready=None) -> None:
                         die(f"fifo write failed before any byte ({exc}) — engine died; see status")
                     die(f"fifo write failed mid-frame ({exc}) after {sent}/{len(payload)} bytes "
                         "— frame is TORN, input stream tainted: agentctl stop, then restart "
-                        "with the engine's resume args", 2)
+                        "with the engine's resume args", EXIT_FAILED)
                 if time.monotonic() >= write_deadline:
                     break
             if sent < len(payload):
                 die(f"engine stopped draining the fifo mid-frame ({sent}/{len(payload)} bytes in 30s) "
                     "— frame is TORN, session input stream is tainted: agentctl stop, then restart "
-                    "with the engine's resume args", 2)
+                    "with the engine's resume args", EXIT_FAILED)
             os.unlink(sess.intent)
             _INFLIGHT["intent"] = None
         finally:
@@ -1069,7 +1123,7 @@ def classify(sess: Session) -> int:
         print(f"IDENTITY-UNKNOWN: active identity record is {id_status} ({store.path}){why}"
               " — no state may be adopted or concluded; agentctl stop, then restart to "
               "establish a new attempt")
-        return 2
+        return EXIT_FAILED
 
     # 1. engine process exited? (the pane shell writes RC on engine exit)
     if os.path.exists(sess.rc):
@@ -1079,7 +1133,7 @@ def classify(sess: Session) -> int:
             rc = "?"
         if rc != "0" and scan_quota(sess):
             print(f"STALLED-EXTERNAL: engine exited rc={rc} on a backend quota/auth error — fix credentials, then agentctl stop + restart")
-            return 5
+            return EXIT_STALLED_EXTERNAL
         if rc == "0":
             ok, hit = deliverable_fresh(sess)
             receipt = None if ok else delivered_receipt(store)
@@ -1090,15 +1144,15 @@ def classify(sess: Session) -> int:
                 # the mtime path — they carry no hashes to supersede it with.
                 print(f"DONE: engine exited rc=0{receipt_note(receipt)} — receipt evidence "
                       "supersedes the mtime freshness heuristic")
-                return 0
+                return EXIT_DONE
             if ok:
                 note = f", deliverable fresh: {hit}" if hit else ""
                 print(f"DONE: engine exited rc=0{note} (duplex engines normally stay alive — treat as complete)")
-                return 0
+                return EXIT_DONE
             print(f"IDLE-NO-DELIVERABLE: engine exited rc=0 but '{sess.meta.get('deliverable')}' not produced this round")
-            return 6
+            return EXIT_IDLE_NO_DELIVERABLE
         print(f"FAILED: engine exited rc={rc} — tail {sess.events} / {sess.stderr} (raw kept on disk)")
-        return 2
+        return EXIT_FAILED
 
     # 2. supervisor pane gone without an rc = killed mid-flight — UNLESS a terminal marker
     #    stamped with the CURRENT identity is on disk. A dead process cannot emit new events,
@@ -1123,34 +1177,34 @@ def classify(sess: Session) -> int:
                     print("IDENTITY-UNKNOWN: terminal record claims delivery but its receipt "
                           f"body is invalid — {why}; refusing to adopt it (kept on disk for "
                           "post-mortem, not rewritten)")
-                    return 2
+                    return EXIT_FAILED
                 stamp = identity.IdentityStore.marker_stamp(marker)
                 try:
                     first = store.apply_event(stamp["attemptId"], stamp.get("seq"))
                 except identity.IdentityPersistError as exc:
                     print(f"IDENTITY-UNKNOWN: cannot record the marker adoption ({exc}) — "
                           "refusing to adopt terminal evidence")
-                    return 2
+                    return EXIT_FAILED
                 again = "" if first else " (event already applied — idempotent re-read)"
                 # the delivered-evidence summary is printed ONLY for a receipt that passed the
                 # WS2 schema gate, so an invalid body can never speak in a DONE line either
                 print(f"DONE: adopted the terminal marker of the current attempt{again} — "
                       f"engine pane already reaped; {detail}"
                       f"{receipt_note(store.delivered_receipt(marker) or {})}")
-                return 0
+                return EXIT_DONE
             if klass == identity.UNKNOWN:
                 print(f"IDENTITY-UNKNOWN: terminal marker not adoptable — {detail}")
-                return 2
+                return EXIT_FAILED
             if klass != identity.OK:
                 print(f"{klass}: terminal marker NOT adopted (kept on disk for post-mortem, "
                       f"not rewritten) — {detail}")
         print("AGENT-DEAD: no rc and no tmux session — killed mid-flight; agentctl stop to clean, then restart")
-        return 2
+        return EXIT_FAILED
 
     # 2.5 torn input stream: a sender died mid-frame — nothing downstream is trustworthy
     if os.path.exists(sess.intent):
         print("FAILED: torn frame on the input stream (write-intent marker) — agentctl stop, then restart with resume args")
-        return 2
+        return EXIT_FAILED
 
     # 3. agent-declared blocker (cross-engine ask-user protocol), fenced by identity: a
     #    record stamped by a PRIOR attempt must never park the current one in WAITING-INPUT.
@@ -1167,10 +1221,10 @@ def classify(sess: Session) -> int:
         if klass == identity.UNKNOWN:
             print(f"IDENTITY-UNKNOWN: BLOCKED.md stamp is not decidable — {detail}; refusing "
                   "to adopt it and refusing to conclude anything else about this round")
-            return 2
+            return EXIT_FAILED
         if klass == identity.OK:
             print("WAITING-INPUT: agent wrote BLOCKED.md — read it, answer via agentctl steer")
-            return 4
+            return EXIT_WAITING_INPUT
         print(f"{klass}: BLOCKED.md NOT adopted (kept on disk for post-mortem, not rewritten)"
               f" — {detail}")
 
@@ -1178,36 +1232,36 @@ def classify(sess: Session) -> int:
     state, detail = PROJECTORS[engine](sess)
     if state == "WAITING":
         print(f"WAITING-INPUT: {detail}")
-        return 4
+        return EXIT_WAITING_INPUT
     if state == "ERROR":
         if scan_quota(sess):
             print(f"STALLED-EXTERNAL: turn failed on backend quota/auth — fix credentials, then steer to retry. {detail}")
-            return 5
+            return EXIT_STALLED_EXTERNAL
         print(f"FAILED: engine reported an error result (turn failed, engine still alive) — {detail}")
-        return 2
+        return EXIT_FAILED
     if state == "RUNNING":
         stalled, why = stream_stalled(sess, engine)
         if stalled:
             print(f"STALLED-STREAM: {why} — engine likely wedged mid-round; salvage "
                   "work from the checkout/commits first, then agentctl stop "
                   "(AGENT_WATCH_STALL_MINS tunes the window; 0 disables)")
-            return 11
+            return EXIT_STALLED_STREAM
         print(f"RUNNING: {detail}")
-        return 10
+        return EXIT_RUNNING
     ok, hit = deliverable_fresh(sess)
     receipt = None if ok else delivered_receipt(store)
     if receipt is not None:
         print(f"DONE: engine idle{receipt_note(receipt)} — receipt evidence supersedes the "
               "mtime freshness heuristic")
         print(f"last: {detail}")
-        return 0
+        return EXIT_DONE
     if not ok:
         print(f"IDLE-NO-DELIVERABLE: engine idle but '{sess.meta.get('deliverable')}' not produced this round — steer the agent; do not stop")
-        return 6
+        return EXIT_IDLE_NO_DELIVERABLE
     note = f", deliverable fresh: {os.path.basename(hit)}" if hit else ""
     print(f"DONE: engine idle{note}")
     print(f"last: {detail}")
-    return 0
+    return EXIT_DONE
 
 
 # ── commands ──────────────────────────────────────────────────────────────────
@@ -1256,7 +1310,7 @@ def codex_route_replace(sess: Session, ctx: dict):
         pre_offset = events_size(sess)
         intr = codex_request(sess, interrupt, {"threadId": thread, "turnId": active})
         if intr is None or "error" in intr:
-            die(f"{interrupt} not accepted: {clip(json.dumps(intr, ensure_ascii=False), 200)}", 2)
+            die(f"{interrupt} not accepted: {clip(json.dumps(intr, ensure_ascii=False), 200)}", EXIT_FAILED)
         # only OUR turn's terminal frame opens the replacement; a stray
         # completion or a timeout must refuse (review S2 2026-07-19)
         done = wait_for(
@@ -1267,7 +1321,7 @@ def codex_route_replace(sess: Session, ctx: dict):
             timeout=15.0)
         if done is None:
             die("interrupted turn did not reach a terminal state in 15s — NOT starting "
-                "the replacement; check status, then retry or stop+resume", 2)
+                "the replacement; check status, then retry or stop+resume", EXIT_FAILED)
     # THE codex replace commit point: the engine has accepted the interrupt and the
     # interrupted turn is terminal (or there was nothing to interrupt), so the replacement
     # really is about to be written — and the new attempt is durable before that frame goes
@@ -1293,7 +1347,7 @@ def send_frame(args: argparse.Namespace) -> int:
         die(f"engine already exited (rc file present) — agentctl status {sess.name}")
     if os.path.exists(sess.intent):
         die("a previous frame write died mid-stream (write-intent marker present) — the "
-            "engine's input stream is tainted: agentctl stop, then restart with resume args", 2)
+            "engine's input stream is tainted: agentctl stop, then restart with resume args", EXIT_FAILED)
     if args.verb in ("prompt", "steer", "steer-now", "replace"):
         check_review_budget(sess, text)
     # ── capability gate ───────────────────────────────────────────────────────────────
@@ -1327,7 +1381,7 @@ def send_frame(args: argparse.Namespace) -> int:
             rec = store.transition(kind)
         except identity.IdentityPersistError as exc:
             die(f"IDENTITY-PERSIST-FAILED: {exc} — frame NOT sent; the prior active identity "
-                "record (if any) stays authoritative", 2)
+                "record (if any) stays authoritative", EXIT_FAILED)
         print(f"identity: attempt {rec['attemptId']} incarnation "
               f"{rec.get('processIncarnation') or 'UNESTABLISHED'}")
 
@@ -1419,7 +1473,7 @@ def send_frame(args: argparse.Namespace) -> int:
             return 3
         if "error" in reply:
             print(f"ERR: engine rejected the frame: {clip(json.dumps(reply['error'], ensure_ascii=False), 300)}")
-            return 2
+            return EXIT_FAILED
         print(f"OK: {args.verb} accepted by engine (correlated JSON-RPC response)")
         if args.deliverable:
             meta_update(Session(args.run_dir, args.session), "deliverable", args.deliverable)
@@ -1438,7 +1492,7 @@ def send_frame(args: argparse.Namespace) -> int:
             return 3
         if reply.get("success") is not True:
             print(f"ERR: engine rejected the frame: {clip(json.dumps(reply, ensure_ascii=False), 300)}")
-            return 2
+            return EXIT_FAILED
         print(f"OK: {args.verb} accepted by engine (correlated response)")
         if args.deliverable:
             meta_update(Session(args.run_dir, args.session), "deliverable", args.deliverable)
@@ -1748,6 +1802,36 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
     return 0
 
 
+def typed_state_document() -> dict:
+    """The published machine contract for the typed state vocabulary. code / name / meaning
+    only: disposition is judgement that moves with the workflow, not a runtime fact, so it is
+    not published here."""
+    return {
+        "schemaVersion": TYPED_STATE_SCHEMA_VERSION,
+        "states": [{"code": code, "name": name, "meaning": meaning}
+                   for code, name, meaning in TYPED_STATES],
+    }
+
+
+def cmd_states(args: argparse.Namespace) -> int:
+    """Runtime-generated typed state vocabulary. Same contract as `capabilities`: one table
+    in this module, generated here, and no prose copy anywhere that could hold a second
+    opinion about what an exit code means."""
+    doc = typed_state_document()
+    if args.json:
+        print(json.dumps(doc, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    width = max(len(s["name"]) for s in doc["states"]) + 2
+    print(f"typed state vocabulary (schemaVersion {doc['schemaVersion']}) — generated from "
+          f"the TYPED_STATES table in {os.path.basename(__file__)}; no prose copy exists")
+    print("exit  " + "name".ljust(width) + "meaning (what the runtime observed)")
+    for state in doc["states"]:
+        print(f"{str(state['code']).rjust(4)}  {state['name'].ljust(width)}{state['meaning']}")
+    print("\ndisposition — what an orchestrator should DO about a state — is judgement, not a "
+          "runtime fact, and is deliberately not published here.")
+    return 0
+
+
 def provider_spec_rows() -> list[str]:
     """The shell-consumable provider spec — `agentctl`'s ONLY provider list.
 
@@ -1880,7 +1964,7 @@ def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
             "and agentctl status, then agentctl stop + restart with the engine's resume args if "
             "it stays stuck\n"
         ).encode("utf-8")
-    code = SUPERVISOR_LOST if verb == "watch-state" else 8
+    code = EXIT_SUPERVISOR_LOST if verb == "watch-state" else EXIT_ENGINE_SILENT
 
     def fire(_signum, _frame):
         # undo the ONE piece of durable state an _exit() would strand: a write-intent
@@ -1929,9 +2013,11 @@ def cmd_classify(args: argparse.Namespace) -> int:
 # The waiter needs exactly two facts and this module is the ONE place that derives them: is
 # there a fenced terminal conclusion for the current attempt+round (identity.terminal_verdict),
 # and — only if there is not — is the supervisor demonstrably alive.
-SUPERVISOR_EXITS = {0, 2, 4, 5, 6, 7, 8, 11}   # every terminal class a watch may report
-WAIT_MORE = 10                                  # supervisor alive, no conclusion yet: keep waiting
-SUPERVISOR_LOST = 12                            # dead, or undecidable — never DONE, always bounded
+# every terminal class a watch may report — named, so this set cannot name a code the
+# published vocabulary does not have
+SUPERVISOR_EXITS = {EXIT_DONE, EXIT_FAILED, EXIT_WAITING_INPUT, EXIT_STALLED_EXTERNAL,
+                    EXIT_IDLE_NO_DELIVERABLE, EXIT_WATCH_TIMEOUT, EXIT_ENGINE_SILENT,
+                    EXIT_STALLED_STREAM}
 PROCEED_TO_ARM = 13                             # arm-mode only, never leaves the waiter
 # A lease older than this is a wedged supervisor, not a live one. The window is derived, never
 # a bare constant: the supervisor renews the lease BEFORE it classifies, and one classify may
@@ -2182,7 +2268,7 @@ def watch_state(args: argparse.Namespace) -> int:
         print(f"IDENTITY-UNKNOWN: active identity record is {id_status} ({store.path})"
               f"{' — ' + store.corrupt_reason if store.corrupt_reason else ''} — no state may be "
               "adopted or concluded; agentctl stop, then restart to establish a new attempt")
-        return 2
+        return EXIT_FAILED
     state, rc, detail = store.terminal_verdict(armed_seq=args.armed_seq)
     if state == "ok":
         print(detail)
@@ -2197,7 +2283,7 @@ def watch_state(args: argparse.Namespace) -> int:
         print(f"RUNNING: {why}"
               + (f" (terminal evidence present but not adoptable — {detail})"
                  if state == "unusable" else ""))
-        return WAIT_MORE
+        return EXIT_RUNNING
     print(f"SUPERVISOR-LOST: reason={'dead' if live == 'dead' else 'unknown'} {why}"
           + (f"; terminal evidence present but not adoptable — {detail}"
              if state == "unusable" else "")
@@ -2207,7 +2293,7 @@ def watch_state(args: argparse.Namespace) -> int:
           # a refusal the supervisor could not publish (stale attempt / round / a failed write)
           # must still reach the host: silence there is how a fenced-out watcher went dark.
           + last_words(run, name))
-    return SUPERVISOR_LOST
+    return EXIT_SUPERVISOR_LOST
 
 
 def last_words(run_dir: str, name: str) -> str:
@@ -2230,7 +2316,7 @@ def cmd_watch_state(args: argparse.Namespace) -> int:
     except Exception as exc:      # noqa: BLE001 — a crashed reader is undecidable, not a verdict
         print(f"SUPERVISOR-LOST: reason=unknown the waiter's read failed ({exc!r}) — no "
               "conclusion may be inferred from a failed read")
-        return SUPERVISOR_LOST
+        return EXIT_SUPERVISOR_LOST
     finally:
         signal.alarm(0)
 
@@ -2321,7 +2407,7 @@ def cmd_identity(args: argparse.Namespace) -> int:
         try:
             rec = store.transition(args.op)
         except (identity.IdentityPersistError, ValueError) as exc:
-            die(f"IDENTITY-PERSIST-FAILED: {exc}", 2)
+            die(f"IDENTITY-PERSIST-FAILED: {exc}", EXIT_FAILED)
         print(f"identity {args.op}: attempt {rec['attemptId']} incarnation "
               f"{rec.get('processIncarnation') or 'UNESTABLISHED'}")
         return 0
@@ -2335,17 +2421,17 @@ def cmd_identity(args: argparse.Namespace) -> int:
             print(f"{identity.UNKNOWN}: `identity publish` requires --round (the round the "
                   "conclusion was computed for, captured BEFORE classify) — an unfenced "
                   "publish is refused: no terminal conclusion published, no delivery receipt")
-            return 2
+            return EXIT_FAILED
         try:
             klass, detail = store.publish_terminal(args.armed, args.round, rc=args.rc,
                                                    detail=args.detail)
         except identity.IdentityPersistError as exc:
             print(f"IDENTITY-UNKNOWN: reason={identity.PUBLISH_INTERRUPTED} {exc} — no "
                   "terminal conclusion published")
-            return 2
+            return EXIT_FAILED
         if klass != identity.OK:
             print(f"{klass}: {detail}")
-            return 2
+            return EXIT_FAILED
         # the machine line the DONE verdict carries: reason= first, evidence after
         print(detail)
         return 0
@@ -2353,7 +2439,7 @@ def cmd_identity(args: argparse.Namespace) -> int:
         store.clear()
     except identity.IdentityPersistError as exc:
         die(f"IDENTITY-PERSIST-FAILED: {exc} — identity state left UNCHANGED; a lock that "
-            "cannot be acquired proves nothing about holders", 2)
+            "cannot be acquired proves nothing about holders", EXIT_FAILED)
     return 0
 
 
@@ -2686,7 +2772,7 @@ def cmd_watch_wait(args: argparse.Namespace) -> int:
             same, mark_seen = 1, mark
         rc, msg = _read_state(run, name, armed_seq=args.armed_seq,
                               lease_unchanged=same, poll=poll)
-        if rc == SUPERVISOR_LOST and not graced and "supervisor's last words" not in msg:
+        if rc == EXIT_SUPERVISOR_LOST and not graced and "supervisor's last words" not in msg:
             # retirement race: the killer writes the last-words note a beat AFTER the sensing
             # process dies, so a LOST read inside that gap would report a mysterious death
             # with no cause. ONE grace poll turns a mid-retirement read into the noted
@@ -2696,7 +2782,7 @@ def cmd_watch_wait(args: argparse.Namespace) -> int:
             i += 1                              # grace lands on the final budgeted poll —
             _sleep(poll)                        # bounded: one extra iteration, once, ever
             continue
-        if rc != WAIT_MORE:
+        if rc != EXIT_RUNNING:
             print(f"=== [{name}] {msg} ===")
             deliver_conclusion(run, name, rc, args.armed_seq, same, poll)
             return _watch_exit(rc)
@@ -2707,16 +2793,19 @@ def cmd_watch_wait(args: argparse.Namespace) -> int:
     print(f"=== [{name}] SUPERVISOR-LOST: reason=unknown the supervisor is alive but "
           f"concluded nothing in {cap} waiter polls (its own budget is {maxp} polls) — "
           f"inspect {run}/{name}.watch.super.log ===")
-    return _watch_exit(SUPERVISOR_LOST)
+    return _watch_exit(EXIT_SUPERVISOR_LOST)
 
 ARM_RETIRE_FIRST = 4        # decided: retire what is provably not ours, then spawn
 
 ARM_SPAWN = 3               # decided: spawn, nothing to retire
 
+ARM_UNDECIDABLE = 2         # decided: nothing may be concluded or retired — the shell maps
+                            # this to the waiter's typed SUPERVISOR-LOST
+
 def cmd_watch_arm_check(args: argparse.Namespace) -> int:
     run, name = args.run_dir, args.session
     rc, _ = _read_state(run, name, armed_seq=args.armed_seq, quiet=True)
-    if rc == WAIT_MORE:
+    if rc == EXIT_RUNNING:
         return 0                    # already sensing under the current identity — attach
     if shutil.which("tmux") is None:
         print("no tmux on PATH — the sensing loop has nowhere to live")
@@ -2781,7 +2870,7 @@ def cmd_watch_arm_wait(args: argparse.Namespace) -> int:
           "automatically: killing a session this waiter cannot identify is the one move that "
           f"could murder a healthy supervisor. Inspect it with 'tmux attach -t {sup}', then "
           f"'tmux kill-session -t {sup}' and re-run 'agentctl watch {name}'")
-    return 2
+    return ARM_UNDECIDABLE
 
 def cmd_supervisor_retire(args: argparse.Namespace) -> int:
     """The non-tmux half of retirement: the last words, then the lease.
@@ -2830,14 +2919,14 @@ def _sense_conclude(args: argparse.Namespace, rnd: str, rc: int, msg: str) -> No
             sys.exit(3)
         print(f"[{name}] published {rc} — {msg}\n{pmsg}")
         sys.exit(0)
-    if rc == 0:
+    if rc == EXIT_DONE:
         # same round fence as the daemon: rnd is the round captured BEFORE this classify
         prc, pmsg = _ctl(run, "identity", "publish", name, "--armed", args.armed,
                          "--round", rnd)
         if pmsg:
             msg = f"{msg}\n{pmsg}"
         if prc != 0:
-            rc = 2      # armed under another identity: publish nothing, report the class
+            rc = EXIT_FAILED      # armed under another identity: publish nothing, report the class
     print(f"=== [{name}] {msg} ===")
     _watch_exit(rc)
 
@@ -2880,35 +2969,35 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
         # if a steer opened the next round in between.
         rnd = _session_round(run, name)
         rc, msg = _ctl(run, "classify", name)
-        if rc == 10:
+        if rc == EXIT_RUNNING:
             silent = silent + 1 if "no output since last steer" in msg else 0
             if silent >= silent_max:
-                _sense_conclude(args, rnd, 8,
+                _sense_conclude(args, rnd, EXIT_ENGINE_SILENT,
                                 f"ENGINE-SILENT at {_clock()} — steer delivered but no engine "
                                 f"output ~2min; inspect {run}/{name}.duplex.stderr.log")
             idle = tmo = 0
-        elif rc in (0, 6):
+        elif rc in (EXIT_DONE, EXIT_IDLE_NO_DELIVERABLE):
             # stability: require 2 consecutive terminal reads — a turn boundary right before
             # an auto-consumed queued message must not read as terminal.
             idle += 1
             silent = tmo = 0
             if idle >= 2:
                 _sense_conclude(args, rnd, rc, msg)
-        elif rc == 8:
+        elif rc == EXIT_ENGINE_SILENT:
             # classify's own control-plane timeout — transient lock/engine contention is
             # possible, so require 2 consecutive reads before killing the watch (mirrors the
             # idle stability rule).
             tmo += 1
             idle = silent = 0
             if tmo >= 2:
-                _sense_conclude(args, rnd, 8, msg)
+                _sense_conclude(args, rnd, EXIT_ENGINE_SILENT, msg)
         else:
             _sense_conclude(args, rnd, rc, msg)
         if i % 12 == 0:
             print(f"[{name}] heartbeat iter {i} {_clock()} — {msg}")
         i += 1
         _sleep(poll)
-    _sense_conclude(args, rnd, 7,
+    _sense_conclude(args, rnd, EXIT_WATCH_TIMEOUT,
                     "WATCH TIMEOUT — engine still active; re-run watch or investigate")
     return 0
 
@@ -3373,6 +3462,10 @@ def main() -> None:
     p_cap = sub.add_parser("capabilities", help="runtime-generated provider capability contract")
     p_cap.add_argument("--json", action="store_true", help="stable machine shape")
     p_cap.set_defaults(func=cmd_capabilities)
+
+    p_states = sub.add_parser("states", help="runtime-generated typed state vocabulary")
+    p_states.add_argument("--json", action="store_true", help="stable machine shape")
+    p_states.set_defaults(func=cmd_states)
 
     p_prov = sub.add_parser("providers", help="the provider adapter spec agentctl launches from")
     p_prov.add_argument("--shell", action="store_true",

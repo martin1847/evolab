@@ -8,16 +8,16 @@
 #   agentctl watch  <session> [--inline]  # block until terminal; typed exits (vocabulary below)
 #   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
+#   agentctl states [--json]             # runtime-generated typed state vocabulary
 #   agentctl inventory --dry-run         # read-only candidate overview (never kills anything)
 #
 # ONE lane, three engines (unified 2026-07-19): each runs its native duplex stdio protocol
 # long-lived in a tmux supervisor pane; steering is a protocol frame on the session fifo
 # (duplexctl = single flock-serialized writer) and capability gaps REFUSE instead of forking
 # lanes. tmux SUPERVISES only. NOT a transaction system: concurrent same-name starts are an
-# orchestrator bug, sequential ones are refused mechanically. Typed exits (round lane's):
-#   0 DONE / 1 SESSION-GONE / 2 FAILED|AGENT-DEAD / 3 send-unconfirmed / 4 WAITING-INPUT
-#   / 5 STALLED-EXTERNAL / 6 IDLE-NO-DELIVERABLE / 7 WATCH-TIMEOUT / 8 ENGINE-SILENT
-#   / 9 BUDGET-EXHAUSTED / 11 STALLED-STREAM / 12 SUPERVISOR-LOST (watch only; never DONE)
+# orchestrator bug, sequential ones are refused mechanically. The typed exit vocabulary is
+# NOT copied here: `agentctl states` prints it (and `--json` publishes it), generated from
+# duplexctl's TYPED_STATES. Untyped: 1 usage/SESSION-GONE, 3 send-unconfirmed.
 # `agentctl watch-daemon <session>` is INTERNAL: the sensing loop tmux runs for supervised watch.
 #
 # THIS SCRIPT IS A THIN ENTRY, AND THAT IS A CONTRACT: usage + argument parsing, tmux and
@@ -44,7 +44,7 @@ meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
   echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [engine args...]" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]" >&2
-  echo "       agentctl status <session> | watch <session> [--inline] | stop <session> [cwd] | capabilities [--json]" >&2
+  echo "       agentctl status <session> | watch <session> [--inline] | stop <session> [cwd] | capabilities [--json] | states [--json]" >&2
   echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
   exit 1
 }
@@ -494,6 +494,12 @@ case "${1:-}" in
             "") "$PY" "$CTL" capabilities ;;
             --json) "$PY" "$CTL" capabilities --json ;;
             *) echo "ERR: unknown capabilities option '$1' (only --json)" >&2; exit 1 ;;
+          esac ;;
+  # exactly two spellings; anything else (including an extra word after --json) is refused
+  states) shift; case "$#:${1:-}" in
+            "0:")       "$PY" "$CTL" states ;;
+            "1:--json") "$PY" "$CTL" states --json ;;
+            *) echo "ERR: states is read-only and is spelled 'agentctl states' or 'agentctl states --json' — got: $*" >&2; exit 1 ;;
           esac ;;
   # read-only by construction: the argument contract is refused HERE, before any probe runs
   inventory) shift; case "${1:-}" in
