@@ -3,27 +3,27 @@
 > 适用于任何前端 fix 的运行时验证。
 > 核心原则：**前端改动，代码 review + 单测都不够，必须回浏览器看真实渲染**。
 
-## 工具选型：MCP 主、CLI 补（不是二选一）
+## 工具选型：浏览器 CLI 探路、Test 定型、curl 补 HTTP
+
+> 三个词各指一物，**别用裸「CLI」**：`playwright-cli`（浏览器 CLI，驱真浏览器）·
+> `@playwright/test`（断言真源）· `curl`（HTTP 直连，不经浏览器）。
 
 | 角色 | 工具 | 何时用 |
 |---|---|---|
-| **前端行为验证（主）** | **Playwright MCP 隔离上下文（默认首选）**；登录态阻塞时先报 BLOCKED 或请求单独授权，不自动接管用户日常浏览器 | 唯一能看"UI 真实渲染对不对"——有没有提前显示完成/重复/卡死/计时错乱。**前端 fix 必须靠它**。 |
-| **前端联网诊断（主）** | Playwright MCP 网络（`browser_network_requests`） | 看请求 pending/失败/去向——能抓到**前端自己的联网 bug**（如代理目标没配，请求 pending）。CLI 直连会"恰好成功"从而**掩盖**这类 bug。 |
-| **元素定位** | a11y/DOM 快照的 uid/ref | 比坐标/截图稳、可复现、token 省；坐标/vision 仅作 fallback（拿不到 ref 或纯视觉布局问题）。 |
-| **后端 ground-truth（补充）** | CLI `curl` + bearer token | 抓 SSE 逐事件时序（`curl -N` 比网络面板强）、探 API、提 token、脚本化/循环、token 省。**绕过前端网络层 → 验不了前端行为**。 |
+| **探索 / 定位 / 临时诊断** | `@playwright/cli`（命令 `playwright-cli`）：`snapshot` 取 ref → `find` 搜大快照 → `generate-locator` 出 locator；`requests` / `console` 读联网与运行时 | 真浏览器且省 token——工具 schema 不进上下文，命令即证据可贴进 goal。看得到"渲染对不对"与**前端自己的联网 bug**（代理没配、请求 pending）。ref 定位比坐标/截图稳，坐标/vision 仅作 fallback。 |
+| **断言真源 / 重复执行 / 部署后验收** | `@playwright/test` 的 `.spec.ts` | selector 与 oracle 稳定后落 spec；本地 build 与已部署环境**复用同一 spec**，只切 `use.baseURL`（按 `process.env` 分支）与 auth fixture（`auth.setup.ts` setup project + `dependencies` + `storageState`；凭据落 `playwright/.auth` 且 gitignore）。 |
+| **后端 ground-truth** | `curl` + bearer token | 抓 SSE 逐事件时序（`curl -N`）、探 API、提 token、脚本化。**绕过前端网络层 → 验不了前端行为**，别拿它当渲染验证。 |
+| **Playwright MCP（例外形态）** | 同一套工具的 MCP 前端 | 不是"能力缺口"——未发现 MCP 独有能力。差别在形态：MCP 默认 headed、贵（工具 schema + 快照进上下文），适合**需要模型在 agentic loop 内逐 tool 迭代**或要人眼盯的场景。 |
 
+**浏览器归属**：一律用 Playwright 自起的隔离浏览器（`playwright-cli open` 临时 profile，并行用
+`-s=<name>`）；**绝不接管主理人日常 Chrome/Edge**（多 agent 与用户争控制面，断连坑过两次）——登录墙
+挡住就报 BLOCKED 或请求单独授权。已下沉强制层（bash guard ⑽ · agent guard P0a），此处只是指针。
 
-**判据**：纯 CLI 验不了前端渲染；纯 MCP 抓 SSE 时序笨。一个前端 fix 的最优是**混合**——
-MCP 驱动登录+渲染验证+网络诊断，CLI 抓 SSE/API ground-truth。
+## 重复型 E2E：交付物 = `.spec.ts`，不是自建 runner
 
-> **Playwright 优先已是 hook 硬规则**（P0a：浏览器派发载用户日常浏览器控制 token 即被 `cto-guard-agent.py` DENY）。
-> why：用户日常浏览器与多 agent 争控制面、断连坑两次；仅当 Playwright 登录态不可解决且用户单独授权时才考虑。
-
-## 重复型 E2E：交付物 = 无头 playwright 脚本
-
-交互式 browser-MCP 每驱动一次 E2E 烧一个量级 token——同一验收第二次起走脚本：node 无头 playwright，
-参数化、可独立重跑，负对照内建（如 `--expect-absent <假id>` 必红），输出机器可读 `RESULT` 尾行
-（消费者只认尾行）；脚本随项目入库、路径进该项目 AGENTS.md。browser-MCP 只用于首次 selector 探路。
+同一验收第二次起不再手驱：selector 与 oracle 稳定后落 `@playwright/test` spec，负对照内建
+（如"某个假 id 必须查无"），随项目入库、路径进该项目 AGENTS.md。**消费口径 = 进程退出码 + reporter
+产物**（取代自建 node runner 的 `RESULT` 尾行约定；验收方只认退出码与 report，不认叙述）。
 
 ## 状态形状矩阵（E2E 只测新鲜快乐态 = 结构性漏测）<!-- trunk:状态形状矩阵 -->
 
@@ -45,7 +45,7 @@ staging 应养**常备测试账号矩阵**（手机号全字段户 / oauth 贫�
 ## 联调铁律
 
 1. **a11y/DOM 快照优先定位元素**，坐标/截图 fallback。
-2. **深层问题（console/network/perf）走 MCP**，别从截图猜运行时。
+2. **深层问题（console/network/perf）读运行时**（`playwright-cli console` / `requests`），别从截图猜。
 3. **每次改完回浏览器读运行时验证**（vite HMR 自动重载 → 重新 snapshot/读 console/查 network）。
    不要只读代码就认定改对了。
 4. **canvas 渲染的 UI**（多维表/图表）a11y 拿不到内容 → 退回截图 read。
@@ -54,7 +54,7 @@ staging 应养**常备测试账号矩阵**（手机号全字段户 / oauth 贫�
 
 mock 契约 + 后端 SSE 帧 + 本地 dev 渲染**都过，也不等于真用户能看到**。完整闭环：
 改代码 → **本地 localhost E2E（部署前门，必过）** → **运维发布** → **登已发布的真应用跑真实一轮**
-（浏览器 MCP，非 mock / 非本地 dev）→ 成功**截图** → 才更新任务系统状态。
+（真浏览器，非 mock / 非本地 dev）→ 成功**截图** → 才更新任务系统状态。
 
 - **部署前先在 localhost E2E（必过门，别直接发布）**：用**真 build 连真后端**（不是 §联调铁律3 那种
   vite HMR dev 渲染——那只是迭代时的快照）跑一遍真实用户路径。理由：**部署慢且贵，bug 在本地抓一次
@@ -85,12 +85,12 @@ mock 契约 + 后端 SSE 帧 + 本地 dev 渲染**都过，也不等于真用户
 
 只有一条**跨项目通用手法**留在这里：运行时配置硬编码、要临时改指向又不污染正在被 review
 的工作树时，在页面加载前把配置对象用 `Object.defineProperty(..., {writable:false})` 锁住，
-让页面自身的注入脚本覆盖失败（零文件改动）。**关键是"加载前"**：用 Playwright 的
-`page.addInitScript`（经 `browser_run_code_unsafe` 调，每次导航在页面脚本前跑）——**不是** `browser_evaluate`
-/ chrome-devtools `evaluate_script`，那俩是加载后求值、抢不到页面自己注入之前。实测验证过此手法
-（addInitScript 先跑 + writable:false 挡掉页面覆盖）。
+让页面自身的注入脚本覆盖失败（零文件改动）。**关键是"加载前"**：用 `page.addInitScript`
+（`playwright-cli run-code` 或 spec 里直接调，每次导航在页面脚本前跑）——**不是**加载后求值的
+`evaluate` 类，那抢不到页面自己注入之前。实测验证过（addInitScript 先跑 + writable:false 挡掉覆盖）。
 
 ## 新项目接入
 
-把上面"联调铁律"+"工具选型"写进该前端项目的 `AGENTS.md`（"前端联调/浏览器运行时验证规约"
-节）。MCP server 配在 `~/.claude.json`，新增后需重启会话/`/mcp` 重连,不热加载。
+把上面"联调铁律"+"工具选型"写进该前端项目的 `AGENTS.md`（"前端联调/浏览器运行时验证规约"节），
+并在其中钉死 `@playwright/cli` 与 `@playwright/test` 的版本——前者仍在 0.x（底层走 alpha 通道），
+命令面会漂，别当稳定契约引用。
