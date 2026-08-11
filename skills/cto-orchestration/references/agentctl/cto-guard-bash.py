@@ -607,15 +607,32 @@ def main():
     v9 = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", raw).replace("\\", "")
     if re.search(r"playwright-cli\b[^|;&]*\battach\b", v9) and re.search(
             r"(?:^|\s)--(?:cdp|extension)\b", v9):
-        sys.stderr.write(
-            "DENY: `playwright-cli attach --cdp/--extension` takes over the principal's real "
-            "browser — multi-agent contention with the user's own session hangs (bit us twice). "
-            "Fix: drive Playwright's own isolated browser — `playwright-cli open <url>` (temp "
-            "profile), `-s=<name>` for parallel isolated sessions. Login wall? report BLOCKED or "
-            "ask for separate authorization; never take the daily browser. "
-            "Read: cto-orchestration/references/frontend-verify.md §工具选型 (浏览器归属).\n"
-        )
-        return 2
+        # Attaching is not always wrong (principal's ruling 2026-08-12): an enterprise SSO login
+        # that cannot be replayed into storageState legitimately needs a real Chrome — and CDP
+        # attach to an ALREADY-RUNNING one is the correct shape, strictly better than seizing the
+        # profile directory (which locks it and breaks the principal's own browser). What must
+        # stay gated is doing it silently by default. Same one-shot override as rule (7):
+        # consumption IS the approval, so it can never linger as a standing bypass.
+        marker = "/tmp/cto-allow-browser-attach"
+        try:
+            os.remove(marker)
+            consumed = True
+        except OSError:
+            consumed = False
+        if not consumed:
+            sys.stderr.write(
+                "DENY: attaching to a real browser is not the default — multi-agent contention "
+                "with the principal's own session hangs (bit us twice). Fix: drive Playwright's "
+                "own browser (`playwright-cli open <url>`), login state carried by a "
+                "PROJECT-SCOPED storageState file (per role: admin/buyer), one named session per "
+                "project (`-s=<project>`), expiry refreshed by a setup project — not a temp "
+                "profile, not the daily browser. Genuinely need real "
+                "Chrome (enterprise SSO that cannot be replayed)? Attach to an ALREADY-RUNNING "
+                "dedicated instance (never seize the profile dir), ask the principal, then "
+                "`touch /tmp/cto-allow-browser-attach` (one-shot, consumed on use) and re-run. "
+                "Read: cto-orchestration/references/frontend-verify.md §工具选型 (浏览器归属).\n"
+            )
+            return 2
 
     return 0
 
