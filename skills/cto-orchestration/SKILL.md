@@ -69,6 +69,10 @@ duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。
 - 只有 blocking 驱动续轮；第 3 轮起每轮续派须在 brief 写 `SHIP-BLOCKING: <依据>`；同一 finding 的修复连续 2 轮只新增 finding，则止损并转人工裁决或 accept-documented。
 - **杠杆账（简单干脆优先）**：用户可见小病 → 先找交互/配置层一刀关整类的最小解；机制自明（关掉即该类物理不可发生）且可逆 → 直做，机制存疑 → 仍过 §3 先量再改；取证仅在最小解不明时派。修复轮 ≥2 或对外协定往返 ≥2 → 主动算杠杆账（残余 = 概率×血量×复杂度）提降级案，不等主理人纠偏；单 seat 不堆叠多份合同——交付时点会被最慢件绑架。验收跑 `references/scale-check.sh` 机械核规模锚（goal-template 规模锚行的电；超锚冒泡主理人，不静默收）。
+- **配比轴（8 分业务效果 : 2 分必要工程）**：开批前先判面——受益者是项目对外承诺服务的那类人 =
+  业务面，受益者是我们自己（含自家席位 / 流程 / 工具）= 工程面（判据正源 `meta/leverage-line.md`
+  §第二轴）。**连续 2 批工程面 → 第 3 批开工前 STOP-and-report**，向主理人冒泡「业务面下一步是
+  什么」再定，不自驱续投；工程批各自健康（评审收敛 / 规模锚绿）不构成配比正当。
 - 多轮 headless review 显式传 `--workflow review-loop --max-rounds N`（三引擎通用：每次 goal/steer 投递计一轮）；轮数与 stop-loss 只认 runtime meta，主干不复制状态机。
 - 评审期间执行 agent 不写同一 worktree。
 
