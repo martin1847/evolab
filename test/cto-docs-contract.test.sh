@@ -64,7 +64,12 @@ chk_contains "goal read and deliverable paths are absolute" "所有“先读路�
 chk_contains "goal exempts command arguments" "不要求证明命令内部每个参数都绝对化" "$goal_body"
 chk_contains "findings uses absolute placeholder" "/absolute/path/to/worktree/docs/orchestration/" "$goal_body"
 chk_contains "goal delegates understanding gate to runtime" "复述 / 立即开工 / BLOCKED 协议由 runtime" "$goal_body"
-chk_contains "runtime understanding gate starts" "Do not wait for approval or interaction" "$agentctl_body"
+chk_contains "runtime understanding gate starts work" "do not idle waiting for approval to begin" "$agentctl_body"
+# the gate's other half: a contract STOP is held BY writing BLOCKED.md, and cheap rollback is not
+# a licence to self-approve past it. Both halves regressed workers when only the first existed.
+chk_contains "runtime gate routes contract STOP to BLOCKED.md" "when the goal contract tells you to stop and wait for the orchestrator" "$agentctl_body"
+chk_contains "runtime gate denies self-approval by blast radius" "never licenses self-approval past one" "$agentctl_body"
+chk_not_contains "no unqualified do-not-wait wording" "Do not wait for approval or interaction" "$agentctl_body"
 chk_contains "goal has conditional premises section" "Premises this goal rests on (VERIFY — do not trust)" "$goal_body"
 chk_contains "premise evidence is candidate not verdict" "candidate evidence" "$goal_body"
 chk_contains "false premise stops implementation" "任何 premise 为假 → **STOP AND REPORT**" "$goal_body"
