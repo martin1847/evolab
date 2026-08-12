@@ -137,9 +137,59 @@ chk_contains "2.5KB letter warns on stderr" "aim for <2KB" "$err"
 chk_eq "2.5KB letter lands in inbox despite warning" 1 "$(ls "$AGENT_MAIL_DIR/beta/inbox/"*brevity-warn*.md 2>/dev/null | wc -l | tr -d ' ')"
 err="$(python3 -c 'print("z" * 1024, end="")' | bash "$BUSBIN" send alpha beta brevity-ok "1KB 信" 2>&1 >/dev/null)"; rc=$?
 chk_eq "1KB letter: exit 0" 0 "$rc"
-chk_eq "1KB letter: no warning on stderr" "" "$err"
-# drain the brevity letters so later mail-check assertions see a clean beta inbox
-for bf in "$AGENT_MAIL_DIR/beta/inbox/"*brevity-*.md; do
+# asserts the SIZE warning is absent, not that stderr is empty — a body of filler carries no
+# evidence trace, so the sourcing reminder below legitimately fires on it.
+chk_not_contains "1KB letter: no brevity warning" "aim for <2KB" "$err"
+
+# sourcing reminder: a letter is the only artifact that reaches another seat unreviewed, so a long
+# body with NO evidence trace gets nudged. Decidable proxy only — trace presence, never whether a
+# claim is truly sourced. Delivery is never affected.
+#
+# The negative battery below is the real contract. A first cut fired on "received, archived", on
+# questions, and on letters citing a URL or a path — cold review reproduced every one, and a
+# reminder that fires on routine mail is one nobody reads. Each case here is one of those
+# reproductions, kept as a standing assertion.
+PAD="$(python3 -c 'print("背景交代：" + "本批改动涉及派工链路与回执口径的对齐工作。" * 12, end="")')"
+
+claims_send() { # $1 slug  $2 body -> ERR (stderr only)
+  ERR="$(printf '%s' "$2" | bash "$BUSBIN" send alpha beta "$1" "取证探针" 2>&1 >/dev/null)"
+}
+
+# --- fires: long enough to carry a load-bearing claim, nothing cited ---------------------------
+claims_send claims-bare "${PAD}前端把该字段当 number 传今天都能悄悉工作。"
+chk_contains "traceless long letter gets the reminder" "no evidence trace found" "$ERR"
+chk_eq "traceless letter lands in inbox anyway" 1 \
+  "$(ls "$AGENT_MAIL_DIR/beta/inbox/"*claims-bare*.md 2>/dev/null | wc -l | tr -d ' ')"
+# a clock time or a ratio is not a citation — this pair is why the file:line branch demands a
+# letter on the left of the colon
+claims_send claims-time "${PAD}下次检查安排在 14:30，样本比例 1:2。"
+chk_contains "a time and a ratio are not evidence" "no evidence trace found" "$ERR"
+# an inline identifier in backticks is not a command
+claims_send claims-ident "${PAD}消费方大概用的是 \`amount\` 这个字段。"
+chk_contains "an inline identifier is not a command" "no evidence trace found" "$ERR"
+
+# --- silent: routine shapes that carry no claim, and every source form senders actually use -----
+claims_send claims-ack "收到，已归档，下周跟进。"
+chk_not_contains "a transactional reply is not nudged" "no evidence trace found" "$ERR"
+claims_send claims-ask "这个决定是谁批准的？"
+chk_not_contains "a short question is not nudged" "no evidence trace found" "$ERR"
+claims_send claims-url "${PAD}依据：https://example.com/audit-report"
+chk_not_contains "a URL counts as a trace" "no evidence trace found" "$ERR"
+claims_send claims-path "${PAD}依据：/tmp/audit/report.md 里的第三节。"
+chk_not_contains "an absolute path counts as a trace" "no evidence trace found" "$ERR"
+claims_send claims-line "${PAD}判据在 skills/agent-mail/agentmail:103。"
+chk_not_contains "a file:line counts as a trace" "no evidence trace found" "$ERR"
+claims_send claims-cmd "${PAD}跑了 \`bash test/agentmail.test.sh\`，89 passed。"
+chk_not_contains "a backticked command counts as a trace" "no evidence trace found" "$ERR"
+claims_send claims-unver "${PAD}未取证：真实引擎下的行为没跑过。"
+chk_not_contains "an explicit unverified marker counts as a trace" "no evidence trace found" "$ERR"
+
+# delivery is never affected, whatever the predicate decided
+claims_send claims-rc "${PAD}零痕迹长信。"
+chk_eq "reminder never changes the exit code" 0 "$(printf '%s' "${PAD}零痕迹长信。" | bash "$BUSBIN" send alpha beta claims-rc2 "rc" >/dev/null 2>&1; echo $?)"
+# drain the brevity + sourcing-reminder letters so later mail-check assertions see a clean beta inbox
+for bf in "$AGENT_MAIL_DIR/beta/inbox/"*brevity-*.md "$AGENT_MAIL_DIR/beta/inbox/"*claims-*.md; do
+  [ -e "$bf" ] || continue
   bash "$BUSBIN" archive beta "$(basename "$bf" .md)" >/dev/null
 done
 

@@ -32,6 +32,15 @@ EOF
 # every byte of a letter is read by the recipient's context, so brevity is a token budget, not style.
 BODY_CAP=8192
 BODY_SOFT=2048
+# Sourcing-reminder tuning (see the send path). CLAIMS_MIN is a coarse floor, NOT a validated
+# threshold: coordination replies and questions sit well under it, a letter carrying a load-bearing
+# system claim sits well over. CLAIMS_TRACE is the vocabulary senders actually cite with — the
+# file:line branch requires a letter on the left so times (14:30) and ratios (1:2) are not evidence,
+# and a backticked span must contain a space so an inline identifier is not mistaken for a command.
+# Known and accepted: `localhost:3000` reads as a citation, and a mostly-speculative letter with one
+# real citation stays silent — narrowing either one means classifying prose, which is undecidable.
+CLAIMS_MIN=400
+CLAIMS_TRACE='https?://|/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]|[A-Za-z0-9_/.-]*[A-Za-z][A-Za-z0-9_/.-]*:[0-9]{1,5}|`[^`]* [^`]*`|\$\(|未验|未核|未取证|推测|没验证|unverified|not verified'
 
 # Archive retention (days; owner-set policy: 60). Every `archive` opportunistically prunes the same
 # seat's expired letters — no daemon/cron needed; `prune` runs the sweep explicitly. The env var
@@ -101,6 +110,27 @@ case "$cmd" in
     fi
     if [ "$bodylen" -gt "$BODY_SOFT" ]; then
       echo "warning: letter is $bodylen bytes; aim for <2KB — conclusion first, only the action you need from the recipient, evidence as file paths/URLs not inline content" >&2
+    fi
+    # A letter is the one artifact that reaches another seat's decision table without passing any
+    # review — code, gates and PR feedback all get cold-reviewed; a letter is written and sent.
+    # Field case (external seat, 2026-08-12): one unsourced sentence, written as a possibility, was
+    # read as a finding and used to size a breaking change; a later audit measured zero exposure.
+    #
+    # Whether a claim is sourced is not machine-decidable, and a hard block would only breed fake
+    # markers. Trace-ABSENCE is decidable, and zero traces was the shape of the field case. But
+    # absence alone over-fires: a first cut warned on "received, archived", on questions, and on
+    # letters citing a URL or a path — the very forms the size warning two lines up recommends.
+    # Cold review reproduced all of them. Two independent narrowings, neither semantic:
+    #   - a floor: coordination replies and questions are short; a letter long enough to carry a
+    #     load-bearing claim is not. CLAIMS_MIN is a coarse cut, not a validated threshold.
+    #   - a trace vocabulary that matches what senders actually cite: file:line (rejecting all-digit
+    #     left sides so 14:30 and 1:2 are not evidence, and known hosts so localhost:3000 is not),
+    #     URLs, absolute paths, a backticked span containing a space (a command, not an inline
+    #     identifier), or an explicit unverified marker.
+    # Still accepted, by design: a speculation-heavy letter carrying one real citation stays silent.
+    # Narrowing that further means classifying which sentences are claims — back to undecidable.
+    if [ "$bodylen" -ge "$CLAIMS_MIN" ] && ! printf '%s' "$body" | grep -qE "$CLAIMS_TRACE"; then
+      echo "reminder: no evidence trace found (no file:line, URL, path, command, or unverified/推测 marker) in a ${bodylen}-byte letter. Every factual claim about a system needs its source inline or an explicit guess marker — and say what you did NOT check. If a sentence has neither, verify it or cut it, then re-send." >&2
     fi
     # Maildir-style atomic delivery: compose fully in tmp/, then a same-fs rename into inbox/.
     # There is no window where inbox/ can contain a half-written letter.
