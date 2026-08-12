@@ -49,11 +49,22 @@ assert_rc "$rc" 0 "skills tree narrative-clean"
 # 5. the widened face: a skill-internal README carrying review-finding provenance reds …
 mkdir -p "$T/skills/x/references/y"
 w "$T/skills/x/references/y/README.md" '判据正文' '取这个阈值是因为（评审 R2 F-03）曾误判' '尾部'
-out="$(python3 "$CHECK" "$T/skills/x/references/y/README.md" 2>&1)"
-assert_rc $? 1 "skill-internal README in the face"
-# … and a declared exemption is skipped instead (temporary scaffolding, listed with an owner)
-out="$(python3 "$CHECK" "$REPO/skills/cto-orchestration/references/agentctl/README.md" 2>&1)"
-assert_rc $? 0 "declared exemption skipped"
+# … and it must red through face() — passing the path directly bypasses the very enumeration
+# that can regress (tail review M4 2026-08-12: narrowing face() to skills/*/SKILL.md silently
+# dropped every README while this control stayed green).
+git -C "$T" init -q 2>/dev/null   # face() enumerates via git ls-files — a bare dir is invisible to it
+out="$(python3 "$CHECK" --tree "$T" 2>&1)"
+assert_rc $? 1 "skill-internal README reds THROUGH the tree face"
+assert_has "$out" "README.md" "face() names the offending README"
+# EXEMPT must stay empty: an entry there is the escape hatch that hid this file for a whole batch
+n_exempt="$(python3 -c '
+import ast,sys
+for a in ast.parse(open(sys.argv[1],encoding="utf-8").read()).body:
+    if isinstance(a, ast.Assign) and any(getattr(t,"id","")=="EXEMPT" for t in a.targets):
+        print(len(a.value.elts)); break
+else: print("NO-EXEMPT-BINDING")
+' "$CHECK")"
+assert_rc "$n_exempt" "0" "EXEMPT stays empty (an entry = prose winning)"
 
 rm -rf "$T"
 echo "== narrative: $pass passed, $fail failed =="

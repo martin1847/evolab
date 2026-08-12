@@ -54,7 +54,7 @@ duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原
    `start` 在 goal 帧被接受后立即返回，**不会自动 watch**；紧接着用宿主的受控后台能力运行 `agentctl watch <session>`。先接线 `references/agentctl/guard-hooks.json`；guard 负责高频机械失误，主干不复制其规则表。
 
    理解门：runtime footer 要求简短复述后立即开工，真阻塞写 `<cwd>/BLOCKED.md` 并停止（三引擎同协议）。
-4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；完整状态表见 agentctl README。
+4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；词表跑 `agentctl states`，处置见 agentctl README。
 5. **steering 走 `agentctl steer`**：默认排队/下一轮，`--now` mid-turn，`--replace` 弃当前重来；
    引擎能力差异查 `agentctl capabilities`，不支持的组合由接口当场拒绝并指正路。投递成功 ≠ 模型照做，
    验收仍看交付物。每个后续 turn 都重新挂 `agentctl watch`。

@@ -586,9 +586,12 @@ teardown
 # Baseline 12.5% measured 2026-08-12; 1.0-point headroom absorbs ordinary plumbing.
 BASH_LINES="$(wc -l < "$AGENTCTL")"
 PY_LINES="$(wc -l < "$(dirname "$AGENTCTL")/duplexctl.py")"
+# cross-multiply, do not floor a percentage then compare (floor turned the stated 13.5% into
+# an effective <13.6% ratchet — review m1 2026-08-12)
 SHARE_X10="$(( BASH_LINES * 1000 / (BASH_LINES + PY_LINES) ))"
+OVER=$(( BASH_LINES * 1000 > 135 * (BASH_LINES + PY_LINES) ? 1 : 0 ))
 # breach message names the fix, not just the number (a bare number teaches nobody)
-[ "$SHARE_X10" -le 135 ] && VERDICT="within" \
+[ "$OVER" -eq 0 ] && VERDICT="within" \
   || VERDICT="BREACH(${SHARE_X10}/1000): bash 占比回升 = 判定正在回流 shell — 下沉 duplexctl，或在 goal 声明理由并更新基线"
 chk_eq "C10 thin entry: bash share ${SHARE_X10}/1000 stays under the 135 ratchet" "within" "$VERDICT"
 

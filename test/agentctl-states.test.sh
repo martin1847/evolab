@@ -101,4 +101,24 @@ print(" ".join(bad) if bad else "CONSISTENT %d" % len(published))
 ' "$CTL")"
 chk_eq "no unpublished typed code and no bare-literal verdict" "CONSISTENT 11" "$violations"
 
+# S4b — the SECOND production definition. duplexctl's table is the claimed single source, but
+# identity.py hand-maintains the terminal subset (it gates whether a typed result may be
+# published at all). Scanning only duplexctl false-greened a real drift: deleting a class there
+# left S4 at 4 passed while the runtime refused to publish that exit (tail review M1 2026-08-12).
+id_drift="$(states --json | python3 -c '
+import ast, json, sys
+pub = {s["code"]: s["name"] for s in json.load(sys.stdin)["states"]}
+tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+tc = {}
+for a in tree.body:
+    if isinstance(a, ast.Assign) and any(getattr(t, "id", "") == "TERMINAL_CLASSES" for t in a.targets):
+        tc = {k.value: v.value for k, v in zip(a.value.keys, a.value.values)}
+bad = [f"terminal-code-not-published:{c}" for c in sorted(tc) if c not in pub]
+# names must agree where both speak; the published name may carry alternates (A|B)
+bad += [f"name-disagrees:{c}:{tc[c]}!={pub[c]}" for c in sorted(tc)
+        if c in pub and tc[c] not in pub[c].split("|")]
+print(" ".join(bad) if bad else "AGREES %d" % len(tc))
+' "$(dirname "$CTL")/identity.py")"
+chk_eq "S4b identity.py terminal map agrees with the published vocabulary" "AGREES 8" "$id_drift"
+
 summary

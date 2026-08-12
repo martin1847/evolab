@@ -15,7 +15,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 - **steer 语义**（能力差异拒绝制，不分叉车道）：三引擎能力矩阵由 runtime 生成，`agentctl capabilities`
   是唯一真源（同一张表既驱动路由、又出拒绝文案）。投递成功 ≠ 模型照做，验收仍看交付物。
-- **typed exit 三引擎同词汇**（全表见 [typed 状态](#typed-状态编排者纪律)）；
+- **typed exit 三引擎同词汇**（词表 `agentctl states`，处置见下节）；
   **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析；freshness
   用 mtime 对 epoch（每次 steer 即轮转）；必带/不带的判据归 SKILL.md §0。
@@ -110,8 +110,8 @@ exit code、名字与语义是运行时事实 → `agentctl states`（`--json` �
 | ENGINE-SILENT | 查 stderr.log；必要时 stop+resume |
 | BUDGET-EXHAUSTED | 转人工裁决 |
 | RUNNING | 继续等 |
-| STALLED-STREAM | 按停滞处理；窗口用 `AGENT_WATCH_STALL_MINS` 调、0 关 |
-| SUPERVISOR-LOST | `reason=dead` 重挂；`reason=unknown` 先清 rogue `<s>-watchd` 再重挂 |
+| STALLED-STREAM | **先从 checkout/commits 抢救成果，再 stop**；探针任一不确定按 RUNNING 处理（宁钝勿敏）。窗口用 `AGENT_WATCH_STALL_MINS` 调、0 关 |
+| SUPERVISOR-LOST | `reason=dead` → 直接重挂。`reason=unknown` → **先读 detail**：只有它点名 rogue/wedged `<s>-watchd` 时才 `tmux kill-session -t <s>-watchd` 再重挂；其余 unknown（canonical 读超时 / `ps` 不可用 / 租约损坏 / pid 复用嫌疑）**只重挂，绝不杀**——那些情况下杀掉的是一个活着的守护环 |
 
 新增 typed MESSAGE 行（**exit 码契约不变**，三类都映射到既有失败 / UNKNOWN 出口）：
 
