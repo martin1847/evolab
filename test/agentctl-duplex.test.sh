@@ -81,6 +81,7 @@ chk_contains "prompt frame carries BLOCKED footer" "BLOCKED.md" "$(cat "$SANDBOX
 # the footer must reach the ENGINE with the contract-gate half intact — source-level wording is
 # checked by cto-docs-contract; this asserts it survives into the delivered frame.
 chk_contains "prompt frame carries contract-gate clause" "stop and wait for the orchestrator" "$(cat "$SANDBOX/omp.log")"
+chk_contains "prompt frame carries promised-review branch" "Unless the goal contract promises to review" "$(cat "$SANDBOX/omp.log")"
 chk_eq "prompt frame is omp type=prompt" 1 "$(grep -c '"type":"prompt"' "$SANDBOX/omp.log")"
 
 out="$(bash "$AGENTCTL" status dxA 2>&1)"; rc=$?

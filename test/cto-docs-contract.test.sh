@@ -69,6 +69,11 @@ chk_contains "runtime understanding gate starts work" "do not idle waiting for a
 # a licence to self-approve past it. Both halves regressed workers when only the first existed.
 chk_contains "runtime gate routes contract STOP to BLOCKED.md" "when the goal contract tells you to stop and wait for the orchestrator" "$agentctl_body"
 chk_contains "runtime gate denies self-approval by blast radius" "never licenses self-approval past one" "$agentctl_body"
+# the footer consumes the kernel's branch predicate (orchestrator-core §3): a PROMISED pre-work
+# review is a gate, and it is held through the same channel — otherwise the kernel states a rule
+# the shipping lane does not implement, and that contract shape has two contradictory answers.
+chk_contains "runtime gate defers to a promised pre-work review" "Unless the goal contract promises to review that restatement" "$agentctl_body"
+chk_contains "promised review is held via the same channel" "a promised pre-work review is such a gate" "$agentctl_body"
 chk_not_contains "no unqualified do-not-wait wording" "Do not wait for approval or interaction" "$agentctl_body"
 chk_contains "goal has conditional premises section" "Premises this goal rests on (VERIFY — do not trust)" "$goal_body"
 chk_contains "premise evidence is candidate not verdict" "candidate evidence" "$goal_body"

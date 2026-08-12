@@ -58,8 +58,9 @@ steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影�
                （omp = 活体 get_state 往返；claude = result 帧；codex = turn/completed）
 ```
 
-- goal 投递 = `prompt` 帧（正文 = goal 文件 + HEADLESS 协议 footer：立即开工、阻塞**或合同门要求
-  停下等裁决**时写 `<cwd>/BLOCKED.md` 停下——fresh BLOCKED.md 映射 exit 4，三引擎同协议）。
+- goal 投递 = `prompt` 帧（正文 = goal 文件 + HEADLESS 协议 footer：立即开工**除非合同承诺了开工前
+  核对**、阻塞**或合同门要求停下等裁决**时写 `<cwd>/BLOCKED.md` 停下——fresh BLOCKED.md 映射
+  exit 4，三引擎同协议）。
 - **崩溃恢复腿**：照 `agentctl capabilities` 的 `resume` 行走——degraded 两家（`stop` 后重开会话、
   engine args 由 start 原样转发）正路在各自 note 里；codex 唯一 supported，握手内续 thread：
   `agentctl start codex <s> <cwd> --goal <f> --resume-thread <threadId>`（supported 不带 note，故写这）。

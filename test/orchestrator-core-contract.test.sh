@@ -45,6 +45,11 @@ chk_not_contains "presence is not the branch predicate" "编排者在场（能�
 # worker never idles waiting for a handshake the lane never promised. Flipping this default is
 # the mutation this assertion exists to catch.
 chk_contains "unpromised release defaults to start immediately" "没承诺（默认）→ 无放行可言" "$core_body"
+# Pin the ACTION too, not just the label: a mutation that keeps the label above while rewriting
+# the neighbouring clause into "restate, then wait for release anyway" inverts the default and
+# was shown to pass this suite green (cold review R2). The label names the branch; this names
+# what the worker does in it.
+chk_contains "and the action in that branch is to start, not wait" "复述完即开工" "$core_body"
 
 # (3) The channel rule, and its orthogonality to (1) — collapsing the two back into a single
 # either/or is what made the predicate undecidable the first time.
