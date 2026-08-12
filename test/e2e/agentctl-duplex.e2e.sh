@@ -16,7 +16,18 @@ cd "$(dirname "$0")"
 . ../lib-testkit.sh   # assertion helpers only
 
 REPO_ROOT="$(cd ../.. && pwd)"
+# Tag fidelity (E2E_FROM_ARCHIVE=<ref>): drive the lane from a `git archive` export instead of the
+# worktree. The worktree carries gitignored scaffolding, so a gate that only ever runs there can be
+# green while the SHIPPED tag is broken. Off by default — the daily gate stays fast; set it before a
+# release. This replaces a separate cold-dispatch probe: same real-engine legs, one extra property.
 AW="$REPO_ROOT/skills/cto-orchestration/references/agentctl"
+if [ -n "${E2E_FROM_ARCHIVE:-}" ]; then
+  ARC="$(mktemp -d /tmp/e2e-archive.XXXXXX)"; trap 'rm -rf "$ARC"' EXIT
+  git -C "$REPO_ROOT" archive "$E2E_FROM_ARCHIVE" | tar -x -C "$ARC" \
+    || { echo "  FAIL cannot archive ref '$E2E_FROM_ARCHIVE'"; exit 1; }
+  AW="$ARC/skills/cto-orchestration/references/agentctl"
+  echo "  [archive] lane under test = $E2E_FROM_ARCHIVE (not the worktree)"
+fi
 AGENTCTL="$AW/agentctl"
 
 echo "== agentctl-duplex.e2e (omp + claude duplex legs; uses API tokens) =="
@@ -74,8 +85,11 @@ EOF
 
 # economy models where the id is known-safe (fuzzy omp ids can open an interactive
 # picker; this gate proves lane machinery, not models).
-run_leg claude --model haiku
-run_leg omp --auto-approve --model=anthropic/claude-opus-4-8
-run_leg codex
+# Model pins live here (test-side only, never in the skill). This gate proves LANE MACHINERY,
+# not model quality — always pin the cheapest model that can follow a two-line goal. Override per
+# leg via env when a name goes stale (a wrong name fails the whole gate, so we do not guess).
+run_leg claude --model "${E2E_MODEL_CLAUDE:-haiku}"
+run_leg omp --auto-approve --model="${E2E_MODEL_OMP:-anthropic/claude-haiku-4-5}"
+run_leg codex --model "${E2E_MODEL_CODEX:-gpt-5.5}"
 
 summary
