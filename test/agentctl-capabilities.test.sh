@@ -577,4 +577,19 @@ chk_contains "C9 capability table read through a two-hop relative symlink" \
   "capability contract" "$out"
 teardown
 
+# ── C10 thin-entry ratchet: judgement stays in python, bash stays plumbing ──
+# The salvage batch bought this property (bash 916→449, decisions moved into duplexctl) but the
+# contract lived only in that goal doc — it died when the goal was archived, and bash then grew
+# 449→513 across four batches with nothing watching. Ratchet the SHARE, not an absolute count
+# (fixed budgets were already refuted once: they go stale and get declared around). Share is what
+# the property actually means — bash may grow when the runtime grows, it may not grow ALONE.
+# Baseline 12.5% measured 2026-08-12; 1.0-point headroom absorbs ordinary plumbing.
+BASH_LINES="$(wc -l < "$AGENTCTL")"
+PY_LINES="$(wc -l < "$(dirname "$AGENTCTL")/duplexctl.py")"
+SHARE_X10="$(( BASH_LINES * 1000 / (BASH_LINES + PY_LINES) ))"
+# breach message names the fix, not just the number (a bare number teaches nobody)
+[ "$SHARE_X10" -le 135 ] && VERDICT="within" \
+  || VERDICT="BREACH(${SHARE_X10}/1000): bash 占比回升 = 判定正在回流 shell — 下沉 duplexctl，或在 goal 声明理由并更新基线"
+chk_eq "C10 thin entry: bash share ${SHARE_X10}/1000 stays under the 135 ratchet" "within" "$VERDICT"
+
 summary
