@@ -88,8 +88,10 @@ EOF
 # Model pins live here (test-side only, never in the skill). This gate proves LANE MACHINERY,
 # not model quality — always pin the cheapest model that can follow a two-line goal. Override per
 # leg via env when a name goes stale (a wrong name fails the whole gate, so we do not guess).
+# Both non-claude pins were probed live before landing here — one-line 'reply MODEL-OK' round
+# through the engine's own CLI, model passed as an ARGUMENT so no default config was touched.
 run_leg claude --model "${E2E_MODEL_CLAUDE:-haiku}"
 run_leg omp --auto-approve --model="${E2E_MODEL_OMP:-anthropic/claude-haiku-4-5}"
-run_leg codex --model "${E2E_MODEL_CODEX:-gpt-5.5}"
+run_leg codex --model "${E2E_MODEL_CODEX:-gpt-5.6-luna}"
 
 summary
