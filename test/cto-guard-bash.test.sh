@@ -375,6 +375,26 @@ chk_eq "playwright test run allowed" 0 "$RC"
 
 run ''
 chk_eq "empty command allowed" 0 "$RC"; chk_eq "empty command no stderr" "" "$ERR"
+# (10) gate output piped — rc masked + evidence truncated (LESSON pipe-masks-exit-code n=3)
+run 'bash test/run.sh 2>&1 | tail -3'
+chk_eq "gate|tail denied" 2 "$RC"; chk_contains "gate|tail names the disease" "exit code is the LAST" "$ERR"
+run './agentmail.test.sh | grep -c FAIL'
+chk_eq "test.sh|grep denied" 2 "$RC"
+run 'bash skills/cto-orchestration/references/retro-check.sh --base main --docs docs | head -5'
+chk_eq "retro-check|head denied" 2 "$RC"
+run 'bash test/run.sh > /tmp/gate.log 2>&1; echo rc=$?'
+chk_eq "file-first shape allowed" 0 "$RC"; chk_eq "file-first silent" "" "$ERR"
+run 'grep -n FAIL test/retro-check.test.sh | head -5'
+chk_eq "gate path as grep ARGUMENT allowed" 0 "$RC"
+run 'bash test/run.sh && echo ok'
+chk_eq "gate && chain (no pipe) allowed" 0 "$RC"
+run 'bash test/run.sh || echo failed'
+chk_eq "gate || chain is not a pipe" 0 "$RC"
+run 'tail -3 /tmp/gate.log | grep FAIL'
+chk_eq "piping a LOG FILE (not the gate) allowed" 0 "$RC"
+run 'echo done; bash test/run.sh > /tmp/g.log 2>&1'
+chk_eq "gate in later segment, pipe-free, allowed" 0 "$RC"
+
 tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"
 tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{}}' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"

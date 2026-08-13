@@ -103,7 +103,13 @@ for f in ../skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
          ../skills/agent-mail/mail-guard.py; do
   out="$(scan "$f")"; rc=$?
   chk_eq "$(basename "$f"): every DENY carries a resolvable doc pointer" 0 "$rc"
-  chk_not_contains "$(basename "$f"): scanner saw denies" "0 denies" "$out"
+  # word-anchored: a plain "0 denies" needle false-fires the moment a file reaches 10 denies
+  # ("10 denies" contains it) — bit us live 2026-08-13 when rule 10 landed as the 10th DENY.
+  if printf '%s' "$out" | grep -qE '(^|[^0-9])0 denies'; then
+    chk_eq "$(basename "$f"): scanner saw denies" "some" "0"
+  else
+    chk_eq "$(basename "$f"): scanner saw denies" "some" "some"
+  fi
 done
 
 summary

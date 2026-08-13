@@ -585,6 +585,37 @@ def main():
             )
             return 2
 
+    # (10) gate output piped — a pipeline's exit code is the LAST command's, so a red gate
+    #      reports green (`bash test/run.sh | tail -3` → tail exits 0), and the pipe also
+    #      truncates the evidence (field: three occurrences 2026-07-10 / 08-09 / 08-12; the
+    #      last one left "FAIL=1, which suite?" permanently unanswerable). LESSON
+    #      pipe-masks-exit-code n=3 — this rule is its gate. Right shape: write the gate's
+    #      output to a file, read rc directly, THEN grep the file.
+    #      Command-position discipline as in (6): grepping/reading a *.test.sh path as an
+    #      ARGUMENT must not trip this; only executing one does. `2>&1` is normalized away
+    #      first so the redirect's `&` doesn't end the segment scan. `||` is a chain, not a
+    #      pipe. Deliberately NOT covered (accept-documented, same boundary as (9): a regex
+    #      cannot parse shell): command substitution `$(gate)`, process substitution,
+    #      `set -o pipefail` preambles (pipefail fixes rc but still truncates evidence —
+    #      recovery is the same file-first shape), and gate runners not matching the three
+    #      naming families below.
+    v10 = re.sub(r"\d*>&\d*", "", cmd)
+    if re.search(
+        r"(?:^|[;&(]\s*)(?:\w+=\S*\s+)*(?:(?:bash|sh|zsh|exec|nohup|time)\s+)*"
+        r"[\"']?\S*(?:\.test\.sh|test/run\.sh|retro-check\.sh)[\"']?"
+        r"[^;&|]*\|(?!\|)",
+        v10,
+    ):
+        sys.stderr.write(
+            "DENY: gate output piped — a pipeline's exit code is the LAST command's, so a "
+            "red gate reports green, and the pipe truncates the evidence (bit us 3x; one "
+            "red is permanently unattributable). Fix: run the gate with output to a file "
+            "and read rc directly — `bash test/run.sh > /tmp/gate.log 2>&1; echo rc=$?` — "
+            "then grep the log. Read: cto-orchestration/references/retrospective.md "
+            "§教训分层沉淀.\n"
+        )
+        return 2
+
     # (9) browser ownership: the agent drives Playwright's OWN isolated browser, never the
     #      principal's daily Chrome/Edge. Same rule as P0a in cto-guard-agent.py — that one
     #      guards the `mcp__chrome-devtools` channel; `playwright-cli attach --cdp/--extension`

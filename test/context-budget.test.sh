@@ -41,9 +41,10 @@ GUARD_AGENT="../skills/cto-orchestration/references/agentctl/cto-guard-agent.py"
 # where a worker stops reading; the number's only claim is "no bigger than today". Treat a failure
 # as "justify this growth", not as "you crossed a known limit".
 BUDGET_FOOTER=791          # per-session, unconditional: every goal frame pays this
-BUDGET_GUARD_TOTAL=7034    # all injected text across both guards
+BUDGET_GUARD_TOTAL=7439    # all injected text across both guards (raised 7034→7439 on 2026-08-13:
+                           # rule 10 gate-pipe DENY, +405 B — a deliberate, weighed addition)
 BUDGET_GUARD_SINGLE=754    # the longest single message a worker can be handed at once
-BUDGET_GUARD_COUNT=19      # sink count: a drop means extraction broke or a sink moved out of view
+BUDGET_GUARD_COUNT=20      # sink count: a drop means extraction broke or a sink moved out of view
 
 echo "== injected-context budget =="
 
