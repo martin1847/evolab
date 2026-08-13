@@ -394,6 +394,25 @@ run 'tail -3 /tmp/gate.log | grep FAIL'
 chk_eq "piping a LOG FILE (not the gate) allowed" 0 "$RC"
 run 'echo done; bash test/run.sh > /tmp/g.log 2>&1'
 chk_eq "gate in later segment, pipe-free, allowed" 0 "$RC"
+# review reproductions 2026-08-13 (1 blocker + 2 major) as standing assertions
+run "$(printf 'echo ready\nbash test/run.sh | tail -3')"
+chk_eq "NEWLINE-separated gate pipe denied (blocker repro)" 2 "$RC"
+run 'env bash test/run.sh | tail -3'
+chk_eq "env wrapper denied" 2 "$RC"
+run 'command bash test/run.sh | tail -3'
+chk_eq "command wrapper denied" 2 "$RC"
+run '/bin/bash test/run.sh | tail -3'
+chk_eq "abs-path interpreter denied" 2 "$RC"
+run 'bash test/run\.sh | tail -3'
+chk_eq "backslash-escaped path denied" 2 "$RC"
+run "bash test/'run.sh' | tail -3"
+chk_eq "quoted path segment denied" 2 "$RC"
+run "bash test/run.sh --filter 'a;b' | tail -3"
+chk_eq "quoted arg with ; does not split the segment" 2 "$RC"
+run "echo '(bash test/run.sh | tail -3)'"
+chk_eq "quoted prose is DATA, not a gate (false-positive repro)" 0 "$RC"
+run "echo 'note; bash test/run.sh | tail -3'"
+chk_eq "quoted prose with ; is DATA" 0 "$RC"
 
 tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"

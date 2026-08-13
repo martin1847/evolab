@@ -1,7 +1,7 @@
 ---
 name: observability-standard
 version: 1.2.4
-description: 生产级可观测性规范,**所有后端服务**通用(普通微服务与 agent / 多 agent / RAG 项目;Python / Go / Java / Rust)。核心:trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点与跨进程传播、日志级别与边界类型纪律;agent / RAG 在此基线上加 LLM / 工具 / 检索埋点(GenAI 语义约定)。Use whenever writing or reviewing backend code involving logging, tracing, structured logs, context propagation, log levels, log/trace/db correlation, boundary types — or agent / LLM / tool / retrieval instrumentation. 用户只说"加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪"也适用,不限于显式提到规范时。
+description: 生产级可观测性规范,**所有后端服务**通用(普通微服务与 agent / 多 agent / RAG 项目;Python / Go / Java / Rust)。核心:trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点与跨进程传播、日志级别与边界类型纪律;agent / RAG 在此基线上加 LLM / 工具 / 检索埋点(GenAI 语义约定)。Use whenever writing or reviewing backend code involving logging, tracing, structured logs, context propagation, log levels, log/trace/db correlation, boundary types — or agent orchestration / sub-agents, LLM / tool / retrieval calls. 用户只说"加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪"也适用,不限于显式提到规范时。
 ---
 
 # 可观测性与工程规范

@@ -599,10 +599,21 @@ def main():
     #      `set -o pipefail` preambles (pipefail fixes rc but still truncates evidence —
     #      recovery is the same file-first shape), and gate runners not matching the three
     #      naming families below.
-    v10 = re.sub(r"\d*>&\d*", "", cmd)
+    #      View construction (review 2026-08-13, 1 blocker + 2 major all here): build from
+    #      `raw`, NOT `cmd` — cmd flattens newlines to spaces and a second-line gate pipeline
+    #      loses its command-position anchor (rule 8 learned the same lesson: newline = `;`).
+    #      Then normalize the shell-executed token surface the way rule 9 does: join line
+    #      continuations, unquote simple tokens (`test/'run.sh'`), blank quoted spans that
+    #      contain spaces/delimiters to an inert ARG (they are DATA — `echo '(bash
+    #      test/run.sh | tail)'` must stay silent; `--filter 'a;b'` must not split the
+    #      segment), strip backslashes, and accept env/command/abs-path interpreter wrappers.
+    v10 = re.sub(r"\\\r?\n", "", raw).replace("\n", ";")
+    v10 = re.sub(r"\d*>&\d*", "", v10)
+    v10 = re.sub(r"([\"'])([^\s\"';|&()]*)\1", r"\2", v10)
+    v10 = re.sub(r"([\"'])[^\"']*\1", " ARG ", v10).replace("\\", "")
     if re.search(
-        r"(?:^|[;&(]\s*)(?:\w+=\S*\s+)*(?:(?:bash|sh|zsh|exec|nohup|time)\s+)*"
-        r"[\"']?\S*(?:\.test\.sh|test/run\.sh|retro-check\.sh)[\"']?"
+        r"(?:^|[;&(]\s*)(?:\w+=\S*\s+)*(?:(?:\S*/)?(?:bash|sh|zsh|env|command|exec|nohup|time)\s+)*"
+        r"\S*(?:\.test\.sh|test/run\.sh|retro-check\.sh)"
         r"[^;&|]*\|(?!\|)",
         v10,
     ):
