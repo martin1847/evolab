@@ -27,6 +27,11 @@
      goal 归档它就死了）；**压缩门**——同层出现 **≥3 条同族条目 → 提蒸馏合并案**（1 条上层判据 +
      retire 原件，corpus 总量不增；总量没减 = 复制不是晋升）。retro 只**提议**，改 spec 由主理人**裁定**
      （提议/批准分离，防按一次性事件堆规则）。
+   - **教训与门同形态**（「缺口要与成绩同形态」的复盘版）：教训入台账写 typed 行——
+     `LESSON: <slug> n=<复发次数> gate=<门路径|none|accepted(理由)>`（行首顶格，允许 `- ` 列表前缀）
+     ——散文教训进不了决策，复发也没人数得清。n≥2 且 gate=none 是 retro-check 的 blocking FAIL：
+     当批要么升门（gate 指向真实存在的文件），要么主理人显式 accepted(理由)；
+     一条教训最多以散文形态活两次。
    - **淘汰同轮做**：会在动手那一刻 fire 的才留正文；hook 已强制的收成一行指针；从不 fire 的删或降
      README 背景（不 fire 的散文是净负债）。
 4. **上下文治理**：关交付完的会话（**只清本席位派出的——即本席位 agentctl start 出来的**；会话账
@@ -44,7 +49,8 @@
 6. **memory 治理**：见下「memory 治理」。
 7. **session 切换决策**：见下「session 切换决策」。
 
-收尾跑 SKILL §5 的 **`retro-check.sh`**：已合分支孤儿 worktree 与 ACTIVE_CONTEXT 新鲜度是 blocking FAIL；
+收尾跑 SKILL §5 的 **`retro-check.sh`**：已合分支孤儿 worktree、ACTIVE_CONTEXT 新鲜度与
+复发≥2 无门的 LESSON 行是 blocking FAIL；
 roadmap、DECISION_QUEUE 和 MEMORY 只给 warning，exit 仍可为 0，需按任务语义人工裁决。脚本只验机械代理，不能证明复盘语义完成。
 
 ## memory 治理（步骤 6 展开）

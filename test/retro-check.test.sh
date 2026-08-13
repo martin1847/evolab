@@ -199,5 +199,52 @@ else
   echo "  [skip] no tmux — FOREIGN case skipped"
 fi
 
+# --- check 7: typed lesson ledger (教训与门同形态, retrospective §3) ------------------
+# Case S — known-positive recall: a REAL recurring lesson from the field corpus written
+# exactly as the ledger grammar prescribes must go red (n=3, still gateless).
+r="$(mkrepo)"; printf 'LESSON: pipe-masks-exit-code n=3 gate=none\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "S/recurrent-gateless rc"
+assert_has "$out" "pipe-masks-exit-code" "S names the lesson"
+assert_has "$out" "复发≥2" "S states the rule"
+
+# Case T — n=1 gateless is OBSERVATION tier → green
+r="$(mkrepo)"; printf 'LESSON: first-sighting n=1 gate=none\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "T/observation-tier rc"
+assert_no "$out" "[FAIL]" "T/no fail lines"
+
+# Case U — gate points at a real file (list-marker prefix form) → green
+r="$(mkrepo)"; mkdir -p "$r/test"; : > "$r/test/some-gate.sh"
+printf -- '- LESSON: gated-lesson n=4 gate=test/some-gate.sh\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "U/gated rc"
+assert_has "$out" "none past the prose limit" "U/gated counted clean"
+
+# Case V — claimed gate file does not exist → FAIL (dead pointer reads as protection)
+r="$(mkrepo)"; printf 'LESSON: ghost-gate n=2 gate=test/never-written.sh\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "V/dead-pointer rc"
+assert_has "$out" "no such file" "V/dead pointer flagged"
+
+# Case W — documented acceptance with a reason → green; empty acceptance → warn only
+r="$(mkrepo)"
+printf 'LESSON: accepted-boundary n=2 gate=accepted(边界不属病 主理人放行)\nLESSON: hollow-accept n=2 gate=accepted()\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "W/accepted rc"
+assert_has "$out" "hollow-accept" "W/empty acceptance named"
+assert_has "$out" "needs a reason" "W/empty acceptance warned"
+
+# Case X — malformed line → warn, never silently consumed as green data
+r="$(mkrepo)"; printf 'LESSON: broken-entry recurrence=three\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "X/malformed rc (warn≠fail)"
+assert_has "$out" "malformed LESSON line" "X/malformed warned"
+
+# Case Y — no LESSON lines anywhere → explicit skip note, not a silent green
+r="$(mkrepo)"; out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "Y/no-ledger rc"
+assert_has "$out" "教训台账未 typed 化" "Y/absence is named, not silent"
+
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

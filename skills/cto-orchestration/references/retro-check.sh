@@ -201,5 +201,48 @@ $(basename "$m" .duplex.meta)-watchd
   fi
 else echo "  [skip] no agentctl run dir / not a git repo"; fi
 
+# 7) typed lesson ledger — 教训要与门同形态 (retrospective.md §3): a lesson line is
+# machine-countable data; prose lessons can't drive decisions and nobody counts their
+# recurrences. Grammar (line start, optional "- " list marker):
+#   LESSON: <slug> n=<int> gate=<none|accepted(<reason>)|<repo-relative-path>>
+# FAIL = n>=2 still gateless (a lesson may live as prose at most twice), or a claimed
+# gate file that does not exist (a dead pointer reads as protection). No LESSON lines
+# at all = ledger not adopted → note only: can't count what was never typed.
+echo "7) 教训同形态 (LESSON 行: n≥2 须 gate 或显式 accepted):"
+lessons=0; lfail=0
+while IFS= read -r ln; do
+  lfile="${ln%%:*}"; body="${ln#*LESSON:}"
+  lessons=$((lessons+1))
+  slug="$(printf '%s' "$body" | awk '{print $1}')"
+  ln_n="$(printf '%s' "$body" | grep -oE ' n=[0-9]+' | head -1 | cut -d= -f2)"
+  gate="$(printf '%s' "$body" | sed -n 's/.* gate=//p' | sed 's/[[:space:]]*$//')"
+  if [ -z "$slug" ] || [ -z "$ln_n" ] || [ -z "$gate" ]; then
+    echo "  [warn] malformed LESSON line in $lfile — need 'LESSON: <slug> n=<int> gate=<none|accepted(reason)|path>'"
+    warns=$((warns+1)); continue
+  fi
+  case "$gate" in
+    none)
+      if [ "$ln_n" -ge 2 ]; then
+        echo "  [FAIL] lesson '$slug' n=$ln_n gate=none — 复发≥2 还躺散文档：本批升门（gate=<path>）或主理人 accepted(理由)"
+        lfail=$((lfail+1))
+      fi;;
+    "accepted("?*")") ;;  # documented acceptance with a non-empty reason
+    accepted*)
+      echo "  [warn] lesson '$slug': accepted needs a reason — accepted(<why>)"; warns=$((warns+1));;
+    *)
+      if [ ! -e "$REPO/$gate" ]; then
+        echo "  [FAIL] lesson '$slug' claims gate '$gate' but no such file — dead pointer reads as protection"
+        lfail=$((lfail+1))
+      fi;;
+  esac
+done < <(grep -rE '^(- )?LESSON:' "$DOCS" --include='*.md' 2>/dev/null)
+if [ "$lessons" -eq 0 ]; then
+  echo "  [skip] no LESSON lines under $DOCS — 教训台账未 typed 化，复发计数不可机检（形态见 retrospective.md §3）"
+elif [ "$lfail" -gt 0 ]; then
+  fail "$lfail gateless/dead-pointer lesson(s) — 升门或 accepted 后再收口"
+else
+  ok "$lessons lesson line(s), none past the prose limit"
+fi
+
 echo "== result: $fails FAIL, $warns warn =="
 [ "$fails" -eq 0 ]
