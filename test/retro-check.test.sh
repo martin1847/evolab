@@ -246,5 +246,39 @@ r="$(mkrepo)"; out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "Y/no-ledger rc"
 assert_has "$out" "教训台账未 typed 化" "Y/absence is named, not silent"
 
+# --- review reproductions as standing assertions (each was a live bypass/false-positive) --
+# Case Z1 — fenced grammar example must NOT count as a ledger record (opt-in boundary)
+r="$(mkrepo)"; printf '```text\nLESSON: example-only n=2 gate=none\n```\n' > "$r/docs/guide.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "Z1/fenced-example rc"
+assert_no "$out" "example-only" "Z1/fenced example not consumed"
+assert_has "$out" "教训台账未 typed 化" "Z1/still reads as no ledger"
+
+# Case Z2 — n past the 9-digit grammar cap must be malformed, never reaching the shell
+# test operator (the review repro overflowed [ -ge ] into a silent green; the cap is the fix)
+r="$(mkrepo)"; printf 'LESSON: huge-count n=9999999999 gate=none\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "Z2/oversized-n rc (warn≠fail)"
+assert_has "$out" "malformed LESSON line" "Z2/oversized n rejected as malformed"
+assert_no "$out" "integer expression expected" "Z2/no shell test error leaks"
+
+# Case Z3 — 'n=1x' must not be truncated to n=1 and consumed
+r="$(mkrepo)"; printf 'LESSON: malformed-count n=1x gate=none\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "Z3/nonnumeric-n rc"
+assert_has "$out" "malformed LESSON line" "Z3/partial match rejected"
+
+# Case Z4 — whitespace-only acceptance reason must warn, not bypass the n>=2 rule
+r="$(mkrepo)"; printf 'LESSON: whitespace-only n=2 gate=accepted( )\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "Z4/blank-reason rc"
+assert_has "$out" "needs a reason" "Z4/blank reason warned"
+
+# Case Z5 — trailing prose after gate=none is rejected, not guessed as a path
+r="$(mkrepo)"; printf 'LESSON: trailing-prose n=2 gate=none because reasons\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "Z5/trailing-prose rc"
+assert_has "$out" "trailing text after gate=none" "Z5/trailing prose rejected"
+
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

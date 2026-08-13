@@ -65,9 +65,8 @@ duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原
 - 按风险定深度：低风险走轻量 review；鉴权、迁移、基建、大重构走 `references/review-dispatch.md` 的完整循环。
 - **goal 评审：白名单免评，其余必评**——命中免评白名单（唯一清单在 `references/review-dispatch.md` §goal-review，共同硬门=不新增任何决策面）→ 跳过；未命中或拿不准 → 派发前 1 轮冷上下文 goal-review（仪器六问 + 契约三问，同节）。
 - **直写也要合同**：编排位自己直写 shipped 面（教义 / 门 / guard）动手前，同样先写最小合同——
-  Done-when + 坏样本来源 + scope 三行即可，评审 brief 随附。blocker 密度集中在无合同的直写
-  单元上（走过合同的 worker 产物几乎不吃 blocker），故无合同的直写单元评审面按不完整处理、
-  评审者当 finding 报。
+  Done-when + 坏样本来源 + scope 三行即可，评审 brief 随附；无合同的直写单元评审面按不完整
+  处理、评审者当 finding 报。
 - brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。
 - 先枚举执行分叉；轴装配先查 path→轴映射表（表命中必进 brief，判断只增补），再点名 `缺失消费者`、
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。

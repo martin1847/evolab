@@ -213,20 +213,31 @@ lessons=0; lfail=0
 while IFS= read -r ln; do
   lfile="${ln%%:*}"; body="${ln#*LESSON:}"
   lessons=$((lessons+1))
-  slug="$(printf '%s' "$body" | awk '{print $1}')"
-  ln_n="$(printf '%s' "$body" | grep -oE ' n=[0-9]+' | head -1 | cut -d= -f2)"
-  gate="$(printf '%s' "$body" | sed -n 's/.* gate=//p' | sed 's/[[:space:]]*$//')"
-  if [ -z "$slug" ] || [ -z "$ln_n" ] || [ -z "$gate" ]; then
+  # full-line grammar FIRST — a partially matching line is malformed, never partially
+  # consumed (review-reproduced bypasses: 'n=1x' truncated to 1; an integer past the
+  # shell test range erroring straight to green; prose after gate= read as a path).
+  # slug is ASCII kebab/word chars; n is 1-9 digits (a cap, so [ -ge ] can't overflow).
+  if ! printf '%s' "$body" | grep -qE '^[[:space:]]+[A-Za-z0-9_.-]+[[:space:]]+n=[0-9]{1,9}[[:space:]]+gate=[^[:space:]]'; then
     echo "  [warn] malformed LESSON line in $lfile — need 'LESSON: <slug> n=<int> gate=<none|accepted(reason)|path>'"
     warns=$((warns+1)); continue
   fi
+  slug="$(printf '%s' "$body" | awk '{print $1}')"
+  ln_n="$(printf '%s' "$body" | grep -oE ' n=[0-9]+' | head -1 | cut -d= -f2)"
+  gate="$(printf '%s' "$body" | sed -n 's/.* gate=//p' | sed 's/[[:space:]]*$//')"
   case "$gate" in
     none)
       if [ "$ln_n" -ge 2 ]; then
         echo "  [FAIL] lesson '$slug' n=$ln_n gate=none — 复发≥2 还躺散文档：本批升门（gate=<path>）或主理人 accepted(理由)"
         lfail=$((lfail+1))
       fi;;
-    "accepted("?*")") ;;  # documented acceptance with a non-empty reason
+    none*)  # trailing prose after 'none' is not a path claim — reject, don't guess
+      echo "  [warn] malformed LESSON line in $lfile — trailing text after gate=none"
+      warns=$((warns+1));;
+    accepted\(*\))
+      reason="${gate#accepted(}"; reason="${reason%)}"
+      if [ -z "$(printf '%s' "$reason" | tr -d '[:space:]')" ]; then
+        echo "  [warn] lesson '$slug': accepted needs a reason — accepted(<why>)"; warns=$((warns+1))
+      fi;;
     accepted*)
       echo "  [warn] lesson '$slug': accepted needs a reason — accepted(<why>)"; warns=$((warns+1));;
     *)
@@ -235,7 +246,12 @@ while IFS= read -r ln; do
         lfail=$((lfail+1))
       fi;;
   esac
-done < <(grep -rE '^(- )?LESSON:' "$DOCS" --include='*.md' 2>/dev/null)
+done < <(find "$DOCS" -name '*.md' -type f -exec awk '
+  FNR==1 { fence=0 }
+  /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+  fence { next }
+  /^(- )?LESSON:/ { print FILENAME ":" $0 }
+' {} + 2>/dev/null)
 if [ "$lessons" -eq 0 ]; then
   echo "  [skip] no LESSON lines under $DOCS — 教训台账未 typed 化，复发计数不可机检（形态见 retrospective.md §3）"
 elif [ "$lfail" -gt 0 ]; then

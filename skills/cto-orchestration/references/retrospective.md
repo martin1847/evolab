@@ -28,7 +28,8 @@
      retire 原件，corpus 总量不增；总量没减 = 复制不是晋升）。retro 只**提议**，改 spec 由主理人**裁定**
      （提议/批准分离，防按一次性事件堆规则）。
    - **教训与门同形态**（「缺口要与成绩同形态」的复盘版）：教训入台账写 typed 行——
-     `LESSON: <slug> n=<复发次数> gate=<门路径|none|accepted(理由)>`（行首顶格，允许 `- ` 列表前缀）
+     `LESSON: <slug> n=<复发次数> gate=<门路径|none|accepted(理由)>`（行首顶格，允许 `- ` 列表前缀；
+     slug 用 ASCII 词字符 `A-Za-z0-9_.-`，n 最多 9 位，code fence 内的示例不计入台账）
      ——散文教训进不了决策，复发也没人数得清。n≥2 且 gate=none 是 retro-check 的 blocking FAIL：
      当批要么升门（gate 指向真实存在的文件），要么主理人显式 accepted(理由)；
      一条教训最多以散文形态活两次。
