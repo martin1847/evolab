@@ -142,10 +142,9 @@ omp commit+核证后起 codex 于同一 worktree。**只给"查哪些轴 + verif
 
 **激进找、出口滤（两层分工别选反边）**：brief 鼓励评审者调查一切可疑模式——源头克制型措辞（"只报你
 确定的"）是漏报机器；置信过滤放 verdict 层——低置信也报、标 confidence(0-1)，由证据档杀假阳：
-所有 finding 须 file:line 引用（禁从命名推断行为），blocker/major 须探针/失败测试**执行复现**
-（业界评审产品的验证层同构：候选先泛报、再独立复现过滤）。出口是**双面闸**：晋级须复现，**删除须
-证伪**——不能复现只降档不删；要删一条 finding 必须指出 diff/代码里直接反驳它的证据，「仅仅无法验证」
-不构成删除理由（防 verifier 变成第二个噪声源；大规模评审产品的 filter pass 同款 veto 措辞）。
+出口的操作规则（file:line 引用 / 复现要求 / **双面闸**：晋级须复现、删除须证伪）归 preamble
+单源；本节只留分工原理——候选先泛报、再独立复现过滤，是业界评审产品验证层的同构，veto 措辞
+防 verifier 变成第二个噪声源。
 
 **点名最易翻车的轴**（让 codex 主动写探针复现，命中率远高于泛泛 review）：
 
@@ -201,7 +200,7 @@ ADR 类方向文档，brief 里给出其绝对路径，并要求评审者：①�
 写 `docs/orchestration/<NAME>_REVIEW_codex.md`——severity 分级 findings + verdict，维护
 `blocking / queued / advisory / pre-existing / 已修 / stagnation` 栏目逐轮更新，收敛状态一眼可判。
 **pre-existing（存量 bug、非本 diff 引入）单列**：记录、开 follow-up，不进 blocking——治 scope 争议；
-作者声明的"预存失败"必须让 codex 在干净 base 上复现验证后才准入此档。
+准入口径（干净 base 复现）归 preamble 单源，此处不复制。
 
 **循环回修每轮重贴不可变目标**：request-changes → 派回 omp 修 → codex 复审，循环到 ship。每轮派回时把原
 goal 的不可变验收点重贴进 prompt 对照——防多轮改着改着跑题。

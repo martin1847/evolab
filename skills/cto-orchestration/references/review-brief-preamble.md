@@ -10,6 +10,8 @@ scope、逐单元合同与评审轴。
   `new-blocking` 只计**本轮首次**提出的 blocking（复确认的旧项不重计——杠杆线分诊消费此字段）。
 - 每条 finding 给 file:line（不许从命名推断行为）+ confidence（0-1）。
 - blocker / major 额外要求**复现**：你真正跑过的命令 / 探针 / 合成载荷，附观察值 vs 期望值。
+- **删除须证伪**（双面闸另半边）：撤掉一条 finding 必须指出直接反驳它的证据；
+  「仅仅无法验证」只降档、不删。
 - severity 分档 blocker / major / minor / nit；nit 最多列 5 条、其余报个数。
   **存量病（非本 diff 引入）标 `PRE-EXISTING`**：记录、不阻塞；作者自称「预存失败」的，
   你在干净 base 上复现验证后才准入此档。
