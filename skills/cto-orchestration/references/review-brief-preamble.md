@@ -7,6 +7,8 @@ that pointed you here carries the batch-specific scope, per-unit contracts, and 
 
 - Deliverable: the markdown file the dispatch declared. FIRST line must be the Tally:
   `new-blocking: <n> | major: <n> | minor: <n> | verdict: <ship|request-changes>`.
+  `new-blocking` counts blocking findings FIRST raised this round (re-confirmed carry-overs
+  do not recount — the leverage-line triage consumes this field).
 - Every finding cites file:line (not inference from naming) + confidence (0-1).
 - blocker/major additionally needs a reproduction: a command, probe, or synthetic payload
   you actually ran, with observed vs expected output.

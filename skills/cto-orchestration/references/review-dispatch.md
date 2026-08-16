@@ -80,7 +80,7 @@ Evidence bar: every finding cites file:line (not inference from naming); blocker
 needs a probe or failing test that reproduces it. Rate each finding with confidence (0-1).
 Write your review to <REVIEW_codex.md 绝对路径> with severity-tagged findings
 (blocker/major/minor/nit; pre-existing bugs not introduced by this diff tagged PRE-EXISTING —
-record, don't block) and a final verdict (approve / request-changes) + a one-line tally up front;
+record, don't block) and a final verdict (ship / request-changes) + a one-line tally up front;
 the tally line must include `new-blocking: <N>` (blocking findings FIRST raised this round — the
 leverage-line triage consumes this field). Cap nits at 5, mention the rest as a count.
 Calibration: only findings that affect correctness or the stated requirements can block;
@@ -214,7 +214,7 @@ ADR 类方向文档，brief 里给出其绝对路径，并要求评审者：①�
 **pre-existing（存量 bug、非本 diff 引入）单列**：记录、开 follow-up，不进 blocking——治 scope 争议；
 作者声明的"预存失败"必须让 codex 在干净 base 上复现验证后才准入此档。
 
-**循环回修每轮重贴不可变目标**：request-changes → 派回 omp 修 → codex 复审，循环到 approve。每轮派回时把原
+**循环回修每轮重贴不可变目标**：request-changes → 派回 omp 修 → codex 复审，循环到 ship。每轮派回时把原
 goal 的不可变验收点重贴进 prompt 对照——防多轮改着改着跑题。
 
 - 质量类无限可挑的项（过滤规则、命名）明确"达标线"：线内必修、线外进 `queued`。例："确定性过滤是兜底、LLM
