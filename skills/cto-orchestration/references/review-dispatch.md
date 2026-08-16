@@ -68,35 +68,25 @@
 
 ## 首轮评审
 
+> 输出契约 / 证据档 / severity 与 PRE-EXISTING 口径 / 只读纪律**全在 preamble，模板不复制**。
+
 ```
-Independent code review. Review the change set `origin/<base>...HEAD` (three-dot = merge-base
-diff; commits <sha…>) on <branch> in this worktree (<server root>). Context docs (read first): <goal.md> , <findings.md> (同目录).
-Review focus: (1) <该变更最危险的轴，点名：旗标关路径零行为泄漏 / 崩溃恢复 / 并发竞态 /
-降级语义 / 安全契约>; (2) <次轴>; (3) test adequacy; (4) scope discipline vs the goal
-guardrails; (5) <作者声明的可疑点，要求独立验证，如"2 个预存失败 stale-on-base"的说法>.
-Investigate every suspicious pattern aggressively — filtering happens at the verdict layer,
-not by self-censoring. Skip: generated code / lockfiles / anything CI already enforces / <项目排除面>.
-Evidence bar: every finding cites file:line (not inference from naming); blocker/major additionally
-needs a probe or failing test that reproduces it. Rate each finding with confidence (0-1).
-Write your review to <REVIEW_codex.md 绝对路径> with severity-tagged findings
-(blocker/major/minor/nit; pre-existing bugs not introduced by this diff tagged PRE-EXISTING —
-record, don't block) and a final verdict (ship / request-changes) + a one-line tally up front;
-the tally line must include `new-blocking: <N>` (blocking findings FIRST raised this round — the
-leverage-line triage consumes this field). Cap nits at 5, mention the rest as a count.
-Calibration: only findings that affect correctness or the stated requirements can block;
-speculative hardening / style go to advisory.
-Read-only review: do NOT modify code or commit.
+Read first: <review-brief-preamble.md 绝对路径>（常驻合同）。
+独立代码评审。评审集 = `origin/<base>...HEAD`（three-dot = merge-base 差分；commits <sha…>），
+分支 <branch>，worktree <server root>。Context docs（先读）：<goal.md>、<findings.md>（同目录）。
+评审焦点：(1) <该变更最危险的轴，点名：旗标关路径零行为泄漏 / 崩溃恢复 / 并发竞态 /
+降级语义 / 安全契约>；(2) <次轴>；(3) 测试充分性；(4) scope 纪律 vs goal guardrails；
+(5) <作者声明的可疑点，要求独立验证>。
+跳过：生成代码 / lockfile / CI 已强制项 / <项目排除面>。
+评审写到 <REVIEW_codex.md 绝对路径>。
 ```
 
 ## 复审（第 N 轮）
 
 ```
-Round <N> re-review: commit <sha> addresses your findings — <逐条一句话>.
-Verify each is properly closed — especially <上轮 HIGH 的修复自身的新风险，例如
-"recovery path 自身是否 race-safe（恢复 vs 迟到的协调器 finally 双跑？）">,
-and confirm no other changes snuck in. Append "Round <N>" verdict to <REVIEW_codex.md>,
-tally line including `new-blocking: <N>` (blocking findings FIRST raised this round).
-Read-only.
+第 <N> 轮复审：commit <sha> 回应了你的 findings——<逐条一句话>。
+逐条核真闭合——尤其 <上轮 HIGH 修复自身的新风险>，并确认没有夹带改动。
+把 "Round <N>" verdict 追加到 <REVIEW_codex.md>，Tally 口径同 preamble。只读。
 ```
 
 - [ ] review-loop 续派任何一轮前 → 先过**杠杆线分诊**（对象：该 review-loop 会话）：①逐轮
@@ -113,19 +103,18 @@ Read-only.
 ## 收敛准则注入（防乒乓，第 3 轮左右仍未收敛时）
 
 ```
-CONVERGENCE CRITERION (from the orchestrator, also state it in the findings doc):
-<兜底机制> is a best-effort backstop — <主闸机制> is the primary gate. After this round,
-the bar is: all COMMON <X> covered with tests. Further exotic gaps are minor follow-ups,
-NOT ship blockers.
+收敛准则（来自编排位，同时写进 findings 文档）：
+<兜底机制> 是尽力兜底——<主闸机制> 才是主闸。本轮之后达标线 = 所有常见 <X> 有测试覆盖；
+更冷僻的缺口是 minor follow-up，不是 ship blocker。
 ```
 
 ## 修复派回 omp 模板
 
 ```
-codex round <N>: request-changes — read <REVIEW_codex.md> and address ALL findings in a
-follow-up commit on this branch: [<severity>] <一句话> — <修复方向，含"mirror the EXACT
-existing behavior of <同场景的既有路径>"这类对齐要求>; ... Add tests: <修复前必须红的
-回归测试>. Re-run the suites, commit, append the change note to the findings doc.
+codex 第 <N> 轮：request-changes——读 <REVIEW_codex.md>，在本分支一个后续 commit 里
+处理全部 findings：[<severity>] <一句话> — <修复方向，含「镜像 <同场景既有路径> 的
+既有行为」类对齐要求>；… 加测试：<修复前必须红的回归测试>。复跑测试套、commit、
+把变更说明追加进 findings 文档。
 ```
 
 修复涉及**资源界限 / 生命周期**（锁、超时、marker、句柄）时，模板必须加一句：先枚举**全部**够得到
