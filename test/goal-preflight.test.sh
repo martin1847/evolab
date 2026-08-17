@@ -145,5 +145,30 @@ printf 'Preflight (<orchestrator note>): query metrics => 3 rows observed\n' > "
 run_check "$goal"
 chk_eq "[F1] placeholder INSIDE ascii annotation rejected" 1 "$rc"
 
+# --- absence-claim scope declaration (2026-08-17, external-seat n=6 field shape) ----------
+# known-positive recall: the real incident line (generalized) — absence claim, scope only in
+# the author's head → reject
+printf 'Preflight: 已用带已知阳性的负对照证明自有源码对这 4 个包零引用 => 可删\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] incident line rejected (absence claim, no scope)" 1 "$rc"
+chk_contains "[SCOPE] error names the disease" "扫描面" "$out"
+
+printf 'Preflight: rg -l langpkg src/ flask_app/ 零引用（scope=全部启动路径目录）=> 可删\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] path tokens satisfy the declaration" 0 "$rc"
+
+printf 'Preflight: 全仓 rg 证明该 flag 零引用 => 可删\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] whole-repo word satisfies the declaration" 0 "$rc"
+
+printf 'Preflight: zero references to the retired endpoint => remove it\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] english absence claim without scope rejected" 1 "$rc"
+
+# negative control: ordinary negative observation is NOT an absence-over-corpus claim
+printf "Preflight: jq 'length > 0' metrics.json => no rows hit the cap\n" > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] plain negative observation untouched" 0 "$rc"
+
 rm -rf "$SANDBOX"
 summary
