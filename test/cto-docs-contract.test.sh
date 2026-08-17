@@ -87,6 +87,9 @@ chk_contains "refuted table has required columns" "claim / evidence / pointer" "
 # no-copy rule silently regresses.
 chk_contains "SKILL runtime gate criterion" "合同承诺了开工前核对" "$skill_body"
 chk_contains "SKILL names footer as source" "runtime footer 固定追加" "$skill_body"
+# negative half (review 2026-08-17 B2): re-copying the retired footer literal back into the
+# SKILL must go red — the positive pair alone stays green after a literal re-copy.
+chk_not_contains "SKILL does not re-copy footer literal" "runtime footer 要求简短复述后立即开工" "$skill_body"
 chk_not_contains "README has no blanket wait gate" "核对无误再放行" "$readme_body"
 chk_contains "README duplex protocol footer" "HEADLESS 协议 footer" "$readme_body"
 chk_contains "README keeps ENGINE-SILENT honesty" "ENGINE-SILENT" "$readme_body"
