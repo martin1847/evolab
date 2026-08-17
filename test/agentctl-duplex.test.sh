@@ -715,6 +715,21 @@ chk_eq "unpersistable episode reads fail-closed 1" 1 "$(imk_py count)"
 WATCH_RUN_DIR="$WATCH_RUN_DIR_SAVE"
 # stop teardown removes the sidecar so a reclaimed session name cannot inherit stale marks
 chk_contains "idle-marks is in the stop removal set" "duplex.idle-marks" "$(grep -A2 '_STOP_KEPT = ' "$AW_DIR/duplexctl.py")"
+# hint carries the path-first guidance (review M2: prefix pin alone let the new half vanish)
+chk_contains "idle hint keeps path-first guidance" "check the path first" "$(grep -B2 -A4 '2nd+ idle episode this session' "$AW_DIR/duplexctl.py")"
+
+echo "== footer deliverable sentence: injected ONLY when a deliverable was declared =="
+FGATE="$SANDBOX/fgate"; mkdir -p "$FGATE"
+sed -n '/^append_footer()/,/^}/p' "$AGENTCTL" > "$FGATE/fn.sh"
+printf ': > "$1"\nappend_footer "$1" "/abs/wt" "/abs/stamp.txt" "%s"\n' 'out-*.md' >> "$FGATE/fn.sh"
+bash "$FGATE/fn.sh" "$FGATE/with.txt"
+chk_contains "with-deliverable footer names the glob" "declared deliverable file (out-*.md)" "$(cat "$FGATE/with.txt")"
+chk_contains "with-deliverable footer states chat is not delivery" "chat output is not delivery" "$(cat "$FGATE/with.txt")"
+sed -n '/^append_footer()/,/^}/p' "$AGENTCTL" > "$FGATE/fn2.sh"
+printf ': > "$1"\nappend_footer "$1" "/abs/wt" "/abs/stamp.txt" ""\n' >> "$FGATE/fn2.sh"
+bash "$FGATE/fn2.sh" "$FGATE/without.txt"
+chk_not_contains "no-deliverable footer carries NO false file contract" "deliverable file" "$(cat "$FGATE/without.txt")"
+chk_contains "no-deliverable footer keeps the base second line" "further instructions may arrive" "$(cat "$FGATE/without.txt")"
 # the hint text must live in the LIVE-idle verdict block (source pin; anchored BEFORE the
 # verdict print where the hint is assembled)
 chk_contains "hint wired on live-idle verdict" "2nd+ idle episode this session" "$(grep -B14 "IDLE-NO-DELIVERABLE: engine idle but" "$AW_DIR/duplexctl.py")"

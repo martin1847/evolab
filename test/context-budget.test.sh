@@ -40,9 +40,12 @@ GUARD_AGENT="../skills/cto-orchestration/references/agentctl/cto-guard-agent.py"
 # These are CURRENT-MAXIMUM ratchets, not validated thresholds. No experiment says 754 bytes is
 # where a worker stops reading; the number's only claim is "no bigger than today". Treat a failure
 # as "justify this growth", not as "you crossed a known limit".
-BUDGET_FOOTER=868          # per-session, unconditional (raised 791→868 on 2026-08-17:
-                           # results-go-in-the-deliverable sentence, +77 B — 5/7 cross-seat
-                           # frame-verified idle cases were conclusions-in-chat-not-in-file)
+BUDGET_FOOTER=879          # WORST-CASE shape: with a declared deliverable the footer names
+                           # the glob (measured with "out-*.md"; longer globs cost their own
+                           # bytes). No-deliverable sessions pay the base 791 — the sentence
+                           # is conditional (review 2026-08-17 B1: never lie to a legal path).
+                           # Raised 791→879: 5/7 cross-seat frame-verified idle cases were
+                           # conclusions-in-chat-not-in-file.
 BUDGET_GUARD_TOTAL=7771    # all injected text across both guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed)
 BUDGET_GUARD_SINGLE=754    # the longest single message a worker can be handed at once
@@ -55,7 +58,7 @@ echo "== injected-context budget =="
 # blank lines are all part of what the engine receives. wc -c is bytes, matching the guard side.
 fn="$(mktemp)"; out="$(mktemp)"
 sed -n '/^append_footer()/,/^}/p' "$AGENTCTL_SRC" > "$fn"
-printf ': > "$1"\nappend_footer "$1" "/abs/worktree" "/abs/run/stamp.txt"\n' >> "$fn"
+printf ': > "$1"\nappend_footer "$1" "/abs/worktree" "/abs/run/stamp.txt" "out-*.md"\n' >> "$fn"
 bash "$fn" "$out"
 footer_bytes="$(wc -c < "$out" | tr -d ' ')"
 rm -f "$fn" "$out"

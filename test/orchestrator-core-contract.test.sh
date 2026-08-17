@@ -61,7 +61,10 @@ chk_contains "kernel keeps the understanding gate" "理解门" "$core_body"
 # re-anchored 2026-08-17: cross-seat frame verification (7 cases, 2 seats) showed pre-work
 # correction is structurally unreachable headless — the honest claim is now "restatement is
 # an on-disk audit anchor, not a handshake". Pin the new criterion AND its negative.
+chk_contains "not-a-handshake is SCOPED to the default branch" "默认路径（合同未" "$core_body"
 chk_contains "kernel states restatement is not a handshake" "不是握手" "$core_body"
+chk_contains "restatement value names contract-as-read on the structured channel" "contract-as-read" "$core_body"
+chk_not_contains "kernel does not name a lane artifact" "BLOCKED" "$core_body"
 chk_contains "kernel names the real catchers" "派发前评审与交付后评审" "$core_body"
 
 summary

@@ -131,10 +131,16 @@ survivor_advise() { # $1 session — stderr advisory only; never signals, never 
 # runtime keeps accepting one, and test/agentctl-identity.test.sh N2 holds that behaviour — but
 # telling the worker its stamp is optional buys nothing it can act on and weakens the instruction
 # that follows. Reader-facing rationale belongs here in the source, not in the injected frame.
-append_footer() { # $1 out-file  $2 cwd  $3 identity stamp file
+append_footer() { # $1 out-file  $2 cwd  $3 identity stamp file  $4 deliverable glob ("" = none)
+  # The deliverable sentence is injected ONLY when one was declared (review 2026-08-17 B1:
+  # an unconditional sentence told no-deliverable sessions to write a file that does not
+  # exist — the runtime contract must never lie to a legal path). Naming the glob beats a
+  # generic clause: 5/7 cross-seat frame-verified idles were conclusions-in-chat.
+  local line2='This session is non-interactive. Work from this message and stop when done; further instructions may arrive as new messages.'
+  [ -n "${4:-}" ] && line2="This session is non-interactive. Work from this message and stop when done; results go IN the declared deliverable file (${4}) — chat output is not delivery. Further instructions may arrive as new messages."
   printf '\n\n---\nHEADLESS PROTOCOL\n%s\n%s\n%s\n' \
     'Briefly restate the files/contracts, scope, and main risk. Unless the goal contract promises to review that restatement before work begins, start work immediately — do not idle waiting for approval to begin.' \
-    'This session is non-interactive. Work from this message and stop when done; results go IN the declared deliverable file — chat output is not delivery. Further instructions may arrive as new messages.' \
+    "$line2" \
     "If blocked, or when the goal contract tells you to stop and wait for the orchestrator (a promised pre-work review is such a gate — there you write the restatement itself), write it to $2/BLOCKED.md with the exact contents of $3 as its LAST line, then stop. That file IS how you hold a gate in a non-interactive session — a small blast radius or an easy rollback never licenses self-approval past one." >> "$1"
 }
 
@@ -271,7 +277,7 @@ cmd_start() {
   fi
 
   PROMPT="$DIR/$S.duplex.prompt"
-  cat "$GOAL" > "$PROMPT"; append_footer "$PROMPT" "$CWD" "$DIR/$S.identity.d/blocked-stamp.txt"
+  cat "$GOAL" > "$PROMPT"; append_footer "$PROMPT" "$CWD" "$DIR/$S.identity.d/blocked-stamp.txt" "$DELIV"
   ctl send "$S" --verb prompt --file "$PROMPT" || {
     echo "ERR: goal delivery failed — engine up but prompt not accepted; inspect then agentctl stop $S" >&2; exit 2; }
   echo "started $ENG → duplex session '$S' (cwd $CWD; tmux supervises, protocol steers)"
