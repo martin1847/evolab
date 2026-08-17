@@ -40,7 +40,9 @@ GUARD_AGENT="../skills/cto-orchestration/references/agentctl/cto-guard-agent.py"
 # These are CURRENT-MAXIMUM ratchets, not validated thresholds. No experiment says 754 bytes is
 # where a worker stops reading; the number's only claim is "no bigger than today". Treat a failure
 # as "justify this growth", not as "you crossed a known limit".
-BUDGET_FOOTER=791          # per-session, unconditional: every goal frame pays this
+BUDGET_FOOTER=868          # per-session, unconditional (raised 791→868 on 2026-08-17:
+                           # results-go-in-the-deliverable sentence, +77 B — 5/7 cross-seat
+                           # frame-verified idle cases were conclusions-in-chat-not-in-file)
 BUDGET_GUARD_TOTAL=7771    # all injected text across both guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed)
 BUDGET_GUARD_SINGLE=754    # the longest single message a worker can be handed at once

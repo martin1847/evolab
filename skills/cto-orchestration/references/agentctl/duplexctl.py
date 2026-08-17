@@ -1325,8 +1325,10 @@ def classify(sess: Session) -> int:
         # was the fix. Observability only: the watcher gains no steer authority (auto-nudge
         # was deliberately declined by the principal, 2026-08-09 — this hint is NOT that).
         hint = ("" if _idle_mark_and_count(sess) < 2 else
-                " [2nd+ idle episode this session — likely context exhaustion; a fresh "
-                "session (agentctl stop + start) usually beats another nudge]")
+                " [2nd+ idle episode this session — likely context exhaustion, or the "
+                "declared --deliverable no longer matches this round's actual output "
+                "(check the path first); else a fresh session (agentctl stop + start) "
+                "usually beats another nudge]")
         print(f"IDLE-NO-DELIVERABLE: engine idle but '{sess.meta.get('deliverable')}' not produced this round — steer the agent; do not stop{hint}")
         return EXIT_IDLE_NO_DELIVERABLE
     _idle_marks_reset(sess)
