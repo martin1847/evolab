@@ -58,6 +58,10 @@ chk_contains "channel decides expression, not whether to stop" "通道只决定�
 
 # (4) The understanding gate itself must survive: the split refines it, never replaces it.
 chk_contains "kernel keeps the understanding gate" "理解门" "$core_body"
-chk_contains "kernel keeps silence-is-not-consent" "别把沉默当默许" "$core_body"
+# re-anchored 2026-08-17: cross-seat frame verification (7 cases, 2 seats) showed pre-work
+# correction is structurally unreachable headless — the honest claim is now "restatement is
+# an on-disk audit anchor, not a handshake". Pin the new criterion AND its negative.
+chk_contains "kernel states restatement is not a handshake" "不是握手" "$core_body"
+chk_contains "kernel names the real catchers" "派发前评审与交付后评审" "$core_body"
 
 summary
