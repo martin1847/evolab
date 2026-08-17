@@ -1152,8 +1152,12 @@ def _idle_mark_and_count(sess: Session) -> int:
 
 def _idle_marks_reset(sess: Session) -> None:
     """DONE boundary: append an R sentinel (works even when unlink would be refused).
-    If even the append fails, fall back to remove; if both fail the residual is narrow —
-    the next count's own append will typically fail the same way and read fail-closed."""
+    If even the append fails, fall back to remove. ACCEPTED RESIDUAL (review 2026-08-17
+    R2, carried): if BOTH fail here and IO then RECOVERS before the next idle, the stale
+    pre-reset marks survive and that idle reads as episode 2 — one advisory hint line
+    shown early. Closing it needs durable state that survives the same IO failure that
+    caused it, which does not exist; the hint's blast radius (one sentence, no authority)
+    is priced against that. Do not read this counter as exact."""
     try:
         with open(_idle_marks_path(sess), "a", encoding="utf-8") as fh:
             fh.write("R\n")

@@ -39,6 +39,11 @@ chk_eq "white-box dynamic-load stays banned outside sanctioned consumers" "" "$w
 duplex_consumes="$(grep -oE '\bm\.[A-Za-z_]+' agentctl-duplex.test.sh | sort -u | tr '\n' ' ')"
 chk_eq "duplex test's white-box consumption is exactly the helper pair" \
   "m._idle_mark_and_count m._idle_marks_reset " "$duplex_consumes"
+# named evasion from review R2: getattr(m, ...) reaches internals without an m.attr literal.
+# This gate is a tripwire against accidental scope creep, not a sandbox — but the one named
+# evasion shape gets its own tripwire.
+chk_eq "no getattr-shaped access to the loaded module" "" \
+  "$(grep -n 'getattr( *m' agentctl-duplex.test.sh || true)"
 # known positive for the extractor itself: a synthetic line with an extra internal must show up
 chk_contains "consumption extractor sees a planted extra internal" "m.classify" \
   "$(printf 'x = m.classify\n' | grep -oE '\bm\.[A-Za-z_]+')"
