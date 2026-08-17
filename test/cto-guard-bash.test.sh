@@ -422,6 +422,19 @@ run 'git -C /x add test/foo.test.sh; git -C /x commit -m m'
 chk_eq "runner as argument + commit allowed" 0 "$RC"
 run 'bash test/run.sh > /tmp/g.log 2>&1; echo rc=$?'
 chk_eq "gate with ; but no commit allowed" 0 "$RC"
+# review 2026-08-17 repros: bound sequence, not global existence (B2) + wrapper forms (B3)
+run 'echo ready; bash test/run.sh && git -C /x commit -m m'
+chk_eq "leading ; then rc-coupled chain allowed" 0 "$RC"
+run 'bash test/run.sh && git -C /x commit -m m; echo done'
+chk_eq "trailing ; after rc-coupled chain allowed" 0 "$RC"
+run "$(printf 'echo ready\nbash test/run.sh && git -C /x commit -m m')"
+chk_eq "newline before rc-coupled chain allowed" 0 "$RC"
+run 'env CI=1 bash test/run.sh; git -C /x commit -m m'
+chk_eq "env-assignment wrapper weld denied" 2 "$RC"
+run 'bash -e test/run.sh; git -C /x commit -m m'
+chk_eq "interpreter-flag wrapper weld denied" 2 "$RC"
+run 'command -- bash test/run.sh; git -C /x commit -m m'
+chk_eq "command -- wrapper weld denied" 2 "$RC"
 
 tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"

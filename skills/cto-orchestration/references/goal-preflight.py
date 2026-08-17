@@ -69,12 +69,23 @@ def smelly_rows(body):
 # semantic, the consuming worker re-enumerates the scope and diffs — goal-template clause).
 # Known boundary (accept-documented): a keyword list — rephrased absence claims slip
 # through; this catches the ones written the way people actually write them.
+# Corpus-bound vocabulary only (review 2026-08-17 M4): bare 不存在/没有任何 also match
+# single-point runtime observations (`404，端点不存在`) which are NOT scans over a corpus —
+# the discriminator requires reference/usage/call semantics. Corpus claims phrased with the
+# bare words slip through: same word-list boundary as declared above, not a new one.
 ABSENCE_RE = re.compile(
-    r"零引用|零调用|零使用|未被引用|未被调用|无任何引用|没有任何引用|不存在|没有任何|仅在\s*\d|只在\s*\d"
+    r"零引用|零调用|零使用|未被引用|未被调用|[无没]有?任何(?:引用|调用|使用|命中)"
+    r"|(?:引用|调用|使用)[^\n，。;]{0,4}不存在|仅在\s*\d|只在\s*\d"
     r"|zero\s+(?:references|usages|callers|hits)|no\s+(?:references|usages|callers)|unused",
     re.IGNORECASE,
 )
-SCOPE_RE = re.compile(r"scope\s*=|全仓|全树|整仓|repo[ -]?根|repo-root|[^\s`]+/[^\s`]+")
+# A scope declaration is scope=, a whole-tree word, or a PATH token. Path-ness is judged,
+# not just a slash (review 2026-08-17 B1: URLs and dates/ratios satisfied a bare-slash
+# test): URLs are stripped first, and the slash's left side must contain a letter.
+_URL_RE = re.compile(r"https?://\S+")
+SCOPE_RE = re.compile(
+    r"scope\s*=|全仓|全树|整仓|repo[ -]?根|repo-root"
+    r"|(?:^|[\s（(=`,，])[A-Za-z0-9_.~*-]*[A-Za-z_][A-Za-z0-9_.~*-]*/[^\s`）),，]+")
 
 
 def fail(message):
@@ -104,7 +115,7 @@ def main():
     if UNRESOLVED.match(probe) or UNRESOLVED.match(observed):
         return fail("the cheapest refutation must be run before dispatch; unresolved/N/A is not evidence")
     line = LINE_RE.search(body).group(0)
-    if ABSENCE_RE.search(line) and not SCOPE_RE.search(line):
+    if ABSENCE_RE.search(line) and not SCOPE_RE.search(_URL_RE.sub("", line)):
         return fail(
             "缺席断言未声明扫描面——负对照只证明探测器有效，不证明扫描面完整"
             "（外部实证：范围只在作者脑内的『零引用』差点删掉半个应用）。"

@@ -170,5 +170,18 @@ printf "Preflight: jq 'length > 0' metrics.json => no rows hit the cap\n" > "$go
 run_check "$goal"
 chk_eq "[SCOPE] plain negative observation untouched" 0 "$rc"
 
+# review 2026-08-17 repros as standing assertions (B1 slash-text impostors + M4 zh point obs)
+printf 'Preflight: checked https://example.com/x and found zero references => remove\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] URL does not impersonate a scan root" 1 "$rc"
+
+printf 'Preflight: checked on 8/17 and found zero references => remove\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] date slash does not impersonate a scan root" 1 "$rc"
+
+printf 'Preflight: curl -I localhost:3000 => 404，端点不存在\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] zh single-point negative observation untouched" 0 "$rc"
+
 rm -rf "$SANDBOX"
 summary

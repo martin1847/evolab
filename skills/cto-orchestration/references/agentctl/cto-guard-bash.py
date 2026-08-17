@@ -611,8 +611,14 @@ def main():
     v10 = re.sub(r"\d*>&\d*", "", v10)
     v10 = re.sub(r"([\"'])([^\s\"';|&()]*)\1", r"\2", v10)
     v10 = re.sub(r"([\"'])[^\"']*\1", " ARG ", v10).replace("\\", "")
+    # wrappers may carry option flags and env assignments (`env CI=1 bash`, `bash -e`,
+    # `command --`) — review 2026-08-17 B3: without them the anchor breaks and the weld
+    # shape sails through. Nested shells (`bash -lc '…'`) are OUT of this rule's reach by
+    # construction: the quoted body is blanked to ARG in v10 — accept-documented boundary,
+    # same class as command substitution in (10).
     _POS_RUNNER = (
-        r"(?:^|[;&(]\s*)(?:\w+=\S*\s+)*(?:(?:\S*/)?(?:bash|sh|zsh|env|command|exec|nohup|time)\s+)*"
+        r"(?:^|[;&(]\s*)(?:\w+=\S*\s+)*"
+        r"(?:(?:\S*/)?(?:bash|sh|zsh|env|command|exec|nohup|time)(?:\s+(?:-\S+|\w+=\S*))*\s+)*"
         r"\S*(?:\.test\.sh|test/run\.sh|retro-check\.sh)"
     )
     if re.search(_POS_RUNNER + r"[^;&|]*\|(?!\|)", v10):
@@ -632,8 +638,11 @@ def main():
     #       after it shipped. A direct `gate && git commit` chain stays legal (rc-coupled,
     #       no `;`); runner as a mere argument (`git add x.test.sh; git commit`) does not
     #       match because the anchor requires command position.
-    if (re.search(_POS_RUNNER, v10) and ";" in v10
-            and re.search(r"\bgit\s[^|]*\bcommit\b", v10)):
+    # BOUND sequence, not three global existence checks (review 2026-08-17 B2: a `;`
+    # anywhere plus a legal `gate && git commit` direct chain was denied): the gate's own
+    # segment must END at a `;` and the commit must come AFTER that break. A commit inside
+    # the gate's segment (`gate && git commit; echo done`) is rc-coupled and stays legal.
+    if re.search(_POS_RUNNER + r"[^;]*;.*\bgit\s[^|;]*\bcommit\b", v10):
         sys.stderr.write(
             "DENY: gate run and `git commit` in one `;`-broken compound — the commit no "
             "longer depends on the gate's rc (bit us 4x; the 4th sailed through the pipe "
