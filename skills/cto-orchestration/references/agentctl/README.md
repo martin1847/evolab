@@ -19,6 +19,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析；freshness
   用 mtime 对 epoch（每次 steer 即轮转）；必带/不带的判据归 SKILL.md §0。
+  **`steer -d` 只移动 watcher 的 freshness 目标，不重发 footer**——worker 不会自动得知新目标，
+  你的 steer 文本必须自己点名交付文件（runtime 在 `-d` 成功时会当场提醒这一条）。
 - **尾行机器可读**：`watch` 四类出口（终态 / 非终态 / ENGINE-SILENT / TIMEOUT）都在 typed
   `=== … ===` 行之后追加最后一行 `EXIT=<n>`——包装层（管道 / 后台 harness）吞掉进程退出码时仍可解析；
   文案与 exit code 均不变。`status` 读到 RUNNING 而**无存活 watcher**（pid 文件缺失、或进程已亡）追加

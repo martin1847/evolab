@@ -1550,7 +1550,7 @@ def send_frame(args: argparse.Namespace) -> int:
             return EXIT_FAILED
         print(f"OK: {args.verb} accepted by engine (correlated JSON-RPC response)")
         if args.deliverable:
-            meta_update(Session(args.run_dir, args.session), "deliverable", args.deliverable)
+            _deliverable_moved(args.run_dir, args.session, args.deliverable)
         return 0
 
     req_id = f"ctl-{uuid.uuid4().hex[:12]}"
@@ -1569,12 +1569,23 @@ def send_frame(args: argparse.Namespace) -> int:
             return EXIT_FAILED
         print(f"OK: {args.verb} accepted by engine (correlated response)")
         if args.deliverable:
-            meta_update(Session(args.run_dir, args.session), "deliverable", args.deliverable)
+            _deliverable_moved(args.run_dir, args.session, args.deliverable)
         return 0
     print(f"OK: {args.verb} delivered to engine stdin (claude queues it natively; no per-frame ack exists)")
     if args.deliverable:
-        meta_update(Session(args.run_dir, args.session), "deliverable", args.deliverable)
+        _deliverable_moved(args.run_dir, args.session, args.deliverable)
     return 0
+
+
+def _deliverable_moved(run_dir: str, session: str, glob_: str) -> None:
+    """steer -d moves the freshness target for the NEXT round. The footer is a one-shot
+    frame and is never re-sent, so the OPERATOR is the only one who can tell the worker —
+    say it at the decision point (review 2026-08-17 R3: this boundary lived in a helper
+    comment no CLI operator ever meets)."""
+    meta_update(Session(run_dir, session), "deliverable", glob_)
+    print("note: deliverable updated for the NEXT freshness check — the runtime does NOT "
+          "re-send the footer; your steer text itself must tell the worker to write "
+          f"results into '{glob_}' (chat output is not delivery).", file=sys.stderr)
 
 
 def cmd_wait_ready(args: argparse.Namespace) -> int:

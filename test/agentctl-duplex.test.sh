@@ -553,6 +553,13 @@ chk_eq "declared deliverable: status persists the marker" 1 "$([ -s "$WATCH_RUN_
 chk_eq "quoted glob still yields valid marker JSON (F3)" 0 "$(python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$WATCH_RUN_DIR/dmS.terminal.json" >/dev/null 2>&1; echo $?)"
 bash "$AGENTCTL" steer dmS -m "round two" >/dev/null 2>&1
 chk_eq "steer opens a new round and clears the marker (F1)" 0 "$([ -e "$WATCH_RUN_DIR/dmS.terminal.json" ] && echo 1 || echo 0)"
+# steer -d moves the freshness target WITHOUT re-sending the footer — the runtime must say
+# so to the operator at the decision point (review R3: the boundary lived in a helper
+# comment no CLI operator ever meets)
+sderr="$(bash "$AGENTCTL" steer dmS -m "write into the new file" -d 'moved-*.md' 2>&1 >/dev/null)"
+chk_contains "steer -d surfaces the no-refooter boundary to the operator" "does NOT re-send the footer" "$sderr"
+chk_contains "steer -d note names the new target" "moved-*.md" "$sderr"
+chk_eq "steer -d really moved the meta target" "moved-*.md" "$(sed -n 's/^deliverable=//p' "$WATCH_RUN_DIR/dmS.duplex.meta" | tail -1)"
 bash "$AGENTCTL" stop dmS >/dev/null 2>&1
 
 # stale same-name marker: start claims the name and clears prior-life residue (F1)
