@@ -699,6 +699,20 @@ printf '{"ts":1,"offset":10}\n' >> "$WATCH_RUN_DIR/imk.duplex.sent-journal"
 chk_eq "after a steer the next idle is episode 2" 2 "$(imk_py count)"
 chk_eq "reset clears" "ok" "$(imk_py reset)"
 chk_eq "post-DONE idle starts over at 1" 1 "$(imk_py count)"
+# review repros (2026-08-17 B1) as standing assertions:
+printf '\xff\n' >> "$WATCH_RUN_DIR/imk.duplex.sent-journal"   # undecodable journal byte
+chk_eq "undecodable journal byte never crashes the counter" 2 "$(imk_py count)"
+# read-only dir: reset's R-sentinel append still works on the existing writable file, and a
+# fresh idle after that DONE reads 1 — a stale pre-reset mark must never fabricate episode 2
+chmod 0555 "$WATCH_RUN_DIR"
+chk_eq "reset survives an unlink-denied dir (sentinel append)" "ok" "$(imk_py reset)"
+chk_eq "post-reset idle in read-only dir is episode 1 again" 1 "$(imk_py count)"
+chmod 0755 "$WATCH_RUN_DIR"
+# unpersistable marks (missing dir) → fail-closed to 1, never a memory-fabricated 2
+IMGONE="$SANDBOX/gone-run"; WATCH_RUN_DIR_SAVE="$WATCH_RUN_DIR"
+WATCH_RUN_DIR="$IMGONE"
+chk_eq "unpersistable episode reads fail-closed 1" 1 "$(imk_py count)"
+WATCH_RUN_DIR="$WATCH_RUN_DIR_SAVE"
 # stop teardown removes the sidecar so a reclaimed session name cannot inherit stale marks
 chk_contains "idle-marks is in the stop removal set" "duplex.idle-marks" "$(grep -A2 '_STOP_KEPT = ' "$AW_DIR/duplexctl.py")"
 # the hint text must live in the LIVE-idle verdict block (source pin; anchored BEFORE the

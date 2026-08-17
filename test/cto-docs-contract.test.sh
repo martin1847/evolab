@@ -29,10 +29,19 @@ echo "== cto docs contract =="
 # mechanism), replay-corpus.py (consumes the shipped projector as the single source of truth).
 # agentctl-duplex sanctioned 2026-08-17 for ONE block (idle-marks helpers): they are pure
 # file arithmetic whose CLI-black-box path requires a full engine emulator answering
-# get_state — negative leverage for a hint line. Scope stays the helper pair; consuming any
-# other duplexctl internal from that file is still an offence (manifest gate holds).
+# get_state — negative leverage for a hint line. The sanction is enforced PRECISELY below
+# (review B2: a whole-file exemption let `m.classify` ride the allowlist unseen): the
+# file's dynamically-loaded attribute consumption set must equal exactly the helper pair.
 wb_offenders="$(grep -rl 'spec_from_file_location' . 2>/dev/null | sed 's|^\./||' | grep -v '__pycache__' | grep -vE '^(replay-corpus\.py|duplex-fixtures/ws3/probe\.py|cto-docs-contract\.test\.sh|agentctl-duplex\.test\.sh)$' || true)"
 chk_eq "white-box dynamic-load stays banned outside sanctioned consumers" "" "$wb_offenders"
+# precise sanction: extract every `m.<attr>` the duplex test consumes from the loaded module
+# and pin the set to exactly the helper pair. A third internal (`m.classify`…) goes red here.
+duplex_consumes="$(grep -oE '\bm\.[A-Za-z_]+' agentctl-duplex.test.sh | sort -u | tr '\n' ' ')"
+chk_eq "duplex test's white-box consumption is exactly the helper pair" \
+  "m._idle_mark_and_count m._idle_marks_reset " "$duplex_consumes"
+# known positive for the extractor itself: a synthetic line with an extra internal must show up
+chk_contains "consumption extractor sees a planted extra internal" "m.classify" \
+  "$(printf 'x = m.classify\n' | grep -oE '\bm\.[A-Za-z_]+')"
 chk_contains "unified surface is agentctl" "agentctl start|steer|status|watch|stop" "$skill_body"
 # WS3: the provider capability matrix is RUNTIME-generated. The main skill keeps the control
 # principle and a pointer; the wire-level truth is asserted against duplexctl's one table.

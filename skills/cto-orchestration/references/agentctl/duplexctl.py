@@ -1112,37 +1112,56 @@ def _idle_marks_path(sess: Session) -> str:
 
 
 def _idle_mark_and_count(sess: Session) -> int:
-    """Distinct idle EPISODES this session. Episode identity = steer count at observation
-    time: re-polling the same stuck round adds nothing; a steer that fails to unstick makes
-    the next observation a new episode. Best effort — a failed write never fails classify."""
+    """Distinct idle EPISODES since the last DONE. Episode identity = steer count at
+    observation time: re-polling the same stuck round adds nothing; a steer that fails to
+    unstick makes the next observation a new episode.
+
+    FAIL-CLOSED to "no hint" (review 2026-08-17): the ONLY consequence of this counter is
+    an advisory hint, so any state we could not durably persist must read as count=1 —
+    an in-memory token or a stale pre-reset mark must never fabricate a 2nd episode.
+    Append-only design: reset writes an R sentinel instead of unlinking (an unlink can be
+    denied while the file stays appendable, which left stale marks alive); decode errors
+    are neutralized with errors="replace" so classify can never crash here."""
     try:
         with open(os.path.join(sess.run, f"{sess.name}.duplex.sent-journal"),
-                  encoding="utf-8") as fh:
+                  encoding="utf-8", errors="replace") as fh:
             steers = sum(1 for _ in fh)
     except OSError:
         steers = 0
-    seen: set[str] = set()
+    lines: list[str] = []
     try:
-        with open(_idle_marks_path(sess), encoding="utf-8") as fh:
-            seen = {ln.strip() for ln in fh if ln.strip()}
+        with open(_idle_marks_path(sess), encoding="utf-8", errors="replace") as fh:
+            lines = [ln.strip() for ln in fh if ln.strip()]
     except OSError:
         pass
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i] == "R":
+            lines = lines[i + 1:]
+            break
+    seen = set(lines)
     tok = str(steers)
     if tok not in seen:
         try:
             with open(_idle_marks_path(sess), "a", encoding="utf-8") as fh:
                 fh.write(tok + "\n")
         except OSError:
-            pass
+            return 1  # could not persist the episode — never reason from memory
         seen.add(tok)
     return len(seen)
 
 
 def _idle_marks_reset(sess: Session) -> None:
+    """DONE boundary: append an R sentinel (works even when unlink would be refused).
+    If even the append fails, fall back to remove; if both fail the residual is narrow —
+    the next count's own append will typically fail the same way and read fail-closed."""
     try:
-        os.remove(_idle_marks_path(sess))
+        with open(_idle_marks_path(sess), "a", encoding="utf-8") as fh:
+            fh.write("R\n")
     except OSError:
-        pass
+        try:
+            os.remove(_idle_marks_path(sess))
+        except OSError:
+            pass
 
 
 def classify(sess: Session) -> int:
