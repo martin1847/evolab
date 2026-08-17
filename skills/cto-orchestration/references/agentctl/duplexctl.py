@@ -1107,6 +1107,44 @@ def stream_stalled(sess: Session, engine: str) -> tuple[bool, str]:
                   f"({len(descendants)} descendant(s))")
 
 
+def _idle_marks_path(sess: Session) -> str:
+    return os.path.join(sess.run, f"{sess.name}.duplex.idle-marks")
+
+
+def _idle_mark_and_count(sess: Session) -> int:
+    """Distinct idle EPISODES this session. Episode identity = steer count at observation
+    time: re-polling the same stuck round adds nothing; a steer that fails to unstick makes
+    the next observation a new episode. Best effort — a failed write never fails classify."""
+    try:
+        with open(os.path.join(sess.run, f"{sess.name}.duplex.sent-journal"),
+                  encoding="utf-8") as fh:
+            steers = sum(1 for _ in fh)
+    except OSError:
+        steers = 0
+    seen: set[str] = set()
+    try:
+        with open(_idle_marks_path(sess), encoding="utf-8") as fh:
+            seen = {ln.strip() for ln in fh if ln.strip()}
+    except OSError:
+        pass
+    tok = str(steers)
+    if tok not in seen:
+        try:
+            with open(_idle_marks_path(sess), "a", encoding="utf-8") as fh:
+                fh.write(tok + "\n")
+        except OSError:
+            pass
+        seen.add(tok)
+    return len(seen)
+
+
+def _idle_marks_reset(sess: Session) -> None:
+    try:
+        os.remove(_idle_marks_path(sess))
+    except OSError:
+        pass
+
+
 def classify(sess: Session) -> int:
     sess.require_meta()
     engine = sess.meta.get("engine", "")
@@ -1251,13 +1289,24 @@ def classify(sess: Session) -> int:
     ok, hit = deliverable_fresh(sess)
     receipt = None if ok else delivered_receipt(store)
     if receipt is not None:
+        _idle_marks_reset(sess)
         print(f"DONE: engine idle{receipt_note(receipt)} — receipt evidence supersedes the "
               "mtime freshness heuristic")
         print(f"last: {detail}")
         return EXIT_DONE
     if not ok:
-        print(f"IDLE-NO-DELIVERABLE: engine idle but '{sess.meta.get('deliverable')}' not produced this round — steer the agent; do not stop")
+        # 2nd+ DISTINCT idle episode (episode identity = steer count, so re-polling one
+        # stuck round never inflates it; DONE resets) reads as context exhaustion far more
+        # often than as a wording problem — field 2026-08-17, external seat: 3 same-day
+        # cases, the operator burned an extra nudge round before realizing a fresh session
+        # was the fix. Observability only: the watcher gains no steer authority (auto-nudge
+        # was deliberately declined by the principal, 2026-08-09 — this hint is NOT that).
+        hint = ("" if _idle_mark_and_count(sess) < 2 else
+                " [2nd+ idle episode this session — likely context exhaustion; a fresh "
+                "session (agentctl stop + start) usually beats another nudge]")
+        print(f"IDLE-NO-DELIVERABLE: engine idle but '{sess.meta.get('deliverable')}' not produced this round — steer the agent; do not stop{hint}")
         return EXIT_IDLE_NO_DELIVERABLE
+    _idle_marks_reset(sess)
     note = f", deliverable fresh: {os.path.basename(hit)}" if hit else ""
     print(f"DONE: engine idle{note}")
     print(f"last: {detail}")
@@ -3050,7 +3099,7 @@ def _read_stop_sample(sample: str, token: str) -> str | None:
 
 _STOP_KEPT = ("duplex.in", "duplex.meta", "duplex.round-started", "duplex.wlock",
               "duplex.prompt", "duplex.sent-offset", "duplex.write-intent",
-              "duplex.watch.pid")
+              "duplex.watch.pid", "duplex.idle-marks")
 
 def _control_state_paths(run_dir: str, name: str) -> list[str]:
     paths = [os.path.join(run_dir, f"{name}.{suffix}") for suffix in _STOP_KEPT]

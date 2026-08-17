@@ -675,4 +675,34 @@ chk_contains "deny names the wrong-premise motive" "premise is wrong" "$out"
 chk_contains "deny keeps the doc pointer" "Read: cto-orchestration" "$out"
 rm -rf "/tmp/claude-agdxtest/$$" "/tmp/cto-allow-kill-$TID"
 
+echo "== idle-marks: episode = steer count; DONE resets; stop cleans (helper white-box) =="
+# White-box by SANCTION (cto-docs-contract allowlist, 2026-08-17): the helpers are pure file
+# arithmetic; their CLI-black-box path needs an engine emulator answering get_state — negative
+# leverage for a hint line. Live two-idle fire is e2e-tier. Only these two helpers may be
+# consumed here; anything else from duplexctl is still the manifest gate's business.
+sandbox_new
+imk_py(){ AW_DIR="$AW_DIR" WATCH_RUN_DIR="$WATCH_RUN_DIR" python3 - "$1" <<'EOF'
+import importlib.util, os, sys, types
+spec = importlib.util.spec_from_file_location(
+    "duplexctl", os.environ["AW_DIR"] + "/duplexctl.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sess = types.SimpleNamespace(run=os.environ["WATCH_RUN_DIR"], name="imk")
+if sys.argv[1] == "count":
+    print(m._idle_mark_and_count(sess))
+else:
+    m._idle_marks_reset(sess); print("ok")
+EOF
+}
+chk_eq "first idle episode counts 1" 1 "$(imk_py count)"
+chk_eq "re-poll of the same episode still 1" 1 "$(imk_py count)"
+printf '{"ts":1,"offset":10}\n' >> "$WATCH_RUN_DIR/imk.duplex.sent-journal"
+chk_eq "after a steer the next idle is episode 2" 2 "$(imk_py count)"
+chk_eq "reset clears" "ok" "$(imk_py reset)"
+chk_eq "post-DONE idle starts over at 1" 1 "$(imk_py count)"
+# stop teardown removes the sidecar so a reclaimed session name cannot inherit stale marks
+chk_contains "idle-marks is in the stop removal set" "duplex.idle-marks" "$(grep -A2 '_STOP_KEPT = ' "$AW_DIR/duplexctl.py")"
+# the hint text must live in the LIVE-idle verdict block (source pin; anchored BEFORE the
+# verdict print where the hint is assembled)
+chk_contains "hint wired on live-idle verdict" "2nd+ idle episode this session" "$(grep -B14 "IDLE-NO-DELIVERABLE: engine idle but" "$AW_DIR/duplexctl.py")"
+
 summary

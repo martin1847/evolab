@@ -27,7 +27,11 @@ echo "== cto docs contract =="
 # runtime modules to poke internals freezes the internal ABI and taxes every restructure; the
 # probes never caught a field bug. Sanctioned consumers only: ws3/probe.py (fake-engine wire
 # mechanism), replay-corpus.py (consumes the shipped projector as the single source of truth).
-wb_offenders="$(grep -rl 'spec_from_file_location' . 2>/dev/null | sed 's|^\./||' | grep -v '__pycache__' | grep -vE '^(replay-corpus\.py|duplex-fixtures/ws3/probe\.py|cto-docs-contract\.test\.sh)$' || true)"
+# agentctl-duplex sanctioned 2026-08-17 for ONE block (idle-marks helpers): they are pure
+# file arithmetic whose CLI-black-box path requires a full engine emulator answering
+# get_state — negative leverage for a hint line. Scope stays the helper pair; consuming any
+# other duplexctl internal from that file is still an offence (manifest gate holds).
+wb_offenders="$(grep -rl 'spec_from_file_location' . 2>/dev/null | sed 's|^\./||' | grep -v '__pycache__' | grep -vE '^(replay-corpus\.py|duplex-fixtures/ws3/probe\.py|cto-docs-contract\.test\.sh|agentctl-duplex\.test\.sh)$' || true)"
 chk_eq "white-box dynamic-load stays banned outside sanctioned consumers" "" "$wb_offenders"
 chk_contains "unified surface is agentctl" "agentctl start|steer|status|watch|stop" "$skill_body"
 # WS3: the provider capability matrix is RUNTIME-generated. The main skill keeps the control
