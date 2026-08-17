@@ -83,9 +83,13 @@ ABSENCE_RE = re.compile(
 # not just a slash (review 2026-08-17 B1: URLs and dates/ratios satisfied a bare-slash
 # test): URLs are stripped first, and the slash's left side must contain a letter.
 _URL_RE = re.compile(r"https?://\S+")
+# A path token may start absolute (`/Users/...`) or dot-relative (`./src`, `../lib`) —
+# review R2: requiring the letter before the FIRST slash rejected both. The letter
+# requirement moves to the first named segment; bare digits (8/17) still fail it.
 SCOPE_RE = re.compile(
     r"scope\s*=|全仓|全树|整仓|repo[ -]?根|repo-root"
-    r"|(?:^|[\s（(=`,，])[A-Za-z0-9_.~*-]*[A-Za-z_][A-Za-z0-9_.~*-]*/[^\s`）),，]+")
+    r"|(?:^|[\s（(=`,，])(?:\.{1,2}/|/)?"
+    r"[A-Za-z0-9_.~*-]*[A-Za-z_][A-Za-z0-9_.~*-]*/[^\s`）),，]+")
 
 
 def fail(message):

@@ -183,5 +183,14 @@ printf 'Preflight: curl -I localhost:3000 => 404，端点不存在\n' > "$goal"
 run_check "$goal"
 chk_eq "[SCOPE] zh single-point negative observation untouched" 0 "$rc"
 
+# R2 repros: absolute and dot-relative scan roots are legitimate declarations
+printf 'Preflight: rg zero references under ./src/app => remove\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] dot-relative scan root accepted" 0 "$rc"
+
+printf 'Preflight: rg zero references under /abs/repo/root => remove\n' > "$goal"
+run_check "$goal"
+chk_eq "[SCOPE] absolute scan root accepted" 0 "$rc"
+
 rm -rf "$SANDBOX"
 summary
