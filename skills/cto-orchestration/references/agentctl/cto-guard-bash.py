@@ -611,12 +611,11 @@ def main():
     v10 = re.sub(r"\d*>&\d*", "", v10)
     v10 = re.sub(r"([\"'])([^\s\"';|&()]*)\1", r"\2", v10)
     v10 = re.sub(r"([\"'])[^\"']*\1", " ARG ", v10).replace("\\", "")
-    if re.search(
+    _POS_RUNNER = (
         r"(?:^|[;&(]\s*)(?:\w+=\S*\s+)*(?:(?:\S*/)?(?:bash|sh|zsh|env|command|exec|nohup|time)\s+)*"
         r"\S*(?:\.test\.sh|test/run\.sh|retro-check\.sh)"
-        r"[^;&|]*\|(?!\|)",
-        v10,
-    ):
+    )
+    if re.search(_POS_RUNNER + r"[^;&|]*\|(?!\|)", v10):
         sys.stderr.write(
             "DENY: gate output piped — a pipeline's exit code is the LAST command's, so a "
             "red gate reports green, and the pipe truncates the evidence (bit us 3x; one "
@@ -624,6 +623,23 @@ def main():
             "and read rc directly — `bash test/run.sh > /tmp/gate.log 2>&1; echo rc=$?` — "
             "then grep the log. Read: cto-orchestration/references/retrospective.md "
             "§教训分层沉淀.\n"
+        )
+        return 2
+    # (10b) gate and `git commit` welded into one compound command with a `;` break —
+    #       the commit no longer depends on the gate's rc (the `;` resets $?; whatever
+    #       follows chains off an innocent middle command). 4th recurrence of the same
+    #       family, this exact shape, committed THROUGH rule (10)'s pipe check the day
+    #       after it shipped. A direct `gate && git commit` chain stays legal (rc-coupled,
+    #       no `;`); runner as a mere argument (`git add x.test.sh; git commit`) does not
+    #       match because the anchor requires command position.
+    if (re.search(_POS_RUNNER, v10) and ";" in v10
+            and re.search(r"\bgit\s[^|]*\bcommit\b", v10)):
+        sys.stderr.write(
+            "DENY: gate run and `git commit` in one `;`-broken compound — the commit no "
+            "longer depends on the gate's rc (bit us 4x; the 4th sailed through the pipe "
+            "check). Fix: run the gate alone and read rc first; commit in a SEPARATE "
+            "command after the gate is green. Read: cto-orchestration/references/"
+            "retrospective.md §教训分层沉淀.\n"
         )
         return 2
 

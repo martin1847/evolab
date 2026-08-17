@@ -413,6 +413,15 @@ run "echo '(bash test/run.sh | tail -3)'"
 chk_eq "quoted prose is DATA, not a gate (false-positive repro)" 0 "$RC"
 run "echo 'note; bash test/run.sh | tail -3'"
 chk_eq "quoted prose with ; is DATA" 0 "$RC"
+# (10b) `;`-broken gate+commit weld — the 4th-recurrence shape, verbatim from the field
+run 'bash test/run.sh > /tmp/g.log 2>&1; rc=$?; echo "rc=$rc"; git -C /x add -A && git -C /x commit -m m'
+chk_eq "gate;...;commit weld denied" 2 "$RC"; chk_contains "10b names the break" "no longer depends" "$ERR"
+run 'bash test/run.sh && git -C /x commit -m m'
+chk_eq "direct gate && commit chain allowed (rc-coupled)" 0 "$RC"
+run 'git -C /x add test/foo.test.sh; git -C /x commit -m m'
+chk_eq "runner as argument + commit allowed" 0 "$RC"
+run 'bash test/run.sh > /tmp/g.log 2>&1; echo rc=$?'
+chk_eq "gate with ; but no commit allowed" 0 "$RC"
 
 tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"
