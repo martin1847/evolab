@@ -134,10 +134,14 @@ survivor_advise() { # $1 session — stderr advisory only; never signals, never 
 append_footer() { # $1 out-file  $2 cwd  $3 identity stamp file  $4 deliverable glob ("" = none)
   # The deliverable sentence is injected ONLY when one was declared (review 2026-08-17 B1:
   # an unconditional sentence told no-deliverable sessions to write a file that does not
-  # exist — the runtime contract must never lie to a legal path). Naming the glob beats a
-  # generic clause: 5/7 cross-seat frame-verified idles were conclusions-in-chat.
+  # exist — the runtime contract must never lie to a legal path). GENERIC wording, no glob
+  # (review R2): the footer is a one-shot frame while `steer -d` can move the deliverable
+  # later — naming the start-time glob would order the worker to write a file the watcher
+  # no longer checks. Known boundary: a session started WITHOUT a deliverable that gains
+  # one via `steer -d` never gets this sentence — the steer text itself must name the
+  # artifact (goal-template's 交付物 line does; runtime does not re-inject footers).
   local line2='This session is non-interactive. Work from this message and stop when done; further instructions may arrive as new messages.'
-  [ -n "${4:-}" ] && line2="This session is non-interactive. Work from this message and stop when done; results go IN the declared deliverable file (${4}) — chat output is not delivery. Further instructions may arrive as new messages."
+  [ -n "${4:-}" ] && line2='This session is non-interactive. Work from this message and stop when done; results go IN the declared deliverable file — chat output is not delivery. Further instructions may arrive as new messages.'
   printf '\n\n---\nHEADLESS PROTOCOL\n%s\n%s\n%s\n' \
     'Briefly restate the files/contracts, scope, and main risk. Unless the goal contract promises to review that restatement before work begins, start work immediately — do not idle waiting for approval to begin.' \
     "$line2" \

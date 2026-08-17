@@ -40,11 +40,12 @@ GUARD_AGENT="../skills/cto-orchestration/references/agentctl/cto-guard-agent.py"
 # These are CURRENT-MAXIMUM ratchets, not validated thresholds. No experiment says 754 bytes is
 # where a worker stops reading; the number's only claim is "no bigger than today". Treat a failure
 # as "justify this growth", not as "you crossed a known limit".
-BUDGET_FOOTER=879          # WORST-CASE shape: with a declared deliverable the footer names
-                           # the glob (measured with "out-*.md"; longer globs cost their own
-                           # bytes). No-deliverable sessions pay the base 791 — the sentence
-                           # is conditional (review 2026-08-17 B1: never lie to a legal path).
-                           # Raised 791→879: 5/7 cross-seat frame-verified idle cases were
+BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentence is generic,
+                           # no glob enters the frame: R2 caught that a start-time glob lies
+                           # once `steer -d` moves the deliverable, and a variable payload
+                           # escapes any ratchet). No-deliverable sessions pay the base 791;
+                           # the sentence is conditional (B1: never lie to a legal path).
+                           # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
 BUDGET_GUARD_TOTAL=7771    # all injected text across both guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed)

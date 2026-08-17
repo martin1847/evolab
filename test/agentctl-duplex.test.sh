@@ -84,6 +84,10 @@ chk_contains "prompt frame carries contract-gate clause" "stop and wait for the 
 chk_contains "prompt frame carries promised-review branch" "Unless the goal contract promises to review" "$(cat "$SANDBOX/omp.log")"
 chk_eq "prompt frame is omp type=prompt" 1 "$(grep -c '"type":"prompt"' "$SANDBOX/omp.log")"
 
+# no-deliverable start must NOT carry the file-delivery contract (review R2 M1: the helper
+# test alone let the production call-point wiring regress unseen — this pins the REAL frame)
+chk_not_contains "no-deliverable prompt frame has no file contract" "chat output is not delivery" "$(cat "$SANDBOX/omp.log")"
+
 out="$(bash "$AGENTCTL" status dxA 2>&1)"; rc=$?
 chk_eq "omp idle no-gate → DONE rc0" 0 "$rc"
 chk_contains "omp DONE message" "DONE: engine idle" "$out"
@@ -536,8 +540,12 @@ chk_eq "stop removes the watcher pid file" 0 "$([ -e "$WATCH_RUN_DIR/nwR.duplex.
 chk_eq "stop removes the terminal marker" 0 "$([ -e "$WATCH_RUN_DIR/nwR.terminal.json" ] && echo 1 || echo 0)"
 
 # marker lifecycle (review F1/F3): declared deliverable + quoted glob → durable, parseable, round-scoped
+FAKE_PROVIDER_LOG="$SANDBOX/dmS.log" \
 bash "$AGENTCTL" start claude dmS "$WT" --goal "$declared" --deliverable 'dm-"q"-*.md' >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q '"type":"result"' "$WATCH_RUN_DIR/dmS.duplex.events.jsonl" 2>/dev/null && break; /bin/sleep 0.2; done
+# with-deliverable start: the file-delivery sentence must survive into the ENGINE-received
+# frame through the PRODUCTION call point (review R2 M1 — helper-only tests missed the wire)
+chk_contains "declared-deliverable prompt frame carries file contract" "chat output is not delivery" "$(cat "$SANDBOX/dmS.log")"
 : > "$WT/dm-\"q\"-1.md"
 out="$(bash "$AGENTCTL" status dmS 2>&1)"; rc=$?
 chk_eq "declared+fresh deliverable → DONE 0" 0 "$rc"
@@ -723,8 +731,9 @@ FGATE="$SANDBOX/fgate"; mkdir -p "$FGATE"
 sed -n '/^append_footer()/,/^}/p' "$AGENTCTL" > "$FGATE/fn.sh"
 printf ': > "$1"\nappend_footer "$1" "/abs/wt" "/abs/stamp.txt" "%s"\n' 'out-*.md' >> "$FGATE/fn.sh"
 bash "$FGATE/fn.sh" "$FGATE/with.txt"
-chk_contains "with-deliverable footer names the glob" "declared deliverable file (out-*.md)" "$(cat "$FGATE/with.txt")"
+# generic sentence, no glob (R2: a start-time glob lies once `steer -d` moves the target)
 chk_contains "with-deliverable footer states chat is not delivery" "chat output is not delivery" "$(cat "$FGATE/with.txt")"
+chk_not_contains "footer never embeds the mutable glob" "out-*.md" "$(cat "$FGATE/with.txt")"
 sed -n '/^append_footer()/,/^}/p' "$AGENTCTL" > "$FGATE/fn2.sh"
 printf ': > "$1"\nappend_footer "$1" "/abs/wt" "/abs/stamp.txt" ""\n' >> "$FGATE/fn2.sh"
 bash "$FGATE/fn2.sh" "$FGATE/without.txt"
