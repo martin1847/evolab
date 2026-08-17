@@ -30,11 +30,9 @@ metadata:
 
 默认用 omp 执行、codex 评审，但**工具名不证明异构**；派工前看实际 model/backend，避免执行席与评审席落到同一 lineage 或 quota 池。
 
-派工统一走 `agentctl start|steer|status|watch|stop`——**一条 lane、三引擎**，每个引擎跑自己的原生
-duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原则：能力差异不分叉车道，由
-接口当场拒绝并指正路**——不支持的组合永远是 typed 拒绝 + 正路，绝不静默降级成别的语义。谁支持什么
-由 runtime 自己讲，本文不留第二份能力表：`agentctl capabilities`（人读表 / `--json` 机器读；状态
-闭枚举 supported·degraded·unsupported·experimental，degraded 必带降级说明）。
+派工统一走 `agentctl start|steer|status|watch|stop`——**一条 lane、三引擎**各跑原生 duplex 协议。
+**控制原则：能力差异不分叉车道，由接口 typed 拒绝 + 指正路，绝不静默降级**；谁支持什么由
+runtime 自己讲（`agentctl capabilities`，状态词表 `agentctl states`），本文不留第二份能力表。
 
 另有 **Agent subagent**（浏览器 / MCP / 隔离主上下文的读密集工作：独立上下文、只回蒸馏结论、显式按任务分档 model）。
 需要人工现场时直接 `tmux attach` 旁观，worker 控制始终走协议。
@@ -45,15 +43,11 @@ duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原
 
 1. **校准基线**：fetch 远端，确认目标 base 与 worktree；base 未动不仪式性 rebase。只读 scout 也显式指定 cwd/base，防静默继承过期 checkout。命令与核证见 `references/dispatch-baseline.md`。
 2. **写自包含 goal**：一个 goal = 一个可独立交付的单元 + 一个清晰交付物；每条 Done-when 绑定证明命令，写清 scope、out-of-scope、stop-and-report。高不确定方向进入昂贵设计/实现前，先跑最便宜证伪；preflight 门默认开（start 校验 goal 的 Preflight 声明已解），取证 / 机械 / 纯研究类 goal 用 `--no-preflight` 显式豁免。单行合同、Premises 与 Value gate 直接用 `references/goal-template.md`。
-3. **派发并挂 watcher**：
-
-   ```bash
-   references/agentctl/agentctl start <omp|codex|claude> <session> <cwd> --goal <abs-goal-or-brief> [--deliverable <glob>]
-   ```
-
-   `start` 在 goal 帧被接受后立即返回，**不会自动 watch**；紧接着用宿主的受控后台能力运行 `agentctl watch <session>`。先接线 `references/agentctl/guard-hooks.json`；guard 负责高频机械失误，主干不复制其规则表。
-
-   理解门：runtime footer 要求简短复述后立即开工（除非**合同承诺了开工前核对**——那时复述本身写进下面这个文件），阻塞**或合同门要求停下等裁决**时写 `<cwd>/BLOCKED.md` 并停止（三引擎同协议）——headless 下写这个文件就是守门的交付动作，不是兜底路。
+3. **派发并挂 watcher**：`agentctl start <engine> <session> <cwd> --goal <abs> [--deliverable <glob>]`
+   ——goal 帧被接受即返回、**不会自动 watch**，紧接着用宿主受控后台跑 `agentctl watch`；先接线
+   `references/agentctl/guard-hooks.json`（高频机械失误归 guard，主干不复制其规则表）。
+   理解门与 BLOCKED 协议由 runtime footer 固定追加（真源，本文不复制字面）；编排位记一条：
+   合同承诺了开工前核对 → worker 把复述写进 `<cwd>/BLOCKED.md` 等裁决，其余场景复述完即开工。
 4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；词表跑 `agentctl states`，处置见 agentctl README。
 5. **steering 走 `agentctl steer`**：默认排队/下一轮，`--now` mid-turn，`--replace` 弃当前重来；
    引擎能力差异查 `agentctl capabilities`，不支持的组合由接口当场拒绝并指正路。投递成功 ≠ 模型照做，
@@ -72,16 +66,13 @@ duplex 协议（omp rpc / claude stream-json / codex app-server）。**控制原
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。
 - 只有 blocking 驱动续轮；第 3 轮起每轮续派须在 brief 写 `SHIP-BLOCKING: <依据>`；同一 finding 的修复连续 2 轮只新增 finding，则止损并转人工裁决或 accept-documented。
 - **杠杆账（简单干脆优先）**：用户可见小病 → 先找交互/配置层一刀关整类的最小解；机制自明（关掉即该类物理不可发生）且可逆 → 直做，机制存疑 → 仍过 §3 先量再改；取证仅在最小解不明时派。修复轮 ≥2 或对外协定往返 ≥2 → 主动算杠杆账（残余 = 概率×血量×复杂度）提降级案，不等主理人纠偏；单 seat 不堆叠多份合同——交付时点会被最慢件绑架。验收跑 `references/scale-check.sh` 机械核规模锚（goal-template 规模锚行的电；超锚冒泡主理人，不静默收）。
-- **配比轴（真路径优先）**：开批前判面——受益者是项目对外承诺服务的那类人 = 业务面，是我们自己
-  （席位 / 流程 / 自用工具 / 门）= 工程面；工具型项目里**随产品发布、外部使用者装得到的工具就是
-  产品本体 = 业务面**，按「装得到吗」判、不按「是不是工具」判。**分类以落地物路径为准**，
-  覆写留一行理由。**闸咬结果停滞，
-  不咬投入计数**（批由执行者自划，按批数计能被合批规避）：**距上次「真实用户路径被走通」超阈值
-  → STOP-and-report**，冒泡「下一条要验的真路径是什么」。三个词各有确定来源，缺一即闸不成立：
-  「被走通」= 存在一份过了本节回执判据的交付回执；**阈值与单位**由项目在其 AGENTS.md 编排节声明
-  （无声明 = 闸未装，复盘时补，别默认一个数）；**尚无任何合格回执 = 闸已触发**（fail-closed，
-  你还没走过）。**权威记录 = 复盘时写进项目台账的那一行**（人写、非自动派生），因此这闸
-  **在复盘时判，不连续计时**——想要连续计时得先有机器可读的回执时间戳，本轴不假装已经有。比值（默认旋钮 8:2，惯例起点非发现）只在复盘呈现、由主理人每期调。
+- **配比轴（真路径优先）**：开批前判面，**以落地物路径为准**——外部使用者装得到 / 读得到 /
+  跑得到 = 业务面（工具型项目 shipped 工具即产品本体，判「装得到吗」不判「是不是工具」）；
+  测试 / 门 / 自用工具 / 本地台账 = 工程面；覆写留一行理由。**闸咬结果停滞不咬投入计数**：
+  距上次「真实用户路径被走通」超阈值 → STOP-and-report。三个词各有确定来源，缺一即闸不成立：
+  「被走通」= 存在过本节回执判据的交付回执；阈值由项目 AGENTS.md 编排节声明（无声明 = 闸未装）；
+  **尚无合格回执 = 闸已触发**（fail-closed）。权威记录 = 复盘写进台账那一行，故此闸**复盘时判、
+  不连续计时**；比值旋钮（默认 8:2，惯例非发现）只在复盘呈现、归主理人调。
 - 多轮 headless review 显式传 `--workflow review-loop --max-rounds N`（三引擎通用：每次 goal/steer 投递计一轮）；轮数与 stop-loss 只认 runtime meta，主干不复制状态机。
 - 评审期间执行 agent 不写同一 worktree。
 

@@ -81,9 +81,10 @@ cooldown 各家都落在这一带），但没有研究支持它最优，**且它
   同 finding 两轮止损 + max-rounds）、`skills/cto-orchestration/references/goal-template.md`
   §Guardrails 自证止损、`skills/agent-frontend-standard/SKILL.md` §视觉验证环迭代预算、
   `skills/cto-orchestration/references/retrospective.md` §教训分层沉淀·晋升三门之样本门。
-- 配比轴的两个 fire 点：**批次选择时刻** = `skills/cto-orchestration/SKILL.md` §2（连续工程面
-  批次的 STOP-and-report）；**记账面** = `skills/cto-orchestration/references/retrospective.md`
-  §交付清单（每单元标面 + 报近期配比——比值是数字才治得了）。
+- 配比轴的两个 fire 点：**批次选择时刻** = `skills/cto-orchestration/SKILL.md` §2（距上次真实
+  用户路径被走通超阈值的 STOP-and-report，fail-closed）；**记账面** =
+  `skills/cto-orchestration/references/retrospective.md` §交付清单（每单元标面 + 报近期配比
+  与间隔——比值是数字才治得了）。
 - runtime 机械档（连续轮 Tally 自动解析告警 / 配比自动归类）：候选，纸面档 fire 实证 ≥2 后再升
   （复杂度按证据升级；配比面的自动归类另有已证难点——运行时代码就住在 skills/ 里，路径启发式
   会误判）。
