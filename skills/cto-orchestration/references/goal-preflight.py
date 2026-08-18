@@ -4,6 +4,15 @@
 This is deliberately a shape/evidence-presence gate, not a truth oracle. The gate is on
 by default (mechanical/forensic goals opt out with --no-preflight); the runtime refuses
 missing, duplicate, placeholder, or unresolved declarations before launch.
+
+SCAN SURFACE, stated because a reader WILL rediscover it otherwise (external seat did,
+2026-08-18, with reproductions): the absence-claim scope check reads the Preflight line
+ONLY. An absence claim in goal BODY prose — even using this gate's own vocabulary — is
+not this gate's territory by design: body claims are premises, and premises flow through
+goal-template §Premises (the consuming worker re-enumerates the scope and diffs) and
+pre-dispatch goal-review. Extending the keyword scan to full text trades an unmeasured
+false-positive surface for coverage the layered path already owns; if that trade is ever
+re-priced, measure body-prose keyword density first.
 """
 import re
 import sys
