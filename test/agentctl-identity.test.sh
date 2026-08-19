@@ -672,6 +672,163 @@ chk_eq "P3 watch never exits 0" 1 "$([ "$wrc" != 0 ] && echo 1 || echo 0)"
 bash "$AGENTCTL" stop u3 >/dev/null 2>&1
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
+echo "== Q1: the record's detail bound is LINE-WISE — a reader never gets half a line =="
+# The published detail is machine-read: classify emits a typed verdict line plus advisory
+# lines that carry json.dumps payloads, and `detail[:DETAIL_MAX]` used to hand watch readers
+# a truncated JSON string (impl review R1 B1). Clipping only the caller's half and then
+# appending the writer's receipt display line was equally false — the FIELD is what watch
+# replays, and it ran past the bound with the marker no longer last (impl review R2). So the
+# oracle here measures the whole stored field: ≤ DETAIL_MAX, every line either a whole source
+# line / the writer's receipt line / the marker, and the marker LAST. Publish only touches
+# files, so this case needs no engine and no pane.
+QWT="$SANDBOX/q1wt"; mkdir -p "$QWT"
+q1_seed() { # $1 session
+  printf 'engine=omp\ncwd=%s\nround=0\n' "$QWT" > "$WATCH_RUN_DIR/$1.duplex.meta"
+  : > "$WATCH_RUN_DIR/$1.duplex.round-started"
+  python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity start "$1" >/dev/null 2>&1
+}
+q1_publish() { # $1 session  $2 detail file — publishes rc=6 with that detail
+  local tok
+  tok="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity token "$1")"
+  python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity publish "$1" --armed "$tok" \
+    --rc 6 --round 0 --detail "$(cat "$2")" >/dev/null 2>&1
+}
+cat > "$SANDBOX/q1-check.py" <<'PY'
+import json, sys
+MARK = "…[detail truncated"
+REBUILT = "receipt (rebuilt from record fields): "
+src = open(sys.argv[1], encoding="utf-8").read().rstrip("\n").split("\n")
+rec = json.load(open(sys.argv[2], encoding="utf-8"))["detail"]
+lines = rec.split("\n")
+bad, marks, receipt = [], 0, 0
+# the STORED field carries no trailing newline and no blank tail line; stripping before the
+# scan would make a stray one unobservable (impl review R3 minor 1)
+if rec != rec.rstrip("\n"):
+    bad.append("trailing-newline-in-stored-field")
+for i, ln in enumerate(lines):
+    if ln.startswith(MARK):
+        marks += 1
+        if i != len(lines) - 1:
+            bad.append("marker-not-last:%d/%d" % (i, len(lines) - 1))
+    elif ln.startswith("terminal record published ("):   # the writer's own receipt line
+        receipt += 1
+    elif ln.startswith(REBUILT):
+        # the rebuild is a READ-side reconstruction; it must never be stored
+        bad.append("rebuilt-line-stored:%d" % i)
+    elif ln not in src:
+        bad.append("not-a-whole-source-line:%s" % ln[-30:])
+if len(rec) > int(sys.argv[3]):
+    bad.append("over-bound:%d" % len(rec))
+print(" ".join(bad) if bad
+      else "FIELD_OK lines=%d mark=%d receipt=%d" % (len(lines), marks, receipt))
+PY
+
+# 10 whole lines (1 verdict of 33 chars + 9 of 99): the budget is 600 − 65-char marker − 1
+# newline = 534, so exactly the verdict + 5 data lines (533 chars) survive; the rest of the
+# tail — including the writer's own receipt display line — is dropped WHOLE. The arithmetic is
+# spelled out here on purpose: this suite carries its own oracle, and a regression in the
+# marker accounting has to red something.
+python3 -c 'print("IDLE-NO-DELIVERABLE: verdict line"); [print("L%d:" % i + "x"*96) for i in range(9)]' \
+  > "$SANDBOX/q1-long.txt"
+q1_seed q1a
+q1_publish q1a "$SANDBOX/q1-long.txt"
+chk_eq "Q1 a 1000-char multi-line detail publishes whole lines + a trailing marker, in bound" \
+  "FIELD_OK lines=7 mark=1 receipt=0" \
+  "$(python3 "$SANDBOX/q1-check.py" "$SANDBOX/q1-long.txt" "$WATCH_RUN_DIR/q1a.terminal.json" 600)"
+# …and because that drop took the receipt display line with it, the READ side rebuilds one
+# from structural fields — otherwise a replaying waiter is the only surface with no receipt
+# at all (impl review R3). Read-side only: the stored field above must not contain it.
+cat > "$SANDBOX/q1-replay.py" <<'PY'
+# argv: record.json  replay.txt  rebuilt|none — the verdict of ONE replay against the record
+# it replays. Exactly one trailing newline is the transport's (the reader's own print); more is
+# a stray blank line and must stay observable, so nothing here rstrips (impl review R3 minor 1).
+import json, sys
+REBUILT = "receipt (rebuilt from record fields): "
+rec = json.load(open(sys.argv[1], encoding="utf-8"))
+raw = open(sys.argv[2], encoding="utf-8").read()
+text = raw[:-1] if raw.endswith("\n") else raw
+if text.endswith("\n"):
+    print("extra-trailing-blank-line")
+    sys.exit()
+lines = text.split("\n")
+built = [ln for ln in lines if ln.startswith(REBUILT)]
+if sys.argv[3] == "none":
+    print("rebuilt=%d same_detail=%s"
+          % (len(built), "yes" if text == rec["detail"] else "no"))
+    sys.exit()
+bits = built[0].split() if built else []
+want_phase = "phase=%s" % (rec.get("phase") or "-")
+if len(built) != 1:
+    print("rebuilt-lines=%d" % len(built))
+elif built[0] != lines[-1]:
+    print("rebuilt-not-last")
+elif "reason=%s" % rec.get("reason") not in bits:
+    print("reason-not-the-record-field:want reason=%s" % rec.get("reason"))
+elif want_phase not in bits:
+    print("phase-not-the-record-field:want %s" % want_phase)
+elif text != rec["detail"] + "\n" + built[0]:
+    # the replay is the STORED field plus that one line — nothing else rewritten
+    print("replay-is-not-stored-detail-plus-one-line")
+else:
+    print("ok")
+PY
+python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" watch-state q1a --arm \
+  > "$SANDBOX/q1a-replay.txt" 2>&1
+chk_eq "Q1 the pressured record replays as the stored field plus a rebuilt receipt line" ok \
+  "$(python3 "$SANDBOX/q1-replay.py" "$WATCH_RUN_DIR/q1a.terminal.json" \
+     "$SANDBOX/q1a-replay.txt" rebuilt)"
+# …and that line's prefix must collide with NO typed class word: a diagnostic summary that
+# starts like a verdict is a verdict to every reader that scans line starts. Asserted against
+# the vocabulary itself, never a hand-copied list.
+chk_eq "Q1 the rebuilt line starts with no typed class word" ok \
+  "$(python3 -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import identity
+words = (list(identity.TERMINAL_CLASSES.values())
+         + [identity.OK, identity.UNKNOWN, identity.STALE_ATTEMPT,
+            identity.STALE_INCARNATION, identity.STALE_ROUND])
+hit = [w for w in words if identity.RECEIPT_REBUILT_PREFIX.startswith(w)]
+print("ok" if not hit else "collides:%s" % ",".join(hit))' "$AW_DIR")"
+
+# paired control: a detail that fits is stored verbatim — no marker invented
+printf 'IDLE-NO-DELIVERABLE: verdict line\nadvisory line\n' > "$SANDBOX/q1-short.txt"
+q1_seed q1b
+q1_publish q1b "$SANDBOX/q1-short.txt"
+chk_eq "Q1 PAIRED GREEN: a detail under the bound keeps every line, marker-free, receipt kept" \
+  "FIELD_OK lines=3 mark=0 receipt=1" \
+  "$(python3 "$SANDBOX/q1-check.py" "$SANDBOX/q1-short.txt" "$WATCH_RUN_DIR/q1b.terminal.json" 600)"
+
+# the one line that may still be cut: a FIRST line that alone overruns the budget. That line
+# is the typed verdict prose (advisory lines always follow it), so no payload can be split.
+python3 -c 'print("IDLE-NO-DELIVERABLE: " + "y"*900)' > "$SANDBOX/q1-huge.txt"
+q1_seed q1c
+q1_publish q1c "$SANDBOX/q1-huge.txt"
+q1c_detail="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["detail"].split("\n")[0])' \
+  "$WATCH_RUN_DIR/q1c.terminal.json")"
+case "$q1c_detail" in "IDLE-NO-DELIVERABLE: yyy"*) q1c_pre=yes ;; *) q1c_pre=no ;; esac
+chk_eq "Q1 an over-long FIRST line is cut to the budget (only prose can be)" \
+  "prefix=yes len=534" "prefix=$q1c_pre len=${#q1c_detail}"
+chk_contains "Q1 and that cut is announced" "…[detail truncated" \
+  "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["detail"])' \
+     "$WATCH_RUN_DIR/q1c.terminal.json")"
+
+# BACKWARD COMPATIBILITY: a record written before `receiptLineDropped` existed carries no such
+# field. It must still replay, and it must replay the OLD way (no rebuild) — the flag is read
+# with `is True`, so absent is not "maybe". Simulated by stripping the field off q1a's record,
+# which is exactly the shape an older agentctl left on disk.
+python3 -c 'import json, sys
+p = sys.argv[1]
+rec = json.load(open(p, encoding="utf-8"))
+rec.pop("receiptLineDropped", None)
+json.dump(rec, open(p, "w", encoding="utf-8"))' "$WATCH_RUN_DIR/q1a.terminal.json"
+python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" watch-state q1a --arm \
+  > "$SANDBOX/q1a-legacy.txt" 2>&1; q1a_lrc=$?
+chk_eq "Q1 a legacy record (no flag) still replays, and replays without a rebuilt line" \
+  "rc=6 rebuilt=0 same_detail=yes" \
+  "rc=$q1a_lrc $(python3 "$SANDBOX/q1-replay.py" "$WATCH_RUN_DIR/q1a.terminal.json" \
+     "$SANDBOX/q1a-legacy.txt" none)"
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
 echo "== complexity budget: no new long-running process, no out-of-scope file touched =="
 SB="$SANDBOX"; SOCK="$TMUX_SOCK"
 kill_socket_tmux; sweep_private_engines

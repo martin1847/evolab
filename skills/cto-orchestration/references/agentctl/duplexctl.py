@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import fnmatch
 import glob as globmod
 import json
 import math
@@ -576,6 +577,133 @@ def deliverable_fresh(sess: Session) -> tuple[bool, str]:
         except OSError:
             continue
     return False, pattern
+
+
+# ── misplaced-deliverable scan ────────────────────────────────────────────────
+# Field incident 2026-08-18 (external seat): worker and reviewer wrote their file into
+# the session cwd ROOT under the declared BASENAME while the declaration named a path one
+# directory deeper. The gate read IDLE-NO-DELIVERABLE, the orchestrator read "no
+# output", stopped the seat and re-dispatched — a review carrying a BLOCKER was never
+# consumed and the branch merged hurt. The bytes were on disk the whole time.
+#
+# OBSERVABILITY ONLY: these lines print AFTER the verdict line and touch no exit code,
+# no state, no receipt. Bounds are hard constants, not tunables — a watcher poll must
+# stay cheap and predictable on a large worktree:
+#   * depth: the cwd itself plus at most SCAN_MAX_DEPTH levels of subdirectory
+#   * entries: SCAN_MAX_ENTRIES dirents CONSUMED overall, counted as each comes off an
+#     os.scandir iterator. os.walk is unusable here: it materializes a whole directory
+#     before any cap can apply, so one 200k-entry dir would be enumerated in full.
+#   * symlinks are never followed and never candidates (no link-vs-target mtime
+#     ambiguity to adjudicate); dotted names are skipped — a misplaced deliverable is
+#     not a hidden file, and .git alone would eat the whole budget.
+# TWO FAILURE LAYERS, deliberately different (impl review R1 B2 fixed the contract, not the
+# code): a PER-DIRECTORY OSError is EXPECTED filesystem noise (unreadable dir, dir raced
+# away) — that subtree is skipped and candidates already found elsewhere still speak, because
+# the incident shape sits in the cwd ROOT and must not be lost to one unreadable directory
+# three levels down. Anything else — an unexpected error anywhere in the scan — hits the
+# blanket fail-safe arm in misplaced_hint() and the whole scan goes silent: state safety
+# outranks scanner health, so that degradation is indistinguishable from a clean cwd. The
+# paired tests (known positive + injected fault on the same fixture) are the only
+# calibration that exists for the silent arm.
+SCAN_MAX_DEPTH = 3
+SCAN_MAX_ENTRIES = 2000
+SCAN_SHOW = 3
+
+
+def _misplaced_candidates(sess: Session) -> tuple[list[str], bool]:
+    """(absolute paths that carry the declared deliverable's NAME in a place the
+    declaration does not name, whether the entry cap stopped the scan early).
+
+    Pattern resolution is deliverable_fresh's, deliberately: relative globs against the
+    session cwd, absolute kept. A path the declared glob itself matches is never
+    misplaced — that set is the gate's own business, and this scan excludes it."""
+    pattern = sess.meta.get("deliverable", "")
+    if not pattern:
+        return [], False
+    cwd = sess.meta.get("cwd", ".")
+    if not os.path.isabs(pattern):
+        pattern = os.path.join(cwd, pattern)
+    want = os.path.basename(pattern)
+    if not want:
+        return [], False
+    try:
+        epoch_mtime = os.path.getmtime(sess.epoch)
+    except OSError:
+        epoch_mtime = 0.0
+    declared = {os.path.abspath(p) for p in globmod.glob(pattern)}
+    hits: list[str] = []
+    budget = SCAN_MAX_ENTRIES
+    capped = False
+    stack = [(os.path.abspath(cwd), 0)]
+    while stack and not capped:
+        base, depth = stack.pop()
+        batch = []
+        try:
+            with os.scandir(base) as it:
+                # budget is checked BEFORE each next(): a check-after-consume let the 2001st
+                # dirent be pulled to discover the cap was full (R1 B3). "Consumed" means
+                # exactly the entries this loop pulled, and it never exceeds the constant.
+                while True:
+                    if budget <= 0:
+                        capped = True
+                        break
+                    try:
+                        entry = next(it)
+                    except StopIteration:
+                        break
+                    budget -= 1
+                    batch.append(entry)
+        except OSError:
+            pass            # bounded-degradation arm: skip this subtree, keep what is paid for
+        # sorted WITHIN the consumed batch: traversal order is stable whenever the cap
+        # did not fire. Once it fires the os-order truncation is arbitrary, which is
+        # exactly what the "; scan capped" wording refuses to hide.
+        for entry in sorted(batch, key=lambda e: e.name):
+            if entry.name.startswith("."):
+                continue
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    if depth + 1 <= SCAN_MAX_DEPTH:
+                        stack.append((entry.path, depth + 1))
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if not fnmatch.fnmatch(entry.name, want):
+                    continue
+                path = os.path.abspath(entry.path)
+                # belt and suspenders: in the exit-6 context every member of `declared` is
+                # necessarily STALE (a fresh one would have made the verdict DONE), so the
+                # epoch fence below already covers this. This arm holds when the fence cannot
+                # — a missing/unreadable epoch file reads as mtime 0.0 and accepts everything.
+                if path in declared:
+                    continue
+                if entry.stat(follow_symlinks=False).st_mtime < epoch_mtime:
+                    continue
+            except OSError:
+                continue
+            hits.append(path)
+    return hits, capped
+
+
+def misplaced_hint(sess: Session) -> None:
+    """Advisory lines under an IDLE-NO-DELIVERABLE verdict.
+
+    The path leaves json.dumps-ENCODED: a filename holding a newline (or the text
+    "DONE:") must not be able to forge a second typed line in a stdout an orchestrator
+    parses. ANY failure returns silently — the verdict printed above this call must
+    never depend on a scanner."""
+    try:
+        hits, capped = _misplaced_candidates(sess)
+        for path in hits[:SCAN_SHOW]:
+            print(f"possible misplaced deliverable: {json.dumps(path)}")
+        extra = len(hits) - SCAN_SHOW
+        if extra > 0:
+            print(f"(+{extra} more among scanned entries"
+                  f"{'; scan capped' if capped else ''})")
+    except Exception:   # noqa: BLE001 — a broken scan must read exactly like a clean cwd
+        return
 
 
 def scan_quota(sess: Session) -> bool:
@@ -1211,6 +1339,7 @@ def classify(sess: Session) -> int:
                 print(f"DONE: engine exited rc=0{note} (duplex engines normally stay alive — treat as complete)")
                 return EXIT_DONE
             print(f"IDLE-NO-DELIVERABLE: engine exited rc=0 but '{sess.meta.get('deliverable')}' not produced this round")
+            misplaced_hint(sess)
             return EXIT_IDLE_NO_DELIVERABLE
         print(f"FAILED: engine exited rc={rc} — tail {sess.events} / {sess.stderr} (raw kept on disk)")
         return EXIT_FAILED
@@ -1330,6 +1459,7 @@ def classify(sess: Session) -> int:
                 "(check the path first); else a fresh session (agentctl stop + start) "
                 "usually beats another nudge]")
         print(f"IDLE-NO-DELIVERABLE: engine idle but '{sess.meta.get('deliverable')}' not produced this round — steer the agent; do not stop{hint}")
+        misplaced_hint(sess)
         return EXIT_IDLE_NO_DELIVERABLE
     _idle_marks_reset(sess)
     note = f", deliverable fresh: {os.path.basename(hit)}" if hit else ""

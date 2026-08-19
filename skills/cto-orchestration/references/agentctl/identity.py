@@ -86,6 +86,62 @@ TERMINAL_CLASSES = {0: "DONE", 2: "FAILED", 4: "WAITING-INPUT", 5: "STALLED-EXTE
                     11: "STALLED-STREAM"}
 # how much of classify's human line the record carries — bounded, diagnostics only
 DETAIL_MAX = 600
+# The bound is enforced LINE-WISE on the WHOLE field, never mid-line. classify's stdout is one
+# typed verdict line plus optional machine-readable advisory lines (the misplaced-deliverable
+# hint publishes a json.dumps'd path), and a char-level cut handed watch readers half a JSON
+# string — parseable prose became unparseable evidence at exactly the moment a reader needed
+# the path (impl review R1 B1). Clipping the classify part alone then appending the receipt
+# display line was just as false: the field, and therefore `watch`'s replay of it, still ran
+# past 600 and the marker was no longer last (impl review R2). So the clip is applied ONCE, to
+# the concatenation, and lines are dropped from the TAIL: the receipt display line goes before
+# any hint line does, because it is a redundant rendering of structural fields (`reason`,
+# `phase`, `deliverables` — the receipt readers use those, never this text) while the hint is
+# the payload an operator actually needs.
+DETAIL_TRUNC_MARK = "…[detail truncated; run agentctl status <session> for full lines]"
+
+
+def clip_detail(detail: str | None) -> str:
+    """`detail` bounded to DETAIL_MAX characters without ever cutting inside a line.
+
+    Under the limit the text is published verbatim (no marker, no rewriting). Over it, whole
+    lines are kept from the top while they fit beside the marker, the tail is dropped, and the
+    marker is the LAST line. Only ONE line can still be char-cut: a first line that alone
+    overruns the budget — that is the typed verdict prose (advisory lines always follow it), so
+    no json.dumps payload can ever be split."""
+    text = detail or ""
+    if len(text) <= DETAIL_MAX:
+        return text
+    if len(DETAIL_TRUNC_MARK) + 1 >= DETAIL_MAX:
+        return DETAIL_TRUNC_MARK[:DETAIL_MAX]
+    budget = DETAIL_MAX - len(DETAIL_TRUNC_MARK) - 1        # -1 = the marker's own newline
+    kept: list[str] = []
+    used = 0
+    for line in text.split("\n"):
+        need = len(line) + (1 if kept else 0)
+        if used + need > budget:
+            break
+        kept.append(line)
+        used += need
+    if not kept:
+        kept = [text.split("\n", 1)[0][:budget]]
+    return "\n".join(kept + [DETAIL_TRUNC_MARK])
+
+
+# STRUCTURAL signal, written by publish: the stored detail was clipped past its own receipt
+# display line. Readers must never sniff the text for that (a truncated record is exactly the
+# case where text sniffing is least trustworthy), and a replay must not be the ONE surface with
+# no receipt information at all — so `terminal_verdict` rebuilds the summary from the record's
+# own fields when this flag is true (impl review R3: the R3 ruling assumed watch generated that
+# summary separately; it does not — the replay path only ever printed `detail`).
+# Absent or false — which is every record written before this field existed — means NO rebuild,
+# so a legacy record replays byte for byte as it always did.
+RECEIPT_LINE_DROPPED = "receiptLineDropped"
+# Prefix of the rebuilt line. Deliberately NOT a typed class word: no reader that scans for
+# DONE:/FAILED:/IDLE-NO-DELIVERABLE: can mistake it for a verdict, and everything after it is
+# formatted from structural fields — no detail text is re-emitted, so there is no injection
+# surface either.
+RECEIPT_REBUILT_PREFIX = "receipt (rebuilt from record fields): "
+
 # Printed beside a delivered conclusion, NEVER stored in the record: a terminal record must make
 # no claim about verification, and a substring reader cannot tell a negated claim from a claim.
 DELIVERED_CAVEAT = (" (delivered ≠ verified: runtime terminal + hashed artifact evidence only)")
@@ -749,7 +805,12 @@ class IdentityStore:
         non-regular file or unparseable bytes (a symlink out of the run dir is someone else's
         file, a torn read is not a verdict), the WS1 schema gate, class↔exit agreement (prose
         never names the class, so a record whose two authoritative fields disagree is forged or
-        corrupt), the attempt+incarnation fence, and the round fence."""
+        corrupt), the attempt+incarnation fence, and the round fence.
+
+        The `ok` detail is the STORED text plus, when the record says its receipt display line
+        was clipped away (`RECEIPT_LINE_DROPPED`), one line rebuilt from structural fields. This
+        is the only surface that carries the receipt to a replaying waiter: `receipt_note` lives
+        on the classify/adopt DONE path and is never reached from here (impl review R3)."""
         status, marker = self.read_terminal_marker()
         if status == STATUS_ABSENT:
             delivered = self._delivered_for(armed_seq)
@@ -803,7 +864,20 @@ class IdentityStore:
             return ("unusable", 0, f"{STALE_ROUND}: record concluded round {got_round}, the "
                     f"session is on round {now_round}")
         text = marker.get("detail") or klass
+        if marker.get(RECEIPT_LINE_DROPPED) is True:
+            # the stored copy lost its receipt display line to the DETAIL_MAX clip. Rebuild it
+            # from the record's own structural fields so the replay — the DEFAULT consumer
+            # surface — still carries reason/phase/evidence. `is True` on purpose: a legacy
+            # record (no such field) and an unpressured one both fall through, so nothing is
+            # printed twice and nothing that used to replay changes.
+            text += (f"\n{RECEIPT_REBUILT_PREFIX}"
+                     f"{self.receipt_line(marker, marker.get('reason') or '-')}")
         if marker.get("phase") == PHASE_DELIVERED:
+            # AFTER the rebuild on purpose: the caveat qualifies the evidence claims
+            # (deliverable / sha256 / gitHead) that the rebuilt line carries, exactly as it
+            # trails the receipt line in `publish_terminal`'s own stdout. Appended to the last
+            # line rather than put on one of its own — a reader that greps the record for
+            # "verified" must still come up empty, and this text is never stored.
             text += DELIVERED_CAVEAT
         return "ok", rc, text
 
@@ -1348,7 +1422,7 @@ class IdentityStore:
                       # conclusion so the next round's reader refuses it without re-deriving
                       "class": TERMINAL_CLASSES[rc],
                       "round": now_round,
-                      "detail": (detail or "")[:DETAIL_MAX],
+                      "detail": detail or "",          # clipped ONCE, below, after the join
                       "deliverable": declared,
                       "reason": reason,
                       # the receipt view of the triple (spec field names) and the WS1 fence
@@ -1377,7 +1451,16 @@ class IdentityStore:
             # The delivered caveat is deliberately NOT stored: the record must make no claim
             # about verification, not even a negated one (a reader grepping the record for
             # "verified" must come up empty), so it is re-derived from `phase` when printed.
-            marker["detail"] = f"{marker['detail']}\n{published}" if marker["detail"] else published
+            # The DETAIL_MAX bound applies to this JOINED text, not to the classify half: the
+            # field is what `watch-state` replays, so clipping before the append published a
+            # record that broke the documented ≤600 bound and pushed the truncation marker off
+            # the tail (impl review R2). `published` is still returned in full below — the
+            # caller's own line is never truncated, only the copy stored for replay.
+            joined = f"{marker['detail']}\n{published}" if marker["detail"] else published
+            marker["detail"] = clip_detail(joined)
+            # whether the tail that fell off took the receipt display line with it, decided
+            # here where BOTH strings are in hand — the reader then needs no heuristic
+            marker[RECEIPT_LINE_DROPPED] = not marker["detail"].endswith(published)
             self._atomic_json(self.marker_path, marker)
             return OK, published + (DELIVERED_CAVEAT if delivered else "")
 

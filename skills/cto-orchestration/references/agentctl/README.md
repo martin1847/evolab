@@ -33,7 +33,11 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   **同名 `<s>-watchd` 在但没有本 identity 的租约 = 不可判，不是降级理由**：返回 `12 reason=unknown`
   并点名清理指引（`tmux kill-session -t <s>-watchd` 后重挂），绝不静默 inline。`--inline` 是显式
   兼容旗标（进程内轮询，被杀即丢本轮结论）。
-- **输出有界**：status/watch 只回 typed 一行 + ≤600 字符摘要；引擎 raw 全量只落
+- **输出有界**：`status` 回 typed 一行 + 摘要，另可跟至多 4 行错位产物提示（见下 exit 6）；
+  terminal record 里落盘的 detail 硬上界 ≤600 字符且**按整行截**——放不下的行整行丢弃并追加
+  `…[detail truncated; …]` 标记行为末行，绝不半截 JSON。`watch` 回放 = 该 detail（≤600），
+  受压丢掉 receipt 展示行时再补一行由结构字段重建的 receipt 摘要
+  （`receipt (rebuilt from record fields): reason=… phase=…`）。引擎 raw 全量只落
   `$RUN/<s>.duplex.events.jsonl`（单条 raw transcript 可达百 KB 级，回显会炸编排者上下文——
   摘要有界是本控制面的硬设计）。
 - **后台任务 cwd 语义**：宿主后台机制跑 `agentctl watch` 时，命令继承**发起时刻
@@ -91,6 +95,8 @@ codex 引擎注：app-server 官方标 experimental，但错误帧自描述（�
   即消费 tombstone（转 `.consumed` 留取证），已消解的死亡不复报。
 - 引擎二进制可用 env 覆盖（测试缝 + 自定装机位）：`AGENTCTL_BIN_OMP` / `AGENTCTL_BIN_CLAUDE` / `AGENTCTL_BIN_CODEX`。
 - exit 6 `IDLE-NO-DELIVERABLE` 用 `agentctl steer` 补一刀，**不要 stop**；`stop` 只用于收工或明确放弃。
+  verdict 行后可能跟 `possible misplaced deliverable: "<abs path>"`（有界扫 cwd 找同名错位产物，
+  json 编码防伪造 typed 行；只提示、不改 rc，无命中/扫描退化都零输出）——先看这行再决定 steer 措辞。
 - **stop = 进程组收割**（tmux kill 只碰 pane leader，引擎子孙会被 PID 1 收养泄漏）：
   pane 起在自有 session+group（pane_pid == pgid），stop 对该组
   TERM → 有界宽限（`AGENTCTL_REAP_GRACE`，默认 5s）→ KILL → pgrep 复核零残留；陈旧 meta 走
