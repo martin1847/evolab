@@ -3,7 +3,8 @@
 > Owner: omp. Worktree `<abs path>`, branch `<feat/...>`（cut from latest origin/<base> @ <sha>）.
 > Reviewer: codex（after commits; diff 口径 three-dot `origin/<base>...HEAD`；评审行为契约归
 > review-dispatch，本模板不复述）. Commits stay LOCAL — pushing requires <用户名> approval.
-> 本 goal 中所有“先读路径”和“交付物路径”必须写绝对路径，尤其跨伞仓/子仓；
+> 本 goal 中所有“先读路径”和“交付物路径”必须写绝对路径，尤其跨伞仓/子仓；评审/派工 brief
+> 同此规则（brief 也是 goal——裸文件名会被下游席位就近解释，产物写错位置）。
 > 不要求证明命令内部每个参数都绝对化。如属研究：RESEARCH ONLY — no code changes, no commits.
 > 规模锚（实现类默认，编排位验收跑 scale-check 机械核）：新增测试行数 ≤ 新增产品行数；
 > 重构 / 零行为批新增测试 = 0。要偏离锚，在本 goal 写一行理由；超锚未声明 = 拒收，绿也拒。
