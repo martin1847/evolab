@@ -460,17 +460,24 @@ chk_contains "the start banner names the tier it requested" "review sandbox=dang
 bash "$AGENTCTL" stop rvR >/dev/null 2>&1
 
 # With both tiers unified the wire frame cannot show WHICH key the handshake selected —
-# always-default would pass the exact-frame check above. The selection seam is proven here
-# with divergent stub tiers instead.
-out="$(python3 - "$AW_DIR/duplexctl.py" <<'PYSEL'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("dctl", sys.argv[1])
-d = importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
-d.PROVIDERS["codex"]["sandbox"] = {"default": "tier-D", "review": "tier-R"}
-print(d.sandbox_tier("codex", True), d.sandbox_tier("codex", False))
-PYSEL
-)"
-chk_eq "sandbox_tier selects by the review flag even when tiers diverge" "tier-R tier-D" "$out"
+# always-default (or a call site hardwired to review=False) would pass the exact-frame
+# checks above. Proven through the REAL entry instead: a fixture COPY of the lane with
+# divergent tiers must put tier-R on a --review frame and tier-D on a default frame.
+DIV="$SANDBOX/divergent-aw"; mkdir -p "$DIV"
+cp "$AW_DIR/agentctl" "$AW_DIR/duplexctl.py" "$AW_DIR/identity.py" "$DIV/"
+sed -i '' 's/^CODEX_SANDBOX = .*/CODEX_SANDBOX = {"default": "tier-D", "review": "tier-R"}/' "$DIV/duplexctl.py"
+export FAKE_PROVIDER_LOG="$SANDBOX/rv-div-r.log"
+out="$(bash "$DIV/agentctl" start codex rvWr "$WT" --goal "$SANDBOX/goal.md" --review --no-preflight 2>&1)"; rc=$?
+chk_eq "divergent fixture: review start rc0" 0 "$rc"
+chk_contains "divergent fixture: review flag reaches the wire frame" '"sandbox":"tier-R"' \
+  "$(start_frame "$SANDBOX/rv-div-r.log")"
+bash "$DIV/agentctl" stop rvWr >/dev/null 2>&1
+export FAKE_PROVIDER_LOG="$SANDBOX/rv-div-d.log"
+out="$(bash "$DIV/agentctl" start codex rvWd "$WT" --goal "$SANDBOX/goal.md" --no-preflight 2>&1)"; rc=$?
+chk_eq "divergent fixture: default start rc0" 0 "$rc"
+chk_contains "divergent fixture: default frame stays on the default tier" '"sandbox":"tier-D"' \
+  "$(start_frame "$SANDBOX/rv-div-d.log")"
+bash "$DIV/agentctl" stop rvWd >/dev/null 2>&1
 
 # Both refusals are PARAMETER-surface refusals, so they own nothing. The self-proving check is
 # that the same session name starts clean immediately afterwards: a leftover fifo or meta file
@@ -492,8 +499,9 @@ chk_contains "the refusal names the missing tier" "declares none" "$out"
 chk_eq "and it owns no lane state either" "" \
   "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvO\.' | tr '\n' ' ')"
 
-# The deliverable fence: watch and the exit-6 scan resolve deliverables against cwd, so a
-# deliverable outside it is delivered where nothing looks — refused before the lane owns anything.
+# The deliverable fence: review artifacts written into unrelated trees outlive worktree
+# cleanup as orphans, and the exit-6 near-miss scan walks cwd only — refused before the
+# lane owns anything.
 out="$(bash "$AGENTCTL" start codex rvG1 "$WT" --goal "$SANDBOX/goal.md" --review \
        --deliverable "$SANDBOX/outside.md" 2>&1)"; rc=$?
 chk_eq "review + absolute glob OUTSIDE cwd refused" 1 "$rc"
@@ -526,7 +534,7 @@ chk_eq "RELATIVE '..' glob refused (a relative glob is not automatically safe)" 
 chk_eq "the relative-escape refusal owns no lane state" "" \
   "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvE1\.' | tr '\n' ' ')"
 # R1 B1 second half: a symlink INSIDE cwd whose target is outside it. Lexical comparison called
-# this inside the sandbox; the worker's write would have landed outside. The deepest EXISTING
+# this inside the cwd; the write would have landed outside the workspace. The deepest EXISTING
 # ancestor is resolved physically (`cd … && pwd -P`, no realpath(1) — macOS has no `-m`).
 mkdir -p "$SANDBOX/rv-escape"
 ln -s ../rv-escape "$WT/rvlink"

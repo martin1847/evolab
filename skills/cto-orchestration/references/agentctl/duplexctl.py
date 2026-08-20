@@ -1770,7 +1770,7 @@ def deliverable_inside_cwd(glob_: str, cwd: str) -> bool:
          like the cwd (/a/b-2/x against /a/b) does not pass.
     No existing ancestor at all = nothing to resolve = ambiguity = refuse. Ambiguity refusing
     is the trade: the false positive lands loudly on the operator at start/steer time, over a
-    seat that silently cannot write its own verdict. Glob metacharacters need no special case —
+    deliverable that silently lands as an orphan nothing collects. Glob metacharacters need no special case —
     a wildcard component never names a real directory, so the walk simply passes it.
 
     A glob with an empty basename (`/`, or anything ending in `/`) names a DIRECTORY, not a
@@ -1913,9 +1913,9 @@ CODEX_SANDBOX = {"default": "danger-full-access", "review": "danger-full-access"
 
 def sandbox_tier(engine: str, review: bool) -> str:
     """The tier the handshake pins — always the provider record's, never a literal.
-    A seam on purpose: with both tiers unified the wire frame cannot show WHICH key
-    was selected, so the selection is proven at this function with divergent stub
-    tiers (agentctl-duplex.test.sh) instead of on the frame."""
+    With both tiers unified the wire frame cannot show WHICH key was selected, so the
+    full wiring (meta review=1 → this selection → the frame) is proven against a
+    divergent-tier fixture copy of this file (agentctl-duplex.test.sh)."""
     return provider(engine)["sandbox"]["review" if review else "default"]
 
 PROVIDERS: dict[str, dict] = {

@@ -223,15 +223,15 @@ cmd_start() {
   #  * a provider that declares no tier — the lane must not accept a permission request it
   #    cannot deliver (an unhandled flag forwarded to an extra_argv engine is not a refusal).
   #  * with --resume-thread — thread/resume sends the threadId ALONE, so a resumed thread
-  #    keeps its creation-time tier AND its creation-time identity: `--review` here would
-  #    stamp review=1 onto a thread that was never dispatched as a review seat, and the
-  #    receipt would claim a seat no handshake ever pinned. Holds even with tiers unified.
+  #    keeps its creation-time tier: `--review` here would stamp review=1 into meta and
+  #    print a review banner for a thread whose start never selected the review tier —
+  #    the lane's own record would misdescribe the thread. Holds even with tiers unified.
   if [ -n "$REVIEW" ] && [ -z "$P_REVIEW_SANDBOX" ]; then
     echo "ERR: --review needs a provider with an OS sandbox tier; '$ENG' declares none — the lane pins no sandbox for it at all, so there is nothing to select. Run 'agentctl capabilities' and read the permissionEnforcement row for $ENG; the review seat is codex" >&2
     exit 1
   fi
   if [ -n "$REVIEW" ] && [ -n "$RESUME_THREAD" ]; then
-    echo "ERR: --review cannot be combined with --resume-thread — thread/resume carries only the threadId, so a resumed thread keeps its creation-time tier and identity: stamping review=1 on it would mint a review seat no handshake ever pinned. Drop --resume-thread to start a NEW review thread, or drop --review to continue thread '$RESUME_THREAD' as-is" >&2
+    echo "ERR: --review cannot be combined with --resume-thread — thread/resume carries only the threadId, so a resumed thread keeps its creation-time tier: stamping review=1 on it would make the lane's meta and banner claim a review dispatch the handshake never made. Drop --resume-thread to start a NEW review thread, or drop --review to continue thread '$RESUME_THREAD' as-is" >&2
     exit 1
   fi
   if [ "$PREFLIGHT" = 1 ]; then
