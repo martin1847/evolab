@@ -854,7 +854,7 @@ def main():
             "publishes no typed state: a heredoc in the same command waits on stdin EOF forever "
             "(field 2026-08-19: one hang ran 10h21m) and an empty `$(cat brief)` burns a round in "
             "silence. Fix: dispatch through the lane — `agentctl start codex <s> <cwd> --goal <f> "
-            "--review` pins sandbox=workspace-write (cwd writable, outside read-only). "
+            "--review` gets typed exit codes, a watcher and a receipt. "
             "`codex --version` / `login` / `exec-server` and `agentctl start codex` pass. "
             "Read: cto-orchestration/references/agentctl/README.md §强制层 ⑩.\n"
         )

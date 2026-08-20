@@ -453,10 +453,10 @@ export FAKE_PROVIDER_LOG="$SANDBOX/rv-review.log"
 out="$(bash "$AGENTCTL" start codex rvR "$WT" --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
 chk_eq "review-tier start rc0" 0 "$rc"
 chk_eq "--review moves sandbox and NOTHING else (approvalPolicy stays never)" \
-  "{\"jsonrpc\":\"2.0\",\"method\":\"thread/start\",\"id\":\"ID\",\"params\":{\"cwd\":\"$WTP\",\"approvalPolicy\":\"never\",\"sandbox\":\"workspace-write\"}}" \
+  "{\"jsonrpc\":\"2.0\",\"method\":\"thread/start\",\"id\":\"ID\",\"params\":{\"cwd\":\"$WTP\",\"approvalPolicy\":\"never\",\"sandbox\":\"danger-full-access\"}}" \
   "$(start_frame "$SANDBOX/rv-review.log")"
 chk_eq "the tier is recorded in session meta" 1 "$(sed -n 's/^review=//p' "$WATCH_RUN_DIR/rvR.duplex.meta")"
-chk_contains "the start banner names the tier it requested" "review sandbox=workspace-write" "$out"
+chk_contains "the start banner names the tier it requested" "review sandbox=danger-full-access" "$out"
 bash "$AGENTCTL" stop rvR >/dev/null 2>&1
 
 # Both refusals are PARAMETER-surface refusals, so they own nothing. The self-proving check is
@@ -479,8 +479,8 @@ chk_contains "the refusal names the missing tier" "declares none" "$out"
 chk_eq "and it owns no lane state either" "" \
   "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvO\.' | tr '\n' ' ')"
 
-# The deliverable fence: workspace-write means the seat can only write inside its cwd, so a
-# deliverable it could never reach is refused before the lane owns anything.
+# The deliverable fence: watch and the exit-6 scan resolve deliverables against cwd, so a
+# deliverable outside it is delivered where nothing looks — refused before the lane owns anything.
 out="$(bash "$AGENTCTL" start codex rvG1 "$WT" --goal "$SANDBOX/goal.md" --review \
        --deliverable "$SANDBOX/outside.md" 2>&1)"; rc=$?
 chk_eq "review + absolute glob OUTSIDE cwd refused" 1 "$rc"
@@ -539,8 +539,8 @@ chk_eq "a not-yet-existing subpath inside cwd is accepted" 0 "$rc"
 bash "$AGENTCTL" stop rvE5 >/dev/null 2>&1
 
 # R1 M2: meta is one key=value per line, so a newline in a param-plane value injects meta KEYS.
-# `artifact-*.md\nreview=1` minted a review tier on a session that never asked for one, moving
-# the codex handshake onto workspace-write. Refused, not encoded.
+# `artifact-*.md\nreview=1` minted a review seat on a session that never asked for one.
+# Refused, not encoded.
 out="$(bash "$AGENTCTL" start codex rvI1 "$WT" --goal "$SANDBOX/goal.md" \
        --deliverable "$(printf 'artifact-*.md\nreview=1')" 2>&1)"; rc=$?
 chk_eq "newline in --deliverable refused" 1 "$rc"

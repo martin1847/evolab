@@ -71,7 +71,12 @@ steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影�
   engine args 由 start 原样转发）正路在各自 note 里；codex 唯一 supported，握手内续 thread：
   `agentctl start codex <s> <cwd> --goal <f> --resume-thread <threadId>`（supported 不带 note，故写这）。
 - **评审档 `--review`**（codex 专属；非 codex、或与 `--resume-thread` 并存，参数面即拒——thread/resume 只带
-  threadId 不重发 sandbox，放行即静默 fail-open）：thread/start 钉 `sandbox=workspace-write`（cwd 内可写、外只读、无审批面），故**交付物必须在 session cwd 内**——绝对与相对 glob 一律判（相对 `..` 会逃逸，不豁免）：含 `..` 分量即拒，最深已存在祖先目录物理解析后不在 cwd 内即拒（含 cwd 内指向外部的 symlink），无已存在祖先按歧义拒，basename 为空（`/` 或尾 `/`）= 目录不是交付物、拒；判定归 `duplexctl check-params`，`start` 与 `steer -d` 同门。另：进 meta 的参数面值一律拒含换行（否则注入 meta key，可无声改档），写点 `meta_update` 兜底引擎回传值。
+  threadId 不重发 tier，放行即上报一个引擎从未钉过的席位）。沙箱两档统一 `danger-full-access`
+  （workspace-write 网络封锁致评审席无法独立复算，n=3 假阻塞；写边界零战果）。
+  **交付物仍必须在 session cwd 内**——车道纪律非沙箱事实：watch 与 exit-6 扫描都按 cwd 解析，
+  写外面即无人认领。绝对与相对 glob 一律判：含 `..` 分量即拒，最深已存在祖先目录物理解析后不在
+  cwd 内即拒（含 symlink 外逃），无已存在祖先按歧义拒，basename 为空 = 目录非交付物、拒；
+  判定归 `duplexctl check-params`，`start` 与 `steer -d` 同门。另：进 meta 的参数面值一律拒含换行（否则注入 meta key，可无声改档），写点 `meta_update` 兜底引擎回传值。
 - 单写者纪律：所有 fifo 写经 `duplexctl.py`（flock）；并发 steer 由锁串行。
 
 codex 引擎注：app-server 官方标 experimental，但错误帧自描述（参数漂移当场报全量合法值）、

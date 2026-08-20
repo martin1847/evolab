@@ -1735,38 +1735,35 @@ def _deliverable_moved(run_dir: str, session: str, glob_: str) -> None:
 # meta file or a tmux session, so a refusal leaves nothing behind.
 
 def _meta_line_problem(flag: str, value: str) -> str | None:
-    r"""The meta is one `key=value` per line, so a newline inside a value is a KEY injection,
-    not a formatting quirk: `--deliverable $'artifact-*.md\nreview=1'` minted a review tier
-    nobody asked for and moved the codex handshake onto another sandbox (review R1 M2).
-    Refused rather than encoded — none of these values has a legitimate newline, and encoding
-    would only move the ambiguity into the parser. EVERY value that reaches meta is checked,
-    because the injection is a property of the FILE FORMAT and not of one flag."""
+    r"""The meta is one `key=value` per line, so a newline inside a value is a KEY injection:
+    `--deliverable $'artifact-*.md\nreview=1'` minted a review seat nobody asked for
+    (review R1 M2). Refused rather than encoded — no value here has a legitimate newline.
+    EVERY value that reaches meta is checked: the injection is a property of the FILE
+    FORMAT, not of one flag."""
     if "\n" in value or "\r" in value:
         return (f"{flag} value contains a newline — the session meta is one key=value per "
-                "line, so this would inject meta KEYS (a deliverable carrying 'review=1' "
-                "silently re-pins the codex sandbox tier). Refused rather than encoded: pass "
-                "a single-line value")
+                "line, so this would inject meta KEYS (e.g. a smuggled 'review=1'). "
+                "Refused rather than encoded: pass a single-line value")
     return None
 
 
 def deliverable_inside_cwd(glob_: str, cwd: str) -> bool:
-    """Whether a review seat could actually WRITE this deliverable.
+    """Whether this deliverable lands inside the session cwd.
 
-    A `--review` session runs under the workspace-write tier: writable inside cwd, read-only
-    outside, and no approval surface to fall back on — so a deliverable it cannot reach is a
-    session that reaches DONE and delivers nothing.
+    Lane discipline, not a sandbox fact: watch resolves the deliverable glob against cwd
+    and the exit-6 scan walks cwd — a deliverable outside it is invisible to both, so the
+    session reaches DONE and delivers nothing anyone can find.
 
-    EVERY glob is judged, relative included. The original contract assumed a relative glob
-    "cannot escape because it is resolved against cwd" — false for `..`, which this very
-    module joins onto the cwd, landing `../outside.md` one level up (review R1 B1). So the
-    glob is resolved to a candidate path first and one rule covers both spellings.
+    EVERY glob is judged, relative included — `..` joined onto cwd lands one level up
+    (review R1 B1), so the glob is resolved to a candidate path first and one rule covers
+    both spellings.
 
     Two refusals, in order:
       1. any `..` component, anywhere. Refused rather than normalized: the target need not
          exist yet, and lexical normalization is a lie the moment a symlink sits on the path.
       2. the deepest EXISTING ancestor directory, resolved PHYSICALLY, must be the cwd or
          under it. This is what catches `<cwd>/link/result.md` where `link -> ../outside`:
-         lexical comparison called that inside the sandbox while the write would have landed
+         lexical comparison called that inside the cwd while the write would have landed
          outside. Comparison is by path COMPONENT, never string prefix, so a sibling spelled
          like the cwd (/a/b-2/x against /a/b) does not pass.
     No existing ancestor at all = nothing to resolve = ambiguity = refuse. Ambiguity refusing
@@ -1822,13 +1819,12 @@ def cmd_check_params(args: argparse.Namespace) -> int:
     if args.review and args.deliverable and not deliverable_inside_cwd(
             args.deliverable, args.cwd):
         print(f"ERR: {args.gate} refused: a --review session's deliverable must live INSIDE "
-              f"its session cwd ({args.cwd}), and '{args.deliverable}' does not. The review "
-              "sandbox is workspace-write (writable in cwd, read-only outside), so the worker "
-              f"would reach DONE unable to write it. Fix: point the glob inside {args.cwd} — "
-              "relative globs are resolved there, but '..' escapes and is refused outright. "
-              "The deepest EXISTING ancestor directory is resolved physically, so a symlink "
-              "leading out of the cwd is refused too; a path with no existing ancestor is "
-              "unresolvable and refused as ambiguous.", file=sys.stderr)
+              f"its session cwd ({args.cwd}), and '{args.deliverable}' does not — watch and "
+              "the exit-6 scan resolve deliverables against cwd, so one outside it is "
+              f"delivered where nothing looks. Fix: point the glob inside {args.cwd}. "
+              "'..' escapes and is refused; the deepest existing ancestor is resolved "
+              "physically (symlinks out of cwd refused); no existing ancestor = ambiguous, "
+              "refused.", file=sys.stderr)
         return 1
     return 0
 
@@ -1879,7 +1875,7 @@ def handshake(args: argparse.Namespace) -> int:
                                 {"threadId": sess.meta["resume_thread"]}, timeout=args.wait)
     else:
         # the sandbox TIER is the provider record's, not a literal here: `--review` writes
-        # `review=1` to meta and the review tier keeps everything outside cwd read-only.
+        # `review=1` to meta and selects the review tier from that record.
         # thread/resume above deliberately has no tier — it sends the threadId alone, so a
         # resumed thread cannot be re-pinned, which is why `agentctl start` refuses the pair.
         tiers = provider(engine)["sandbox"]
@@ -1906,20 +1902,13 @@ def handshake(args: argparse.Namespace) -> int:
 # the top): the OPERATION an operator can invoke through `agentctl`, never "how elegantly the
 # duplex protocol happens to serve it". `route` names a wire method/frame type with an
 # executable branch; `surface` names a non-protocol realization when there is no wire route.
-# codex is the lane's only OS-sandboxed engine, and its two tiers are ONE fact with two
-# consumers — the thread/start params the handshake sends, and the permissionEnforcement
-# refusal that tells an operator which tier got pinned. Both read this dict, so a tier
-# rename cannot leave the published contract describing a sandbox nobody pins.
-#   default — the execution seat: the worker owns its worktree AND everything around it.
-#   review  — the review seat (`agentctl start codex … --review`): cwd stays WRITABLE
-#             because a review seat must be able to write its own deliverable, everything
-#             outside cwd is read-only, and there is no approval surface to fall back on
-#             (approvalPolicy stays never). This is why a review deliverable must live
-#             inside the session cwd, and why `agentctl start` refuses an escaping glob.
-# Providers with no OS sandbox surface declare an EMPTY dict rather than omitting the key:
-# the shell reads the review tier out of the generated spec, and "no such tier" is what
-# makes `--review` a typed refusal there instead of a flag that silently does nothing.
-CODEX_SANDBOX = {"default": "danger-full-access", "review": "workspace-write"}
+# codex is the lane's only OS-sandboxed engine; this dict feeds both the thread/start
+# params and the permissionEnforcement row, so a tier rename cannot desync the two.
+# Tiers are unified: workspace-write's network block made review seats misread live
+# probes/DB reads as DEAD (n=3 false BLOCKED in one night) while the write boundary
+# caught nothing. Providers with no OS sandbox declare an EMPTY dict: "no such tier"
+# is what makes `--review` a typed refusal.
+CODEX_SANDBOX = {"default": "danger-full-access", "review": "danger-full-access"}
 
 PROVIDERS: dict[str, dict] = {
     "omp": {
@@ -2056,9 +2045,8 @@ PROVIDERS: dict[str, dict] = {
                 UNSUPPORTED,
                 refusal="the handshake pins approvalPolicy=never and sandbox="
                         f"{CODEX_SANDBOX['default']} (default lane) or "
-                        f"{CODEX_SANDBOX['review']} (`--review`, the review seat: cwd "
-                        "writable, outside read-only): approvals are disabled by design, "
-                        "the runtime enforces nothing"),
+                        f"{CODEX_SANDBOX['review']} (`--review`, the review seat): "
+                        "approvals are disabled by design, the runtime enforces nothing"),
         },
     },
 }

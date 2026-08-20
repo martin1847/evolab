@@ -217,23 +217,20 @@ cmd_start() {
     echo "ERR: --model cannot be combined with --resume-thread — a resumed thread keeps the model it was started with, so '$MODEL' would be dropped in silence: drop --model to resume thread '$RESUME_THREAD' on its own model, or drop --resume-thread to start a NEW thread on '$MODEL'" >&2
     exit 1
   fi
-  # `--review` selects the review seat's OS-level sandbox tier (codex thread/start
-  # sandbox=workspace-write). Two refusals, both HERE at the parameter surface — before this
-  # start owns a fifo, a meta file, a tmux session or a handshake:
-  #  * a provider that declares no tier. `--review` is consumed by this parser, so it never
-  #    reaches EXTRA — but on an extra_argv=1 engine an UNHANDLED flag would be forwarded to the
-  #    engine binary verbatim, and "the engine will reject it eventually" is not a refusal: the
-  #    lane must not accept a permission request it cannot deliver.
-  #  * with --resume-thread. thread/resume sends the threadId ALONE, with no sandbox param, so a
-  #    resumed thread keeps the tier it was CREATED under and the lane cannot re-pin it.
-  #    Honouring both would fail OPEN on the one axis the review seat exists to guarantee, and
-  #    the start banner would claim a tier the engine never got.
+  # `--review` marks the review seat and selects its sandbox tier from the provider spec.
+  # Two refusals, both HERE at the parameter surface — before this start owns a fifo, a meta
+  # file, a tmux session or a handshake:
+  #  * a provider that declares no tier — the lane must not accept a permission request it
+  #    cannot deliver (an unhandled flag forwarded to an extra_argv engine is not a refusal).
+  #  * with --resume-thread — thread/resume sends the threadId ALONE, so a resumed thread
+  #    keeps the tier it was CREATED under; the banner must never claim a tier the engine
+  #    never got.
   if [ -n "$REVIEW" ] && [ -z "$P_REVIEW_SANDBOX" ]; then
     echo "ERR: --review needs a provider with an OS sandbox tier; '$ENG' declares none — the lane pins no sandbox for it at all, so there is nothing to select. Run 'agentctl capabilities' and read the permissionEnforcement row for $ENG; the review seat is codex" >&2
     exit 1
   fi
   if [ -n "$REVIEW" ] && [ -n "$RESUME_THREAD" ]; then
-    echo "ERR: --review cannot be combined with --resume-thread — thread/resume carries only the threadId, so a resumed thread keeps the sandbox tier it was CREATED under and the lane cannot re-pin it to $P_REVIEW_SANDBOX: accepting both would report a review seat it never pinned. Drop --resume-thread to start a NEW review thread, or drop --review to continue thread '$RESUME_THREAD' under its own tier" >&2
+    echo "ERR: --review cannot be combined with --resume-thread — thread/resume carries only the threadId, so a resumed thread keeps the tier it was CREATED under: accepting both would report a review seat it never pinned. Drop --resume-thread to start a NEW review thread, or drop --review to continue thread '$RESUME_THREAD' as-is" >&2
     exit 1
   fi
   if [ "$PREFLIGHT" = 1 ]; then
