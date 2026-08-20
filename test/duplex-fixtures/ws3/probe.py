@@ -43,7 +43,8 @@ _spec = importlib.util.spec_from_file_location("duplexctl_under_test",
 dx = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dx)
 
-SPEC_FIELDS = ("name", "bin_env", "bin", "argv", "extra_argv", "resume_flag")
+SPEC_FIELDS = ("name", "bin_env", "bin", "argv", "extra_argv", "resume_flag",
+               "review_sandbox")
 
 
 def cells(engine: str) -> dict:

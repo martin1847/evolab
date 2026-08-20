@@ -252,6 +252,20 @@ chk_eq "C5 and does not copy omp's answer onto codex" "supported" \
 # the criterion itself is written down, so a cell cannot be judged by a private rule
 chk_contains "C5 the resume criterion is published next to the table" \
   "in-session route, or stop + start with resume args" "$(caps)"
+# The two sandbox tiers are STATIC in the published text: `capabilities` has no session to read
+# a tier out of, so it must name BOTH. An operator choosing between the execution seat and the
+# review seat reads exactly this row, and a runtime that published only the default tier would
+# hide the review seat entirely. Existing C6 assertions pin key SETS, never the wording — so
+# without these three the refusal string could drop a tier and stay green.
+caps_text="$(caps)"
+chk_contains "C5 the default sandbox tier is published" "danger-full-access" "$caps_text"
+chk_contains "C5 and the review tier is published beside it" "workspace-write" "$caps_text"
+chk_contains "C5 the review tier names the flag that selects it" '`--review`' "$caps_text"
+# ONE table, not two literals: the published text and the shell launch spec read the same dict
+chk_eq "C5 the review tier reaches the shell spec from that same table" "workspace-write" \
+  "$(probe spec codex review_sandbox)"
+chk_eq "C5 DAMAGE ORACLE: a provider with no OS sandbox declares no tier at all" "" \
+  "$(probe spec omp review_sandbox)"
 chk_eq "C5 every capability has a written definition" "" \
   "$(probe drift | grep 'no written definition' || true)"
 teardown

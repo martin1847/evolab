@@ -5,6 +5,8 @@ JSON-RPC over stdio. Env controls:
   FAKE_PROVIDER_LOG        append every received frame
   FAKE_CODEX_DELIVERABLE   path written during each turn
   FAKE_CODEX_GATE=<path>   turn stays ACTIVE until this file exists (steer window)
+  FAKE_CODEX_THREAD_ID     threadId returned by thread/start (default thread-1); a value with
+                           a newline is the engine-controlled meta-injection probe
   FAKE_CODEX_ASK=1         after turn/start, emit a native requestUserInput REQUEST (an id-
                            bearing server→client frame) and leave the turn open — the
                            structured-ask shape agentctl must project as WAITING-INPUT
@@ -87,7 +89,11 @@ for line in sys.stdin:
     elif method == "initialized":
         continue
     elif method == "thread/start":
-        emit({"id": req_id, "result": {"thread": {"id": "thread-1"}}})
+        # FAKE_CODEX_THREAD_ID lets a test hand back an ENGINE-CONTROLLED threadId the lane
+        # never validated: the handshake writes it straight into the line-oriented meta, so a
+        # newline there injects meta keys from outside the parameter surface entirely.
+        emit({"id": req_id, "result": {"thread": {
+            "id": os.environ.get("FAKE_CODEX_THREAD_ID", "thread-1")}}})
     elif method == "thread/resume":
         emit({"id": req_id,
               "result": {"thread": {"id": message["params"]["threadId"]}}})

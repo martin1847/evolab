@@ -157,6 +157,107 @@ run 'bash references/agentctl/agentctl start omp mysess /wt --goal /tmp/g.md; ec
 chk_contains "prose watch does not silence the reminder" "watcher" "$(ctx "$OUT")"
 run 'bash references/agentctl/agentctl start omp mysess /wt --goal /tmp/g.md; echo agentctl watch mysess'
 chk_contains "echoed invocation text does not silence the reminder" "watcher" "$(ctx "$OUT")"
+# ── (11) bare `codex exec|e|review`: review dispatch may only go through the lane ──────────
+# Field 2026-08-19/20: the lane pinned danger-full-access with no alternative, the review seat
+# needed OS read-only, so the orchestrator hand-rolled `codex exec --sandbox read-only` — one
+# heredoc-in-the-same-command hang ran 10h21m and one empty `$(cat brief)` burned a round.
+run 'codex exec "review the diff"'
+chk_eq "bare codex exec denied" 2 "$RC"
+chk_contains "deny points at the lane review flag" "--review" "$ERR"
+chk_contains "deny carries the doc pointer" "README.md" "$ERR"
+run 'codex e "review the diff"'
+chk_eq "the 'e' alias is the same call, denied" 2 "$RC"
+run 'codex review --base main'
+chk_eq "the native review subcommand is denied too" 2 "$RC"
+# the field shape verbatim: sandbox flag + heredoc-adjacent prompt plumbing
+run 'codex exec --sandbox read-only "$(cat /tmp/brief.md)"'
+chk_eq "the hand-rolled read-only form denied" 2 "$RC"
+# wrapper chains and path-qualified spellings are command position too (_WRAP8 family)
+run 'env FOO=1 codex exec "x"'
+chk_eq "env-wrapper codex exec denied" 2 "$RC"
+run 'timeout 600 /usr/local/bin/codex review --base main'
+chk_eq "timeout + path-qualified codex review denied" 2 "$RC"
+run "bash -lc 'codex e \"x\"'"
+chk_eq "bash -lc payload codex e denied" 2 "$RC"
+run 'cd /wt && codex exec "x"'
+chk_eq "cd-chained codex exec denied" 2 "$RC"
+# R1 B2: Bash-equivalent spellings. Rule 11 judges the shell EXECUTION face (rule 8's
+# normalization: single-token quotes unwrapped, backslash escapes dropped, line continuations
+# folded), so an equivalent rewrite is the same command. All four were rc=0 before the fix.
+run 'echo skip; "codex" exec "x"'
+chk_eq "quoted command word denied" 2 "$RC"
+run 'co\de\x review --base main'
+chk_eq "backslash-escaped command word denied" 2 "$RC"
+run "$(printf 'codex \\\nexec "x"')"
+chk_eq "line-continuation split denied" 2 "$RC"
+run "bash -lc \$'codex exec \"x\"'"
+chk_eq "ANSI-C quoted payload denied" 2 "$RC"
+# R1 M1: the subcommand is the first NON-FLAG token after codex's valued flags are consumed —
+# a regex with an optional value group backtracked and read a `--profile review` VALUE as the
+# review subcommand, denying a legal login. Both directions pinned.
+run 'codex --profile review login'
+chk_eq "a flag VALUE spelled 'review' does not make login a dispatch" 0 "$RC"
+chk_eq "and that allow is silent" "" "$ERR"
+run 'codex --profile prod login'
+chk_eq "the same login with an unremarkable profile stays allowed" 0 "$RC"
+run 'codex --model review login'
+chk_eq "same for a --model value spelled review" 0 "$RC"
+# a valued flag must not HIDE a real subcommand behind it, in either spelling
+run 'codex --profile foo exec "x"'
+chk_eq "codex exec behind a valued flag denied" 2 "$RC"
+run 'codex --sandbox=read-only exec "x"'
+chk_eq "codex exec behind an =-joined flag denied" 2 "$RC"
+# a VALUELESS flag must not swallow the subcommand as if it took a value
+run 'codex --search exec "x"'
+chk_eq "codex exec after a valueless flag denied" 2 "$RC"
+# R2 F1: a LEGAL codex call must not shadow an illegal one later in the same chain. The token
+# walk used to return on the first invocation it resolved, so `codex login; codex exec "x"` went
+# through — and rule 11 was not the enforcement layer it claims to be. Every invocation in the
+# chain is judged now; a legal subcommand ends its own invocation, never the scan.
+run 'codex login; codex exec "x"'
+chk_eq "a legal codex call does not shadow a later exec (;)" 2 "$RC"
+chk_contains "and the deny is still rule 11's" "--review" "$ERR"
+run 'codex login && codex exec "x"'
+chk_eq "same for && " 2 "$RC"
+run 'codex --version; codex e "x"'
+chk_eq "same when the shadowing call is flags-only" 2 "$RC"
+run 'codex login || codex review --base main'
+chk_eq "same for ||" 2 "$RC"
+run "bash -lc 'codex login; codex exec \"x\"'"
+chk_eq "same inside an interpreter payload" 2 "$RC"
+# PAIRED GREEN: a chain of only-legal codex calls stays allowed — the fix must not deny by
+# "two codex invocations" alone
+run 'codex login; codex --version'
+chk_eq "a chain of legal codex calls stays allowed" 0 "$RC"
+chk_eq "and stays silent" "" "$ERR"
+run 'codex login && codex app-server'
+chk_eq "legal chain ending in app-server allowed" 0 "$RC"
+# THE PLACEMENT PROOF: rule (3)'s branch ends in an unconditional `return 0`, so a bare codex
+# call chained after a legal dispatch is invisible to anything ordered below it. This case is
+# red if rule (11) ever moves under the dispatch reminder.
+run 'bash references/agentctl/agentctl start codex s1 /wt --goal /tmp/g.md; codex exec "review"'
+chk_eq "bare codex chained after a legal dispatch denied (early-return bypass)" 2 "$RC"
+# ALLOW: the lane itself, and every codex spelling that is not a headless dispatch
+run 'bash references/agentctl/agentctl start codex s1 /wt --goal /tmp/g.md --review'
+chk_eq "the lane review dispatch is allowed" 0 "$RC"
+chk_contains "and still gets the watcher reminder" "watcher" "$(ctx "$OUT")"
+run 'codex --version'
+chk_eq "codex --version allowed" 0 "$RC"; chk_eq "codex --version silent" "" "$ERR"
+run 'codex login'
+chk_eq "codex login allowed" 0 "$RC"
+run 'codex --help'
+chk_eq "codex --help allowed" 0 "$RC"
+# `exec-server` shares a prefix with `exec`: a bare \b would have matched straight through it
+run 'codex exec-server --port 1234'
+chk_eq "codex exec-server allowed (prefix trap)" 0 "$RC"
+run 'codex app-server'
+chk_eq "codex app-server allowed (this is what the lane launches)" 0 "$RC"
+# quoted spans are data, and a path as an ARGUMENT is not an invocation
+run 'echo "codex exec is denied now"'
+chk_eq "quoted mention of the guarded command allowed" 0 "$RC"
+run 'grep -rn "codex exec" skills/'
+chk_eq "grepping for the guarded command allowed" 0 "$RC"
+
 # ── (6) live e2e gates: premium orchestrator must dispatch, runner declares E2E_ECONOMY=1 ──
 run 'bash test/e2e/guard-wire.e2e.sh'
 chk_eq "bare e2e gate run denied" 2 "$RC"; chk_contains "e2e deny teaches dispatch+marker" "E2E_ECONOMY=1" "$ERR"
@@ -287,6 +388,20 @@ run '"git" status'
 chk_eq "quoted command token denied" 2 "$RC"
 run 'g\it status'
 chk_eq "backslash-escaped git denied" 2 "$RC"
+# R2 F2 — BACKSLASH PARITY, a regression this normalization introduced and a four-way control.
+# Only an ODD run of backslashes continues a line. Folding unconditionally spliced the two lines
+# of `echo ready \\<newline>git status` — where the pair is a literal backslash ARGUMENT and the
+# newline really does end the command — so rule 8 stopped seeing the unanchored `git` on line 2
+# and went fail-open (rc=2 at e3a4bd7, rc=0 after the naive fold). All four must hold together:
+# fixing parity by dropping the fold would flip the second case back to rc=0.
+run "$(printf 'echo ready \\\\\ngit status')"
+chk_eq "F2 even backslashes are NOT a continuation: line 2 is a new unanchored git" 2 "$RC"
+run "$(printf 'git \\\nstatus')"
+chk_eq "F2 odd backslash IS a continuation (folded, still one command)" 2 "$RC"
+run "$(printf 'echo ready\ngit status')"
+chk_eq "F2 a plain newline is a new command" 2 "$RC"
+run "$(printf 'git -C /abs \\\nstatus')"
+chk_eq "F2 a folded continuation stays ANCHORED (allowed)" 0 "$RC"
 run "bash -lc 'git -C /x status'"
 chk_eq "interpreter payload anchored git allowed" 0 "$RC"
 run 'git --version'

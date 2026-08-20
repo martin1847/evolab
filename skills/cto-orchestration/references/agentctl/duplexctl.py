@@ -136,6 +136,14 @@ class Session:
 
 
 def meta_update(sess: Session, key: str, value: str) -> None:
+    # BACKSTOP for the line-format injection class (review R2 F3): `check-params` refuses at the
+    # parameter surface, where a refusal is cheap and the operator gets a real message, but that
+    # only covers values the SHELL parsed. This is the single write point every other value goes
+    # through too — `thread` comes back from the engine, `deliverable` from `steer -d` — so the
+    # invariant is enforced where the file is actually written and no future key can miss it.
+    if "\n" in value or "\r" in value:
+        die(f"refusing to write meta {key}: value contains a newline, which would inject "
+            f"additional meta keys into {sess.meta_path}")
     lines = [ln for ln in open(sess.meta_path, encoding="utf-8")
              if not ln.startswith(f"{key}=")] if os.path.exists(sess.meta_path) else []
     lines.append(f"{key}={value}\n")
@@ -188,8 +196,9 @@ def clip(text: str, limit: int = SUMMARY_CHARS) -> str:
 # routing branches it names — everything a provider does is generated FROM it:
 #   * `ROUTES` (route id → executable branch), `PROJECTORS` (engine → state projector) and
 #     the shell-consumable provider spec `duplexctl providers --shell` (which is the ONLY
-#     provider list `agentctl` has: allowlist, binary, pinned argv, argv forwarding and the
-#     resume start flag all come from it) are derived, never hand-maintained;
+#     provider list `agentctl` has: allowlist, binary, pinned argv, argv forwarding, the
+#     resume start flag and the review sandbox tier all come from it) are derived, never
+#     hand-maintained;
 #   * `route` IS the wire name the branch emits (omp/claude frame type, codex JSON-RPC
 #     method), and the branches read it back out — the handshake's resume method, the omp
 #     ask frame type and every steer frame come from the cell, not from a literal;
@@ -1718,6 +1727,112 @@ def _deliverable_moved(run_dir: str, session: str, glob_: str) -> None:
           f"results into '{glob_}' (chat output is not delivery).", file=sys.stderr)
 
 
+# ── parameter-surface judgement ───────────────────────────────────────────────
+# What `agentctl start` / `agentctl steer -d` parsed but has not committed anywhere yet. It
+# lives HERE, not in the shell, for the same reason every other judgement does (agentctl is a
+# thin entry): both rules are properties of things this file owns — the session meta's line
+# format, and the review seat's sandbox tier. One verb, called before the start owns a fifo, a
+# meta file or a tmux session, so a refusal leaves nothing behind.
+
+def _meta_line_problem(flag: str, value: str) -> str | None:
+    r"""The meta is one `key=value` per line, so a newline inside a value is a KEY injection,
+    not a formatting quirk: `--deliverable $'artifact-*.md\nreview=1'` minted a review tier
+    nobody asked for and moved the codex handshake onto another sandbox (review R1 M2).
+    Refused rather than encoded — none of these values has a legitimate newline, and encoding
+    would only move the ambiguity into the parser. EVERY value that reaches meta is checked,
+    because the injection is a property of the FILE FORMAT and not of one flag."""
+    if "\n" in value or "\r" in value:
+        return (f"{flag} value contains a newline — the session meta is one key=value per "
+                "line, so this would inject meta KEYS (a deliverable carrying 'review=1' "
+                "silently re-pins the codex sandbox tier). Refused rather than encoded: pass "
+                "a single-line value")
+    return None
+
+
+def deliverable_inside_cwd(glob_: str, cwd: str) -> bool:
+    """Whether a review seat could actually WRITE this deliverable.
+
+    A `--review` session runs under the workspace-write tier: writable inside cwd, read-only
+    outside, and no approval surface to fall back on — so a deliverable it cannot reach is a
+    session that reaches DONE and delivers nothing.
+
+    EVERY glob is judged, relative included. The original contract assumed a relative glob
+    "cannot escape because it is resolved against cwd" — false for `..`, which this very
+    module joins onto the cwd, landing `../outside.md` one level up (review R1 B1). So the
+    glob is resolved to a candidate path first and one rule covers both spellings.
+
+    Two refusals, in order:
+      1. any `..` component, anywhere. Refused rather than normalized: the target need not
+         exist yet, and lexical normalization is a lie the moment a symlink sits on the path.
+      2. the deepest EXISTING ancestor directory, resolved PHYSICALLY, must be the cwd or
+         under it. This is what catches `<cwd>/link/result.md` where `link -> ../outside`:
+         lexical comparison called that inside the sandbox while the write would have landed
+         outside. Comparison is by path COMPONENT, never string prefix, so a sibling spelled
+         like the cwd (/a/b-2/x against /a/b) does not pass.
+    No existing ancestor at all = nothing to resolve = ambiguity = refuse. Ambiguity refusing
+    is the trade: the false positive lands loudly on the operator at start/steer time, over a
+    seat that silently cannot write its own verdict. Glob metacharacters need no special case —
+    a wildcard component never names a real directory, so the walk simply passes it.
+
+    A glob with an empty basename (`/`, or anything ending in `/`) names a DIRECTORY, not a
+    deliverable, and is refused: it can never satisfy the freshness check (review R2 F4)."""
+    cwd = os.path.realpath(cwd)
+    target = glob_ if os.path.isabs(glob_) else os.path.join(cwd, glob_)
+    if os.pardir in target.split(os.sep):
+        return False
+    if not os.path.basename(target):
+        return False
+    anc = os.path.dirname(target)
+    while anc and not os.path.isdir(anc):
+        parent = os.path.dirname(anc)
+        if parent == anc:
+            return False
+        anc = parent
+    if not anc or not os.path.isdir(anc):
+        return False
+    try:
+        phys = os.path.realpath(anc)
+    except OSError:
+        return False
+    # `cwd + os.sep` is `//` at the root, which no real path starts with — so cwd=/ refused its
+    # own descendants (review R2 F4). Append the separator only when it is not already there.
+    prefix = cwd if cwd.endswith(os.sep) else cwd + os.sep
+    return phys == cwd or phys.startswith(prefix)
+
+
+def cmd_check_params(args: argparse.Namespace) -> int:
+    """rc 0 = every supplied value may be committed; rc 1 = refused, reason on stderr.
+
+    The meta-line enumeration below is EVERY param-plane value `agentctl` writes into the meta
+    file, checked against its writer block: engine, cwd, deliverable, model, resume_thread,
+    review, workflow, max_rounds. `cwd` was missing and a directory legitimately containing a
+    newline injected keys past the gate (review R2 F3). Deliberately absent, with reasons:
+    `engine` is a PROVIDERS key (a closed set this process owns), `review` is the literal `1`,
+    and `max_rounds` is already digits-only by the time it gets here. `thread` and the
+    `steer -d` deliverable never pass through this verb at all — meta_update backstops those."""
+    for flag, value in (("--cwd", args.cwd), ("--deliverable", args.deliverable),
+                        ("--model", args.model), ("--resume-thread", args.resume_thread),
+                        ("--workflow", args.workflow)):
+        if not value:
+            continue
+        problem = _meta_line_problem(flag, value)
+        if problem:
+            print(f"ERR: {args.gate} refused: {problem}", file=sys.stderr)
+            return 1
+    if args.review and args.deliverable and not deliverable_inside_cwd(
+            args.deliverable, args.cwd):
+        print(f"ERR: {args.gate} refused: a --review session's deliverable must live INSIDE "
+              f"its session cwd ({args.cwd}), and '{args.deliverable}' does not. The review "
+              "sandbox is workspace-write (writable in cwd, read-only outside), so the worker "
+              f"would reach DONE unable to write it. Fix: point the glob inside {args.cwd} — "
+              "relative globs are resolved there, but '..' escapes and is refused outright. "
+              "The deepest EXISTING ancestor directory is resolved physically, so a symlink "
+              "leading out of the cwd is refused too; a path with no existing ancestor is "
+              "unresolvable and refused as ambiguous.", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_wait_ready(args: argparse.Namespace) -> int:
     """Whole-verb watchdog, armed before Session() like the other two verbs. The
     codex handshake reaches the blocking writer flock FOUR times — three
@@ -1763,8 +1878,13 @@ def handshake(args: argparse.Namespace) -> int:
         started = codex_request(sess, capability(engine, "resume")["route"],
                                 {"threadId": sess.meta["resume_thread"]}, timeout=args.wait)
     else:
+        # the sandbox TIER is the provider record's, not a literal here: `--review` writes
+        # `review=1` to meta and the review tier keeps everything outside cwd read-only.
+        # thread/resume above deliberately has no tier — it sends the threadId alone, so a
+        # resumed thread cannot be re-pinned, which is why `agentctl start` refuses the pair.
+        tiers = provider(engine)["sandbox"]
         params = {"cwd": sess.meta.get("cwd"), "approvalPolicy": "never",
-                  "sandbox": "danger-full-access"}
+                  "sandbox": tiers["review" if sess.meta.get("review") else "default"]}
         if sess.meta.get("model"):
             params["model"] = sess.meta["model"]
         started = codex_request(sess, "thread/start", params, timeout=args.wait)
@@ -1786,6 +1906,21 @@ def handshake(args: argparse.Namespace) -> int:
 # the top): the OPERATION an operator can invoke through `agentctl`, never "how elegantly the
 # duplex protocol happens to serve it". `route` names a wire method/frame type with an
 # executable branch; `surface` names a non-protocol realization when there is no wire route.
+# codex is the lane's only OS-sandboxed engine, and its two tiers are ONE fact with two
+# consumers — the thread/start params the handshake sends, and the permissionEnforcement
+# refusal that tells an operator which tier got pinned. Both read this dict, so a tier
+# rename cannot leave the published contract describing a sandbox nobody pins.
+#   default — the execution seat: the worker owns its worktree AND everything around it.
+#   review  — the review seat (`agentctl start codex … --review`): cwd stays WRITABLE
+#             because a review seat must be able to write its own deliverable, everything
+#             outside cwd is read-only, and there is no approval surface to fall back on
+#             (approvalPolicy stays never). This is why a review deliverable must live
+#             inside the session cwd, and why `agentctl start` refuses an escaping glob.
+# Providers with no OS sandbox surface declare an EMPTY dict rather than omitting the key:
+# the shell reads the review tier out of the generated spec, and "no such tier" is what
+# makes `--review` a typed refusal there instead of a flag that silently does nothing.
+CODEX_SANDBOX = {"default": "danger-full-access", "review": "workspace-write"}
+
 PROVIDERS: dict[str, dict] = {
     "omp": {
         "bin_env": "AGENTCTL_BIN_OMP",
@@ -1794,6 +1929,8 @@ PROVIDERS: dict[str, dict] = {
         # unrecognized `agentctl start` args are forwarded verbatim to the engine — that IS
         # omp's resume surface, so the two facts live in one record
         "extra_argv": True,
+        # the lane sets no OS sandbox flag for omp: no tiers, so `--review` is refused
+        "sandbox": {},
         "projector": project_omp,
         "capabilities": {
             "queuedSteer": _cap(SUPPORTED, route="follow_up", impl=build_frame),
@@ -1832,6 +1969,8 @@ PROVIDERS: dict[str, dict] = {
         "argv": ("-p", "--input-format", "stream-json", "--output-format", "stream-json",
                  "--verbose", "--permission-mode", "bypassPermissions"),
         "extra_argv": True,
+        # bypassPermissions is an APPROVAL setting, not an OS sandbox: no tiers to pin
+        "sandbox": {},
         "projector": project_claude,
         "capabilities": {
             # native queue: lands at the next turn boundary. The protocol has no per-frame
@@ -1878,6 +2017,8 @@ PROVIDERS: dict[str, dict] = {
         # engine config rides the protocol (thread/start params), so stray argv is REFUSED
         # rather than silently dropped — and codex therefore has no start-argv surface
         "extra_argv": False,
+        # the OS-level tiers the handshake pins; `--review` selects the review one
+        "sandbox": CODEX_SANDBOX,
         "projector": project_codex,
         "capabilities": {
             # a route that EXISTS but refuses under a named condition is degraded, not
@@ -1907,11 +2048,17 @@ PROVIDERS: dict[str, dict] = {
             # the next round continues the same conversation without a stop/start dance
             "resume": _cap(SUPPORTED, route="thread/resume", impl=handshake,
                            start_flag="--resume-thread"),
+            # STATIC on purpose: `capabilities` has no session context, so it publishes both
+            # tiers rather than reading one back out of a meta it cannot see. Still UNSUPPORTED
+            # either way — an OS sandbox bounds what the engine can REACH, it does not give
+            # the runtime an approval decision to enforce.
             "permissionEnforcement": _cap(
                 UNSUPPORTED,
-                refusal="the handshake pins approvalPolicy=never and "
-                        "sandbox=danger-full-access: approvals are disabled by design, the "
-                        "runtime enforces nothing"),
+                refusal="the handshake pins approvalPolicy=never and sandbox="
+                        f"{CODEX_SANDBOX['default']} (default lane) or "
+                        f"{CODEX_SANDBOX['review']} (`--review`, the review seat: cwd "
+                        "writable, outside read-only): approvals are disabled by design, "
+                        "the runtime enforces nothing"),
         },
     },
 }
@@ -2050,11 +2197,13 @@ def cmd_states(args: argparse.Namespace) -> int:
 def provider_spec_rows() -> list[str]:
     """The shell-consumable provider spec — `agentctl`'s ONLY provider list.
 
-    `name|bin_env|default_bin|pinned_argv|extra_argv|resume_start_flag`, argv already
-    shell-quoted. The allowlist, the launch command, whether unrecognized start args are
-    forwarded (which IS the start-argv resume surface) and which start flag drives the
-    provider's resume capability all come from here, so the shell cannot hold an opinion the
-    table does not (cold review R1: a renamed launch branch went undetected)."""
+    `name|bin_env|default_bin|pinned_argv|extra_argv|resume_start_flag|review_sandbox`, argv
+    already shell-quoted. The allowlist, the launch command, whether unrecognized start args
+    are forwarded (which IS the start-argv resume surface), which start flag drives the
+    provider's resume capability and which sandbox tier `--review` pins all come from here, so
+    the shell cannot hold an opinion the table does not (cold review R1: a renamed launch
+    branch went undetected). `review_sandbox` is EMPTY for a provider with no OS sandbox
+    surface, and that emptiness is what makes `--review` a typed refusal in the shell."""
     rows = []
     for name, rec in PROVIDERS.items():
         argv = " ".join(shlex.quote(a) for a in rec["argv"])
@@ -2062,6 +2211,7 @@ def provider_spec_rows() -> list[str]:
             name, rec["bin_env"], rec["bin"], argv,
             "1" if rec["extra_argv"] else "0",
             rec["capabilities"]["resume"]["start_flag"],
+            rec["sandbox"].get("review", ""),
         ]))
     return rows
 
@@ -3674,6 +3824,19 @@ def main() -> None:
     p_wl.add_argument("--iter", type=int, default=0, help="current poll iteration")
     p_wl.set_defaults(func=cmd_watch_lease)
 
+    p_cp = sub.add_parser("check-params", help="judge parameter-surface values before the "
+                                               "caller commits any of them (meta-line safety, "
+                                               "review deliverable containment)")
+    p_cp.add_argument("--gate", default="start", help="label used in the refusal line")
+    p_cp.add_argument("--cwd", default="", help="session cwd, already physically normalized")
+    p_cp.add_argument("--review", action="store_true",
+                      help="the caller requested the review sandbox tier")
+    p_cp.add_argument("--deliverable", default="")
+    p_cp.add_argument("--model", default="")
+    p_cp.add_argument("--resume-thread", default="", dest="resume_thread")
+    p_cp.add_argument("--workflow", default="")
+    p_cp.set_defaults(func=cmd_check_params)
+
     p_cap = sub.add_parser("capabilities", help="runtime-generated provider capability contract")
     p_cap.add_argument("--json", action="store_true", help="stable machine shape")
     p_cap.set_defaults(func=cmd_capabilities)
@@ -3684,7 +3847,8 @@ def main() -> None:
 
     p_prov = sub.add_parser("providers", help="the provider adapter spec agentctl launches from")
     p_prov.add_argument("--shell", action="store_true",
-                        help="name|bin_env|default_bin|argv|extra_argv|resume_flag rows")
+                        help="name|bin_env|default_bin|argv|extra_argv|resume_flag|"
+                             "review_sandbox rows")
     p_prov.set_defaults(func=cmd_providers)
 
 

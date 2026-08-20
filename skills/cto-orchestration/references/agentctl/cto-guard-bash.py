@@ -12,6 +12,8 @@
 #   (5) blocking `agentctl watch` in the foreground -> run_in_background [DENY]
 #   (6) live e2e gate run without the E2E_ECONOMY=1 runner marker -> dispatch a cheap-model
 #       worker instead of burning the orchestrator's premium session on supervision [DENY]
+#  (11) bare `codex exec|e|review` -> hand-rolled headless codex (no typed state, stdin-EOF hangs);
+#       review dispatch goes through the lane's `agentctl start codex … --review` [DENY]
 # Deny/checker error = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
@@ -368,11 +370,26 @@ def main():
             return len(parts) > 1 and _unanchored_segs(_strip_spans(parts[1]))
         return _unanchored_segs(_strip_spans(full))
 
-    # rule-8 views: newline = `;` (a second line is a NEW command — flattening to a space
-    # made `echo ready\ngit status` invisible, review R2); unwrap single-token quotes
-    # ("git", $'git'), drop backslash escapes (g\it)
-    cmd8 = raw.replace("\n", ";")
+    # rule-8 views, also consumed by rule (11): a backslash-newline is REMOVED by the shell
+    # before it parses anything, so fold continuations FIRST — otherwise one command spelled
+    # across two lines reads as two, and a subcommand sitting on the second line escapes every
+    # rule anchored at command position (review R1 B2). THEN newline = `;` (a second line is a
+    # NEW command — flattening to a space made `echo ready\ngit status` invisible, review R2);
+    # unwrap single-token quotes ("git", $'git'), drop backslash escapes (g\it)
+    #
+    # PARITY IS LOAD-BEARING (review R2 F2, a regression this fold introduced): only an ODD run
+    # of backslashes continues a line. `echo ready \\<newline>git status` ends the command — the
+    # two backslashes are a literal backslash argument — so `git status` on the next line is a
+    # NEW, unanchored command that rule 8 must still see. Folding unconditionally spliced the
+    # lines and rule 8 went fail-open on exactly the shape it exists to catch. The pattern
+    # therefore anchors on a non-backslash (or string start), keeps whole `\\` pairs in group 2,
+    # and consumes only the final lone backslash plus its newline.
+    cmd8 = re.sub(r"(^|[^\\])((?:\\\\)*)\\\r?\n", r"\g<1>\g<2>", raw).replace("\n", ";")
     v8 = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", cmd8).replace("\\", "")
+    # the shell EXECUTION face: rule 8's normalization, plus multi-word quoted spans collapsed
+    # to QSPAN so a mention inside `echo "…"` / `grep "…"` stays DATA rather than a command.
+    def _exec_face(s):
+        return _strip_spans(re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", s).replace("\\", ""))
     orig8 = ti["command"]  # pre-heredoc-strip: quoted heredoc bodies are data EXCEPT to a shell consumer
     if ((re.search(r"\b(?:git|gh)\b", v8) or re.search(r"\b(?:git|gh)\b", orig8))
             and _umbrella_near(data.get("cwd") or os.getcwd())):
@@ -535,6 +552,86 @@ def main():
                 "Read: cto-orchestration/references/agentctl/README.md §Launch.\n"
             )
             return 2
+
+    # (11) bare `codex exec` / `codex e` / `codex review` — a hand-rolled headless codex.
+    #      Field 2026-08-19/20: the review seat needs OS-level read-only, the lane pinned
+    #      danger-full-access with no alternative, so the orchestrator hand-rolled
+    #      `codex exec --sandbox read-only`. A bare exec owns no fifo and publishes no typed
+    #      state: a heredoc in the same command waits on stdin EOF forever (one hang ran
+    #      10h21m) and a `$(cat brief)` that expanded empty burned a whole round in silence.
+    #      Owner ruling: review dispatch may go through the lane ONLY — the tier it was
+    #      hand-rolling for now exists as `agentctl start codex … --review`.
+    #      PLACEMENT IS LOAD-BEARING: this must stay ABOVE rule (3), whose `if m:` branch ends
+    #      in an unconditional `return 0` — every rule below it is invisible to any command
+    #      containing `agentctl start`, which is exactly the shape that chains a bare codex
+    #      call after a legal dispatch. `agentctl start codex` is allowed by COMMAND POSITION
+    #      here (codex sits as an argument, not at the head of a segment), never by ordering.
+    #      `codex exec-server` is EXPLICITLY excluded — the token compare is exact, where a bare
+    #      `\b` would have matched straight through the hyphen.
+    #      NOT covered, accept-documented: interactive `codex "<prompt>"`. It is a TTY session
+    #      rather than a headless dispatch, and no regex can tell a prompt from a subcommand.
+    #      The subcommand is decided by TOKEN WALK, not by a regex with an optional value group:
+    #      that group backtracks, so `codex --profile review login` re-read the profile VALUE as
+    #      the review subcommand and denied a legal login (review R1 M1).
+    # codex's global options that take a SEPARATE value, from `codex --help` (verified against
+    # the installed CLI, 2026-08-20). Only these consume the next token; every other flag is
+    # valueless, so `codex --search exec …` still resolves `exec` as the subcommand. A valued
+    # flag NOT on this list whose value happens to be exec/e/review denies — a guard erring
+    # toward DENY on an unknown flag is the correct direction, and the list is the narrow part.
+    _CODEX_VALUED = {"-c", "--config", "--enable", "--disable", "--remote",
+                     "--remote-auth-token-env", "-i", "--image", "-m", "--model",
+                     "--local-provider", "-p", "--profile", "-s", "--sandbox", "-C", "--cd",
+                     "--add-dir", "-a", "--ask-for-approval"}
+    _CODEX_HEADLESS = {"exec", "e", "review"}
+    _codex_head = re.compile(
+        r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _WRAP8 + r"(?:\S*/)?codex(?=\s)")
+
+    def _bare_codex(face):
+        """True when ANY command-position `codex` invocation resolves to a headless subcommand.
+
+        Every invocation in the chain is judged, not just the first: returning on the first one
+        let a legal call SHADOW an illegal one, so `codex login; codex exec "x"` (and the `&&`
+        spelling) walked straight through the rule this guard exists to be (review R2 F1). A
+        legal subcommand only ends ITS OWN invocation — it never ends the scan."""
+        for mh in _codex_head.finditer(face):
+            # the invocation ends at the next shell separator; a `(` opens a subshell, so it
+            # cannot carry codex arguments either
+            seg = re.split(r"[;|&()]", face[mh.end():], 1)[0]
+            toks = seg.split()
+            i = 0
+            while i < len(toks):
+                tok = toks[i]
+                if tok.startswith("-"):
+                    # `--flag=value` carries its own value; a listed flag eats the NEXT token
+                    i += 2 if ("=" not in tok and tok in _CODEX_VALUED) else 1
+                    continue
+                if tok in _CODEX_HEADLESS:   # first non-flag token IS the subcommand
+                    return True
+                break                        # a legal subcommand: keep scanning the chain
+            # flags only (`codex --version`, `codex --help`): no subcommand, nothing to deny
+        return False
+    hit11 = _bare_codex(_exec_face(cmd8))
+    if not hit11:
+        # interpreter payloads execute too: `bash -lc 'codex exec …'` / `$'…'` hid the call in a
+        # quoted span, same blind spot rule (8) closes with the same shape
+        for mi in re.finditer(
+                r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _WRAP8 +
+                r"(?:\S*/)?(?:bash|sh|zsh)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+)*\$?([\"'])(.*?)\1",
+                cmd8):
+            if _bare_codex(_exec_face(mi.group(2))):
+                hit11 = True
+                break
+    if hit11:
+        sys.stderr.write(
+            "DENY: bare `codex exec` / `codex e` / `codex review` — a hand-rolled headless codex "
+            "publishes no typed state: a heredoc in the same command waits on stdin EOF forever "
+            "(field 2026-08-19: one hang ran 10h21m) and an empty `$(cat brief)` burns a round in "
+            "silence. Fix: dispatch through the lane — `agentctl start codex <s> <cwd> --goal <f> "
+            "--review` pins sandbox=workspace-write (cwd writable, outside read-only). "
+            "`codex --version` / `login` / `exec-server` and `agentctl start codex` pass. "
+            "Read: cto-orchestration/references/agentctl/README.md §强制层 ⑩.\n"
+        )
+        return 2
 
     m = re.search(r"\bagentctl[\"'\s]+start[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
     if m:

@@ -2,7 +2,7 @@
 # agentctl — unified control surface for headless worker agents (duplex-lane era).
 #
 #   agentctl start  <omp|codex|claude> <session> <cwd> --goal F [--deliverable G]
-#                   [--no-preflight] [engine args...]
+#                   [--no-preflight] [--review] [engine args...]
 #   agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d|--deliverable G]
 #   agentctl status <session>            # one-shot typed state (exit = verdict)
 #   agentctl watch  <session> [--inline]  # block until terminal; typed exits (vocabulary below)
@@ -42,7 +42,7 @@ q() { printf %q "$1"; }
 ctl() { "$PY" "$CTL" --run-dir "$DIR" "$@"; }
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
-  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [engine args...]" >&2
+  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [engine args...]" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]" >&2
   echo "       agentctl status <session> | watch <session> [--inline] | stop <session> [cwd] | capabilities [--json] | states [--json]" >&2
   echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
@@ -158,6 +158,11 @@ provider_row() { # $1 engine — stdout: the spec row, rc 1 = no such provider
 }
 provider_names() { "$PY" "$CTL" providers | tr '\n' '|' | sed 's/|$//'; }
 
+# Parameter-surface VALUE judgement (meta-line safety + the review seat's deliverable fence) is
+# duplexctl's: `ctl check-params` owns both rules and prints its own refusal, because both are
+# properties this shell does not own — the meta file format and the review sandbox tier. Called
+# before the start owns a fifo / meta / tmux session, so a refusal leaves nothing behind.
+
 cmd_start() {
   ENG="${1:?usage}" ; S="${2:?session}" ; CWD="${3:?cwd}"; shift 3
   PROW="$(provider_row "$ENG")" || { echo "ERR: unknown engine '$ENG' ($(provider_names)) — see agentctl capabilities" >&2; exit 1; }
@@ -165,9 +170,16 @@ cmd_start() {
   P_REST="${PROW#*|*|}"; P_BIN="${P_REST%%|*}"
   P_REST="${P_REST#*|}"; P_ARGV="${P_REST%%|*}"
   P_REST="${P_REST#*|}"; P_EXTRA_OK="${P_REST%%|*}"
-  P_RESUME_FLAG="${P_REST#*|}"
+  P_REST="${P_REST#*|}"; P_RESUME_FLAG="${P_REST%%|*}"
+  # `${var#*|}` returns the string UNCHANGED when there is no delimiter left, so an older
+  # SIX-field row handed the resume flag over AS the review tier: `--review` was then accepted
+  # and the banner claimed a sandbox the producer never promised — a permission fail-open on the
+  # exact compatibility path (review R1 B3). Field 7 exists only if a delimiter remains.
+  # Empty = this provider declares no OS sandbox tier, which is what makes `--review` a typed
+  # refusal below rather than a flag that quietly does nothing.
+  case "$P_REST" in *"|"*) P_REVIEW_SANDBOX="${P_REST#*|}";; *) P_REVIEW_SANDBOX="";; esac
   case "$P_BIN_ENV" in ''|*[!A-Z0-9_]*) echo "ERR: provider spec for '$ENG' is malformed (bin env '$P_BIN_ENV')" >&2; exit 1;; esac
-  GOAL=""; DELIV=""; PREFLIGHT=1; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""; MODEL_TOKENS=0
+  GOAL=""; DELIV=""; PREFLIGHT=1; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""; MODEL_TOKENS=0; REVIEW=""
   while [ "$#" -gt 0 ]; do case "$1" in
     --goal) GOAL="${2:?--goal needs a file}"; shift 2;;
     --deliverable) DELIV="${2:?--deliverable needs a glob}"; shift 2;;
@@ -177,6 +189,7 @@ cmd_start() {
     --workflow) WORKFLOW="${2:?--workflow needs a value}"; shift 2;;
     --max-rounds) MAX_ROUNDS="${2:?--max-rounds needs N}"; shift 2;;
     --resume-thread) RESUME_THREAD="${2:?--resume-thread needs an id}"; shift 2;;
+    --review) REVIEW=1; shift;;
     --model) MODEL="${2:?--model needs an id}"; EXTRA[${#EXTRA[@]}]="$1"; EXTRA[${#EXTRA[@]}]="$2"; MODEL_TOKENS=$((MODEL_TOKENS+2)); shift 2;;
     # an empty value is not a model: without this the flag zeroes MODEL, meta gets no model=
     # line, the pinned-argv rule drops the token, and the operator is told nothing at all
@@ -190,6 +203,8 @@ cmd_start() {
     [ "$MAX_ROUNDS" -gt 0 ] || { echo "ERR: --max-rounds must be a positive integer" >&2; exit 1; }
   fi
   [ -n "$GOAL" ] && [ -e "$GOAL" ] || { echo "ERR: --goal <file> required and must exist" >&2; exit 1; }
+  # the review-tier refusals below stay HERE: they read the generated provider spec, which is
+  # this shell's own input, and they decide nothing about a value's content
   if [ -n "$RESUME_THREAD" ] && [ "$P_RESUME_FLAG" != "--resume-thread" ]; then
     echo "ERR: --resume-thread only drives a provider whose resume capability declares it; '$ENG' does not — run 'agentctl capabilities' and read the resume note for $ENG" >&2; exit 1
   fi
@@ -202,6 +217,25 @@ cmd_start() {
     echo "ERR: --model cannot be combined with --resume-thread — a resumed thread keeps the model it was started with, so '$MODEL' would be dropped in silence: drop --model to resume thread '$RESUME_THREAD' on its own model, or drop --resume-thread to start a NEW thread on '$MODEL'" >&2
     exit 1
   fi
+  # `--review` selects the review seat's OS-level sandbox tier (codex thread/start
+  # sandbox=workspace-write). Two refusals, both HERE at the parameter surface — before this
+  # start owns a fifo, a meta file, a tmux session or a handshake:
+  #  * a provider that declares no tier. `--review` is consumed by this parser, so it never
+  #    reaches EXTRA — but on an extra_argv=1 engine an UNHANDLED flag would be forwarded to the
+  #    engine binary verbatim, and "the engine will reject it eventually" is not a refusal: the
+  #    lane must not accept a permission request it cannot deliver.
+  #  * with --resume-thread. thread/resume sends the threadId ALONE, with no sandbox param, so a
+  #    resumed thread keeps the tier it was CREATED under and the lane cannot re-pin it.
+  #    Honouring both would fail OPEN on the one axis the review seat exists to guarantee, and
+  #    the start banner would claim a tier the engine never got.
+  if [ -n "$REVIEW" ] && [ -z "$P_REVIEW_SANDBOX" ]; then
+    echo "ERR: --review needs a provider with an OS sandbox tier; '$ENG' declares none — the lane pins no sandbox for it at all, so there is nothing to select. Run 'agentctl capabilities' and read the permissionEnforcement row for $ENG; the review seat is codex" >&2
+    exit 1
+  fi
+  if [ -n "$REVIEW" ] && [ -n "$RESUME_THREAD" ]; then
+    echo "ERR: --review cannot be combined with --resume-thread — thread/resume carries only the threadId, so a resumed thread keeps the sandbox tier it was CREATED under and the lane cannot re-pin it to $P_REVIEW_SANDBOX: accepting both would report a review seat it never pinned. Drop --resume-thread to start a NEW review thread, or drop --review to continue thread '$RESUME_THREAD' under its own tier" >&2
+    exit 1
+  fi
   if [ "$PREFLIGHT" = 1 ]; then
     "$HERE/../goal-preflight.py" "$GOAL" || {
       echo "HINT: mechanical / forensic / pure-research goals opt out explicitly — re-run with --no-preflight" >&2
@@ -209,6 +243,12 @@ cmd_start() {
   fi
   [ -d "$CWD" ] || { echo "ERR: cwd not found: $CWD" >&2; exit 1; }
   CWD="$(cd "$CWD" && pwd -P)"
+  # every value that will reach meta, plus the review seat's deliverable fence, judged in ONE
+  # duplexctl call against the NORMALIZED cwd — comparing against the caller's spelling would
+  # let a symlinked or dot-laden cwd argument decide where the sandbox boundary is
+  ctl check-params --gate start --cwd "$CWD" ${REVIEW:+--review} \
+     --deliverable "$DELIV" --model "$MODEL" --resume-thread "$RESUME_THREAD" \
+     --workflow "$WORKFLOW" || exit 1
   mkdir -p "$DIR"
 
   # collisions: refuse ANY prior lane state or live tmux session BEFORE branching to an engine
@@ -241,7 +281,7 @@ cmd_start() {
   [ -n "$BIN" ] || BIN="$P_BIN"
   # extra_argv=0: engine config rides the protocol (--model into meta), any other argv REFUSED
   if [ "$P_EXTRA_OK" != 1 ] && [ "${#EXTRA[@]}" -ne "$MODEL_TOKENS" ]; then
-    echo "ERR: $ENG duplex takes engine config via protocol (--model/--resume-thread only) — unrecognized argv: ${EXTRA[*]}" >&2
+    echo "ERR: $ENG duplex takes engine config via protocol (--model/--resume-thread/--review only) — unrecognized argv: ${EXTRA[*]}" >&2
     rm -f "$FIFO" "$DIR/$S.duplex.meta"; exit 1
   fi
   # extra_argv=0: argv stays PINNED — model rides the protocol only (meta model= is consumed
@@ -254,6 +294,7 @@ cmd_start() {
     [ -n "$DELIV" ] && printf 'deliverable=%s\n' "$DELIV"
     [ -n "$MODEL" ] && printf 'model=%s\n' "$MODEL"
     [ -n "$RESUME_THREAD" ] && printf 'resume_thread=%s\n' "$RESUME_THREAD"
+    [ -n "$REVIEW" ] && printf 'review=1\n'
     [ -n "$WORKFLOW" ] && printf 'workflow=%s\nmax_rounds=%s\n' "$WORKFLOW" "$MAX_ROUNDS"; } > "$DIR/$S.duplex.meta"
 
   # exec 3<> holds the fifo read-write so stdin NEVER sees EOF; rc goes out tmp+rename
@@ -290,6 +331,7 @@ cmd_start() {
   # engine two different ways (argv for the forwarding providers, meta + protocol for the
   # pinned ones), and nothing here reads back the model the engine actually settled on.
   REQ="${MODEL:+model=$MODEL}"
+  [ -n "$REVIEW" ] && REQ="${REQ:+$REQ; }review sandbox=$P_REVIEW_SANDBOX"
   if [ "$P_EXTRA_OK" = 1 ] && [ "${#EXTRA[@]}" -gt 0 ]; then REQ="${REQ:+$REQ; }argv ${EXTRA[*]}"; fi
   echo "engine : $ENG — requested: ${REQ:-nothing (engine defaults apply)}; the model/backend actually in effect is the engine's own and is not read back here"
   echo "next   : agentctl watch $S   (blocking, run_in_background)  |  agentctl status $S  (one-shot)"
@@ -308,7 +350,16 @@ cmd_steer() {
   [ -n "$MODE" ] || usage
   case "$(lane_of "$S")" in
     duplex)
+      REVIEW_META="$(meta_get "$S" review)"
       [ "$MODE" = -f ] && { [ -e "$ARG" ] || { echo "ERR: file not found: $ARG" >&2; exit 1; }; }
+      # `steer -d` moves the freshness target into the SAME line-oriented meta and past the SAME
+      # sandbox boundary, so it clears the same gate `start` did — otherwise a session that
+      # opened compliant is walked outside its sandbox by one steer. Only when `-d` is present:
+      # a plain steer writes no new value, so there is nothing to judge.
+      if [ -n "$NEWDELIV" ]; then
+        ctl check-params --gate "steer -d" --cwd "$(meta_get "$S" cwd)" \
+           ${REVIEW_META:+--review} --deliverable "$NEWDELIV" || exit 1
+      fi
       # The terminal record is NOT cleared here: a REFUSED steer opens no round and the
       # conclusion it would destroy is still every attached waiter's answer (R2 F-02) — duplexctl
       # unlinks it inside commit_round_state, at the instant the round counter moves. `--replace`

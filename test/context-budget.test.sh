@@ -47,8 +47,17 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=7771    # all injected text across both guards (raised 7439→7771 on 2026-08-17:
-                           # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed)
+BUDGET_GUARD_TOTAL=8334    # all injected text across both guards (raised 7439→7771 on 2026-08-17:
+                           # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
+                           # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
+                           # Bought: the only route to the review seat's sandbox tier was a
+                           # hand-rolled `codex exec --sandbox read-only`, which cost one 10h21m
+                           # stdin-EOF hang and one silently-empty round. The message carries the
+                           # replacement flag AND the four pass-through spellings, because the
+                           # denial lands on a seat that just lost its only known path. Could not
+                           # come from cutting elsewhere: every other rule's text is already at or
+                           # under its own field-earned minimum, and this one is well under the
+                           # per-message ceiling (which did NOT move).
 BUDGET_GUARD_SINGLE=754    # the longest single message a worker can be handed at once
 BUDGET_GUARD_COUNT=21      # sink count: a drop means extraction broke or a sink moved out of view
 

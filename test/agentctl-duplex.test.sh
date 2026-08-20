@@ -427,6 +427,237 @@ chk_eq "failed turn → FAILED 2" 2 "$rc"
 bash "$AGENTCTL" stop cxE >/dev/null 2>&1
 unset FAKE_CODEX_ERROR_TURN
 
+echo "== codex review seat: the sandbox tier is a lane flag, never a hand-rolled exec =="
+# The FRAME is the whole contract, so both tiers are asserted byte-exact with only the volatile
+# correlation id normalized away. A "contains sandbox=X" assertion would have let approvalPolicy
+# or cwd drift under it unseen — and the default tier's frame must not move AT ALL.
+start_frame() { # $1 log — the thread/start frame with the correlation id normalized
+  # `[0-9a-f][0-9a-f]*`, never `*`: a zero-width match would normalize a malformed empty
+  # `"id":"ctl-"` into `"id":"ID"` and the byte-exact comparison would stop covering the
+  # generator's non-empty-id promise (review R1 m1). BRE, so no `\+` — portable spelling.
+  grep '"method":"thread/start"' "$1" | sed 's/"id":"ctl-[0-9a-f][0-9a-f]*"/"id":"ID"/'
+}
+# meta records the cwd as `pwd -P`, and on darwin $TMPDIR resolves through /private — so the
+# expectation must be built from the SAME normalization the runtime used, never from $WT.
+WTP="$(cd "$WT" && pwd -P)"
+export FAKE_PROVIDER_LOG="$SANDBOX/rv-default.log"
+out="$(bash "$AGENTCTL" start codex rvD "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "default-tier start rc0" 0 "$rc"
+chk_eq "default tier frame is byte-for-byte unchanged" \
+  "{\"jsonrpc\":\"2.0\",\"method\":\"thread/start\",\"id\":\"ID\",\"params\":{\"cwd\":\"$WTP\",\"approvalPolicy\":\"never\",\"sandbox\":\"danger-full-access\"}}" \
+  "$(start_frame "$SANDBOX/rv-default.log")"
+chk_eq "a default session carries no review marker in meta" "" \
+  "$(sed -n 's/^review=//p' "$WATCH_RUN_DIR/rvD.duplex.meta")"
+bash "$AGENTCTL" stop rvD >/dev/null 2>&1
+export FAKE_PROVIDER_LOG="$SANDBOX/rv-review.log"
+out="$(bash "$AGENTCTL" start codex rvR "$WT" --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
+chk_eq "review-tier start rc0" 0 "$rc"
+chk_eq "--review moves sandbox and NOTHING else (approvalPolicy stays never)" \
+  "{\"jsonrpc\":\"2.0\",\"method\":\"thread/start\",\"id\":\"ID\",\"params\":{\"cwd\":\"$WTP\",\"approvalPolicy\":\"never\",\"sandbox\":\"workspace-write\"}}" \
+  "$(start_frame "$SANDBOX/rv-review.log")"
+chk_eq "the tier is recorded in session meta" 1 "$(sed -n 's/^review=//p' "$WATCH_RUN_DIR/rvR.duplex.meta")"
+chk_contains "the start banner names the tier it requested" "review sandbox=workspace-write" "$out"
+bash "$AGENTCTL" stop rvR >/dev/null 2>&1
+
+# Both refusals are PARAMETER-surface refusals, so they own nothing. The self-proving check is
+# that the same session name starts clean immediately afterwards: a leftover fifo or meta file
+# would refuse it (the mkfifo claim is the collision detector).
+out="$(bash "$AGENTCTL" start codex rvX "$WT" --goal "$SANDBOX/goal.md" --review \
+       --resume-thread old-thread-9 2>&1)"; rc=$?
+chk_eq "--review with --resume-thread refused rc1" 1 "$rc"
+chk_contains "the refusal says resume carries no sandbox" "thread/resume carries only the threadId" "$out"
+chk_eq "that refusal owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvX\.' | tr '\n' ' ')"
+out="$(bash "$AGENTCTL" start codex rvX "$WT" --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
+chk_eq "the same name starts clean right after the refusal" 0 "$rc"
+bash "$AGENTCTL" stop rvX >/dev/null 2>&1
+# omp/claude forward unrecognized start args to the engine binary VERBATIM, so a non-codex
+# --review has to be refused here — "the engine will reject it" is not a refusal.
+out="$(bash "$AGENTCTL" start omp rvO "$WT" --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
+chk_eq "--review on a provider with no sandbox tier refused rc1" 1 "$rc"
+chk_contains "the refusal names the missing tier" "declares none" "$out"
+chk_eq "and it owns no lane state either" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvO\.' | tr '\n' ' ')"
+
+# The deliverable fence: workspace-write means the seat can only write inside its cwd, so a
+# deliverable it could never reach is refused before the lane owns anything.
+out="$(bash "$AGENTCTL" start codex rvG1 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "$SANDBOX/outside.md" 2>&1)"; rc=$?
+chk_eq "review + absolute glob OUTSIDE cwd refused" 1 "$rc"
+chk_contains "the refusal names the boundary" "must live INSIDE its session cwd" "$out"
+chk_eq "the deliverable refusal owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvG1\.' | tr '\n' ' ')"
+out="$(bash "$AGENTCTL" start codex rvG2 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "$WTP/REVIEW.md" 2>&1)"; rc=$?
+chk_eq "review + absolute glob INSIDE cwd accepted" 0 "$rc"
+bash "$AGENTCTL" stop rvG2 >/dev/null 2>&1
+out="$(bash "$AGENTCTL" start codex rvG3 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable 'REVIEW-*.md' 2>&1)"; rc=$?
+chk_eq "review + relative glob accepted (resolved against cwd by construction)" 0 "$rc"
+bash "$AGENTCTL" stop rvG3 >/dev/null 2>&1
+# path COMPONENT, not string prefix: a sibling spelled like the cwd must not read as inside it
+mkdir -p "${WTP}-2"
+out="$(bash "$AGENTCTL" start codex rvG4 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "${WTP}-2/x.md" 2>&1)"; rc=$?
+chk_eq "sibling sharing the cwd's string prefix refused" 1 "$rc"
+# a `..` component is refused outright — nothing is resolved, because nothing exists yet
+out="$(bash "$AGENTCTL" start codex rvG5 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "$WTP/../escape.md" 2>&1)"; rc=$?
+chk_eq "'..' component refused without resolving it" 1 "$rc"
+# R1 B1: the ORIGINAL contract assumed a relative glob "cannot escape because it is resolved
+# against cwd". False for `..` — duplexctl joins it onto the cwd and it lands one level up. Both
+# of these were rc=0 (accepted, lane state created) before the fix.
+out="$(bash "$AGENTCTL" start codex rvE1 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "../outside-review.md" 2>&1)"; rc=$?
+chk_eq "RELATIVE '..' glob refused (a relative glob is not automatically safe)" 1 "$rc"
+chk_eq "the relative-escape refusal owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvE1\.' | tr '\n' ' ')"
+# R1 B1 second half: a symlink INSIDE cwd whose target is outside it. Lexical comparison called
+# this inside the sandbox; the worker's write would have landed outside. The deepest EXISTING
+# ancestor is resolved physically (`cd … && pwd -P`, no realpath(1) — macOS has no `-m`).
+mkdir -p "$SANDBOX/rv-escape"
+ln -s ../rv-escape "$WT/rvlink"
+out="$(bash "$AGENTCTL" start codex rvE2 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "$WTP/rvlink/result.md" 2>&1)"; rc=$?
+chk_eq "absolute path through a cwd-internal symlink pointing OUT refused" 1 "$rc"
+out="$(bash "$AGENTCTL" start codex rvE3 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "rvlink/result.md" 2>&1)"; rc=$?
+chk_eq "and the same escape spelled relatively refused too" 1 "$rc"
+# PAIRED GREEN: a symlink that stays inside the cwd is still a legal target — the gate resolves
+# links, it does not ban them.
+mkdir -p "$WT/rvinside"
+ln -s rvinside "$WT/rvin"
+out="$(bash "$AGENTCTL" start codex rvE4 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "$WTP/rvin/result.md" 2>&1)"; rc=$?
+chk_eq "a symlink resolving INSIDE cwd is accepted" 0 "$rc"
+bash "$AGENTCTL" stop rvE4 >/dev/null 2>&1
+# a deep glob whose intermediate dirs do not exist yet resolves to the deepest EXISTING
+# ancestor — the cwd itself — so it passes; the target need not exist
+out="$(bash "$AGENTCTL" start codex rvE5 "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable "docs/orchestration/REVIEW.md" 2>&1)"; rc=$?
+chk_eq "a not-yet-existing subpath inside cwd is accepted" 0 "$rc"
+bash "$AGENTCTL" stop rvE5 >/dev/null 2>&1
+
+# R1 M2: meta is one key=value per line, so a newline in a param-plane value injects meta KEYS.
+# `artifact-*.md\nreview=1` minted a review tier on a session that never asked for one, moving
+# the codex handshake onto workspace-write. Refused, not encoded.
+out="$(bash "$AGENTCTL" start codex rvI1 "$WT" --goal "$SANDBOX/goal.md" \
+       --deliverable "$(printf 'artifact-*.md\nreview=1')" 2>&1)"; rc=$?
+chk_eq "newline in --deliverable refused" 1 "$rc"
+chk_contains "the refusal names the injection" "would inject meta KEYS" "$out"
+chk_eq "the injection attempt owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvI1\.' | tr '\n' ' ')"
+# the same file format, the same hole: every param-plane value that reaches meta is checked
+out="$(bash "$AGENTCTL" start codex rvI2 "$WT" --goal "$SANDBOX/goal.md" \
+       --model "$(printf 'gpt-fake\nreview=1')" 2>&1)"; rc=$?
+chk_eq "newline in --model refused too" 1 "$rc"
+# and on the steer surface, where duplexctl's meta_update writes the same file
+out="$(bash "$AGENTCTL" start codex rvI3 "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "clean session for the steer injection probe started" 0 "$rc"
+out="$(bash "$AGENTCTL" steer rvI3 -m "x" -d "$(printf 'a.md\nreview=1')" 2>&1)"; rc=$?
+chk_eq "newline in steer -d refused" 1 "$rc"
+chk_eq "and no review marker reached the meta" "" \
+  "$(sed -n 's/^review=//p' "$WATCH_RUN_DIR/rvI3.duplex.meta")"
+bash "$AGENTCTL" stop rvI3 >/dev/null 2>&1
+# R2 F3: `--cwd` reaches the SAME line-oriented meta (`printf 'engine=%s\ncwd=%s\n'`) and was
+# missing from the checked enumeration, so a directory whose name legitimately contains a
+# newline injected `review=1` and re-pinned the codex sandbox tier without `--review`.
+BADCWD="$SANDBOX/$(printf 'wtx\nreview=1')"
+mkdir -p "$BADCWD" "$SANDBOX/wtx"
+out="$(bash "$AGENTCTL" start codex rvC1 "$BADCWD" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "newline in the session cwd refused" 1 "$rc"
+chk_contains "the cwd refusal names the injection" "would inject meta KEYS" "$out"
+chk_eq "the cwd injection owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvC1\.' | tr '\n' ' ')"
+# and the same directory is fine once it has no newline: the gate judges the VALUE, not the dir
+out="$(bash "$AGENTCTL" start codex rvC2 "$SANDBOX/wtx" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "the newline-free sibling directory still starts" 0 "$rc"
+bash "$AGENTCTL" stop rvC2 >/dev/null 2>&1
+# the ENGINE-controlled route into meta: thread/start's threadId never passes the parameter
+# surface at all, so meta_update itself is the backstop. A newline there must fail the handshake
+# closed rather than write extra keys.
+export FAKE_CODEX_THREAD_ID="$(printf 'thread-9\nreview=1')"
+out="$(bash "$AGENTCTL" start codex rvC3 "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "an engine-supplied threadId with a newline fails the start" 1 "$rc"
+chk_eq "and no meta survives it" 0 \
+  "$([ -e "$WATCH_RUN_DIR/rvC3.duplex.meta" ] && echo 1 || echo 0)"
+unset FAKE_CODEX_THREAD_ID
+# PAIRED GREEN: the same knob with a legal id still completes the handshake
+export FAKE_CODEX_THREAD_ID=thread-legal
+out="$(bash "$AGENTCTL" start codex rvC4 "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "a legal engine-supplied threadId still starts" 0 "$rc"
+chk_eq "and lands in meta" thread-legal "$(sed -n 's/^thread=//p' "$WATCH_RUN_DIR/rvC4.duplex.meta")"
+bash "$AGENTCTL" stop rvC4 >/dev/null 2>&1
+unset FAKE_CODEX_THREAD_ID
+
+# R2 F4: the root-directory edge of the containment comparison. `cwd + "/"` is `//` at the root,
+# which no real path starts with, so cwd=/ refused its own descendants. Driven through the
+# `check-params` verb because no lane session can be rooted at `/`.
+cp_rc() { python3 "$AW_DIR/duplexctl.py" --run-dir "$WATCH_RUN_DIR" check-params "$@" \
+            >/dev/null 2>&1; echo $?; }
+chk_eq "F4 cwd=/ accepts a descendant" 0 \
+  "$(cp_rc --gate start --cwd / --review --deliverable /tmp/result.md)"
+chk_eq "F4 '--deliverable /' is a directory, not a deliverable: refused" 1 \
+  "$(cp_rc --gate start --cwd / --review --deliverable /)"
+chk_eq "F4 a trailing slash is refused for the same reason" 1 \
+  "$(cp_rc --gate start --cwd "$WTP" --review --deliverable "$WTP/")"
+chk_eq "F4 cwd=/ still refuses a '..' escape" 1 \
+  "$(cp_rc --gate start --cwd / --review --deliverable ../x.md)"
+
+
+# R1 B3: an older SIX-field provider row must not hand the resume flag over AS the review tier.
+# `${var#*|}` returns the string unchanged when no delimiter is left, so `--review` used to be
+# ACCEPTED against a producer that never promised a tier. The AGENTCTL_PYTHON seam (a documented
+# knob) intercepts only `providers --shell` and drops the 7th field; everything else is real.
+cat > "$BIN/py-6field" <<'SIXEOF'
+#!/usr/bin/env bash
+for a in "$@"; do [ "$a" = providers ] && { python3 "$@" | sed 's/|[^|]*$//'; exit $?; }; done
+exec python3 "$@"
+SIXEOF
+chmod +x "$BIN/py-6field"
+chk_eq "the seam really produces a six-field codex row" 6 \
+  "$("$BIN/py-6field" "$AW_DIR/duplexctl.py" providers --shell \
+     | grep '^codex|' | awk -F'|' '{print NF}')"
+out="$(AGENTCTL_PYTHON="$BIN/py-6field" bash "$AGENTCTL" start codex rvB3 "$WT" \
+       --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
+chk_eq "--review against a six-field row refused rc1" 1 "$rc"
+chk_contains "the refusal names the missing tier, not the resume flag" "declares none" "$out"
+chk_not_contains "and never echoes the resume flag as a sandbox tier" "sandbox=--resume-thread" "$out"
+chk_eq "the degraded-row refusal owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^rvB3\.' | tr '\n' ' ')"
+# PAIRED GREEN: the same start against the REAL seven-field row still succeeds
+out="$(bash "$AGENTCTL" start codex rvB3 "$WT" --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
+chk_eq "the real seven-field row still accepts --review" 0 "$rc"
+bash "$AGENTCTL" stop rvB3 >/dev/null 2>&1
+
+# NEGATIVE CONTROL: the fence belongs to the review tier ALONE. The execution seat owns its
+# whole machine and legitimately writes outside cwd — this goes red if the gate leaks.
+out="$(bash "$AGENTCTL" start codex rvG6 "$WT" --goal "$SANDBOX/goal.md" \
+       --deliverable "$SANDBOX/outside.md" 2>&1)"; rc=$?
+chk_eq "default tier + cwd-external glob still allowed" 0 "$rc"
+bash "$AGENTCTL" stop rvG6 >/dev/null 2>&1
+
+# `steer -d` moves the freshness target, so it must clear the SAME fence: otherwise a session
+# that opened compliant is walked out of its sandbox by one steer.
+out="$(bash "$AGENTCTL" start codex rvS "$WT" --goal "$SANDBOX/goal.md" --review \
+       --deliverable REVIEW.md 2>&1)"; rc=$?
+chk_eq "review session for the steer gate started" 0 "$rc"
+out="$(bash "$AGENTCTL" steer rvS -m "move it out" -d "$SANDBOX/outside.md" 2>&1)"; rc=$?
+chk_eq "review steer -d outside cwd refused" 1 "$rc"
+chk_eq "and the deliverable did NOT move" "REVIEW.md" \
+  "$(sed -n 's/^deliverable=//p' "$WATCH_RUN_DIR/rvS.duplex.meta")"
+# the paired green: the same steer with an in-cwd target lands (idle turn required — codex has
+# no queue, so wait for the goal turn's terminal first)
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q 'turn/completed' "$WATCH_RUN_DIR/rvS.duplex.events.jsonl" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+out="$(bash "$AGENTCTL" steer rvS -m "move it in" -d "$WTP/REVIEW2.md" 2>&1)"; rc=$?
+chk_eq "review steer -d inside cwd accepted" 0 "$rc"
+chk_eq "and the deliverable moved" "$WTP/REVIEW2.md" \
+  "$(sed -n 's/^deliverable=//p' "$WATCH_RUN_DIR/rvS.duplex.meta")"
+bash "$AGENTCTL" stop rvS >/dev/null 2>&1
+
 echo "== review-loop budget rides the duplex lane (all engines) =="
 export FAKE_PROVIDER_LOG="$SANDBOX/budget.log"
 out="$(bash "$AGENTCTL" start codex cxR "$WT" --goal "$SANDBOX/goal.md" --workflow review-loop --max-rounds 2 2>&1)"; rc=$?

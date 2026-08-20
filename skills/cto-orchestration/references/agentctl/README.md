@@ -70,6 +70,8 @@ steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影�
 - **崩溃恢复腿**：照 `agentctl capabilities` 的 `resume` 行走——degraded 两家（`stop` 后重开会话、
   engine args 由 start 原样转发）正路在各自 note 里；codex 唯一 supported，握手内续 thread：
   `agentctl start codex <s> <cwd> --goal <f> --resume-thread <threadId>`（supported 不带 note，故写这）。
+- **评审档 `--review`**（codex 专属；非 codex、或与 `--resume-thread` 并存，参数面即拒——thread/resume 只带
+  threadId 不重发 sandbox，放行即静默 fail-open）：thread/start 钉 `sandbox=workspace-write`（cwd 内可写、外只读、无审批面），故**交付物必须在 session cwd 内**——绝对与相对 glob 一律判（相对 `..` 会逃逸，不豁免）：含 `..` 分量即拒，最深已存在祖先目录物理解析后不在 cwd 内即拒（含 cwd 内指向外部的 symlink），无已存在祖先按歧义拒，basename 为空（`/` 或尾 `/`）= 目录不是交付物、拒；判定归 `duplexctl check-params`，`start` 与 `steer -d` 同门。另：进 meta 的参数面值一律拒含换行（否则注入 meta key，可无声改档），写点 `meta_update` 兜底引擎回传值。
 - 单写者纪律：所有 fifo 写经 `duplexctl.py`（flock）；并发 steer 由锁串行。
 
 codex 引擎注：app-server 官方标 experimental，但错误帧自描述（参数漂移当场报全量合法值）、
@@ -196,7 +198,8 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   零文件伤害），任何链式/env 前缀/多 `-C`/解析歧义/`lexists` 命中都落回 DENY。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
   判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）；⑨ 浏览器归属：`playwright-cli attach`
   带接管旗标（CDP / 浏览器扩展）→ DENY，正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
-  见 [frontend-verify](../frontend-verify.md)）。①用剥引号视图，④用原始 cmd，⑤⑥⑧只认命令位（路径当参数
+  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）。
+  ①用剥引号视图，④用原始 cmd，⑤⑥⑧⑩只认命令位（路径当参数
   不拦）；⑨判归一化后的 shell 执行面（与⑧同一套：剥引号 span + 去反斜杠，故转义写法照拦；
   代价是字面量进 shell 命令即拒，已接受的假阳性）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：
