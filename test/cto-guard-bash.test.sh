@@ -550,6 +550,298 @@ run 'bash -e test/run.sh; git -C /x commit -m m'
 chk_eq "interpreter-flag wrapper weld denied" 2 "$RC"
 run 'command -- bash test/run.sh; git -C /x commit -m m'
 chk_eq "command -- wrapper weld denied" 2 "$RC"
+# extraction side-effect, declared: rule 10's wrapper list was the only one of the three
+# missing `timeout`, so the unified set closes that hole in 10 as well as arming 12
+run 'timeout 600 bash test/run.sh | tail -3'
+chk_eq "timeout-wrapped gate pipe denied (wrapper set unified on extraction)" 2 "$RC"
+run 'timeout 600 agentctl watch s1 | tail -3' 1
+chk_eq "timeout-wrapped typed pipe denied" 2 "$RC"
+
+# ── (12) typed-command stdout piped: verdict rc masked + state frame truncated ────────────
+# `agentctl watch|steer|start|stop` and `gh pr checks --watch` / `gh run watch` carry their
+# verdict in the exit code; a pipeline's rc is the LAST command's. Same disease as (10), and
+# deliberately the same parse face (`_pipe_view` + `_pos_head`), one separator apart.
+run 'agentctl watch s1 | tail -3' 1
+chk_eq "watch|tail denied" 2 "$RC"; chk_contains "12 names the masked verdict" "EXIT CODE" "$ERR"
+chk_contains "12 teaches the file-first shape" "rc=\$?" "$ERR"
+run 'agentctl steer s1 -m fix | tee /tmp/o.log'
+chk_eq "steer|tee denied" 2 "$RC"
+run 'agentctl stop s1 | cat'
+chk_eq "stop|cat denied" 2 "$RC"
+# rule (3)'s branch ends in an unconditional `return 0` — this is red if (12) ever moves below it
+run 'agentctl start omp s1 /wt --goal /tmp/g.md | tee /tmp/o.log'
+chk_eq "start|tee denied (early-return placement proof)" 2 "$RC"
+run 'gh pr checks 12 --watch | tail -1'
+chk_eq "gh pr checks --watch piped denied" 2 "$RC"
+run 'gh run watch 99 | cat'
+chk_eq "gh run watch piped denied" 2 "$RC"
+# MID-pipeline: stdout is still consumed, and this is the position rule 10's anchor cannot see
+run 'date | agentctl steer s1 -m fix | tee /tmp/o.log'
+chk_eq "typed command mid-pipeline denied" 2 "$RC"
+run 'echo x | gh run watch 99 | cat'
+chk_eq "gh run watch mid-pipeline denied" 2 "$RC"
+# wrapper / path-qualified / env-prefix spellings reach the same binary
+run 'command agentctl watch s1 | tail -3' 1
+chk_eq "command-wrapper typed pipe denied" 2 "$RC"
+run '/usr/bin/env FOO=1 agentctl stop s1 | cat'
+chk_eq "path-qualified env wrapper typed pipe denied" 2 "$RC"
+run '/opt/bin/agentctl watch s1 | tail -3' 1
+chk_eq "absolute-path binary typed pipe denied" 2 "$RC"
+run 'FOO=1 agentctl watch s1 | tail -3' 1
+chk_eq "env-assignment prefix typed pipe denied" 2 "$RC"
+# a backslash continuation is REMOVED by the shell before it parses: one pipeline, not two lines
+run "$(printf 'agentctl watch s1 \\\n| tail -3')" 1
+chk_eq "backslash continuation spells one pipeline, denied" 2 "$RC"
+# ALLOW: the shapes that are not a consumed stdout
+run 'agentctl watch s1 || echo lost' 1
+chk_eq "|| is a chain, not a pipe" 0 "$RC"; chk_eq "|| chain silent" "" "$ERR"
+run 'echo brief | agentctl steer s1 -f -'
+chk_eq "typed command LAST in pipeline (its STDIN is fed) allowed" 0 "$RC"
+run 'agentctl watch s1 > /tmp/w.log 2>&1' 1
+chk_eq "file-first typed shape allowed" 0 "$RC"; chk_eq "file-first typed shape silent" "" "$ERR"
+run 'echo "agentctl watch s1 | tail -3"'
+chk_eq "quoted literal is DATA" 0 "$RC"
+run 'echo ok; # agentctl watch s1 | tail -3'
+chk_eq "a comment is not command position" 0 "$RC"
+run 'grep -n watch references/agentctl/agentctl | head -5'
+chk_eq "agentctl path as grep ARGUMENT allowed" 0 "$RC"
+run 'gh pr checks 12 | tail -1'
+chk_eq "gh pr checks WITHOUT --watch is out of scope" 0 "$RC"
+# negative control: the same text inside a stripped quoted-heredoc body is data, not a command
+typed_heredoc="$(printf '%s\n' "cat <<'EOF'" 'agentctl watch s1 | tail -3' 'EOF')"
+run "$typed_heredoc"
+chk_eq "stripped quoted-heredoc body is DATA" 0 "$RC"
+# and a plain newline ENDS the command — `| tail` on line 2 is a shell syntax error, not a pipe
+run "$(printf 'agentctl watch s1\n| tail -3')" 1
+chk_eq "plain newline is not a continuation (control for the backslash case)" 0 "$RC"
+# parse failure must NOT silently pass: an exception inside the shared pipeline view reaches
+# the top-level wrapper as CHECKER-ERROR. Targeted — only _pipe_view uses this sub() pattern.
+tmpe="$(mktemp)"; out12="$(python3 -c 'import io,re,runpy,sys
+sys.stdin=io.StringIO(sys.argv[2])
+_sub=re.sub
+re.sub=lambda p,*a,**k: (_ for _ in ()).throw(RuntimeError("boom")) if p==r"\d*>&\d*" else _sub(p,*a,**k)
+runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" "$(mkcmd 'agentctl watch s1 | tail -3' 1)" 2>"$tmpe")"; rc12=$?; err12="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "a broken pipeline view is a CHECKER-ERROR, not a silent pass" 2 "$rc12"
+chk_contains "rule 12 parse failure marker" "CHECKER-ERROR" "$err12"
+
+# ── (13) codex brief wording advisory: WARN-only, bounded read, never blocks ──────────────
+# Word list = literal phrases from the four cyberPolicy-blocked review dispatches (n=4).
+B13="$G8ROOT/briefs"; mkdir -p "$B13"
+printf '%s\n' '目标：核对 rc 直读。注意评审席不要拿 forged 身份去 bypass 门禁。' > "$B13/dirty.md"
+printf '%s\n' 'Goal: verify rc is read directly; report findings as file:line.' > "$B13/clean.md"
+D13="agentctl start codex s1 /wt --goal"
+W13="&& agentctl watch s1"
+run "$D13 $B13/dirty.md --review $W13" 1
+chk_eq "dirty brief still exits 0 (advisory, never a DENY)" 0 "$RC"
+chk_eq "advisory writes nothing to stderr" "" "$ERR"
+chk_contains "dirty brief warns" "WARN (cto-guard 13)" "$(ctx "$OUT")"
+chk_contains "warn names the matched wording" "forged" "$(ctx "$OUT")"
+chk_contains "warn names every match, not just the first" "bypass" "$(ctx "$OUT")"
+chk_contains "warn points at neutral review-dispatch wording" "DISPATCH" "$(ctx "$OUT")"
+chk_contains "warn points at moving detail into the read file" "INTO the file" "$(ctx "$OUT")"
+run "$D13 $B13/clean.md --review $W13" 1
+chk_eq "clean brief exits 0" 0 "$RC"; chk_eq "clean brief emits nothing" "" "$OUT"
+chk_eq "clean brief no stderr" "" "$ERR"
+# CJK term (no word boundaries exist) is a substring match
+printf '%s\n' '这一轮请顺手验证一下能不能绕过 pre-push 钩子。' > "$B13/cjk.md"
+run "$D13 $B13/cjk.md --review $W13" 1
+chk_contains "CJK term matches as a substring" "绕过" "$(ctx "$OUT")"
+# the whole list ships tested: a typo in an unexercised term would be a silent dead entry
+printf '%s\n' 'Send an impostor stamp plus the ATTACK   PAYLOAD, then 失败探针复跑 一轮。' > "$B13/rest.md"
+run "$D13 $B13/rest.md --review $W13" 1
+chk_contains "remaining term: impostor" "impostor" "$(ctx "$OUT")"
+chk_contains "remaining term: attack payload, case- and whitespace-insensitive" "attack   payload" "$(ctx "$OUT")"
+chk_contains "remaining term: the full CJK probe phrase" "失败探针复跑" "$(ctx "$OUT")"
+# CALIBRATION, not defects: the list is literal + whole-word, so inflections and synonyms miss
+printf '%s\n' 'The 2019 gate was bypassed once; probe the new one and report.' > "$B13/inflected.md"
+run "$D13 $B13/inflected.md --review $W13" 1
+chk_eq "whole-word: 'bypassed'/'probe' do not fire (declared FN, calibration)" "" "$OUT"
+printf '%s\n' 'Check whether a spoofed identity can circumvent the guard; 试着规避一下。' > "$B13/synonym.md"
+run "$D13 $B13/synonym.md --review $W13" 1
+chk_eq "synonym rewrite is a KNOWN miss (literal list, not a semantic detector)" "" "$OUT"
+# I/O boundary: every failure is a `not inspected` note at exit 0
+run "$D13 $B13/nope.md --review $W13" 1
+chk_eq "missing brief exits 0" 0 "$RC"
+chk_contains "missing brief reported" "not inspected (missing)" "$(ctx "$OUT")"
+ln -sf "$B13/dirty.md" "$B13/link.md"
+run "$D13 $B13/link.md --review $W13" 1
+chk_eq "symlinked brief exits 0" 0 "$RC"
+chk_contains "symlink is reported, not followed" "not inspected (symlink)" "$(ctx "$OUT")"
+run "$D13 $B13 --review $W13" 1
+chk_contains "a directory is not a brief" "not inspected (not a regular file)" "$(ctx "$OUT")"
+python3 -c 'import sys; open(sys.argv[1],"w").write("bypass "*40000)' "$B13/huge.md"
+run "$D13 $B13/huge.md --review $W13" 1
+chk_contains "oversize brief is bounded, not read" "not inspected (larger than 256KB)" "$(ctx "$OUT")"
+printf 'bypass \377\376 not utf8\n' > "$B13/binary.md"
+run "$D13 $B13/binary.md --review $W13" 1
+chk_contains "undecodable brief reported" "not inspected (not UTF-8)" "$(ctx "$OUT")"
+run "$D13 \"\$BRIEF\" --review $W13" 1
+chk_contains "an expansion in the path is an admitted UNKNOWN" "not inspected (unparseable path)" "$(ctx "$OUT")"
+# path fidelity: the raw text is the source, so a quoted path with a space survives (the
+# normalized pipeline view would have blanked it to ARG — that is why rule 13 does not use it)
+mkdir -p "$G8ROOT/br iefs"; cp "$B13/dirty.md" "$G8ROOT/br iefs/b.md"
+run "$D13 '$G8ROOT/br iefs/b.md' --review $W13" 1
+chk_contains "quoted path containing a space is read" "forged" "$(ctx "$OUT")"
+run "$D13=$B13/dirty.md --review $W13" 1
+chk_contains "--goal=<f> joined form is the same dispatch" "forged" "$(ctx "$OUT")"
+cp "$B13/dirty.md" "$ISO_REPO/brief.md"
+run "$D13 brief.md --review $W13" 1
+chk_contains "relative path resolves against the payload cwd" "forged" "$(ctx "$OUT")"
+# declared boundary: only the FIRST start-codex form in a command is inspected
+run "$D13 $B13/clean.md --review $W13; agentctl start codex s2 /wt --goal $B13/dirty.md --review && agentctl watch s2" 1
+chk_eq "only the FIRST start codex is inspected (declared boundary)" "" "$OUT"
+# scope: not a codex dispatch, and not a dispatch at all
+run "agentctl start omp s1 /wt --goal $B13/dirty.md $W13" 1
+chk_eq "rule 13 is codex-only (an omp brief is not read)" "" "$OUT"
+run "cat $B13/dirty.md"
+chk_eq "reading the brief is not a dispatch" "" "$OUT"
+# the WARN rides rule (3)'s channel: ONE hook response carrying both notes
+run "$D13 $B13/dirty.md --review"
+chk_eq "unwatched dirty dispatch exits 0" 0 "$RC"
+chk_contains "watcher reminder still delivered" "watcher" "$(ctx "$OUT")"
+chk_contains "and the wording WARN rides the same channel" "WARN (cto-guard 13)" "$(ctx "$OUT")"
+chk_eq "exactly one JSON hook response on stdout" 1 "$(printf '%s' "$OUT" | grep -c hookSpecificOutput)"
+# rule 12 outranks the advisory when both apply
+run "$D13 $B13/dirty.md --review | tee /tmp/o.log"
+chk_eq "a piped dispatch is denied by (12), advisory does not soften it" 2 "$RC"
+# THE ADVISORY CONTRACT: an exception inside rule 13 must NOT reach the top-level wrapper,
+# which would turn exit 0 + WARN into exit 2 + DENY of a legal dispatch (review R1 finding-5).
+tmpe="$(mktemp)"; out13="$(python3 -c 'import io,os,runpy,sys
+sys.stdin=io.StringIO(sys.argv[2])
+os.lstat=lambda *a,**k: (_ for _ in ()).throw(RuntimeError("boom"))
+runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" "$(mkcmd "$D13 $B13/dirty.md --review $W13" 1)" 2>"$tmpe")"; rc13=$?; err13="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "an exception inside rule 13 stays exit 0" 0 "$rc13"
+chk_eq "and never emits a CHECKER-ERROR" "" "$err13"
+chk_contains "it degrades to not inspected" "not inspected (unreadable)" "$(ctx "$out13")"
+
+# ── impl review R1 (codex) — every reproduction verbatim, red-then-green ──────────────────
+# B1: rule 8 REQUIRES -R/--repo for gh in a multi-repo umbrella, so the repository-qualified
+# spelling is the only legal one there — and it must still reach rule 12.
+run 'gh -R owner/repo pr checks 12 --watch | tail -1' 1
+chk_eq "R1-B1 gh -R … pr checks --watch piped denied" 2 "$RC"
+chk_contains "R1-B1 and it is rule 12's verdict" "EXIT CODE" "$ERR"
+run 'gh -R owner/repo run watch 99 | cat' 1
+chk_eq "R1-B1 gh -R … run watch piped denied" 2 "$RC"
+run '/opt/bin/gh -R owner/repo pr checks 12 --watch | tail -1' 1
+chk_eq "R1-B1 path-qualified gh with -R denied" 2 "$RC"
+run 'gh --repo owner/repo pr checks 12 --watch | tail -1' 1
+chk_eq "R1-B1 --repo spelling denied too" 2 "$RC"
+# PAIRED GREEN: the global-flag window is bounded and does not turn gh into a wildcard
+run 'gh -R owner/repo pr list | tail -1'
+chk_eq "R1-B1 an unrelated gh subcommand behind -R stays allowed" 0 "$RC"
+
+# B2: an env VALUE with spaces is a blanked ARG in the shared view; the anchor must survive it.
+run 'FOO="a b" agentctl stop s1 | cat'
+chk_eq "R1-B2 quoted env value keeps the env prefix anchored" 2 "$RC"
+run 'env FOO="a b" agentctl stop s1 | cat'
+chk_eq "R1-B2 same through an env wrapper" 2 "$RC"
+run 'A=one B="two words" /opt/bin/agentctl start omp s1 /wt | tee /tmp/o'
+chk_eq "R1-B2 mixed plain+quoted assignments on a path-qualified binary" 2 "$RC"
+chk_contains "R1-B2 and rule 12 answers, not rule 3's reminder" "EXIT CODE" "$ERR"
+
+# M1: `timeout`'s ordinary duration syntax, not just an integer.
+run 'timeout 5s agentctl stop s1 | cat'
+chk_eq "R1-M1 timeout 5s wrapper denied" 2 "$RC"
+run 'timeout 0.5 agentctl stop s1 | cat'
+chk_eq "R1-M1 fractional duration denied" 2 "$RC"
+run 'timeout 5s bash test/run.sh | tail -1'
+chk_eq "R1-M1 rule 10 gets the same duration coverage" 2 "$RC"
+chk_contains "R1-M1 and that one is rule 10's verdict" "exit code is the LAST" "$ERR"
+
+# M2: a backslash-escaped `|` is argv DATA and a `#` comment's `|` is prose — neither is a pipe.
+run 'agentctl stop s1 \| cat'
+chk_eq "R1-M2 escaped pipe is argv data, allowed" 0 "$RC"; chk_eq "R1-M2 and silent" "" "$ERR"
+m2b="agentctl stop s1 '# audit' \\| cat"
+run "$m2b"
+chk_eq "R1-M2 quoted hash plus escaped pipe allowed" 0 "$RC"
+run 'agentctl stop s1 # note | cat'
+chk_eq "R1-M2 a trailing comment's pipe is prose, allowed" 0 "$RC"
+# PAIRED RED-SIDE: the real operators must still bite, and `\\|` IS a real pipe (literal
+# backslash argument + pipe), which is why the escape parking is parity-aware.
+run 'agentctl stop s1 | cat'
+chk_eq "R1-M2 an unescaped pipe is still denied" 2 "$RC"
+run 'agentctl stop s1 \\| cat'
+chk_eq "R1-M2 a literal-backslash argument does not shield the pipe" 2 "$RC"
+run 'echo "a#b" ; agentctl watch s1 | tail -3' 1
+chk_eq "R1-M2 a hash inside a token is not a comment" 2 "$RC"
+
+# M3: binary identity is a basename, not a suffix.
+run 'fakeagentctl stop s1 | cat'
+chk_eq "R1-M3 fakeagentctl is a different program, allowed" 0 "$RC"
+chk_eq "R1-M3 and silent" "" "$ERR"
+run '/opt/bin/agentctl stop s1 | cat'
+chk_eq "R1-M3 PAIRED RED-SIDE: the real binary at a path still denied" 2 "$RC"
+
+# M4: `--watch` is a boolean flag; only bare / =true is watch mode.
+run 'gh pr checks 12 --watch=false | tail -1'
+chk_eq "R1-M4 --watch=false is not watch mode, allowed" 0 "$RC"
+run 'gh pr checks 12 --watch=bogus | tail -1'
+chk_eq "R1-M4 a non-boolean value is not watch mode either" 0 "$RC"
+run 'gh pr checks 12 --watch=true | tail -1'
+chk_eq "R1-M4 PAIRED RED-SIDE: --watch=true is watch mode, denied" 2 "$RC"
+
+# M5: `|&` is bash's pipe-with-stderr operator. Denying it as backgrounding sent the operator
+# to run_in_background — straight into the next denial — instead of the file-first fix.
+run 'agentctl stop s1 |& cat'
+chk_eq "R1-M5 |& piped typed command denied" 2 "$RC"
+chk_contains "R1-M5 with rule 12's file-first fix" "read rc directly" "$ERR"
+chk_eq "R1-M5 and NOT rule 1's orphan wording" 0 "$(printf '%s' "$ERR" | grep -c ORPHAN)"
+run 'printf x | agentctl steer s1 -f - |& cat'
+chk_eq "R1-M5 same mid-pipeline" 2 "$RC"
+chk_eq "R1-M5 mid-pipeline is also not an orphan" 0 "$(printf '%s' "$ERR" | grep -c ORPHAN)"
+run 'bash test/run.sh |& tail -3'
+chk_eq "R1-M5 a gate behind |& reaches rule 10, not rule 1" 2 "$RC"
+chk_contains "R1-M5 and gets rule 10's wording" "exit code is the LAST" "$ERR"
+run 'npm run dev &'
+chk_eq "R1-M5 PAIRED GREEN-SIDE: a real trailing & is still an ORPHAN" 2 "$RC"
+chk_contains "R1-M5 rule 1 keeps its own shape" "ORPHAN" "$ERR"
+
+# M7: a glob/brace/tilde token makes the shell open a DIFFERENT file than the text names.
+printf '%s\n' 'forged stamp here' > "$B13/a[1].md"
+printf '%s\n' 'clean brief, nothing to see' > "$B13/a1.md"
+run "$D13 $B13/a[1].md --review $W13" 1
+chk_eq "R1-M7 glob path exits 0" 0 "$RC"
+chk_contains "R1-M7 glob path is an admitted UNKNOWN, not a literal read" \
+  "not inspected (unparseable path)" "$(ctx "$OUT")"
+chk_eq "R1-M7 and the literal file's wording never leaks" 0 "$(printf '%s' "$(ctx "$OUT")" | grep -c forged)"
+run "$D13 $B13/{a,b}.md --review $W13" 1
+chk_contains "R1-M7 brace expansion is UNKNOWN too" "unparseable path" "$(ctx "$OUT")"
+run "$D13 ~/brief.md --review $W13" 1
+chk_contains "R1-M7 tilde expansion is UNKNOWN too" "unparseable path" "$(ctx "$OUT")"
+# PAIRED GREEN: metacharacters are only ambiguous UNQUOTED. Inside single quotes the shell hands
+# the binary exactly those bytes, so the same brace text is a plain filename and is read.
+printf '%s\n' 'forged, and literally named {a,b}.md' > "$B13/{a,b}.md"
+run "$D13 '$B13/{a,b}.md' --review $W13" 1
+chk_contains "R1-M7 a SINGLE-QUOTED brace is a literal filename, read normally" "forged" "$(ctx "$OUT")"
+# PAIRED GREEN: ordinary filename punctuation is extracted, not rejected
+cp "$B13/dirty.md" "$B13/re-view_2.0+draft@x%y=z:1.md"
+run "$D13 '$B13/re-view_2.0+draft@x%y=z:1.md' --review $W13" 1
+chk_contains "R1-M7 ordinary punctuation still extracts and reads" "forged" "$(ctx "$OUT")"
+
+# m1: quoted data is not a dispatch — the advisory must not narrate a command nobody runs.
+# SCOPE, stated: rule (3)'s watcher reminder still fires on quoted text. That is pre-existing
+# behaviour of rule 3's own `cmd` match, outside this batch, and the reviewer bracketed it the
+# same way; the assertion below is on rule 13's output only.
+run "echo 'note; $D13 $B13/dirty.md --review'"
+chk_eq "R1-m1 quoted dispatch text exits 0" 0 "$RC"
+chk_eq "R1-m1 and produces no rule-13 advisory" 0 \
+  "$(printf '%s' "$(ctx "$OUT")" | grep -c 'cto-guard 13')"
+
+# m2: the size verdict comes from the bytes READ, not from the lstat snapshot. The liar returns
+# st_size=1 for the 280000-byte dirty brief, so a stat-trusting guard would emit the wording WARN.
+tmpe="$(mktemp)"; outm2="$(python3 -c 'import io,os,runpy,sys
+sys.stdin=io.StringIO(sys.argv[2])
+_lstat = os.lstat
+def _liar(p):
+    t = list(_lstat(p)[:10]); t[6] = 1; return os.stat_result(tuple(t))
+os.lstat = _liar
+runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" "$(mkcmd "$D13 $B13/huge.md --review $W13" 1)" 2>"$tmpe")"; rcm2=$?; errm2="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_eq "R1-m2 a lying stat still exits 0" 0 "$rcm2"
+chk_eq "R1-m2 and emits no CHECKER-ERROR" "" "$errm2"
+chk_contains "R1-m2 the bounded read owns the verdict" \
+  "not inspected (larger than 256KB)" "$(ctx "$outm2")"
+chk_eq "R1-m2 and no wording from the oversize file leaks" 0 \
+  "$(printf '%s' "$(ctx "$outm2")" | grep -c bypass)"
 
 tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"

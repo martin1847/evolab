@@ -47,7 +47,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=8334    # all injected text across both guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=9313    # all injected text across both guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -58,8 +58,24 @@ BUDGET_GUARD_TOTAL=8334    # all injected text across both guards (raised 7439�
                            # come from cutting elsewhere: every other rule's text is already at or
                            # under its own field-earned minimum, and this one is well under the
                            # per-message ceiling (which did NOT move).
-BUDGET_GUARD_SINGLE=754    # the longest single message a worker can be handed at once
-BUDGET_GUARD_COUNT=21      # sink count: a drop means extraction broke or a sink moved out of view
+                           # Raised 8334→9313 on 2026-08-20, TWO items, both weighed:
+                           #  +590 B rule (12) typed-command-piped DENY. Bought: `agentctl
+                           #    steer|watch|start|stop` and `gh …--watch` carry their verdict in
+                           #    the exit code, which a pipeline overwrites with the pager's 0.
+                           #    The text must name the masked rc AND the file-first replacement,
+                           #    because the denied seat was mid-supervision when it landed.
+                           #  +389 B rule (13) brief-wording advisory, joining rule (3)'s
+                           #    reminder in ONE hook response (204 → 593 B for that sink). It is
+                           #    the only branch that ever pays: a clean brief emits nothing.
+                           #    Could not come from cutting elsewhere — the advisory has to name
+                           #    the matched phrases, the neutral-wording fix AND its own
+                           #    non-completeness, or it reads as a verdict instead of a hint.
+BUDGET_GUARD_SINGLE=754    # the longest single message a worker can be handed at once. UNMOVED:
+                           # the (3)+(13) assembled response is 593 B, the (12) denial 590 B.
+BUDGET_GUARD_COUNT=23      # sink count: a drop means extraction broke or a sink moved out of
+                           # view. 21→23 on 2026-08-20: +1 real sink (rule 12) and +1 the meter
+                           # had been blind to (see `resolve` below); pinned to the measured
+                           # number, since the old baseline carried untracked slack.
 
 echo "== injected-context budget =="
 
@@ -88,14 +104,27 @@ else
 fi
 
 # ---- 2. guard sinks -----------------------------------------------------------------------------
-read -r guard_total guard_single guard_count guard_recall <<EOF
-$(python3 - "$GUARD_BASH" "$GUARD_AGENT" <<'PY'
-import ast, sys
+# The extractor lives in its OWN file so the suite can run it twice: once for real, once under the
+# review's targeted mutation (see the recall probe below). An oracle that cannot be shown to go
+# red is not an oracle — R1 M6 proved exactly that against the previous inline copy.
+EXTRACT="$(mktemp)"; trap 'rm -f "$EXTRACT"' EXIT
+cat > "$EXTRACT" <<'PY'
+import ast, os, sys
+
 
 # Fields whose value is handed to the agent verbatim by the harness.
 SINK_KEYS = {"additionalContext", "permissionDecisionReason", "reason"}
-# A message we KNOW is injected, used to calibrate the extractor itself (see header).
-KNOWN_POSITIVE = "[browser/long subagent launched]"
+# Messages we KNOW are injected, used to calibrate the extractor itself (see header). The trio
+# covers every sink shape in play AND every local inside the assembled one: a bare local handed
+# to a sink, and BOTH locals of the payload assembled at rule (3)'s sink. Two needles were not
+# enough — a resolve() that dropped only rule 13's local still recalled the reminder and stayed
+# green while 388 bytes went unweighed (review R1 M6).
+KNOWN_POSITIVE = ("[browser/long subagent launched]",          # bare Name sink (PostToolUse)
+                  "REMINDER (cto-guard): session",             # assembled sink, first local
+                  "wording that has tripped")                  # assembled sink, rule 13's local
+# Mutation switch for the recall probe below: comma-separated local names resolve() must ignore.
+# Test-only; the real invocation passes nothing.
+IGNORE = {n for n in os.environ.get("GUARD_METER_IGNORE", "").split(",") if n}
 
 def literal_text(node):
     """Literal string text under one expression, counted once.
@@ -118,7 +147,17 @@ def collect(path):
                 varmap[n.targets[0].id] = t
 
     def resolve(node):
-        return varmap.get(node.id, "") if isinstance(node, ast.Name) else literal_text(node)
+        """Literal text at this sink, plus every local whose literal value flows into it.
+
+        Resolving only a bare Name weighed an assembled payload — `"\\n".join(t for t in
+        (reminder, note) if t)` — as ZERO bytes, so a rule could inject a page of text with
+        this gate green (caught 2026-08-20 while wiring rule 13 onto rule 3's channel).
+        """
+        parts = [literal_text(node)]
+        for n in ast.walk(node):
+            if isinstance(n, ast.Name) and n.id in varmap and n.id not in IGNORE:
+                parts.append(varmap[n.id])
+        return "".join(parts)
 
     msgs = []
     for node in ast.walk(tree):
@@ -143,17 +182,33 @@ def collect(path):
     return msgs
 
 total = longest = count = 0
-recall = 0
+seen = []
 for path in sys.argv[1:]:
     for m in collect(path):
         b = len(m.encode("utf-8"))
         total += b; count += 1; longest = max(longest, b)
-        if KNOWN_POSITIVE in m:
-            recall = 1
+        seen.append(m)
+recall = int(all(any(k in m for m in seen) for k in KNOWN_POSITIVE))
 print(total, longest, count, recall)
 PY
-)
+
+read -r guard_total guard_single guard_count guard_recall <<EOF
+$(python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT")
 EOF
+
+# RECALL PROBE (review R1 M6, the reviewer's mutation run as a standing negative control): a
+# resolve() that ignores ONLY rule 13's local. Before the third known positive this mutation was
+# invisible — total silently fell 9313→8925 while count stayed 23 and recall stayed 1, i.e. the
+# gate reported green for 388 unweighed bytes. The probe asserts the oracle now BITES.
+read -r mut_total _ mut_count mut_recall <<EOF
+$(GUARD_METER_IGNORE=note13 python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT")
+EOF
+if [ "$mut_recall" = "0" ] && [ "$mut_total" -lt "$guard_total" ]; then
+  _record "recall probe: dropping ONLY rule 13's local goes red ($mut_total < $guard_total bytes)" 1
+else
+  _record "recall probe: dropping ONLY rule 13's local goes red" 0 \
+    "mutated run reported recall=$mut_recall total=$mut_total count=$mut_count — the known-positive set does not discriminate rule 13's message, so its bytes could go unweighed"
+fi
 
 if [ "$guard_total" -le "$BUDGET_GUARD_TOTAL" ]; then
   _record "guard injected text within budget ($guard_total <= $BUDGET_GUARD_TOTAL)" 1

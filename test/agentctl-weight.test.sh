@@ -31,11 +31,23 @@ cd "$(dirname "$0")"
 # and state in the commit message why the weight had to go into that file. A batch that splits a
 # file rewrites the shrinking row (the lock-new-low arm reds otherwise) and adds a row for the
 # new module in that same commit.
+# cto-guard-bash.py 831→1019 (2026-08-20, rules 12+13): the weight HAD to land here — a
+# PreToolUse·Bash rule has no other home, and rule 12 was deliberately built on rule 10's
+# extracted `_pipe_view`/`_pos_head` instead of a second shell approximation, which is why the
+# growth is 12/13's own surface (bounded `--goal` extraction + its I/O failure taxonomy) plus
+# the doctrine comments this file carries per rule, not duplicated parsing.
+# 1019→1070 (same day, impl-review R2 收口): +51 for 11 adopted findings, ALL correctness, no
+# new surface — gh global-flag window (B1), env value blanking (B2), timeout duration syntax
+# (M1), escaped-separator parking + `#` comment strip (M2), agentctl basename boundary (M3),
+# `--watch` boolean semantics (M4), `|&` reclassified from rule 1 to rule 12 (M5), glob/brace/
+# tilde UNKNOWN (M7), command-position gate on the advisory (m1), post-read size verdict (m2).
+# Each carries the reviewer's reproduction as a standing assertion; the shared parse face stayed
+# shared — no second approximation was added to pay for any of them.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3972
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 588
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 831
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1070
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked
 
