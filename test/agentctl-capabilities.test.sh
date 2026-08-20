@@ -259,7 +259,7 @@ chk_contains "C5 the resume criterion is published next to the table" \
 # without these three the refusal string could drop a tier and stay green.
 caps_text="$(caps)"
 chk_contains "C5 the default sandbox tier is published" "danger-full-access" "$caps_text"
-chk_contains "C5 and the review tier is published beside it" "review" "$caps_text"
+chk_contains "C5 and the review tier is published bound to its flag" 'danger-full-access (`--review`' "$caps_text"
 chk_contains "C5 the review tier names the flag that selects it" '`--review`' "$caps_text"
 # ONE table, not two literals: the published text and the shell launch spec read the same dict
 chk_eq "C5 the review tier reaches the shell spec from that same table" "danger-full-access" \

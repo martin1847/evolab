@@ -459,6 +459,19 @@ chk_eq "the tier is recorded in session meta" 1 "$(sed -n 's/^review=//p' "$WATC
 chk_contains "the start banner names the tier it requested" "review sandbox=danger-full-access" "$out"
 bash "$AGENTCTL" stop rvR >/dev/null 2>&1
 
+# With both tiers unified the wire frame cannot show WHICH key the handshake selected —
+# always-default would pass the exact-frame check above. The selection seam is proven here
+# with divergent stub tiers instead.
+out="$(python3 - "$AW_DIR/duplexctl.py" <<'PYSEL'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("dctl", sys.argv[1])
+d = importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
+d.PROVIDERS["codex"]["sandbox"] = {"default": "tier-D", "review": "tier-R"}
+print(d.sandbox_tier("codex", True), d.sandbox_tier("codex", False))
+PYSEL
+)"
+chk_eq "sandbox_tier selects by the review flag even when tiers diverge" "tier-R tier-D" "$out"
+
 # Both refusals are PARAMETER-surface refusals, so they own nothing. The self-proving check is
 # that the same session name starts clean immediately afterwards: a leftover fifo or meta file
 # would refuse it (the mkfifo claim is the collision detector).
@@ -630,15 +643,15 @@ out="$(bash "$AGENTCTL" start codex rvB3 "$WT" --goal "$SANDBOX/goal.md" --revie
 chk_eq "the real seven-field row still accepts --review" 0 "$rc"
 bash "$AGENTCTL" stop rvB3 >/dev/null 2>&1
 
-# NEGATIVE CONTROL: the fence belongs to the review tier ALONE. The execution seat owns its
-# whole machine and legitimately writes outside cwd — this goes red if the gate leaks.
+# NEGATIVE CONTROL: the fence belongs to the review SEAT alone. The execution seat
+# legitimately delivers outside cwd (build outputs) — this goes red if the gate leaks.
 out="$(bash "$AGENTCTL" start codex rvG6 "$WT" --goal "$SANDBOX/goal.md" \
        --deliverable "$SANDBOX/outside.md" 2>&1)"; rc=$?
 chk_eq "default tier + cwd-external glob still allowed" 0 "$rc"
 bash "$AGENTCTL" stop rvG6 >/dev/null 2>&1
 
 # `steer -d` moves the freshness target, so it must clear the SAME fence: otherwise a session
-# that opened compliant is walked out of its sandbox by one steer.
+# that opened compliant is walked out of its fence by one steer.
 out="$(bash "$AGENTCTL" start codex rvS "$WT" --goal "$SANDBOX/goal.md" --review \
        --deliverable REVIEW.md 2>&1)"; rc=$?
 chk_eq "review session for the steer gate started" 0 "$rc"

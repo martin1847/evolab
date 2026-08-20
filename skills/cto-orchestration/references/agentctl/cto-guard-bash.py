@@ -781,13 +781,12 @@ def main():
             return 2
 
     # (11) bare `codex exec` / `codex e` / `codex review` — a hand-rolled headless codex.
-    #      Field 2026-08-19/20: the review seat needs OS-level read-only, the lane pinned
-    #      danger-full-access with no alternative, so the orchestrator hand-rolled
-    #      `codex exec --sandbox read-only`. A bare exec owns no fifo and publishes no typed
-    #      state: a heredoc in the same command waits on stdin EOF forever (one hang ran
-    #      10h21m) and a `$(cat brief)` that expanded empty burned a whole round in silence.
-    #      Owner ruling: review dispatch may go through the lane ONLY — the tier it was
-    #      hand-rolling for now exists as `agentctl start codex … --review`.
+    #      Field 2026-08-19/20: the orchestrator hand-rolled `codex exec` for a review
+    #      seat. A bare exec owns no fifo and publishes no typed state: a heredoc in the
+    #      same command waits on stdin EOF forever (one hang ran 10h21m) and a `$(cat
+    #      brief)` that expanded empty burned a whole round in silence.
+    #      Owner ruling: review dispatch may go through the lane ONLY —
+    #      `agentctl start codex … --review`.
     #      PLACEMENT IS LOAD-BEARING: this must stay ABOVE rule (3), whose `if m:` branch ends
     #      in an unconditional `return 0` — every rule below it is invisible to any command
     #      containing `agentctl start`, which is exactly the shape that chains a bare codex

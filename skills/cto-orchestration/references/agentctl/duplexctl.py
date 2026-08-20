@@ -1731,8 +1731,8 @@ def _deliverable_moved(run_dir: str, session: str, glob_: str) -> None:
 # What `agentctl start` / `agentctl steer -d` parsed but has not committed anywhere yet. It
 # lives HERE, not in the shell, for the same reason every other judgement does (agentctl is a
 # thin entry): both rules are properties of things this file owns — the session meta's line
-# format, and the review seat's sandbox tier. One verb, called before the start owns a fifo, a
-# meta file or a tmux session, so a refusal leaves nothing behind.
+# format, and the review seat's deliverable fence. One verb, called before the start owns a
+# fifo, a meta file or a tmux session, so a refusal leaves nothing behind.
 
 def _meta_line_problem(flag: str, value: str) -> str | None:
     r"""The meta is one `key=value` per line, so a newline inside a value is a KEY injection:
@@ -1750,9 +1750,11 @@ def _meta_line_problem(flag: str, value: str) -> str | None:
 def deliverable_inside_cwd(glob_: str, cwd: str) -> bool:
     """Whether this deliverable lands inside the session cwd.
 
-    Lane discipline, not a sandbox fact: watch resolves the deliverable glob against cwd
-    and the exit-6 scan walks cwd — a deliverable outside it is invisible to both, so the
-    session reaches DONE and delivers nothing anyone can find.
+    Lane discipline, not a sandbox fact (watch itself resolves absolute globs anywhere):
+    review artifacts live WITH the review workspace — written into an unrelated tree they
+    survive worktree cleanup as orphans (the misplaced-deliverable incident class), and
+    the exit-6 near-miss scan walks cwd only, so a missing deliverable declared outside
+    cwd could not even be hunted.
 
     EVERY glob is judged, relative included — `..` joined onto cwd lands one level up
     (review R1 B1), so the glob is resolved to a candidate path first and one rule covers
@@ -1819,9 +1821,10 @@ def cmd_check_params(args: argparse.Namespace) -> int:
     if args.review and args.deliverable and not deliverable_inside_cwd(
             args.deliverable, args.cwd):
         print(f"ERR: {args.gate} refused: a --review session's deliverable must live INSIDE "
-              f"its session cwd ({args.cwd}), and '{args.deliverable}' does not — watch and "
-              "the exit-6 scan resolve deliverables against cwd, so one outside it is "
-              f"delivered where nothing looks. Fix: point the glob inside {args.cwd}. "
+              f"its session cwd ({args.cwd}), and '{args.deliverable}' does not — review "
+              "artifacts written into unrelated trees outlive worktree cleanup as orphans, "
+              "and the exit-6 near-miss scan walks cwd only. Fix: point the glob inside "
+              f"{args.cwd}. "
               "'..' escapes and is refused; the deepest existing ancestor is resolved "
               "physically (symlinks out of cwd refused); no existing ancestor = ambiguous, "
               "refused.", file=sys.stderr)
@@ -1874,13 +1877,10 @@ def handshake(args: argparse.Namespace) -> int:
         started = codex_request(sess, capability(engine, "resume")["route"],
                                 {"threadId": sess.meta["resume_thread"]}, timeout=args.wait)
     else:
-        # the sandbox TIER is the provider record's, not a literal here: `--review` writes
-        # `review=1` to meta and selects the review tier from that record.
         # thread/resume above deliberately has no tier — it sends the threadId alone, so a
-        # resumed thread cannot be re-pinned, which is why `agentctl start` refuses the pair.
-        tiers = provider(engine)["sandbox"]
+        # resumed thread keeps its creation-time tier and `agentctl start` refuses the pair.
         params = {"cwd": sess.meta.get("cwd"), "approvalPolicy": "never",
-                  "sandbox": tiers["review" if sess.meta.get("review") else "default"]}
+                  "sandbox": sandbox_tier(engine, bool(sess.meta.get("review")))}
         if sess.meta.get("model"):
             params["model"] = sess.meta["model"]
         started = codex_request(sess, "thread/start", params, timeout=args.wait)
@@ -1909,6 +1909,14 @@ def handshake(args: argparse.Namespace) -> int:
 # caught nothing. Providers with no OS sandbox declare an EMPTY dict: "no such tier"
 # is what makes `--review` a typed refusal.
 CODEX_SANDBOX = {"default": "danger-full-access", "review": "danger-full-access"}
+
+
+def sandbox_tier(engine: str, review: bool) -> str:
+    """The tier the handshake pins — always the provider record's, never a literal.
+    A seam on purpose: with both tiers unified the wire frame cannot show WHICH key
+    was selected, so the selection is proven at this function with divergent stub
+    tiers (agentctl-duplex.test.sh) instead of on the frame."""
+    return provider(engine)["sandbox"]["review" if review else "default"]
 
 PROVIDERS: dict[str, dict] = {
     "omp": {

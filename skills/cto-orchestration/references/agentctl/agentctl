@@ -160,7 +160,7 @@ provider_names() { "$PY" "$CTL" providers | tr '\n' '|' | sed 's/|$//'; }
 
 # Parameter-surface VALUE judgement (meta-line safety + the review seat's deliverable fence) is
 # duplexctl's: `ctl check-params` owns both rules and prints its own refusal, because both are
-# properties this shell does not own — the meta file format and the review sandbox tier. Called
+# properties this shell does not own — the meta file format and the deliverable fence. Called
 # before the start owns a fifo / meta / tmux session, so a refusal leaves nothing behind.
 
 cmd_start() {
@@ -223,14 +223,15 @@ cmd_start() {
   #  * a provider that declares no tier — the lane must not accept a permission request it
   #    cannot deliver (an unhandled flag forwarded to an extra_argv engine is not a refusal).
   #  * with --resume-thread — thread/resume sends the threadId ALONE, so a resumed thread
-  #    keeps the tier it was CREATED under; the banner must never claim a tier the engine
-  #    never got.
+  #    keeps its creation-time tier AND its creation-time identity: `--review` here would
+  #    stamp review=1 onto a thread that was never dispatched as a review seat, and the
+  #    receipt would claim a seat no handshake ever pinned. Holds even with tiers unified.
   if [ -n "$REVIEW" ] && [ -z "$P_REVIEW_SANDBOX" ]; then
     echo "ERR: --review needs a provider with an OS sandbox tier; '$ENG' declares none — the lane pins no sandbox for it at all, so there is nothing to select. Run 'agentctl capabilities' and read the permissionEnforcement row for $ENG; the review seat is codex" >&2
     exit 1
   fi
   if [ -n "$REVIEW" ] && [ -n "$RESUME_THREAD" ]; then
-    echo "ERR: --review cannot be combined with --resume-thread — thread/resume carries only the threadId, so a resumed thread keeps the tier it was CREATED under: accepting both would report a review seat it never pinned. Drop --resume-thread to start a NEW review thread, or drop --review to continue thread '$RESUME_THREAD' as-is" >&2
+    echo "ERR: --review cannot be combined with --resume-thread — thread/resume carries only the threadId, so a resumed thread keeps its creation-time tier and identity: stamping review=1 on it would mint a review seat no handshake ever pinned. Drop --resume-thread to start a NEW review thread, or drop --review to continue thread '$RESUME_THREAD' as-is" >&2
     exit 1
   fi
   if [ "$PREFLIGHT" = 1 ]; then
@@ -242,7 +243,7 @@ cmd_start() {
   CWD="$(cd "$CWD" && pwd -P)"
   # every value that will reach meta, plus the review seat's deliverable fence, judged in ONE
   # duplexctl call against the NORMALIZED cwd — comparing against the caller's spelling would
-  # let a symlinked or dot-laden cwd argument decide where the sandbox boundary is
+  # let a symlinked or dot-laden cwd argument decide where the fence boundary is
   ctl check-params --gate start --cwd "$CWD" ${REVIEW:+--review} \
      --deliverable "$DELIV" --model "$MODEL" --resume-thread "$RESUME_THREAD" \
      --workflow "$WORKFLOW" || exit 1
@@ -350,8 +351,8 @@ cmd_steer() {
       REVIEW_META="$(meta_get "$S" review)"
       [ "$MODE" = -f ] && { [ -e "$ARG" ] || { echo "ERR: file not found: $ARG" >&2; exit 1; }; }
       # `steer -d` moves the freshness target into the SAME line-oriented meta and past the SAME
-      # sandbox boundary, so it clears the same gate `start` did — otherwise a session that
-      # opened compliant is walked outside its sandbox by one steer. Only when `-d` is present:
+      # fence, so it clears the same gate `start` did — otherwise a session that opened
+      # compliant is walked outside its fence by one steer. Only when `-d` is present:
       # a plain steer writes no new value, so there is nothing to judge.
       if [ -n "$NEWDELIV" ]; then
         ctl check-params --gate "steer -d" --cwd "$(meta_get "$S" cwd)" \
