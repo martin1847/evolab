@@ -59,7 +59,10 @@ roadmap、DECISION_QUEUE 和 MEMORY 只给 warning，exit 仍可为 0，需按�
 - COMPLETED workstream 精简到 ≤10 行（结论 + 关键教训 + 指针），删掉过程细节。
 - 事实性细节（路径 / 凭据 / 执行路径 / 导航步骤）沉淀到项目环境文档（如 `ACCESS.local.md`,
   由 `repo-governance-bootstrap` 生成），memory 只留指针——memory 跨 session 存活但容量有限，
-  环境文档是 gitignored 的本地 SoT。
+  环境文档是 gitignored 的本地 SoT。沉淀时追加更正必须**同时改掉被推翻的原文**（supersede
+  原地改写——append-only 是此类文档的主腐烂模式：下游席位审计实测 64 条可核事实 51.6% 已腐，
+  且全部是指针类〔路径/URL/对象名/file:line〕，原理散文零腐烂）；文档成规模后配自动指针
+  lint——脚本正则抽取指针分档机械核查（路径/符号离线、URL/对象在线），零人工标注。
 - 重复 / 矛盾的 memory 合并或删除；已过时的 workstream 状态更新。
 - MEMORY.md 索引 ≤40 行，按类型分组（iron rules / active / completed / reference）。
 
