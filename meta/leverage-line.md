@@ -6,6 +6,9 @@
 > （这投入值不值得续）；两轴各自升级、互不替代。
 > 学名锚：satisficing（Simon）/ value of computation（Russell-Wefald 元推理）/
 > saturation-based stopping（fuzzing·测试停机）/ tolerance + management by exception（PRINCE2）。
+> 工程管理同构（Identify→Prioritize→Optimize）：Pareto 找大头、Effort×Impact 取舍对应
+> **配比轴**（选题权），ROI/价值密度控投入对应**杠杆线本体**（继续权）；反 Gold Plating =
+> 防御性复杂度前提问（fire 点见文末）。三件是同一循环的三步，不另设机制。
 
 ## 机制：产出自然衰减，投入没有
 
