@@ -43,9 +43,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 - **后台任务 cwd 语义**：宿主后台机制跑 `agentctl watch` 时，命令继承**发起时刻
   编排者的 cwd**，与 worker 会话 cwd 无关；判断后台任务归属认 `$RUN/<session>.*` 文件名，别认 cwd。
 - **watch 等的是 worker，不是外部作业**：worker 在等长外部作业（部署列车 / CI / 远端队列）时
-  别拿 watch 反复重挂硬扛——等待期一有噪声就掉出再挂，只产空转轮（下游席位 40min 列车
-  5 次重挂实证）；改用宿主长间隔 wakeup / 定时器对齐外部作业的真实时长，到点再回
-  `status` 一发判态。
+  别拿 watch 反复重挂硬扛——宿主事件会成批收割后台 waiter（见下 tombstone 节），长等待期内
+  每次收割都触发一次重挂，全是空转轮（下游席位 40min 列车 5 次重挂实证）；改用宿主长间隔
+  wakeup / 定时器对齐外部作业的真实时长，到点再回 `status` 一发判态。
 - 需要人工现场 = `tmux attach -t <session>` 旁观 / `tmux capture-pane -p`
   手动尸检；worker 控制始终走协议。
 
