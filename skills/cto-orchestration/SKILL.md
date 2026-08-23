@@ -108,6 +108,8 @@ runtime 自己讲（`agentctl capabilities`，状态词表 `agentctl states`）�
   `references/retrospective.md` 七步逐条勾，再跑 `references/retro-check.sh`；不即兴发挥。脚本只覆盖
   机械代理与 warning，不能替代语义复盘；同时清理已完成会话和孤儿进程。压缩点自动提醒 wiring 真源 =
   `references/retro-hooks.json`（可选接入，schema 限制与形态见该文件）。
+- **盘点仪式**（触发词：盘点 / 接下来做什么 / 规划下一批）：读 `references/stocktake.md` 四步逐条勾
+  ——扫源→标面定档→提案带不做名单→只提案不动工；选题取舍判据单源在该文件，不即兴。
 - 主理人只决战略、不可逆、钱与价值。决策队列、T0/T1/T2 语义和静默默认见 `references/decision-queue.md`；队列只存活跃项，已清残留由 hook 提醒 + retro 硬失败，新鲜度仍是软告警。
 
 ## 6. 专项路由（用到才读）

@@ -42,6 +42,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   摘要有界是本控制面的硬设计）。
 - **后台任务 cwd 语义**：宿主后台机制跑 `agentctl watch` 时，命令继承**发起时刻
   编排者的 cwd**，与 worker 会话 cwd 无关；判断后台任务归属认 `$RUN/<session>.*` 文件名，别认 cwd。
+- **watch 等的是 worker，不是外部作业**：worker 在等长外部作业（部署列车 / CI / 远端队列）时
+  别拿 watch 短窗轮换硬扛——默认窗只会连打 exit-7 空转（40min 列车 5 次重挂实证）；改用宿主
+  长间隔 wakeup / 定时器对齐外部作业的真实时长，到点再回 `status` 一发判态。
 - 需要人工现场 = `tmux attach -t <session>` 旁观 / `tmux capture-pane -p`
   手动尸检；worker 控制始终走协议。
 
@@ -73,8 +76,8 @@ steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影�
 - **评审档 `--review`**（codex 专属；非 codex、或与 `--resume-thread` 并存，参数面即拒——thread/resume 只带
   threadId 不重发 tier，放行即上报一个引擎从未钉过的席位）。沙箱两档统一 `danger-full-access`
   （workspace-write 网络封锁致评审席无法独立复算，n=3 假阻塞；写边界零战果）。
-  **交付物仍必须在 session cwd 内**——车道纪律非沙箱事实：watch 与 exit-6 扫描都按 cwd 解析，
-  写外面即无人认领。绝对与相对 glob 一律判：含 `..` 分量即拒，最深已存在祖先目录物理解析后不在
+  **交付物仍必须在 session cwd 内**——车道纪律非沙箱事实：写进无关树的评审产物会在 worktree
+  清理后变孤儿，且 exit-6 近失扫描只走 cwd。绝对与相对 glob 一律判：含 `..` 分量即拒，最深已存在祖先目录物理解析后不在
   cwd 内即拒（含 symlink 外逃），无已存在祖先按歧义拒，basename 为空 = 目录非交付物、拒；
   判定归 `duplexctl check-params`，`start` 与 `steer -d` 同门。另：进 meta 的参数面值一律拒含换行（否则注入 meta key，可无声改档），写点 `meta_update` 兜底引擎回传值。
 - 单写者纪律：所有 fifo 写经 `duplexctl.py`（flock）；并发 steer 由锁串行。

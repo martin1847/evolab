@@ -21,6 +21,9 @@ git worktree add ../wt-<name> -b feat/<name> origin/<base>
   规范，此处不复读。编排位只记一条：多会话并发时 base 常被别的 PR 推进，
   **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
 - 按 SHA 部署的项目：squash / rebase-merge 的 ancestry 都干净线性（`contains <sha>` 成立）。
+- **同 cwd 起第二席前先收割 BLOCKED.md**：BLOCKED.md 是席位间共享路径——前席遗留不清，
+  新席正确拒动他席文件而卡死、watcher 把旧 BLOCKED 误读为新席状态（同日 n=2）。编排位
+  收割（读取归档其内容）后删除，再派新席。
 - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主
   checkout、非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout
   **显式指到新 worktree**，可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。

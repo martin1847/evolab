@@ -43,7 +43,7 @@
    **base 对齐**（squash 集成仓的长驻 checkout：base 分支与 origin 分叉〔ahead 且 behind〕→ 核实
    ahead 内容已被 squash 合并后 backup ref + `reset --hard origin/<base>`；真未合并的工作先救——
    retro-check 1b 只检测告警，reset 归编排者）+
-   **敞口清单**（=下会话入口）。
+   **敞口清单**（=下会话入口；敞口要变下一批选题时走盘点仪式 `stocktake.md`，取舍判据单源在彼）。
 5. **治理同步（与 memory 更新同级、不可省）**：文档归档（→ `orchestration/archive/` + 索引行）+
    **ACTIVE_CONTEXT 整篇重写**（非追加，~60 行）+ **roadmap 翻状态** + **决策队列先清再刷**（若用
    `DECISION_QUEUE.md`：先移除已处理项，再把 revisit 到期项重浮、给周期全局图。队列只存活跃项，旧决定靠 git history 留痕）。
