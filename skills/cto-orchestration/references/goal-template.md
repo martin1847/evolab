@@ -87,10 +87,10 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
   条件），连续 N 次未达成 → STOP and report（缺配方则 worker 自创长 sleep 顶穿 watcher 窗口）。
 - [ ] 改动带功能旗标 → 写旗标门控：<flag 名，默认 ON/OFF + 理由>。
 - [ ] goal 含合并/发布类终态动作 → 前置写成机械外部输入：「合并前置 = 编排位 steer 传回
-  verdict=PASS **且回执绑定的 head_sha 与待合并 head 逐字相同**；未满足（含 FIX-FIRST、
-  verdict 后又有新提交）⇒ BLOCKED.md 停等；owner 闸不满足 ⇒ STOP 回编排位，**席位不得自绕**
-  （break-glass/程序外通道越权实证）」——抽象条件由席位自判必被穿，
-  不绑 head 的收据会被评审后追加提交沿用（下游席位各 n=2）。
+  verdict=PASS **及其针对的 head_sha**（编排位发此 steer 时必须带上；席位比对它与待合并
+  head 逐字相同）；未满足（含 FIX-FIRST、verdict 后又有新提交）⇒ BLOCKED.md 停等；owner 闸
+  不满足 ⇒ STOP 回编排位，**席位不得自绕**（break-glass/程序外通道越权实证）」——抽象条件由
+  席位自判必被穿，不绑 head 的收据会被评审后追加提交沿用（下游席位各 n=2）。
 - [ ] 普通非 review-loop 长跑且有明确时长/成本上限 → 写明该预算；耗尽仍未达成 = 保持任务
   active + STOP and report。review-loop 轮数预算只由 runtime `--max-rounds` 强制，本 GOAL 不复制轮数。
 
