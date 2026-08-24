@@ -32,14 +32,14 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
 
 ## Premises this goal rests on (VERIFY — do not trust)
 
-> 仅当本 goal 依赖 upstream audit / scout 结论时填写。编排者必须抽出每条承重 premise；candidate evidence
-> is not a verdict。任何 premise 为假 → **STOP AND REPORT**，不得在错误基础上继续实现。
+> 仅当本 goal 依赖 upstream audit / scout 结论、**或从正典（ADR / NORTH_STAR / 基建文档类）
+> 继承硬约束**时填写。编排者必须抽出每条承重 premise；candidate evidence is not a verdict。
+> 任何 premise 为假 → **STOP AND REPORT**，不得在错误基础上继续实现。
 
 - [ ] **Claim**: <承重前提> — **Verify by**: <独立证明命令 / runtime evidence + 预期结果>
 - [ ] **Claim**: <...> — **Verify by**: <...>
-- [ ] 从正典（ADR / NORTH_STAR / 基建文档类）继承的硬约束 = 也是 premise，须标〔来源 +
-  可降级性〕——继承≠免检；向主理人问一句「这约束在本 goal 语境还算数吗」是合法且常为
-  最便宜的证伪——一条已死的继承约束能烧掉数轮设计（下游席位 n=2，机制空间偏置病类）。
+- [ ] 继承的硬约束 = 也是 premise，须标〔来源 + 可降级性〕——继承≠免检；向主理人问一句
+  「这约束在本 goal 语境还算数吗」是合法且常为最便宜的证伪（已死的继承约束会烧掉整轮设计）。
 
 ## North-star gate（目标仓/伞仓声明了方向文档时保留，否则整节删除）
 

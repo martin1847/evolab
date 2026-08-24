@@ -78,6 +78,11 @@ chk_eq "empty goal (/dev/null) refused rc1" 1 "$rc"
 chk_contains "the refusal names the empty contract" "goal file is empty" "$out"
 chk_eq "and it owns no lane state" "" \
   "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^dxE0\.' | tr '\n' ' ')"
+# an ORDINARY zero-byte file too — a /dev/null special-case would pass the trio above
+: > "$SANDBOX/empty-goal.md"
+out="$(bash "$AGENTCTL" start omp dxE1 "$WT" --goal "$SANDBOX/empty-goal.md" 2>&1)"; rc=$?
+chk_eq "empty goal (ordinary 0-byte file) refused rc1" 1 "$rc"
+chk_contains "same refusal for the ordinary specimen" "goal file is empty" "$out"
 
 export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
 export FAKE_PROVIDER_LOG="$SANDBOX/omp.log"
