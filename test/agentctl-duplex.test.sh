@@ -70,6 +70,15 @@ WT="$SANDBOX/wt"; mkdir -p "$WT"
 # goals carry a resolved Preflight declaration: the gate is ON by default since
 # 1.6.0, so every start below exercises the default path (not an exempted one).
 printf 'investigate the thing\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$SANDBOX/goal.md"
+
+# an EXISTING but EMPTY goal is an empty contract — refused at the parameter surface,
+# before the lane owns anything (/dev/null is the field spelling: exists, 0 bytes)
+out="$(bash "$AGENTCTL" start omp dxE0 "$WT" --goal /dev/null 2>&1)"; rc=$?
+chk_eq "empty goal (/dev/null) refused rc1" 1 "$rc"
+chk_contains "the refusal names the empty contract" "goal file is empty" "$out"
+chk_eq "and it owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^dxE0\.' | tr '\n' ' ')"
+
 export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
 export FAKE_PROVIDER_LOG="$SANDBOX/omp.log"
 out="$(bash "$AGENTCTL" start omp dxA "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?

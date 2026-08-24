@@ -37,6 +37,9 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
 
 - [ ] **Claim**: <承重前提> — **Verify by**: <独立证明命令 / runtime evidence + 预期结果>
 - [ ] **Claim**: <...> — **Verify by**: <...>
+- [ ] 从正典（ADR / NORTH_STAR / 基建文档类）继承的硬约束 = 也是 premise，须标〔来源 +
+  可降级性〕——继承≠免检；向主理人问一句「这约束在本 goal 语境还算数吗」是合法且常为
+  最便宜的证伪——一条已死的继承约束能烧掉数轮设计（下游席位 n=2，机制空间偏置病类）。
 
 ## North-star gate（目标仓/伞仓声明了方向文档时保留，否则整节删除）
 

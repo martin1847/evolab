@@ -46,7 +46,7 @@ cd "$(dirname "$0")"
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3972
 skills/cto-orchestration/references/agentctl/identity.py 1509
-skills/cto-orchestration/references/agentctl/agentctl 588
+skills/cto-orchestration/references/agentctl/agentctl 589
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1070
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

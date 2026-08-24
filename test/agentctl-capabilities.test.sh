@@ -177,7 +177,9 @@ out="$(bash "$AGENTCTL" steer cx3b -m "adjust" --now 2>&1)"; rc=$?
 chk_eq "C3 an idle --now is refused too (nothing to steer mid-turn)" 1 "$rc"
 chk_contains "C3 and points at the default steer" "default steer starts the next turn" "$out"
 # a start flag that no provider capability declares is refused at start, with the pointer
-out="$(bash "$AGENTCTL" start omp cx3c "$WT" --goal /dev/null --resume-thread x 2>&1)"; rc=$?
+# (a real non-empty goal: the empty-contract refusal sits earlier on the parameter surface)
+printf 'x\nPreflight: true => ok\n' > "$WATCH_RUN_DIR/cx3c.goal.md"
+out="$(bash "$AGENTCTL" start omp cx3c "$WT" --goal "$WATCH_RUN_DIR/cx3c.goal.md" --resume-thread x 2>&1)"; rc=$?
 chk_eq "C3 --resume-thread on a provider whose resume declares no such flag is refused" 1 "$rc"
 chk_contains "C3 and the refusal points at the runtime contract" "agentctl capabilities" "$out"
 
