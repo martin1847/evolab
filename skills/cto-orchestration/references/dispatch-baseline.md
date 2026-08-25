@@ -8,13 +8,17 @@
 
 ## 基线纪律（fetch + 检查，按需 rebase，集成用 squash）
 
-派工前 `git fetch` + 基于最新远端目标分支开 worktree：
+派工基线四件（`agentctl start` 前编排位亲自做完）：
 
-```bash
-git worktree add ../wt-<name> -b feat/<name> origin/<base>
-```
-
-**不让 agent 在过期基线开工。**
+1. **fresh worktree @ 最新远端 base**：`git fetch` 后
+   `git worktree add ../wt-<name> -b feat/<name> origin/<base>`——不让 agent 在过期基线开工。
+2. **构建/依赖就绪**（venv、node_modules 等按该仓声明）——席位开工即能跑测试，不烧轮装环境。
+3. **播种即 seed commit**：编排位播进 worktree 的任何文件（goal/评审档等）先落 commit——
+   untracked 即脏树，撞席位清洁门直接 STOP（下游席位 n=2 各烧一轮）；非交付件放伞仓
+   docs/，别落 worktree。
+4. **主 checkout 不在核对面**：goal 固定句「基线核对只针对你自己的 worktree；主 checkout 与
+   本地 <base> 分支不在核对面、不得要求 fast-forward」——squash 集成仓的主 checkout 必然
+   分叉，席位拿它判 BLOCKED / 要求 fast-forward 全是误报（下游席位 n=3）。
 
 - **rebase 条件动作 / 集成默认 squash（merge-commit 弃用）**：base 没动不 rebase；动了且与
   改动重叠才 rebase（或 merge base 进来）——判据细节与合后 ancestry 陷阱归你所在仓的 Git 协作
