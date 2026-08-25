@@ -479,7 +479,10 @@ bash "$AGENTCTL" stop rvR >/dev/null 2>&1
 # divergent tiers must put tier-R on a --review frame and tier-D on a default frame.
 DIV="$SANDBOX/divergent-aw"; mkdir -p "$DIV"
 cp "$AW_DIR/agentctl" "$AW_DIR/duplexctl.py" "$AW_DIR/identity.py" "$DIV/"
-sed -i '' 's/^CODEX_SANDBOX = .*/CODEX_SANDBOX = {"default": "tier-D", "review": "tier-R"}/' "$DIV/duplexctl.py"
+# portable in-place edit (BSD sed needs `-i ''`, GNU sed rejects it): suffix + rm
+sed -i.bak 's/^CODEX_SANDBOX = .*/CODEX_SANDBOX = {"default": "tier-D", "review": "tier-R"}/' "$DIV/duplexctl.py" && rm -f "$DIV/duplexctl.py.bak"
+# the fixture edit itself must be PROVEN (a silent no-op turned this suite red only in CI)
+grep -q 'tier-R' "$DIV/duplexctl.py" || { echo "FATAL: divergent fixture edit did not apply"; exit 1; }
 export FAKE_PROVIDER_LOG="$SANDBOX/rv-div-r.log"
 out="$(bash "$DIV/agentctl" start codex rvWr "$WT" --goal "$SANDBOX/goal.md" --review --no-preflight 2>&1)"; rc=$?
 chk_eq "divergent fixture: review start rc0" 0 "$rc"
