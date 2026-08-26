@@ -1,6 +1,6 @@
 ---
 name: observability-standard
-version: 1.2.4
+version: 1.3.0
 description: 生产级可观测性规范,**所有后端服务**通用(普通微服务与 agent / 多 agent / RAG 项目;Python / Go / Java / Rust)。核心:trace_id 串 trace/log + 业务 id 反查 db、结构化日志、OpenTelemetry 埋点与跨进程传播、日志级别与边界类型纪律;agent / RAG 在此基线上加 LLM / 工具 / 检索埋点(GenAI 语义约定)。Use whenever writing or reviewing backend code involving logging, tracing, structured logs, context propagation, log levels, log/trace/db correlation, boundary types — or agent orchestration / sub-agents, LLM / tool / retrieval calls. 用户只说"加点日志" "接一下 trace / instrument this" "set up observability" "这个错误怎么查不到" "这个请求怎么追踪"也适用,不限于显式提到规范时。
 ---
 
@@ -52,7 +52,7 @@ description: 生产级可观测性规范,**所有后端服务**通用(普通微�
 - **RAG 额外**开 `embedding` + `retrieval` span,记 query / top-k / 命中 chunk 的 **id+score** / 最终进上下文的 chunk id;**答案要可溯源到 chunk**。
 - 仅当所用 instrumentation 仍需旧版迁移开关时设 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`;升级时按 pinned oracle 复核,不得把 `latest` 当稳定契约。
 - LiteLLM Proxy 新接入只选 OTel V2;V1/V2、generic OTLP/vendor preset 与 custom callback 不得重复产同一 inference span。generation span 必须挂当前 domain/invocation span;async worker/callback/poller/streaming 捕获并恢复 context。streaming 只有完整消费才 success,early close/cancel/provider error 分别终结且必须有 conformance 证据(见 references §5.1)。
-- 当前 V2 conformance profile 对明文 model I/O 无条件 fail-closed:即使 dev runtime flag 为 true,任何 content key 也必须失败;放开须发布新的显式 profile 版本,不能由运行时开关绕过。
+- 明文 model I/O 放开只走**显式 profile 版本**,永不由运行时开关绕过:oracle 按 `schema_version` 闭集分派(v2 带 content 段 = profile invalid,v3 缺任一子键 = profile invalid,未知版本红),V2 对任何 content key 无条件 fail-closed。`references/conformance-profile-v3.json` 是受控通道:三条件同时成立才放行——运行时 `content_capture_allowed=true` + `deployment.environment.name` 命中环境**白名单**(prod 别名如 `live`/`prd`/带空白值一律红)+ redaction probe 自证(canary 必须像它代表的密钥/邮箱、产出与 canary 1:1 等长非空、canary 不出现在产出**也不出现在被 capture 的内容里**);`audit_records` 子树的字符串叶值必须是哈希或声明的短元数据键(别名字段装明文即红)。gate 判的是 snapshot 级证据自洽,不代替产品仓自己证明 redactor 真接线(形态契约见 references §3 铁律 7)。
 - 持久化执行(Temporal/DBOS/Restate/自建)恢复时会丢 trace context,须持久化 `traceparent` 并重建。
 
 ## 类型纪律

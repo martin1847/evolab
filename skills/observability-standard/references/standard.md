@@ -93,7 +93,8 @@
 4. **上下文绑一次贯穿全程**:进入一次 run 时绑 `run_id`/`tenant_id`/`agent_role`(语言原生 ambient context 机制,见 §6 附录 B),之后每条日志自动带,不手传。
 5. **不要 log-and-throw**:要么处理并记录,要么向上抛由处理者记录,别既记录又抛。
 6. **永不记录**:密钥/token/凭证、完整 PII、客户机密原文。在日志边界脱敏。
-7. **明文 model I/O = 数据披露闸,非日志级别**:记明文 prompt/completion MUST 同时满足 **显式 flag + 非 prod 环境 + best-effort 脱敏**(不是"调成 DEBUG 就行");audit / 持久溯源 **MUST 仅存哈希**,不留明文。
+7. **明文 model I/O = 数据披露闸,非日志级别**:记明文 prompt/completion MUST 同时满足 **显式 flag + 非 prod 环境 + best-effort 脱敏**(不是"调成 DEBUG 就行");audit / 持久溯源 **MUST 仅存哈希**,不留明文。这三条件由 `references/conformance-profile-v3.json` 机械执行,oracle 只按 `schema_version` 闭集分派(v2 带 content 段 / v3 缺子键 / 未知版本 = profile invalid,红):**环境走白名单**(`allowed_environment_pattern`,值先 strip、大小写不敏感;不命中即红,故 `live` / `prd` / `"prod "` 等别名不再是"非 prod")、`audit_records` 子树的**每个字符串叶值**必须 fullmatch 哈希模式或命中 `metadata_key_allowlist` 且不超 `metadata_max_length`(别名字段装明文即红)。V2 profile 保持无条件 fail-closed,放开只能换显式 profile 版本、不能由运行时开关绕过。
+   - **snapshot 形态契约(下游机械可产出)**:`redaction_probe.canaries` = **object list**,每项 `{class, value}` 两个非空字符串;`redaction_probe.redacted` = **string list**;两者 **1:1 等长、按索引对齐**(长度不等即 `content.redaction_output_arity`,聚合成单串的产出形态不被接受);每个 `class` 必须在 `forbidden_output_patterns` 有对应形状,且该 class 的 `value` 必须命中该形状(不像 API key 的 `api_key` canary 即红);产出每项 strip 后 ≥ `min_output_chars`。probe 与 capture 面机械绑定:任何 canary 字面量若出现在**被 capture 的 content key 值**里即红——该断言只在 canary 真被送进 capture 管道时才有杀伤力。**oracle 判的是 snapshot 级证据自洽**,它结构上不能证明「canary 穿过了真实 redactor 路径」或「产品仓真的调用了 redactor」——把 canary 灌进真实管道并断言其结局,由产品仓自己的 conformance 测试(§9.1 负例探针)负责,gate 不冒充那一层。
 8. **必记点(均 ≥ INFO)**:路由/决策点及其依据、状态转移、每次 LLM/工具/检索/跨进程调用的边界与结果状态、重试/回退/降级/补偿、每步 token 与成本(也作 metric)。
 9. **统一 logger 树 + 级别由配置控**:用语言原生 named logger(如 `getLogger(__name__)`)落统一树,**MUST NOT 自造 logger 名**;级别由 env/config 统一控,**MUST NOT 用 `os.getenv(...DEBUG...)` 之类门控单条日志**(级别是配置事,不是代码里逐条判)。
 

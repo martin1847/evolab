@@ -1,0 +1,44 @@
+{
+  "schema_version": "observability-conformance/v3",
+  "allowed_operations": ["chat", "create_agent", "embeddings", "execute_tool", "generate_content", "invoke_agent", "invoke_workflow", "plan", "retrieval", "text_completion"],
+  "required_resource": ["service.name", "service.version"],
+  "service_version_pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+  "forbidden_service_version_pattern": "^(?:[dD][eE][vV]|[lL][aA][tT][eE][sS][tT]|[uU][nN][kK][nN][oO][wW][nN])$",
+  "required_span_roles": [],
+  "gen_ai_required_span_roles": ["domain", "inference"],
+  "required_span_fields": ["trace_id", "span_id"],
+  "required_inference": ["gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.request.model"],
+  "custom_attribute_allowlists": {},
+  "custom_attribute_max_length": 32,
+  "consistent_trace_attributes": [],
+  "metric_label_forbidden_keys": ["run.id"],
+  "approved_semantic_producer": "litellm_sdk_semconv",
+  "content_keys": ["gen_ai.system_instructions", "gen_ai.input.messages", "gen_ai.output.messages", "gen_ai.prompt.variable", "gen_ai.tool.call.arguments", "gen_ai.tool.call.result"],
+  "forbidden_keys": ["gen_ai.prompt", "gen_ai.completion", "prompt.name", "prompt.version", "tool_call_id"],
+  "forbidden_key_prefixes": [],
+  "content_capture": {
+    "flag_field": "content_capture_allowed",
+    "environment_resource_key": "deployment.environment.name",
+    "allowed_environment_pattern": "^(?:development|dev|staging|stage|test|testing|local)$",
+    "redaction_probe": {
+      "field": "redaction_probe",
+      "canary_field": "canaries",
+      "canary_class_field": "class",
+      "canary_value_field": "value",
+      "output_field": "redacted",
+      "required_canary_classes": ["api_key", "email"],
+      "min_output_chars": 3,
+      "forbidden_output_patterns": {
+        "api_key": "(?:sk|pk|ak|tok)-[A-Za-z0-9]{8,}",
+        "bearer": "[Bb]earer[ \\t]+[A-Za-z0-9._~+/-]{8,}",
+        "email": "[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}"
+      }
+    },
+    "audit_sink": {
+      "field": "audit_records",
+      "hash_value_pattern": "^sha256:[0-9a-f]{64}$",
+      "metadata_key_allowlist": ["sink", "record.id", "recorded.at", "schema.version"],
+      "metadata_max_length": 64
+    }
+  }
+}
