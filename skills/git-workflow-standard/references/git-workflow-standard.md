@@ -53,6 +53,9 @@ git log <branchpoint>..origin/<base>   # 空 = base 没动
 - **base 动了且碰了你改的文件 → rebase 或把 base merge 进来**解冲突,再 PR。
 - **base 动了但文件不重叠 → 可不动**(合并自然干净)。
 - **并发会话**:base 可能在你 cut 和 merge 之间被别的 PR 推进——所以 `fetch`+检查**必做**;但"检查"≠"每次都 rebase"。若 repo-local 门明确要求 branches up to date,合前还会再卡一次。
+- **评审/阅读用途的差分用 three-dot**(`origin/<base>...HEAD`,merge-base 差分):stale-base 上的两点
+  差分(`origin/<base>..HEAD` 内容对比)会把他人 commit 的反向删除误读为你的回退。rebase 只服务
+  push/merge,不服务"把 diff 读干净"。
 
 ## 4. 集成策略（默认线性,2026-06-25 全 agent 修订）
 

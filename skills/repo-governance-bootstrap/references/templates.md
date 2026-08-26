@@ -4,7 +4,8 @@
 > [ADR](#adr-模板) · [组件引入 ADR lifecycle 变体](#组件引入-adr-变体lifecycle) · [模块文档](#模块文档模板) ·
 > [Roadmap 条目](#roadmap-条目模板) · [Deferred 条目](#deferred-延期条目模板) · [Deferred 索引](#deferred-索引模板roadmapdeferredreadmemd) ·
 > [ACTIVE_CONTEXT](#active_contextmd-模板) · [ACCESS.local](#accesslocalmd-模板) · [INDEX](#indexmd-模板) ·
-> [NORTH_STAR](#north_star-模板可选伞仓或有明确长期方向的仓) · [AGENTS.md minimal 变体](#agentsmd-minimal-变体维护型低活跃仓)
+> [NORTH_STAR](#north_star-模板可选伞仓或有明确长期方向的仓) · [AGENTS.md minimal 变体](#agentsmd-minimal-变体维护型低活跃仓) ·
+> [GOV INDEX](#gov-index-模板docsgovernanceindexmd演化项首条-gov-出现时才建) · [GOV 文档](#gov-文档模板docsgovernancegov-nnn-slugmd)
 
 ## ADR 模板
 
@@ -94,7 +95,7 @@ Acceptance Criteria:
 
 ## Deferred 延期条目模板
 
-ID = `<PREFIX>-DEFER-NNN`（`<PREFIX>` 为项目自定义前缀，如 `AAM` / `PAY`）。一项一文件存 `roadmap/deferred/<PREFIX>-DEFER-NNN-<slug>.md`，并在 `roadmap/deferred/README.md` 索引。
+ID = `<PREFIX>-DEFER-NNN`（`<PREFIX>` 为项目自定义前缀，如 `PAY` / `SHOP`）。一项一文件存 `roadmap/deferred/<PREFIX>-DEFER-NNN-<slug>.md`，并在 `roadmap/deferred/README.md` 索引。
 
 ```markdown
 # <PREFIX>-DEFER-NNN: <Title>
@@ -348,4 +349,37 @@ dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI
 
 <从仓内文件推导的真实命令；未实跑过的标 `(not verified)`——禁止编造命令。>
 
+```
+
+## GOV INDEX 模板（`docs/governance/INDEX.md`，演化项——首条 GOV 出现时才建）
+
+```markdown
+# Governance INDEX — 域登记表
+
+> 路由判据（更新契约，不按主题）：会原地演进的现行可执行规则 → GOV；只被 supersede 的
+> 定格裁决与理由 → ADR；冻结证据快照 → audit；在飞协调物 → orchestration。
+> 维护协议：新域先查本表——已有域**增订原篇**（日期戳节），无域才立新号；
+> 根 docs/INDEX.md 只挂一行链接到本文件。
+
+| 号 | 域 | 一句话范围 | 文件 |
+|---|---|---|---|
+| GOV-001 | <域名> | <该域现行规则管什么> | GOV-001-<slug>.md |
+```
+
+## GOV 文档模板（`docs/governance/GOV-NNN-<slug>.md`）
+
+```markdown
+# GOV-NNN — <域名>现行规则
+
+> 更新契约：随实证增订原篇（新增日期戳节，不另立新文件）；被推翻的条目原地改写并注明
+> supersede 来源（ADR/复盘）；本文件是该域可执行规则的唯一现行版。
+
+## 现行规则
+
+- <规则 1：判据 + 动作>
+
+## 增订记录
+
+### <YYYY-MM-DD>（<一句话触发事件/实证>）
+- <当日新增或改写的条目摘要>
 ```

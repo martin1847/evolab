@@ -1,6 +1,6 @@
 ---
 name: git-workflow-standard
-version: 1.1.1
+version: 1.1.2
 description: 生产级 Git 协作 SOP:受保护分支按仓库 tier 门禁、改动从 feature 分支起、集成默认 squash、rebase 判据、提交不加 AI 签名。任何 git commit / push / 开 PR / 建分支 / rebase / 合并场景加载;agent 写完代码准备提交前必读。Use when committing, pushing, opening a PR, branching, rebasing, or merging.
 ---
 
