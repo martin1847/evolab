@@ -233,8 +233,19 @@ def check_content_capture(
     if records is not None:
         allowlist = audit_cfg["metadata_key_allowlist"]
         max_length = audit_cfg["metadata_max_length"]
-        for key, value in walk_pairs(records):
-            if not isinstance(value, str) or re.fullmatch(audit_cfg["hash_value_pattern"], value):
+        # walk_pairs yields no pair for a bare string inside a list, so audit arrays
+        # ([...], nested included) smuggled plaintext past the rule (downstream-reported
+        # bypass). This walk yields EVERY string leaf with its nearest parent key.
+        def audit_leaves(value: Any, nearest: str) -> list[tuple[str, str]]:
+            if isinstance(value, dict):
+                return [leaf for k, child in value.items()
+                        for leaf in audit_leaves(child, str(k))]
+            if isinstance(value, list):
+                return [leaf for child in value for leaf in audit_leaves(child, nearest)]
+            return [(nearest, value)] if isinstance(value, str) else []
+
+        for key, value in audit_leaves(records, audit_cfg["field"]):
+            if re.fullmatch(audit_cfg["hash_value_pattern"], value):
                 continue
             if key in allowlist:
                 if len(value) > max_length:

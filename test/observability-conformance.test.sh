@@ -240,7 +240,7 @@ errors = json.load(open(sys.argv[1]))["errors"]
 assert errors == ["profile.content_capture_unexpected: observability-conformance/v2"], errors
 PY
 
-for mutation in env_prod_short env_alias_live env_alias_prd env_prod_padded env_allowed_uppercase env_missing probe_missing probe_pattern_leak probe_output_empty probe_output_absent probe_class_missing canary_shapeless capture_canary_leak audit_raw_value audit_alias_raw audit_metadata_too_long contract1_flag_off contract2_prod_env contract3_probe_canary_leak; do
+for mutation in env_prod_short env_alias_live env_alias_prd env_prod_padded env_allowed_uppercase env_missing probe_missing probe_pattern_leak probe_output_empty probe_output_absent probe_class_missing canary_shapeless capture_canary_leak audit_raw_value audit_alias_raw audit_array_raw audit_nested_array_raw audit_metadata_too_long contract1_flag_off contract2_prod_env contract3_probe_canary_leak; do
   python3 - "$TMP/v3-good.json" "$TMP/v3-$mutation.json" "$mutation" "$CANARY_KEY" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1])); m = sys.argv[3]; canary = sys.argv[4]
@@ -266,6 +266,8 @@ elif m == "canary_shapeless":
 elif m == "capture_canary_leak":
     p["spans"][2]["attributes"]["gen_ai.input.messages"] = '[{"role":"user","content":"debug sample %s"}]' % canary
 elif m == "audit_alias_raw": p["audit_records"][0]["attributes"]["prompt_text"] = "user: debug sample in the clear"
+elif m == "audit_array_raw": p["audit_records"] = ["cleartext-secret sample"]
+elif m == "audit_nested_array_raw": p["audit_records"][0]["attributes"]["batch"] = [["user: nested cleartext"]]
 elif m == "audit_metadata_too_long": p["audit_records"][0]["sink"] = "audit_log_" + "x" * 96
 else: raise SystemExit(f"unknown v3 mutation: {m}")
 json.dump(p, open(sys.argv[2], "w"))
@@ -283,7 +285,7 @@ PY
     probe_class_missing) expected=content.redaction_canary_class_missing ;;
     canary_shapeless) expected=content.redaction_canary_shape ;;
     capture_canary_leak) expected=content.capture_canary_leak ;;
-    audit_raw_value|audit_alias_raw) expected=content.audit_not_hashed ;;
+    audit_raw_value|audit_alias_raw|audit_array_raw|audit_nested_array_raw) expected=content.audit_not_hashed ;;
     audit_metadata_too_long) expected=content.audit_metadata_too_long ;;
     *) echo "v3 mutation without an expected error code: $mutation" >&2; exit 1 ;;
   esac
@@ -291,4 +293,4 @@ PY
 done
 
 v3_verdict contract4_dev_flag_probe "$TMP/v3-good.json"
-echo "observability conformance v3: 2 positive (dev+flag+probe, uppercase env) + 18 red mutations + 4 profile-identity reds clean; v2 unconditional fail-closed intact"
+echo "observability conformance v3: 2 positive (dev+flag+probe, uppercase env) + 20 red mutations + 4 profile-identity reds clean; v2 unconditional fail-closed intact"
