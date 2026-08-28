@@ -77,8 +77,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 - `agentctl start … --goal <f>` 在 goal 帧被引擎接受后返回（omp 有 correlated response；claude 为
   送达即返，无逐帧 ack——诚实边界）；**不会自动 watch**，紧接着用宿主受控后台能力挂
-  `agentctl watch <session>`（**NOT shell `&`**，会孤儿化；guard ⑤ 强制 run_in_background，
-  同步 shell 编排者前缀 `AGENT_WATCH_SYNC=1` 显式放行并自读 exit code）。
+  `agentctl watch <session>`（guard ⑤ 强制宿主后台、拦 shell `&` 与前台阻塞；同步 shell 编排者
+  前缀 `AGENT_WATCH_SYNC=1` 显式放行并自读 exit code）。
 - **preflight 门默认开**：启动引擎前调 `../goal-preflight.py` 校验 goal 里
   `Preflight: <probe> => <observed result>` 存在且已解占位，未过即拒发、不起引擎；
   `--no-preflight` 显式豁免（豁免类别的判据归 SKILL.md §1）。
@@ -187,10 +187,12 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   零文件伤害），任何链式/env 前缀/多 `-C`/解析歧义/`lexists` 命中都落回 DENY。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
   判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）；⑨ 浏览器归属：`playwright-cli attach`
   带接管旗标（CDP / 浏览器扩展）→ 默认 DENY，主理人批后 `touch /tmp/cto-allow-browser-attach` 一次性放行；正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
-  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）位于管道**非末端** → DENY（末端放行；rc 被末命令吞、帧被截）；⑫ 门命令段以 `;` 结束且其后接 `git commit` → DENY（commit 不再依赖门 rc；`&&` 链放行）；⑬ 直接派 `agentctl start codex --goal <brief>` 时扫该 brief 的六个字面攻击词 → WARN（brief 读不到也 WARN；cyberPolicy 误拦 n=4）。
+  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）位于管道**非末端** → DENY（末端放行；rc 被末命令吞、帧被截）；⑫ 门命令段以 `;` 结束且其后接 `git commit` → DENY（commit 不再依赖门 rc；`&&` 链放行）；⑬ 直接派 `agentctl start codex --goal <brief>` 时扫该 brief 的六个字面攻击词 → WARN（brief 读不到也 WARN；cyberPolicy 误拦 n=4）；⑭ `agentctl start … <cwd>` 且 `git -C <cwd> status --porcelain` 非空 → DENY（先 seed commit）；⑮ `<cwd>/BLOCKED.md` 存在 → DENY（先收割）。
   ①用剥引号视图，④用原始 cmd，⑤⑥⑧⑩只认命令位（路径当参数
   不拦）；⑨判归一化后的 shell 执行面（与⑧同一套：剥引号 span + 去反斜杠，故转义写法照拦；
   代价是字面量进 shell 命令即拒，已接受的假阳性）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
+- **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：编排位对源码/测试文件的写入 → DENY
+  （活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir 不可读 → ALLOW+WARN）。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：
   browser/E2E 派发含 `mcp__chrome-devtools` → DENY（逼 Playwright，P0a）；派发未显式钉 `model` 档 →
   DENY（P0c）；e2e-runner 派发 model 非便宜档 → DENY（P0d）；Pre·TaskStop|KillShell：目标 `.output` 与 subagent transcript 取最鲜 mtime，
@@ -211,9 +213,5 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 
 ## cwd 锚定（多仓工作区）
 
-Shell cwd 跨工具调用漂移：上一条命令的 cd 残留、被拦命令的 cd 根本没执行、并行调用留下
-最后一条的 cwd。单仓项目无感；伞形多仓工作区里 = git/gh 打错仓。
-纪律：**每段含 git/gh 的命令自带锚**——行首
-`cd /abs/<repo> && …`，或每次调用自锚 `git -C <path>` / `gh -R <owner>/<repo>` / `gh api`。
-guard (8) 检测到伞形根（cwd 或近祖先目录含 ≥2 个子 .git）时硬拦无锚 git/gh；
-单仓环境该规则永不触发。
+伞形多仓里 shell cwd 跨调用漂移会让 git/gh 打错仓——每段含 git/gh 的命令自带锚（`cd /abs/<repo> && …`
+或 `git -C <path>` / `gh -R <owner>/<repo>`）；guard ⑧ 在伞形根硬拦无锚 git/gh，单仓永不触发。
