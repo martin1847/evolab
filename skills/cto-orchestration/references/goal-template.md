@@ -8,8 +8,9 @@
 > 不要求证明命令内部每个参数都绝对化。如属研究：RESEARCH ONLY — no code changes, no commits.
 > 基线核对只针对你自己的 worktree；主 checkout 与本地 <base> 分支不在核对面、不得要求
 > fast-forward（squash 集成仓的主 checkout 必然分叉，拿它判 BLOCKED 是误报）。
-> 规模锚（实现类默认，编排位验收跑 scale-check 机械核）：新增测试行数 ≤ 新增产品行数；
-> 重构 / 零行为批新增测试 = 0。要偏离锚，在本 goal 写一行理由；超锚未声明 = 拒收，绿也拒。
+> 规模锚（实现类默认，编排位验收跑 scale-check 机械核）**是比值，不是上限**：新增测试行数 ≤
+> 新增产品行数；重构 / 零行为批新增测试 = 0。本模板不设产品行数绝对上限——自造上限是零战果
+> 门的典型（复盘 GATE-AUDIT 记账）。要偏离锚，在本 goal 写一行理由；超锚未声明 = 拒收，绿也拒。
 
 ## Context (read first)
 
@@ -91,6 +92,8 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
 - [ ] 涉及长耗时外部作业 → 写**等待配方**：禁止阻塞 sleep >60s，改有判据的短轮询（命令 + 达成
   条件），连续 N 次未达成 → STOP and report（缺配方则 worker 自创长 sleep 顶穿 watcher 窗口）。
 - [ ] 改动带功能旗标 → 写旗标门控：<flag 名，默认 ON/OFF + 理由>。
+- [ ] 本 goal 新造门/上限/仪式（合同硬门、行数上限、证据文档仪式）→ 先向主理人报，且同行附
+  **kill criterion**（什么证据证明它是净负债）；无此行不进合同（复盘按 GATE-AUDIT 结账）。
 - [ ] goal 含合并/发布类终态动作 → 前置写成机械外部输入：「合并前置 = 编排位 steer 传回
   verdict=PASS **及其针对的 head_sha**（编排位发此 steer 时必须带上；席位比对它与待合并
   head 逐字相同）；未满足（含 FIX-FIRST、verdict 后又有新提交）⇒ BLOCKED.md 停等；owner 闸

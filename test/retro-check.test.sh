@@ -245,6 +245,32 @@ assert_has "$out" "malformed LESSON line" "X/malformed warned"
 r="$(mkrepo)"; out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "Y/no-ledger rc"
 assert_has "$out" "教训台账未 typed 化" "Y/absence is named, not silent"
+assert_has "$out" "自造门未记账" "Y/gate-audit absence named too"
+
+# --- 8) gate-effect audit (GATE-AUDIT lines) ---
+# Case G1 — zero real catch + two false BLOCKEDs + bare keep → FAIL (default is kill)
+r="$(mkrepo)"; printf 'GATE-AUDIT: line-cap hits=0 false=3 action=keep\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "G1/zero-catch kept rc"
+assert_has "$out" "gate 'line-cap' hits=0 false=3" "G1/named"
+# Case G2 — same numbers, keep WITH reason → passes (judgment stated)
+r="$(mkrepo)"; printf 'GATE-AUDIT: line-cap hits=0 false=3 action=keep(主理人裁：等第二例再删)\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G2/reasoned keep rc"
+# Case G3 — kill → passes; Case G4 — real catch → keep allowed bare
+r="$(mkrepo)"; printf -- '- GATE-AUDIT: hunk-ritual hits=0 false=2 action=kill\nGATE-AUDIT: path-closure hits=1 false=3 action=keep\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G3+G4/kill and real-catch keep rc"
+assert_has "$out" "2 gate-audit line(s)" "G3+G4/both counted"
+# Case G5 — malformed → warn, not consumed
+r="$(mkrepo)"; printf 'GATE-AUDIT: sloppy caught=0 action=keep\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G5/malformed rc"
+assert_has "$out" "malformed GATE-AUDIT line" "G5/malformed warned"
+# Case G6 — empty keep() with zero catch → FAIL (hollow reason is no reason)
+r="$(mkrepo)"; printf 'GATE-AUDIT: hollow hits=0 false=2 action=keep()\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "G6/hollow keep rc"
 
 # --- review reproductions as standing assertions (each was a live bypass/false-positive) --
 # Case Z1 — fenced grammar example must NOT count as a ledger record (opt-in boundary)

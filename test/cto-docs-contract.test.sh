@@ -157,7 +157,7 @@ chk_eq "goal measurement row line 1 is byte-exact and unique" 1 "$(grep -cF -- "
 chk_eq "goal measurement row line 2 is byte-exact and unique" 1 "$(grep -cF -- "$meas_row2" "$GOAL")"
 meas_ctx="$(grep -A2 -F -- "$meas_row1" "$GOAL")"
 chk_contains "goal measurement row has no interior additions" "- [ ] 鉴权/会话/用户数据相关改动" "$meas_ctx"
-chk_eq "goal checkbox census is pinned" 16 "$(grep -c '^- \[ \]' "$GOAL")"
+chk_eq "goal checkbox census is pinned" 17 "$(grep -c '^- \[ \]' "$GOAL")"
 # structural completeness: exactly seven numbered clauses, one load-bearing invariant pinned each.
 chk_eq "protocol has exactly seven numbered clauses" 7 "$(grep -cE '^[0-9]+\. \*\*' "$MEAS")"
 chk_contains "c1 freezes instrument identity per batch" "禁与旧批合并" "$meas_body"
