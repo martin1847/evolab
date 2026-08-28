@@ -132,7 +132,6 @@ exit code、名字与语义是运行时事实 → `agentctl states`（`--json` �
 判不出一律有界 typed 12，永不映射成 0。** 停滞判定权只在轮询等待者手里且只由它自己的 poll 计数
 产生（不读任何时钟）；一次性读者（`status` / 单发读）只核结构、**永不因"租约看起来旧"判 12**，
 因此它发现不了 wedged 守护环——要判停滞就挂 `agentctl watch`。
-身份三元组 `session_id` / `attempt_id` / `process_incarnation`（pid@start-time）与其提交点、
 
 - **Agent 工具异步 subagent 的完成通知有黑洞**：只在"停止且自身无存活后台子进程"时才发；子 agent 自起
   后台 fork（E2E/monitor）→ 父 idle 而通知永不来。

@@ -16,6 +16,7 @@
 ## Check 0 —（部署验证类必加）running-state trap
 验证 RUNNING 容器内的实际配置（docker exec ... env），不是磁盘上的文件（env_file 只在 create 注入，
 restart 不重读）。不通过则后续检查无意义，报告并停止。
+<!-- 规则单源：goal-template 场景条款「生效前置确认 / 运行时真源」；此块是给运维的实例 -->
 
 ## Queries / Checks（每项一个结果表）
 1. <SQL/查询全文，占位符 <table> 注明按实际 schema 替换> —— 预期读数 + 判定规则
