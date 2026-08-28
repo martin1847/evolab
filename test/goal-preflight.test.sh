@@ -192,5 +192,144 @@ printf 'Preflight: rg zero references under /abs/repo/root => remove\n' > "$goal
 run_check "$goal"
 chk_eq "[SCOPE] absolute scan root accepted" 0 "$rc"
 
+# --- inherited-mechanism premise declaration (2026-08-28, field n=3) ----------------------
+# Half-gate by construction: the semantic half ("was this claim re-probed against a live
+# system?") needs provenance a regex cannot produce, so only DECLARATION SHAPE is judged —
+# exactly the boundary the absence-scope check above already lives on. Optional: a goal with
+# no inherited premise writes no line and is judged on nothing.
+printf "$ok" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] absent line is not judged" 0 "$rc"
+chk_eq "[PREMISE] and stays silent" "" "$out"
+
+printf "${ok}PREMISE: steer 投递即算一轮 verify=\`agentctl status s1\` 读 round => round=2，确认计数\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] a fully resolved declaration passes" 0 "$rc"
+chk_eq "[PREMISE] and is silent" "" "$out"
+
+printf "${ok}PREMISE: <claim> verify=<cmd> => <observed>\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] placeholders rejected" 1 "$rc"
+chk_contains "[PREMISE] error names the line" "PREMISE 行(第 2 行)" "$out"
+chk_contains "[PREMISE] and the disease" "占位符未解" "$out"
+
+printf "${ok}PREMISE: stop 后 meta 留存 verify=<待补> => 已确认\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] a placeholder in the verify half alone is enough" 1 "$rc"
+
+for unresolved in 'not run' pending unknown N/A TBD; do
+  printf "${ok}PREMISE: 席位 cwd 可读 verify=ls run dir => %s\n" "$unresolved" > "$goal"
+  run_check "$goal"
+  chk_eq "[PREMISE] unresolved observation '$unresolved' rejected" 1 "$rc"
+  chk_contains "[PREMISE] '$unresolved' error demands a live probe" "核过活体" "$out"
+done
+printf "${ok}PREMISE: 席位 cwd 可读 verify=TBD => 3 个席位命中\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] an unresolved verify half is rejected too" 1 "$rc"
+
+# a keyword with no verify= / => is prose wearing a declaration's clothes
+printf "${ok}PREMISE: duplex.meta 里有 cwd= 这个键\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] a declaration missing all three parts is rejected" 1 "$rc"
+chk_contains "[PREMISE] error teaches the full shape" "verify=<cmd|live-probe>" "$out"
+printf "${ok}PREMISE: duplex.meta 有 cwd= verify=grep cwd= meta\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] verify= without => rejected" 1 "$rc"
+printf "${ok}PREMISE: verify= => observed\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] an empty claim is not a declaration" 1 "$rc"
+chk_contains "[PREMISE] and says which part is missing" "三段都要有内容" "$out"
+
+# list / checkbox / blockquote markers are how these actually get written
+printf "${ok}- [ ] PREMISE: rc 文件缺失即活体 verify=live-probe 停一个席位 => rc 文件出现，tmux 消失\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] a checkbox row is a declaration" 0 "$rc"
+printf "${ok}- [ ] PREMISE: rc 文件缺失即活体 verify=<待跑> => 未知\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] and is judged as one" 1 "$rc"
+printf "${ok}> PREMISE: 全角冒号也算 verify=真跑 => 观察到 2 条\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] blockquote marker tolerated" 0 "$rc"
+printf "${ok}PREMISE：全角冒号 verify=真跑 => 观察到 2 条\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] full-width colon accepted" 0 "$rc"
+
+# EVERY declaration is judged, not just the first — a second, rotten one must not ride along
+printf "${ok}PREMISE: a verify=cmd a => observed a\nPREMISE: b verify=<待补> => observed b\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] a rotten SECOND declaration still reds" 1 "$rc"
+chk_contains "[PREMISE] and the reported line number is that one" "第 3 行" "$out"
+
+# FALSE-POSITIVE GUARDS: prose that merely uses the word, and the goal-template heading
+printf "${ok}我们的 premise: 这套机制早就核过了，见上文。\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] mid-sentence prose use is not a declaration" 0 "$rc"
+printf "$ok## Premises\n- [ ] API schema 与已发布契约一致\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] the goal-template 'Premises' heading is not a declaration" 0 "$rc"
+
+# PRECEDENCE: a broken Preflight still answers first, and the PREMISE fault does not speak over it
+printf '# no preflight\nPREMISE: x verify=<待补> => y\n' > "$goal"
+run_check "$goal"
+chk_eq "[PREMISE] Preflight failure keeps precedence" 1 "$rc"
+chk_contains "[PREMISE] and it is the Preflight message" "expected exactly one" "$out"
+chk_not_contains "[PREMISE] not the premise one" "PREMISE 行" "$out"
+
+# ── R2 (cold review §3.1) unresolved forms with a TAIL ─────────────────────────────────────
+# `N/A，待跑` and `TBD（待跑）` both counter-probed rc=0 against the tail-anchored version: the
+# closed contract is "N/A/TBD 视为未解", and a full-width comma or a bracket is not evidence.
+for tail in 'N/A，待跑' 'TBD（待跑）' 'TBD (pending the run)' 'n/a - nobody ran it' 'N/A：明天补'; do
+  printf 'Preflight: query metrics => %s\n' "$tail" > "$goal"
+  run_check "$goal"
+  chk_eq "[R2-3.1] unresolved with a tail is still unresolved: $tail" 1 "$rc"
+  chk_contains "[R2-3.1] and it is the unresolved verdict: $tail" "not evidence" "$out"
+done
+printf 'Preflight: N/A（还没跑） => 3 rows\n' > "$goal"
+run_check "$goal"
+chk_eq "[R2-3.1] the PROBE half is judged the same way" 1 "$rc"
+printf "${ok}PREMISE: 机理断言 verify=真跑过 => TBD（待跑）\n" > "$goal"
+run_check "$goal"
+chk_eq "[R2-3.1] and so is a PREMISE observation" 1 "$rc"
+chk_contains "[R2-3.1] naming the live-probe obligation" "核过活体" "$out"
+# FALSE-POSITIVE GUARD — the reason the GENERIC words stay tail-anchored while N/A and TBD do
+# not: a real observation may legitimately open with one of them.
+printf 'Preflight: curl -s /health => no rows hit the cap, rc=0 实测\n' > "$goal"
+run_check "$goal"
+chk_eq "[R2-3.1] a real observation opening with 'no' still dispatches" 0 "$rc"
+printf 'Preflight: probe => nap logs show 3 hits\n' > "$goal"
+run_check "$goal"
+chk_eq "[R2-3.1] and a word merely STARTING with n/a is not the token" 0 "$rc"
+
+# ── R2 (cold review §3.2) the EMPTY placeholder ────────────────────────────────────────────
+printf "${ok}PREMISE: claim verify=<> => observed\n" > "$goal"
+run_check "$goal"
+chk_eq "[R2-3.2] <> is an unresolved placeholder too" 1 "$rc"
+chk_contains "[R2-3.2] and it is the placeholder verdict" "占位符未解" "$out"
+printf 'Preflight: probe <> => observed\n' > "$goal"
+run_check "$goal"
+chk_eq "[R2-3.2] and on the Preflight line as well" 1 "$rc"
+chk_contains "[R2-3.2] with the placeholder message" "replace every placeholder" "$out"
+
+# ── R2 (cold review §4.4) THE INSTRUMENT: a goal this gate cannot read is never green ──────
+# The third mutant this suite owed: the PREMISE battery could only fail on CONTENT, so a broken
+# reader would have been invisible to it.
+printf "${ok}PREMISE: 机理断言 verify=真跑过 => 观察到 2 条\n" > "$goal"
+run_check "$goal"
+chk_eq "[R2-4.4] control: this goal is green when readable" 0 "$rc"
+chmod 000 "$goal"
+run_check "$goal"
+UNREADABLE_RC=$rc; UNREADABLE_OUT=$out
+chmod 644 "$goal"
+chk_eq "[R2-4.4] an unreadable goal exits 1, never 0" 1 "$UNREADABLE_RC"
+chk_contains "[R2-4.4] and says the instrument could not read it" "cannot read goal" "$UNREADABLE_OUT"
+chk_contains "[R2-4.4] in the ERR family with the doc pointer" "ERR: preflight gate:" "$UNREADABLE_OUT"
+run_check "$SANDBOX"
+chk_eq "[R2-4.4] a DIRECTORY handed in as the goal is not green either" 1 "$rc"
+chk_contains "[R2-4.4] and reports the read failure" "cannot read goal" "$out"
+run_check "$SANDBOX/no-such-goal.md"
+chk_eq "[R2-4.4] a missing goal file is not green either" 1 "$rc"
+run_check "$goal"
+chk_eq "[R2-4.4] and the same goal, readable again, is green" 0 "$rc"
+
 rm -rf "$SANDBOX"
 summary

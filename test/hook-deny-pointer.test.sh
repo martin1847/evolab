@@ -100,6 +100,7 @@ rm -rf "$FIX"
 # the shipped guards
 for f in ../skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
          ../skills/cto-orchestration/references/agentctl/cto-guard-agent.py \
+         ../skills/cto-orchestration/references/agentctl/cto-guard-edit.py \
          ../skills/agent-mail/mail-guard.py; do
   out="$(scan "$f")"; rc=$?
   chk_eq "$(basename "$f"): every DENY carries a resolvable doc pointer" 0 "$rc"

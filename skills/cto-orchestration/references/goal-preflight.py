@@ -23,13 +23,22 @@ import sys
 # rejecting it taught goal authors to move load-bearing notes away from the line
 LINE_RE = re.compile(
     r"(?mi)^.*?\bPreflight(\s*[（(][^）)\n]*[）)])?\s*[:：]\s*(.*?)\s*=>\s*(.*?)\s*$")
+# Two arms, deliberately different in reach. The GENERIC words (`no`, `pending`, `todo`, …) are
+# also legitimate openers of a real observation (`no such endpoint, rc=1`), so they only count as
+# unresolved at end-of-declaration or before a `- : —` dash; `N/A` and `TBD` are never anything
+# but unresolved, so they count with ANY tail — `N/A，待跑` and `TBD（待跑）` were the shapes
+# people actually wrote and both counter-probed rc=0 against the tail-anchored version (cold
+# review §3.1). The tail is unconstrained rather than a punctuation list on purpose: a full-width
+# comma, a bracket and a bare Chinese clause are all the same non-evidence.
 UNRESOLVED = re.compile(
     r"^(?:(?:result|observed|status)\s*:\s*)?"
-    r"(?:no|not[ -]?run|pending|todo|tbd|unknown|unverified|n/?a)"
-    r"\s*(?:$|[-:—])",
+    r"(?:(?:no|not[ -]?run|pending|todo|unknown|unverified)\s*(?:$|[-:—])"
+    r"|(?:tbd|n/?a)(?![\w/]))",
     re.IGNORECASE,
 )
-PLACEHOLDER = re.compile(r"<[^<>\n]+>")
+# `<>` included (`*`, not `+`): an EMPTY placeholder is an unresolved declaration too, and
+# `verify=<> => observed` passed the `+` version (cold review §3.2).
+PLACEHOLDER = re.compile(r"<[^<>\n]*>")
 # WARN-class smell only: an acceptance row asserting INTERNAL agreement (table vs registry)
 # instead of observable behaviour is where same-source self-proof hides. Never blocks — this
 # gate validates declaration shape and is never an oracle for oracle quality.
@@ -100,6 +109,41 @@ SCOPE_RE = re.compile(
     r"|(?:^|[\s（(=`,，])(?:\.{1,2}/|/)?"
     r"[A-Za-z0-9_.~*-]*[A-Za-z_][A-Za-z0-9_.~*-]*/[^\s`）),，]+")
 
+# inherited-mechanism premise declaration (2026-08-28, n=3 field shape: a mechanism claim
+# arrived by letter / prior transcript and was written into the next goal WITHOUT anyone
+# re-probing the live system, so a stale premise propagated as a fact). The semantic half —
+# "was this claim actually verified against a live system?" — needs the provenance chain from
+# one prose sentence back to one verification action, which no regex / AST / file-existence
+# check can produce; per shock-in-the-loop §1 判据② it is therefore NOT hard-gated here.
+# What IS machine-decidable is the same thing this gate already judges for Preflight: that the
+# declaration exists in full and carries no unresolved placeholder. Optional by design — a goal
+# with no inherited premise writes no line and is judged on nothing.
+# Anchored at line start (list markers and checkbox tolerated) so body prose "…the premise:
+# X" is not read as a declaration; `Premises` (the goal-template section heading) has no colon
+# after the keyword and never matches.
+PREMISE_LINE = re.compile(r"(?mi)^[\s>*+#-]*(?:\[[ x]\]\s*)?PREMISE\s*[:：]\s*(?P<rest>.*)$")
+PREMISE_PARTS = re.compile(r"(?s)^(?P<claim>.*?)\bverify\s*=\s*(?P<probe>.*?)=>\s*(?P<obs>.*)$")
+
+
+def premise_faults(body):
+    """(line-number, message) for every malformed inherited-premise declaration."""
+    faults = []
+    for m in PREMISE_LINE.finditer(body):
+        number = body.count("\n", 0, m.start()) + 1
+        parts = PREMISE_PARTS.match(m.group("rest"))
+        if not parts:
+            faults.append((number, "写全三段 `PREMISE: <claim> verify=<cmd|live-probe> => "
+                                   "<observed>`——缺 verify= 或 => 的继承断言只是散文"))
+            continue
+        claim, probe, observed = (part.strip() for part in parts.groups())
+        if not (claim and probe and observed):
+            faults.append((number, "三段都要有内容——claim / verify= / => observed 缺一即未声明"))
+        elif PLACEHOLDER.search(m.group("rest")):
+            faults.append((number, "占位符未解——把 `<…>` 换成真跑过的探针与观察到的结果"))
+        elif UNRESOLVED.match(probe) or UNRESOLVED.match(observed):
+            faults.append((number, "继承来的机理断言要核过活体才落笔；unresolved/N/A/TBD 不是证据"))
+    return faults
+
 
 def fail(message):
     print(
@@ -134,6 +178,10 @@ def main():
             "（外部实证：范围只在作者脑内的『零引用』差点删掉半个应用）。"
             "同一行写出扫描根（路径 token / scope=… / 全仓），"
             "消费该前提的 worker 独立重列范围做差集。")
+    faults = premise_faults(body)
+    if faults:
+        number, why = faults[0]
+        return fail(f"PREMISE 行(第 {number} 行)未成立声明：{why}。")
     warn(smelly_rows(body))
     return 0
 

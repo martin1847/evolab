@@ -43,11 +43,51 @@ cd "$(dirname "$0")"
 # tilde UNKNOWN (M7), command-position gate on the advisory (m1), post-read size verdict (m2).
 # Each carries the reviewer's reproduction as a standing assertion; the shared parse face stayed
 # shared — no second approximation was added to pay for any of them.
+# 1070→1159 (2026-08-28, rules 14+15): the weight HAD to land here — both are PreToolUse·Bash
+# rules and there is no second home for one; they were built ON rule (3)'s existing `agentctl
+# start` match and rule (13)'s `_r13_segment`, so the growth is the cwd positional extractor
+# (one shared helper, UNKNOWN-on-expansion like rule 13's `--goal`), one `git status --porcelain`
+# probe, the two denial texts, and the doctrine comments this file carries per rule — no second
+# shell approximation and no second git wrapper.
+# cto-guard-edit.py 213 is a NEW ROW, not a split: `Edit|Write|MultiEdit` is a matcher this
+# package had no script for at all (guard-hooks.json carried only Bash and Agent|Task). Its
+# weight is the seat-liveness predicate the rule cannot exist without — run-dir census, the
+# `_STOP_KEPT` trap (a stopped seat's surviving duplex.meta must not grant write rights), the
+# tmux probe with undecidable-reads-as-live, and the three ALLOW+WARN degrade paths.
+# 1159→1257 and 213→286 (2026-08-28, cold-review R2 fix round): 11 ship-blocking findings, ALL
+# correctness on the four gates already shipped, no new rule and no new surface.
+# cto-guard-bash +98: the weight is the PARSE FACE the two rules were missing. R1 judged them on
+# rule (3)'s unanchored `re.search`, first match only — argv data (`echo agentctl start …`) was
+# DENIED and a real later dispatch in the same command was never judged (§2.1/§2.2, both
+# counter-probed). The replacement is one quote/escape-aware segmenter plus a head test built
+# from rule (10)/(12)'s EXISTING `_ENV_ASSIGN`/`_WRAPPER` anchor applied to `_pipe_view` of each
+# segment: still one shell approximation for the whole file, now reused three ways. The rest is
+# `_git_porcelain`'s third return value (instrument-unavailable, §4.2) with its 149 B warn, and
+# `shlex.quote` on the copyable recoveries (§5.1) — no second git wrapper appeared.
+# cto-guard-edit +73: the rule now judges the WRITE TARGET's work tree instead of the caller's
+# cwd (§1.1 — R1 passed a live seat writing another checkout and denied `/tmp/outside.py` from a
+# git cwd). That costs `_worktree_root` + `_target_dir` + `_seat_holds` (root equality, which is
+# also what closes the §1.4 false positive on a seat launched in a subdirectory), a readable-vs-
+# listable census distinction in `_meta_cwd`/`live_seat_cwds` (§1.3), and the doctrine comments
+# recording each counter-probe. The extension/test-dir predicate SHRANK (§1.2).
+# 1257→1326 (2026-08-28, verify R3 fix round): 2 residual findings, both correctness on gates
+# already shipped, no new rule and no new surface.
+# cto-guard-bash +69: the two faces of an existing rule had to be made to AGREE. (a) §2.2/N1 —
+# `_SEG_HEAD` decided a segment WAS a dispatch on `_pipe_view` (quoted env value = opaque ARG)
+# while `_SEG_START` then located the command on the RAW segment, so a decoy inside a quoted env
+# value won the first match and the guard judged the wrong seat. The fix is `_quote_blind`: the
+# SAME data/opaque split `_pipe_view` already makes, rendered length-preserving so the match
+# maps back onto raw offsets and the quoted-cwd extraction keeps working — no third parse face,
+# no second shell approximation. (b) §4.3 — `_blocked_stands` replaces `os.path.exists`, which
+# answered False both for "no BLOCKED.md" and for "could not stat it"; it is the twin of
+# `_git_porcelain`'s instrument-unavailable return that §4.2 already bought, with its 151 B
+# warn. The rest is the doctrine comments this file carries per counter-probe.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3972
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 589
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1070
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1326
+skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked
 

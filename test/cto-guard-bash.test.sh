@@ -853,5 +853,303 @@ tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PostToolUse","tool_nam
 chk_eq "non-applicable Bash event stays allowed" 0 "$rc"; chk_eq "non-applicable Bash event silent" "" "$err"
 tmpe="$(mktemp)"; out="$(python3 -c 'import io,re,runpy,sys; sys.stdin=io.StringIO("{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}"); re.search=lambda *a,**k: (_ for _ in ()).throw(RuntimeError("boom")); runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "internal Bash checker failure exits 2" 2 "$rc"; chk_contains "internal Bash checker failure marker" "CHECKER-ERROR" "$err"
+# ── (14)/(15) dispatch preconditions on the `<cwd>` positional of `agentctl start` ─────────
+# (15) untracked BLOCKED.md left by the previous seat; (14) a dirty worktree at dispatch time.
+# Both judged on the SAME parse rule (3) uses, and both DENY before any hook response is
+# printed. The order between them is asserted below: a surviving BLOCKED.md is itself untracked,
+# so if (14) answered first the fix line would tell the orchestrator to COMMIT the previous
+# seat's held gate instead of harvesting it.
+SD="$G8ROOT/seed"; mkdir -p "$SD/wt"
+git -C "$SD/wt" init -q
+printf 'x\n' > "$SD/wt/tracked.txt"
+git -C "$SD/wt" add -A >/dev/null 2>&1
+git -C "$SD/wt" -c user.email=t@t -c user.name=t commit -q -m seed >/dev/null 2>&1
+DSP="bash references/agentctl/agentctl start omp seedsess"
+
+# clean tree, no BLOCKED.md: the dispatch is legal and only the watcher reminder speaks
+run "$DSP $SD/wt --goal /tmp/g.md"
+chk_eq "clean worktree dispatch allowed" 0 "$RC"; chk_eq "clean dispatch silent on stderr" "" "$ERR"
+chk_contains "clean dispatch still gets the watcher reminder" "watcher" "$(ctx "$OUT")"
+
+# (14) untracked seed file = dirty
+printf 'brief\n' > "$SD/wt/GOAL.md"
+run "$DSP $SD/wt --goal $SD/wt/GOAL.md"
+chk_eq "dirty worktree dispatch denied" 2 "$RC"
+chk_contains "14 names the disease" "播种未 seed commit" "$ERR"
+chk_contains "14 gives the commit-first正路" "commit -m 'seed:" "$ERR"
+chk_contains "14 carries the doc pointer" "dispatch-baseline.md" "$ERR"
+chk_eq "14 prints no hook response alongside the deny" "" "$OUT"
+# a tracked-but-modified file is the same disease
+git -C "$SD/wt" add -A >/dev/null 2>&1
+git -C "$SD/wt" -c user.email=t@t -c user.name=t commit -q -m seed2 >/dev/null 2>&1
+run "$DSP $SD/wt --goal $SD/wt/GOAL.md"
+chk_eq "committed seed makes the same dispatch legal" 0 "$RC"
+printf 'edited\n' >> "$SD/wt/tracked.txt"
+run "$DSP $SD/wt --goal $SD/wt/GOAL.md"
+chk_eq "an uncommitted modification is dirty too" 2 "$RC"
+git -C "$SD/wt" checkout -q -- tracked.txt
+
+# (15) BLOCKED.md, first while UNTRACKED (both rules apply) — the order proof
+printf 'held gate\n' > "$SD/wt/BLOCKED.md"
+run "$DSP $SD/wt --goal /tmp/g.md"
+chk_eq "surviving BLOCKED.md denied" 2 "$RC"
+chk_contains "15 answers first, not 14" "前席 BLOCKED 未收割" "$ERR"
+chk_eq "and 14's wording never appears" 0 "$(printf '%s' "$ERR" | grep -c 'seed commit')"
+chk_contains "15 tells the seat to harvest, not to commit" "rm $SD/wt/BLOCKED.md" "$ERR"
+chk_contains "15 carries the doc pointer" "dispatch-baseline.md" "$ERR"
+# and a COMMITTED BLOCKED.md (clean tree) is still an unharvested gate
+git -C "$SD/wt" add -A >/dev/null 2>&1
+git -C "$SD/wt" -c user.email=t@t -c user.name=t commit -q -m blocked >/dev/null 2>&1
+run "$DSP $SD/wt --goal /tmp/g.md"
+chk_eq "committed BLOCKED.md still denied (clean tree)" 2 "$RC"
+chk_contains "still 15's verdict" "前席 BLOCKED" "$ERR"
+git -C "$SD/wt" rm -q BLOCKED.md >/dev/null 2>&1
+git -C "$SD/wt" -c user.email=t@t -c user.name=t commit -q -m harvest >/dev/null 2>&1
+run "$DSP $SD/wt --goal /tmp/g.md"
+chk_eq "harvested + committed is legal again" 0 "$RC"
+
+# a directory git does not own is NOT judged (14 skips; 15 needs no repo)
+mkdir -p "$G8ROOT/nogit"
+run "$DSP $G8ROOT/nogit --goal /tmp/g.md"
+chk_eq "non-git cwd is not judged by 14" 0 "$RC"; chk_eq "and stays silent on stderr" "" "$ERR"
+printf 'held\n' > "$G8ROOT/nogit/BLOCKED.md"
+run "$DSP $G8ROOT/nogit --goal /tmp/g.md"
+chk_eq "15 needs no repo — BLOCKED.md in a plain dir still denied" 2 "$RC"
+rm -f "$G8ROOT/nogit/BLOCKED.md"
+run "$DSP $G8ROOT/missing-entirely --goal /tmp/g.md"
+chk_eq "a nonexistent cwd is not judged" 0 "$RC"
+
+# the cwd positional: relative resolves against the payload cwd, quoted spaces survive, and any
+# expansion / glob is an admitted UNKNOWN (same discipline as rule 13's `--goal` extraction)
+GUARD_CWD="$SD"
+printf 'dirty\n' > "$SD/wt/loose.txt"
+run "$DSP wt --goal /tmp/g.md"
+chk_eq "a RELATIVE cwd resolves against the payload cwd" 2 "$RC"
+chk_contains "and it is 14's verdict" "播种未 seed commit" "$ERR"
+mkdir -p "$SD/wt space"; git -C "$SD/wt space" init -q; printf 'x\n' > "$SD/wt space/loose.txt"
+run "$DSP '$SD/wt space' --goal /tmp/g.md"
+chk_eq "a quoted cwd containing a space is judged" 2 "$RC"
+run "$DSP \"\$WT\" --goal /tmp/g.md"
+chk_eq "an expansion in the cwd is an admitted UNKNOWN (not judged)" 0 "$RC"
+run "$DSP $SD/w? --goal /tmp/g.md"
+chk_eq "a glob in the cwd is an admitted UNKNOWN too" 0 "$RC"
+run "bash references/agentctl/agentctl start omp seedsess"
+chk_eq "a dispatch with no cwd positional is not judged" 0 "$RC"
+chk_contains "and still gets the reminder" "watcher" "$(ctx "$OUT")"
+# a flag before the positional must not be eaten as the cwd
+run "$DSP --review $SD/wt --goal /tmp/g.md"
+chk_eq "leading flags are skipped, the positional is still found" 2 "$RC"
+chk_contains "and judged as 14" "播种未 seed commit" "$ERR"
+# DENY outranks the watcher reminder: a dirty dispatch that DOES arm a watcher is still denied
+run "$DSP $SD/wt --goal /tmp/g.md && bash references/agentctl/agentctl watch seedsess" 1
+chk_eq "a watched dirty dispatch is denied all the same" 2 "$RC"
+chk_eq "and prints no JSON alongside" "" "$OUT"
+rm -f "$SD/wt/loose.txt"
+
+# ── R2 (cold review §2.1/§2.2) THE PARSE FACE: command position, and EVERY segment ─────────
+# R1 reused rule (3)'s unanchored `re.search` and inspected only its FIRST match. Both halves
+# were counter-probed: argv DATA was DENIED as if it were a dispatch, and a real LATER dispatch
+# was never judged at all. Rule (3)'s permissive matcher stays where it belongs (an over-eager
+# REMINDER costs a sentence; an over-eager DENY costs the seat its Bash tool).
+printf 'held gate\n' > "$SD/wt/BLOCKED.md"
+run "echo agentctl start omp s $SD/wt"
+chk_eq "R2-2.1 an echoed dispatch is DATA, not a dispatch" 0 "$RC"
+chk_eq "R2-2.1 and no DENY reaches stderr" "" "$ERR"
+run "printf %s agentctl start omp s $SD/wt"
+chk_eq "R2-2.1 printf argv is DATA too" 0 "$RC"
+run "echo 'note; agentctl start omp s $SD/wt'"
+chk_eq "R2-2.1 a quoted mention inside an echo is DATA" 0 "$RC"
+# PAIRED GREEN->RED: the identical text in command position is still judged
+run "$DSP $SD/wt --goal /tmp/g.md"
+chk_eq "R2-2.1 control: the same text in command position is denied" 2 "$RC"
+# the SECOND dispatch of a chain is a dispatch
+CLEANWT="$SD/clean"; mkdir -p "$CLEANWT"; git -C "$CLEANWT" init -q
+git -C "$CLEANWT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1
+CHAIN2="bash references/agentctl/agentctl start omp s2"
+run "$DSP $CLEANWT --goal /tmp/g.md; $CHAIN2 $SD/wt --goal /tmp/g.md"
+chk_eq "R2-2.2 a LATER dispatch onto a held BLOCKED.md is judged" 2 "$RC"
+chk_contains "R2-2.2 and it is 15's verdict" "前席 BLOCKED 未收割" "$ERR"
+chk_eq "R2-2.2 and no hook response rides alongside the deny" "" "$OUT"
+rm -f "$SD/wt/BLOCKED.md"
+printf 'loose\n' > "$SD/wt/loose.txt"
+run "$DSP $CLEANWT --goal /tmp/g.md; $CHAIN2 $SD/wt --goal /tmp/g.md"
+chk_eq "R2-2.2 a LATER dispatch onto a dirty worktree is judged" 2 "$RC"
+chk_contains "R2-2.2 and it is 14's verdict" "播种未 seed commit" "$ERR"
+chk_contains "R2-2.2 the denial names the SECOND cwd, not the first" "$SD/wt" "$ERR"
+rm -f "$SD/wt/loose.txt"
+run "$DSP $CLEANWT --goal /tmp/g.md; $CHAIN2 $CLEANWT --goal /tmp/g.md"
+chk_eq "R2-2.2 control: two clean dispatches stay legal" 0 "$RC"
+
+# ── R2 (cold review §2.3) gate 15 asks EXISTS, not isfile ─────────────────────────────────
+# A directory at `<cwd>/BLOCKED.md` wedges the next seat exactly the same way (it still cannot
+# create its own file there), and git never reports an empty directory, so (14) does not cover it.
+mkdir -p "$SD/wt/BLOCKED.md"
+run "$DSP $SD/wt --goal /tmp/g.md"
+chk_eq "R2-2.3 a DIRECTORY at BLOCKED.md is an unharvested gate too" 2 "$RC"
+chk_contains "R2-2.3 and 15 answers it" "前席 BLOCKED 未收割" "$ERR"
+rmdir "$SD/wt/BLOCKED.md"
+
+# ── R2 (cold review §5.1) the copyable recovery must survive a cwd with a space ────────────
+# The parser ADMITS a quoted cwd containing spaces (asserted above), so an unquoted fix line is
+# a false promise on an input this gate itself accepts: copying it would split the path.
+printf 'loose\n' > "$SD/wt space/loose.txt"
+run "$DSP '$SD/wt space' --goal /tmp/g.md"
+chk_eq "R2-5.1 a spaced cwd is judged as 14" 2 "$RC"
+chk_contains "R2-5.1 14's git commands are shell-quoted" "git -C '$SD/wt space' add -A" "$ERR"
+chk_contains "R2-5.1 both of them" "git -C '$SD/wt space' commit -m 'seed:" "$ERR"
+printf 'held\n' > "$SD/wt space/BLOCKED.md"
+run "$DSP '$SD/wt space' --goal /tmp/g.md"
+chk_eq "R2-5.1 and the same cwd is judged as 15 first" 2 "$RC"
+chk_contains "R2-5.1 15's rm is shell-quoted" "rm '$SD/wt space/BLOCKED.md'" "$ERR"
+rm -f "$SD/wt space/BLOCKED.md"
+
+# ── R2 (cold review §4.2) gate 14's INSTRUMENT: a git that cannot answer must say so ───────
+# `_git_porcelain` folded "no git / timeout" into the same verdict as "not a repo" and the caller
+# allowed in silence — an unmeasured precondition reading exactly like a met one. Targeted
+# mutation of the `git status` call only, so every other rule keeps its real git.
+mut14() { # $1 command  $2 python exception expression -> OUT/ERR/RC
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(mkcmd "$1" | python3 -c 'import runpy,subprocess,sys
+_run=subprocess.run
+def fake(a,**k):
+    if list(a)[:1]==["git"] and "status" in list(a): raise eval(sys.argv[2])
+    return _run(a,**k)
+subprocess.run=fake
+runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" "$2" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+printf 'loose\n' > "$SD/wt/loose.txt"
+run "$DSP $SD/wt --goal /tmp/g.md"
+chk_eq "R2-4.2 control: unmutated, this dirty dispatch is denied" 2 "$RC"
+mut14 "$DSP $SD/wt --goal /tmp/g.md" 'FileNotFoundError("no git on PATH")'
+chk_eq "R2-4.2 a missing git never becomes a DENY (exit 0)" 0 "$RC"
+chk_eq "R2-4.2 and writes nothing to stderr" "" "$ERR"
+chk_contains "R2-4.2 the unmeasured precondition is ANNOUNCED" "WARN (cto-guard 14)" "$(ctx "$OUT")"
+chk_contains "R2-4.2 the warn names the cwd it could not measure" "$SD/wt" "$(ctx "$OUT")"
+chk_contains "R2-4.2 and says what went unchecked" "went UNCHECKED" "$(ctx "$OUT")"
+mut14 "$DSP $SD/wt --goal /tmp/g.md" 'subprocess.TimeoutExpired("git",10)'
+chk_eq "R2-4.2 a git TIMEOUT degrades the same way" 0 "$RC"
+chk_contains "R2-4.2 timeout is announced too" "WARN (cto-guard 14)" "$(ctx "$OUT")"
+mut14 "$DSP $SD/wt --goal /tmp/g.md" 'OSError("git refused")'
+chk_eq "R2-4.2 an OSError from the probe degrades the same way" 0 "$RC"
+chk_contains "R2-4.2 and is announced" "WARN (cto-guard 14)" "$(ctx "$OUT")"
+# the reminder still rides the SAME hook response — one JSON document, never two
+chk_contains "R2-4.2 the watcher reminder still arrives with it" "watcher" "$(ctx "$OUT")"
+chk_eq "R2-4.2 and the response is a single JSON document" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c hookSpecificOutput)"
+rm -f "$SD/wt/loose.txt"
+
+# ── R2 (cold review §4.3) gate 15's INSTRUMENT: the stat probe, mutated on purpose ─────────
+# The pre-existing global `re.search` mutation fails BEFORE this rule and proves nothing about
+# it. Only `BLOCKED.md` lookups are intercepted; rule 8's `.git` probes keep the real function.
+# R3 (verify §4.3) RETARGETED the interception from `os.path.exists` to `os.stat`, because that
+# is the call the rule now makes — patching a function the rule no longer calls would leave
+# these probes measuring nothing while reporting green. The harness CONTRACT is unchanged: `$2`
+# is the BLOCKED.md verdict — truthy = something stands there, falsy = nothing does (raised as
+# the real ENOENT the kernel would give), and an expression that RAISES exercises the
+# instrument face directly.
+mut15() { # $1 command  $2 python expression for the BLOCKED.md verdict -> OUT/ERR/RC
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(mkcmd "$1" | python3 -c 'import os,runpy,sys
+_s=os.stat
+def fake(p,*a,**k):
+    if str(p).endswith("BLOCKED.md"):
+        if eval(sys.argv[2]): return _s(sys.argv[1])
+        raise FileNotFoundError(2,"No such file or directory",str(p))
+    return _s(p,*a,**k)
+os.stat=fake
+runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" "$2" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+mut15 "$DSP $CLEANWT --goal /tmp/g.md" 'True'
+chk_eq "R2-4.3 forced True denies a clean cwd — the verdict really comes from this probe" 2 "$RC"
+chk_contains "R2-4.3 and it is 15's verdict" "前席 BLOCKED 未收割" "$ERR"
+printf 'held\n' > "$SD/wt/BLOCKED.md"
+mut15 "$DSP $SD/wt --goal /tmp/g.md" 'False'
+chk_not_contains "R2-4.3 forced False loses 15's verdict (the arm is load-bearing)" \
+  "前席 BLOCKED" "$ERR"
+# R3 (verify §4.3): an OSError from the stat probe is now a CLASSIFIED reading (WARN, asserted
+# below), so the "cannot ANSWER" face is exercised with a failure this rule does NOT classify —
+# the assertion it carries is unchanged: an unanswerable probe never becomes a silent pass.
+mut15 "$DSP $SD/wt --goal /tmp/g.md" '(_ for _ in ()).throw(RuntimeError("stat wedged"))'
+chk_eq "R2-4.3 a probe that cannot ANSWER is a CHECKER-ERROR, not a silent pass" 2 "$RC"
+chk_contains "R2-4.3 and carries the marker" "CHECKER-ERROR" "$ERR"
+rm -f "$SD/wt/BLOCKED.md"
+
+# ── R3 (verify §4.3) gate 15's BROKEN METER: unreadable is not harvested ───────────────────
+# `os.path.exists` answers False for "nothing there" AND for "could not look" (it swallows the
+# stat error), so a seat whose BLOCKED.md could not be stat'ed — mode 000 parent, dead mount,
+# root-owned file under a non-root guard — read exactly like a harvested one and the dispatch
+# went through SILENTLY GREEN. Verify probe: `os.stat(<cwd>/BLOCKED.md)` raising PermissionError
+# -> rc=0, no warn, no verdict. Same failure shape §4.2 fixed for (14), and the fix is the same:
+# a meter that cannot measure is not a green meter. Not a DENY either — this rule stops a
+# dispatch onto a HELD gate, not onto an unreadable path.
+# PAIRED CONTROL first: the same file, really present, really denies.
+printf 'held\n' > "$CLEANWT/BLOCKED.md"
+git -C "$CLEANWT" add BLOCKED.md >/dev/null 2>&1
+git -C "$CLEANWT" -c user.email=t@t -c user.name=t commit -q -m held >/dev/null 2>&1
+run "$DSP $CLEANWT --goal /tmp/g.md"
+chk_eq "R3-4.3 control: a real committed BLOCKED.md is denied" 2 "$RC"
+mut15 "$DSP $CLEANWT --goal /tmp/g.md" '(_ for _ in ()).throw(PermissionError(13,"Permission denied"))'
+chk_eq "R3-4.3 a stat the guard is not allowed to make never becomes a DENY (exit 0)" 0 "$RC"
+chk_eq "R3-4.3 and writes nothing to stderr" "" "$ERR"
+chk_contains "R3-4.3 the unmeasured precondition is ANNOUNCED" "WARN (cto-guard 15)" "$(ctx "$OUT")"
+chk_contains "R3-4.3 the warn names the path it could not measure" "$CLEANWT/BLOCKED.md" "$(ctx "$OUT")"
+chk_contains "R3-4.3 and says what went unchecked" "went UNCHECKED" "$(ctx "$OUT")"
+chk_not_contains "R3-4.3 and it is not dressed as a verdict" "前席 BLOCKED 未收割" "$(ctx "$OUT")"
+chk_eq "R3-4.3 the warn rides ONE hook response, never a second document" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c hookSpecificOutput)"
+# other OSErrors from the same probe degrade identically — the family, not one errno
+mut15 "$DSP $CLEANWT --goal /tmp/g.md" '(_ for _ in ()).throw(OSError(5,"Input/output error"))'
+chk_eq "R3-4.3 an EIO probe degrades the same way" 0 "$RC"
+chk_contains "R3-4.3 and is announced too" "WARN (cto-guard 15)" "$(ctx "$OUT")"
+# ENOENT/ENOTDIR still MEAN absent — the fix must not turn a harvested seat into a warn
+mut15 "$DSP $CLEANWT --goal /tmp/g.md" '(_ for _ in ()).throw(NotADirectoryError(20,"Not a directory"))'
+chk_eq "R3-4.3 ENOTDIR is ABSENT, not unmeasured (exit 0)" 0 "$RC"
+chk_not_contains "R3-4.3 and says nothing about 15" "cto-guard 15" "$(ctx "$OUT")"
+# an unmeasured (15) must not swallow (14): the loop degrades this seat and keeps judging
+printf 'loose\n' > "$CLEANWT/loose.txt"
+mut15 "$DSP $CLEANWT --goal /tmp/g.md" '(_ for _ in ()).throw(PermissionError(13,"Permission denied"))'
+chk_eq "R3-4.3 an unmeasured 15 still lets 14 judge the same seat" 2 "$RC"
+chk_contains "R3-4.3 and 14's verdict is the one that lands" "播种未 seed commit" "$ERR"
+rm -f "$CLEANWT/loose.txt"
+git -C "$CLEANWT" rm -q BLOCKED.md >/dev/null 2>&1
+git -C "$CLEANWT" -c user.email=t@t -c user.name=t commit -q -m harvest >/dev/null 2>&1
+
+# ── R3 (verify §2.2 / N1) THE PARSE FACE: a quoted env VALUE is not the command ────────────
+# `_SEG_HEAD` judged the segment a dispatch on the VIEW (quoted env value = opaque ARG) but
+# `_SEG_START` then located the command on the RAW segment, so a decoy inside the env value won
+# the first match and the guard judged /tmp/fake instead of the seat actually being started:
+# `X="agentctl start omp fake /tmp/fake" agentctl start omp real <dirty>` exited 0 where (14)
+# owed a DENY. Both faces now agree on what is data (`_quote_blind`).
+DECOY='X="agentctl start omp fake /tmp/fake"'
+printf 'loose\n' > "$SD/wt/loose.txt"
+run "$DECOY agentctl start omp real $SD/wt"
+chk_eq "R3-2.2 a decoy in a quoted env value no longer shadows the real dispatch" 2 "$RC"
+chk_contains "R3-2.2 and 14 judges it" "播种未 seed commit" "$ERR"
+chk_contains "R3-2.2 the seat judged is the REAL one" "$SD/wt" "$ERR"
+chk_not_contains "R3-2.2 not the decoy's path" "/tmp/fake" "$ERR"
+rm -f "$SD/wt/loose.txt"
+printf 'held\n' > "$SD/wt/BLOCKED.md"
+run "$DECOY agentctl start omp real $SD/wt"
+chk_eq "R3-2.2 15 reaches the real seat through the same decoy" 2 "$RC"
+chk_contains "R3-2.2 and it is 15's verdict" "前席 BLOCKED 未收割" "$ERR"
+rm -f "$SD/wt/BLOCKED.md"
+# NEGATIVE CONTROL: the same quoted text with no dispatch behind it is still DATA
+printf 'loose\n' > "$SD/wt/loose.txt"
+run "X=\"agentctl start omp fake $SD/wt\" echo hi"
+chk_eq "R3-2.2 a quoted dispatch in front of echo stays DATA (exit 0)" 0 "$RC"
+chk_eq "R3-2.2 and no DENY reaches stderr" "" "$ERR"
+# the DOCUMENTED positive control stays reachable: a spaced env value before a REAL dispatch
+run "FOO=\"a b\" $DSP $SD/wt --goal /tmp/g.md"
+chk_eq "R3-2.2 a spaced env value before a real dispatch is still judged" 2 "$RC"
+chk_contains "R3-2.2 and 14 owns that verdict" "播种未 seed commit" "$ERR"
+# blinding must not eat the QUOTED-cwd extraction: the positional is read off the RAW segment
+run "FOO=\"a b\" agentctl start omp s1 \"$SD/wt\""
+chk_eq "R3-2.2 a quoted cwd behind a spaced env value is still extracted" 2 "$RC"
+chk_contains "R3-2.2 and names that cwd" "$SD/wt" "$ERR"
+rm -f "$SD/wt/loose.txt"
+GUARD_CWD="$ISO_REPO"
+
 
 summary

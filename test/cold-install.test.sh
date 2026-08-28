@@ -51,7 +51,7 @@ chk "capabilities emits the contract, not a stub" \
 
 # The guards ship with the skill and are wired by the installer — a guard that cannot start is a
 # silently disabled gate on the user's machine.
-for g in cto-guard-bash cto-guard-agent; do
+for g in cto-guard-bash cto-guard-agent cto-guard-edit; do
   payload='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}'
   out="$(printf '%s' "$payload" | ( cd "$T/install" && HOME="$T/home" python3 \
         "cto-orchestration/references/agentctl/$g.py" ) 2>&1)"; rc=$?

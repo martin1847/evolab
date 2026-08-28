@@ -35,6 +35,7 @@ cd "$(dirname "$0")"
 AGENTCTL_SRC="../skills/cto-orchestration/references/agentctl/agentctl"
 GUARD_BASH="../skills/cto-orchestration/references/agentctl/cto-guard-bash.py"
 GUARD_AGENT="../skills/cto-orchestration/references/agentctl/cto-guard-agent.py"
+GUARD_EDIT="../skills/cto-orchestration/references/agentctl/cto-guard-edit.py"
 
 # ---- baselines: UTF-8 bytes, measured 2026-08-12 ----------------------------------------------
 # These are CURRENT-MAXIMUM ratchets, not validated thresholds. No experiment says 754 bytes is
@@ -47,7 +48,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=9313    # all injected text across both guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=12016   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -70,12 +71,56 @@ BUDGET_GUARD_TOTAL=9313    # all injected text across both guards (raised 7439�
                            #    Could not come from cutting elsewhere — the advisory has to name
                            #    the matched phrases, the neutral-wording fix AND its own
                            #    non-completeness, or it reads as a verdict instead of a hint.
-BUDGET_GUARD_SINGLE=754    # the longest single message a worker can be handed at once. UNMOVED:
-                           # the (3)+(13) assembled response is 593 B, the (12) denial 590 B.
-BUDGET_GUARD_COUNT=23      # sink count: a drop means extraction broke or a sink moved out of
+                           # Raised 9313→11660 on 2026-08-28, and the census now covers a THIRD
+                           # file (cto-guard-edit.py — a sink in a file not listed here is
+                           # unweighed, which is why the new guard joined on arrival). Three
+                           # items, all weighed:
+                           #  +939 B cto-guard-bash rules (14)+(15): the two `agentctl start`
+                           #    preconditions (dirty worktree / unharvested BLOCKED.md). Each
+                           #    denial has to name the seat cwd it judged and the recovery that
+                           #    is NOT the other rule's (commit the seed vs harvest the gate),
+                           #    because the two failures look identical from the seat's side.
+                           #  +1408 B / 5 sinks for cto-guard-edit.py: one DENY (735 B, under the
+                           #    unmoved per-message ceiling) plus THREE degrade WARNs. The WARNs
+                           #    are the price of ALLOW+WARN over checker-error: a gate that
+                           #    cannot answer must say so, or its silence reads as approval.
+                           #  Could not come from cutting elsewhere: the E1 denial lands on a
+                           #    seat whose entire lane discipline is at stake and must carry the
+                           #    dispatch replacement AND the licensed direct-write path.
+                           # Raised 11660→11865 on 2026-08-28 (R2 fix round), ONE item weighed:
+                           #  +149 B rule (14)'s instrument warning. Bought: `_git_porcelain`
+                           #    folded "git missing / timed out" into the same silent allow as
+                           #    "not a git work tree", so an UNMEASURED dispatch precondition
+                           #    read exactly like a met one (cold review §4.2). It is the
+                           #    shortest of the three warns by construction — it joins (3)'s
+                           #    reminder and (13)'s advisory in ONE response, and that assembly
+                           #    is what the per-message ceiling below weighs.
+                           #  The remaining +56 B is net churn inside existing sinks: gate E1's
+                           #    denial and degrade warn now name the WRITE TARGET they judged
+                           #    (§1.1) and (15)'s `rm` fix quotes the whole path (§5.1).
+                           # Raised 11865→12016 on 2026-08-28 (R3 fix round), ONE item weighed:
+                           #  +151 B rule (15)'s instrument warning, the twin of (14)'s above.
+                           #    Bought: `os.path.exists` answers False for "no BLOCKED.md" AND
+                           #    for "could not stat it", so a seat the guard was not allowed to
+                           #    look at read exactly like a harvested one and the dispatch went
+                           #    through silently green (verify R3 §4.3). Could not come from
+                           #    cutting elsewhere: it must name the PATH it failed on (the
+                           #    orchestrator has to go look at that one) and say the
+                           #    precondition went unchecked, or it reads as a passed check.
+BUDGET_GUARD_SINGLE=893    # the longest single message a worker can be handed at once. Raised
+                           # 754→893 on 2026-08-28: the worst case is now the (3)+(13)+(14)+(15)
+                           # assembled response, i.e. every instrument in this dispatch failing
+                           # at once, and it is +151 B — exactly (15)'s new warn, nothing else.
+                           # Rule (14)'s warn was cut to 149 B for the OLD 754 ceiling and stays
+                           # cut; (15)'s is held to the same shape. The recovery both drop
+                           # (which errno / which git failure) is one `ls -ld` or `git status`
+                           # away, and that assembly is only reachable when the seat is already
+                           # standing in a broken environment.
+BUDGET_GUARD_COUNT=30      # sink count: a drop means extraction broke or a sink moved out of
                            # view. 21→23 on 2026-08-20: +1 real sink (rule 12) and +1 the meter
-                           # had been blind to (see `resolve` below); pinned to the measured
-                           # number, since the old baseline carried untracked slack.
+                           # had been blind to (see `resolve` below). 23→30 on 2026-08-28:
+                           # +2 (rules 14/15) and +5 (the whole new guard). Pinned to the
+                           # measured number, never carrying untracked slack.
 
 echo "== injected-context budget =="
 
@@ -114,14 +159,17 @@ import ast, os, sys
 
 # Fields whose value is handed to the agent verbatim by the harness.
 SINK_KEYS = {"additionalContext", "permissionDecisionReason", "reason"}
-# Messages we KNOW are injected, used to calibrate the extractor itself (see header). The trio
+# Messages we KNOW are injected, used to calibrate the extractor itself (see header). The set
 # covers every sink shape in play AND every local inside the assembled one: a bare local handed
 # to a sink, and BOTH locals of the payload assembled at rule (3)'s sink. Two needles were not
 # enough — a resolve() that dropped only rule 13's local still recalled the reminder and stayed
-# green while 388 bytes went unweighed (review R1 M6).
+# green while 388 bytes went unweighed (review R1 M6). The fourth pins the THIRD file into the
+# census: drop cto-guard-edit.py from the invocation below and recall goes 0 instead of the
+# budget quietly reporting a smaller, greener number.
 KNOWN_POSITIVE = ("[browser/long subagent launched]",          # bare Name sink (PostToolUse)
                   "REMINDER (cto-guard): session",             # assembled sink, first local
-                  "wording that has tripped")                  # assembled sink, rule 13's local
+                  "wording that has tripped",                  # assembled sink, rule 13's local
+                  "编排位直写源码面")                            # cto-guard-edit's E1 denial
 # Mutation switch for the recall probe below: comma-separated local names resolve() must ignore.
 # Test-only; the real invocation passes nothing.
 IGNORE = {n for n in os.environ.get("GUARD_METER_IGNORE", "").split(",") if n}
@@ -193,7 +241,7 @@ print(total, longest, count, recall)
 PY
 
 read -r guard_total guard_single guard_count guard_recall <<EOF
-$(python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT")
+$(python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT")
 EOF
 
 # RECALL PROBE (review R1 M6, the reviewer's mutation run as a standing negative control): a
@@ -201,7 +249,7 @@ EOF
 # invisible — total silently fell 9313→8925 while count stayed 23 and recall stayed 1, i.e. the
 # gate reported green for 388 unweighed bytes. The probe asserts the oracle now BITES.
 read -r mut_total _ mut_count mut_recall <<EOF
-$(GUARD_METER_IGNORE=note13 python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT")
+$(GUARD_METER_IGNORE=note13 python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT")
 EOF
 if [ "$mut_recall" = "0" ] && [ "$mut_total" -lt "$guard_total" ]; then
   _record "recall probe: dropping ONLY rule 13's local goes red ($mut_total < $guard_total bytes)" 1

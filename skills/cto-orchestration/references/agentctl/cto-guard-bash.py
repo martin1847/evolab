@@ -14,11 +14,15 @@
 #       worker instead of burning the orchestrator's premium session on supervision [DENY]
 #  (11) bare `codex exec|e|review` -> hand-rolled headless codex (no typed state, stdin-EOF hangs);
 #       review dispatch goes through the lane's `agentctl start codex … --review` [DENY]
+#  (14) `agentctl start <engine> <session> <cwd>` onto a DIRTY worktree -> the seat's own clean
+#       gate reds on the orchestrator's uncommitted seed and STOPs before working [DENY]
+#  (15) same dispatch with a surviving `<cwd>/BLOCKED.md` -> the new seat inherits a gate held
+#       by its predecessor and has nowhere to write its own [DENY]
 # Deny/checker error = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
 # extraction would be fragile in a guard.
-import sys, json, re, os, stat, subprocess
+import sys, json, re, os, shlex, stat, subprocess
 
 
 def checker_error(message):
@@ -252,6 +256,186 @@ def _r13_goal_arg(seg):
     if not tok or re.search(r"""[$`\\'"*?\[\]{}~]""", tok):
         return None, "unparseable path"
     return tok, None
+
+
+# ── rules (14) and (15): dispatch preconditions on the seat's cwd ─────────────────────────
+# The THIRD positional of `agentctl start <engine> <session> <cwd>`. Same bounded-extraction
+# discipline as `_r13_goal_arg` (and the same vocabulary): the cwd comes BEFORE every flag in
+# the CLI shape, so the first non-flag token after the session IS it, and any expansion /
+# escape / glob makes the shell open a DIFFERENT directory than the text names -> UNKNOWN,
+# never a guess. UNKNOWN means both rules stay silent; they judge a real directory or nothing.
+def _start_cwd(seg):
+    """The `<cwd>` positional of one `agentctl start` segment, or None when unreadable."""
+    rest = seg
+    while True:
+        m = re.match(r"\s*(-{1,2}[\w-]+)(=\S*)?(?=\s|$)", rest)
+        if not m:
+            break
+        rest = rest[m.end():]
+    rest = rest.lstrip()
+    if rest[:1] in ("'", '"'):
+        end = rest.find(rest[0], 1)
+        if end < 0:
+            return None
+        val = rest[1:end]
+        if rest[0] == '"' and re.search(r"[$`\\]", val):
+            return None
+        return val or None
+    tok = rest.split()[0] if rest.split() else ""
+    if not tok or re.search(r"""[$`\\'"*?\[\]{}~]""", tok):
+        return None
+    return tok
+
+
+# COMMAND POSITION, EVERY SEGMENT — the two properties (14)/(15) cannot be built without, both
+# counter-probed against the R1 shape (cold review §2.1, §2.2). That version reused rule (3)'s
+# unanchored `re.search` and read only its FIRST match, so `echo agentctl start omp s <cwd>` was
+# DENIED as a dispatch (argv data promoted to a command) while `agentctl start … <clean>;
+# agentctl start … <blocked>` PASSED (a real second dispatch never looked at). Rule (3)'s own
+# reminder keeps its permissive matcher: an over-eager REMINDER costs a sentence, an over-eager
+# DENY costs the seat its Bash tool.
+# The segmenter is quote- and escape-aware so a `;` or `|` inside a brief path cannot end a
+# segment (same property `_r13_segment` needed); each segment then starts AT command position by
+# construction, so the head test is rule (10)/(12)'s shared anchor (`_ENV_ASSIGN` + `_WRAPPER`)
+# applied to `_pipe_view` OF THAT SEGMENT — no second shell approximation. The cwd is extracted
+# from the RAW segment, never the view, because the view blanks a quoted span containing a space
+# (`'/wt a'`) to ARG.
+# DECLARED BOUNDARY, inherited from that shared face rather than newly introduced: a dispatch
+# buried in a nested shell (`bash -lc 'agentctl start …'`) is a blanked ARG in the view and is
+# NOT judged — the same construction limit rules (10)/(12)/(13) carry. R1's text search did reach
+# inside those quotes, but it reached inside `echo`'s too, and a rule that cannot tell a command
+# from a string must not hold a DENY.
+_SEG_HEAD = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
+                       + _AGENTCTL + r"\s+start\s+(?:omp|codex|claude)\b")
+_SEG_START = re.compile(r"\bagentctl[\"'\s]+start[\"'\s]+(?:omp|codex|claude)[\"'\s]+"
+                        r"[^\s\"';|&]+")
+# R3 (verify §2.2 / N1): `_SEG_HEAD` decides WHETHER the segment is a dispatch on the VIEW (where
+# a quoted env value is an opaque ARG), but `_SEG_START` then located the command on the RAW
+# segment — so `X="agentctl start omp fake /tmp/fake" agentctl start omp real <dirty>` located
+# the DECOY inside the env value and judged `/tmp/fake` instead of the real seat: probe rc=0
+# where (14) owed a DENY. The two faces must agree on what is data. `_quote_blind` is that
+# agreement made length-preserving: exactly the spans `_pipe_view` blanks to ARG (a quoted body
+# carrying whitespace or a separator) get their CONTENT replaced 1:1 by \x01, so a match maps
+# straight back onto raw offsets and `_r13_segment` keeps reading the RAW text — which is what
+# lets a quoted cwd with spaces still be extracted. The quote DELIMITERS survive, so the
+# `agentctl "start" omp` spelling `_SEG_START` accepts stays reachable.
+_BLIND = "\x01"
+_OPAQUE = re.compile(r"[\s\"';|&()]")
+
+
+def _quote_blind(text):
+    out, i, n = list(text), 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c not in "'\"":
+            i += 1
+            continue
+        quote, j = c, i + 1
+        while j < n:
+            if text[j] == "\\" and quote == '"' and j + 1 < n:
+                j += 2
+                continue
+            if text[j] == quote:
+                break
+            j += 1
+        body = text[i + 1:j]
+        if _OPAQUE.search(body):
+            out[i + 1:j] = _BLIND * len(body)
+        i = j + 1
+    return "".join(out)
+
+
+def _cmd_segments(text):
+    """Every command-position segment of a shell command, quotes and backslash escapes
+    respected. Separators are the ones the rest of this file treats as such (`; | & ( ) \\n`);
+    an unquoted `#` opens a comment that runs to end of line, exactly as in `_pipe_view`."""
+    segs, start, quote, i, n = [], 0, None, 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote is not None:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if c == "#" and (i == 0 or text[i - 1] in " \t\n"):
+            segs.append(text[start:i])
+            nl = text.find("\n", i)
+            if nl < 0:
+                return segs
+            start = i = nl + 1
+            continue
+        if c in ";|&()\n":
+            segs.append(text[start:i])
+            start = i + 1
+        i += 1
+    segs.append(text[start:])
+    return segs
+
+
+def _start_seats(raw, base):
+    """Absolute `<cwd>` of EVERY command-position `agentctl start` in this command, in order.
+    Unreadable positionals (expansion / glob / absent) are dropped, not guessed."""
+    out = []
+    for seg in _cmd_segments(raw):
+        if not _SEG_HEAD.match(_pipe_view(seg)):
+            continue
+        # located on the BLINDED segment (offsets are raw's), read back off the RAW one
+        hit = _SEG_START.search(_quote_blind(seg))
+        if not hit:
+            continue
+        seat = _start_cwd(_r13_segment(seg, hit.end()))
+        if seat:
+            out.append(seat if os.path.isabs(seat) else os.path.join(base, seat))
+    return out
+
+
+def _git_porcelain(repo):
+    """(dirty, decided, available). `decided` False = git answered but does not own this tree ->
+    the rule skips silently, as contracted. `available` False = the INSTRUMENT failed (no git,
+    timeout, OSError) -> the caller says so out loud instead of allowing in silence: a meter that
+    cannot measure is not a green meter (cold review §4.2). Never a DENY on an undecidable tree:
+    rule (14) exists to stop a dispatch onto an uncommitted seed, not to gate directories git
+    does not own."""
+    try:
+        proc = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        return False, False, False
+    if proc.returncode != 0:
+        return False, False, True
+    return bool(proc.stdout.strip()), True, True
+
+
+def _blocked_stands(path):
+    """(stands, measured) for a seat's `BLOCKED.md`. `stands` True = SOMETHING is at that path —
+    file or directory, both wedge the next seat identically (cold review §2.3). `measured` False
+    = the INSTRUMENT could not answer (permissions, dead mount, symlink loop, I/O), which is NOT
+    the same reading as "nothing there" — and `os.path.exists` returns False for BOTH, so a
+    seat this guard could not look at read exactly like a harvested one (verify R3 §4.3, the
+    shape §4.2 already fixed for (14)). Absence is the errno family that MEANS absence
+    (`ENOENT`, and `ENOTDIR` for a non-directory seat); every other OSError is unmeasured, and
+    the caller says so out loud instead of allowing in silence. Never a DENY on an unmeasured
+    seat: (15) exists to stop a dispatch onto a HELD gate, not to gate an unreadable path."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False, True
+    except OSError:
+        return False, False
+    return True, True
 
 
 def _brief_review(raw, vpipe, cwd):
@@ -593,7 +777,7 @@ def main():
         # self-anchor again (self-caught variant of the R1 `cd ||` hole)
         mcd = _cd_anchor(full)
         if mcd:
-            parts = re.split(r";|\|\|", full[mcd.end():], 1)
+            parts = re.split(r";|\|\|", full[mcd.end():], maxsplit=1)
             return len(parts) > 1 and _unanchored_segs(_strip_spans(parts[1]))
         return _unanchored_segs(_strip_spans(full))
 
@@ -822,7 +1006,7 @@ def main():
         for mh in _codex_head.finditer(face):
             # the invocation ends at the next shell separator; a `(` opens a subshell, so it
             # cannot carry codex arguments either
-            seg = re.split(r"[;|&()]", face[mh.end():], 1)[0]
+            seg = re.split(r"[;|&()]", face[mh.end():], maxsplit=1)[0]
             toks = seg.split()
             i = 0
             while i < len(toks):
@@ -885,6 +1069,77 @@ def main():
         )
 
     m = re.search(r"\bagentctl[\"'\s]+start[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
+    # (14)/(15) dispatch preconditions, judged on EVERY command-position `agentctl start` in the
+    #      command (`_start_seats`) rather than on rule (3)'s first unanchored match: quoted argv
+    #      data is not a dispatch, and a LATER dispatch is still one (cold review §2.1/§2.2, both
+    #      counter-probed). Both are DENYs and both must land BEFORE the reminder's
+    #      `print(json.dumps(...))`: exit 2 plus a hook response on stdout would be one malformed
+    #      reply, and (3)'s branch ends in an unconditional `return 0`.
+    #      ORDER IS LOAD-BEARING — (15) BLOCKED.md first, and across ALL seats before (14) judges
+    #      any: an unharvested BLOCKED.md is itself untracked, so (14) would fire on it and its
+    #      fix line ("commit the seed") would tell the orchestrator to COMMIT the previous seat's
+    #      held gate instead of harvesting it.
+    seats14 = _start_seats(raw, data.get("cwd") or os.getcwd())
+    note14 = note15 = ""
+    for seat in seats14:
+        # (15) BLOCKED.md is a path SHARED between successive seats: the new one correctly
+        #      refuses to touch another seat's file and wedges with nowhere to write its own
+        #      held gate (field: same day, n=2). Anything AT that path counts, file or
+        #      DIRECTORY: a directory wedges the next seat the same way (cold review §2.3).
+        #      The meter is `_blocked_stands`, not `os.path.exists` — that call answers False
+        #      for "nothing there" AND for "could not look", so an unreadable seat read exactly
+        #      like a harvested one (verify R3 §4.3; the same shape §4.2 fixed for (14)).
+        stands, measured = _blocked_stands(os.path.join(seat, "BLOCKED.md"))
+        if not measured:
+            note15 = (
+                "WARN (cto-guard 15): %s/BLOCKED.md could not be stat'ed, so the unharvested-"
+                "gate precondition went UNCHECKED on this dispatch — look before you seat."
+                % seat
+            )
+            continue
+        if stands:
+            sys.stderr.write(
+                "DENY: 前席 BLOCKED 未收割 — %s/BLOCKED.md still stands, so the seat you are "
+                "starting inherits a gate held by its predecessor and has nowhere to write "
+                "its own (same day, n=2: the new seat correctly refuses to touch another "
+                "seat's file and wedges). Fix: read it, archive the verdict into the batch "
+                "record, `rm %s`, then re-send this dispatch. "
+                "Read: cto-orchestration/references/dispatch-baseline.md §基线纪律.\n"
+                % (seat, shlex.quote(os.path.join(seat, "BLOCKED.md")))
+            )
+            return 2
+    for seat in seats14:
+        # (14) untracked = dirty: the seat's own clean gate reds on the ORCHESTRATOR's
+        #      uncommitted seed and STOPs before doing any work (downstream seats n=2, one
+        #      burned round each). A directory git does not own is not judged at all — but a
+        #      git that could not RUN is not that answer, and says so (cold review §4.2).
+        #      Every fix command interpolates the cwd through `shlex.quote`: the parser admits
+        #      quoted paths with spaces, so an unquoted copyable recovery is a false promise on
+        #      an input this gate itself accepts (cold review §5.1).
+        dirty, decided, available = _git_porcelain(seat)
+        if not available:
+            # Kept SHORT on purpose: it joins (3)'s reminder and (13)'s advisory in ONE hook
+            # response, and that assembled payload is what `BUDGET_GUARD_SINGLE` ceilings. The
+            # ceiling did NOT move for this batch — 149 B is what fits under it.
+            note14 = (
+                "WARN (cto-guard 14): `git status` could not run for %s, so the DIRTY-worktree "
+                "precondition went UNCHECKED on this dispatch — commit the seed first."
+                % seat
+            )
+            continue
+        if decided and dirty:
+            sys.stderr.write(
+                "DENY: 播种未 seed commit — `agentctl start … %s` onto a DIRTY worktree; the "
+                "seat's clean gate reads the orchestrator's own uncommitted seed as work in "
+                "progress and STOPs (downstream seats n=2, one burned round each). Fix: "
+                "commit the seed first (`git -C %s add -A && git -C %s commit -m 'seed: "
+                "<brief>'`), then re-send this dispatch; anything that must NOT be committed "
+                "belongs in the umbrella's docs/ or .gitignore, never loose in the worktree. "
+                "Read: cto-orchestration/references/dispatch-baseline.md §基线纪律.\n"
+                % (seat, shlex.quote(seat), shlex.quote(seat))
+            )
+            return 2
+
     reminder = ""
     if m:
         session = m.group(2)
@@ -902,14 +1157,16 @@ def main():
                 f"signal now: `agentctl watch {session}` via Bash run_in_background:true (NOT "
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
-    # (13) rides (3)'s channel: on exit 0 only additionalContext reaches the agent, and two
-    # JSON documents on stdout would be one malformed hook response. Both strings stay LOCAL
-    # to this frame so the injected-text ratchet can weigh what a worker is actually handed.
-    if reminder or note13:
+    # (13) and (14)/(15)'s instrument warnings ride (3)'s channel: on exit 0 only
+    # additionalContext reaches the agent, and two JSON documents on stdout would be one
+    # malformed hook response. All four strings stay LOCAL to this frame so the injected-text
+    # ratchet can weigh what a worker is actually handed.
+    if reminder or note13 or note14 or note15:
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": "\n".join(t for t in (reminder, note13) if t),
+                "additionalContext": "\n".join(
+                    t for t in (reminder, note13, note14, note15) if t),
             }
         }))
     if m:
