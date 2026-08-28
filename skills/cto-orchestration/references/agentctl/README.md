@@ -26,8 +26,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   文案与 exit code 均不变。`status` 读到 RUNNING 而**无存活 watcher**（pid 文件缺失、或进程已亡）追加
   一行 `note: no watcher armed — arm: agentctl watch <S>`：只提醒不代挂，typed 行与 exit code 不动。
   **watch 不可用自造轮询顶替**：只认 DONE 的轮询会把 `RUNNING: idle but messages queued` 停成
-  无人收割（下游席位 2h 实证）——typed 终态 / deliverable freshness / round 围栏全靠 sensing
-  supervisor。`--deliverable` 声明与 brief 点名的输出文件必须同名，否则 exit 6（见 misplaced hint）。
+  无人收割——typed 终态 / deliverable freshness / round 围栏全靠 sensing supervisor。
+  `--deliverable` 声明与 brief 点名的输出文件必须同名：runtime 只看声明的 glob——worker 按 brief
+  写到别名得 exit 6（misplaced hint 只扫 cwd 同名近失）；写了声明名却违背 brief 则 DONE 不拦。
 - **supervised watch（默认）**：感知环跑在独立 tmux 会话 `<session>-watchd`，宿主侧 `agentctl watch`
   只是**哑等待者**——只读围栏过的终态记录，自己不 classify。**被外部 TERM 后原地重挂即恢复同一
   class + exit**，连本轮结论都不丢。生命周期绑 attempt：`start` / `stop` / `steer --replace` 回收

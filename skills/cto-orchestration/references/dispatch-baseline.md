@@ -27,8 +27,8 @@
 - 按 SHA 部署的项目：squash / rebase-merge 的 ancestry 都干净线性（`contains <sha>` 成立）。
 - **同 cwd 起第二席前先收割 BLOCKED.md**：BLOCKED.md 是席位间共享路径——前席遗留不清，
   新席正确拒动他席文件而卡死（同日 n=2）。编排位收割（读取归档其内容）后删除，再派新席。
-- **路径闭集派前枚举 use site**：闭集由设计视角写出会漏第三处引用（删 enum 成员的第三处、
-  第三套 precedence，下游席位 n=2）——派前对交付项触碰的符号 `rg` 枚举 use site，闭集 ⊇ 命中。
+- **路径闭集派前枚举 use site**：闭集由设计视角写出会漏第三处引用——派前对交付项触碰的符号
+  `rg` 枚举 use site，闭集 ⊇ 命中。
 - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主
   checkout、非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout
   **显式指到新 worktree**，可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。

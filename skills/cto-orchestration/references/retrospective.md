@@ -35,8 +35,9 @@
      一条教训最多以散文形态活两次。
    - **门效果审计（行为门的对偶面）**：本波编排位自造的每个门/上限/仪式写 typed 行
      `GATE-AUDIT: <slug> hits=<真缺陷数> false=<误报 BLOCKED 数> action=<kill|keep(<理由>)>`
-     ——hits=0 且 false≥2 默认 kill，keep 须写理由（retro-check 第 8 检 FAIL）；先于任何「重新
-     校准阈值」：三次都在参数层归因而没问「门该不该在」，是下游席位一夜实证的病形。
+     （行首顶格或 `- ` 前缀；slug 同 LESSON 字符集；两个计数各最多 9 位；理由可含括号；
+     code fence 内示例不计入）——hits=0 且 false≥2 默认 kill，keep 须写非空理由，否则
+     retro-check 第 8 检 FAIL；先问「门该不该在」，再谈校准阈值。
    - **淘汰同轮做**：会在动手那一刻 fire 的才留正文；hook 已强制的收成一行指针；从不 fire 的删或降
      README 背景（不 fire 的散文是净负债）。
 4. **上下文治理**：关交付完的会话（**只清本席位派出的——即本席位 agentctl start 出来的**；会话账
