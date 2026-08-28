@@ -260,18 +260,13 @@ else
   ok "$lessons lesson line(s), none past the prose limit"
 fi
 
-# 8) gate-effect audit — the dual of 7): a hard gate that FIRES but only false-positives is
-# net-negative exactly like prose that never fires (downstream field: 3 self-made gates,
-# 0 real defects, ~9h of a 15h night). Grammar (line start, optional "- "):
-#   GATE-AUDIT: <slug> hits=<real defects caught> false=<false BLOCKED count> action=<kill|keep(<reason>)>
-# FAIL = hits=0 AND false>=2 AND action=keep without a reason (two false BLOCKEDs and no
-# real catch = default kill; keeping needs a stated why). No lines = audit not adopted → note.
+# 8) gate-effect audit (GATE-AUDIT 行) — 形态与 FAIL 判据单源: retrospective.md §3「门效果审计」条。
 echo "8) 门效果审计 (GATE-AUDIT 行: hits=0 且 false≥2 须 kill 或 keep(理由)):"
 gaudits=0; gfail=0
 while IFS= read -r ln; do
   gfile="${ln%%:*}"; body="${ln#*GATE-AUDIT:}"
   gaudits=$((gaudits+1))
-  if ! printf '%s' "$body" | grep -qE '^[[:space:]]+[A-Za-z0-9_.-]+[[:space:]]+hits=[0-9]{1,9}[[:space:]]+false=[0-9]{1,9}[[:space:]]+action=(kill|keep(\([^)]*\))?)[[:space:]]*$'; then
+  if ! printf '%s' "$body" | grep -qE '^[[:space:]]+[A-Za-z0-9_.-]+[[:space:]]+hits=[0-9]{1,9}[[:space:]]+false=[0-9]{1,9}[[:space:]]+action=(kill|keep(\(.*\))?)[[:space:]]*$'; then
     echo "  [warn] malformed GATE-AUDIT line in $gfile — need 'GATE-AUDIT: <slug> hits=<int> false=<int> action=<kill|keep(<reason>)>'"
     warns=$((warns+1)); continue
   fi

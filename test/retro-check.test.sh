@@ -271,6 +271,45 @@ assert_has "$out" "malformed GATE-AUDIT line" "G5/malformed warned"
 r="$(mkrepo)"; printf 'GATE-AUDIT: hollow hits=0 false=2 action=keep()\n' > "$r/docs/LESSONS.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 1 "G6/hollow keep rc"
+# Case G7 — fenced grammar example must NOT count as an audit record (kills: fence skip
+# dropped from check 8's awk feeder)
+r="$(mkrepo)"; printf '```text\nGATE-AUDIT: example-only hits=0 false=3 action=keep\n```\n' > "$r/docs/guide.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G7/fenced-example rc"
+assert_no "$out" "example-only" "G7/fenced example not consumed"
+assert_has "$out" "自造门未记账" "G7/still reads as no audit ledger"
+# Case G8 — false past the 9-digit grammar cap is malformed, never counted data
+# (kills: false cap widened to {1,10})
+r="$(mkrepo)"; printf 'GATE-AUDIT: overflow hits=0 false=1000000000 action=keep\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G8/oversized-false rc (warn≠fail)"
+assert_has "$out" "malformed GATE-AUDIT line" "G8/oversized false rejected as malformed"
+# Case G9 — trailing prose after the action is malformed, never a silent green bypass
+# (kills: end-of-line anchor dropped from the grammar)
+r="$(mkrepo)"; printf 'GATE-AUDIT: trailing-prose hits=0 false=2 action=keep because reasons\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G9/trailing-prose rc"
+assert_has "$out" "malformed GATE-AUDIT line" "G9/trailing prose rejected"
+# Case G10 — a keep reason may contain parentheses; it is a real reason, not malformed
+# (kills: reason body narrowed back to \([^)]*\), which turned the FAIL path into a warn bypass)
+r="$(mkrepo)"; printf 'GATE-AUDIT: nested-reason hits=0 false=3 action=keep(主理人裁：先留(下批再看))\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G10/nested-paren reason rc"
+assert_no "$out" "malformed GATE-AUDIT line" "G10/nested parens are data, not malformation"
+assert_has "$out" "1 gate-audit line(s)" "G10/counted as a real audit record"
+# Case G11 — false=2 is ON the threshold: bare keep with zero catch → FAIL
+# (kills: false>=2 relaxed to false>2 in the bare-keep branch)
+r="$(mkrepo)"; printf 'GATE-AUDIT: two-false hits=0 false=2 action=keep\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "G11/threshold false=2 rc"
+assert_has "$out" "gate 'two-false' hits=0 false=2" "G11/named at the threshold"
+# Case G12 — one real catch immunizes any false count inside the grammar cap: documented
+# narrow boundary (kills: false cap narrowed below 9 digits)
+r="$(mkrepo)"; printf 'GATE-AUDIT: real-catch hits=1 false=999999999 action=keep\n' > "$r/docs/LESSONS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "G12/real-catch big-false rc"
+assert_no "$out" "malformed GATE-AUDIT line" "G12/9-digit false is in-grammar"
+assert_has "$out" "no unjustified zero-catch gate" "G12/counted clean"
 
 # --- review reproductions as standing assertions (each was a live bypass/false-positive) --
 # Case Z1 — fenced grammar example must NOT count as a ledger record (opt-in boundary)
