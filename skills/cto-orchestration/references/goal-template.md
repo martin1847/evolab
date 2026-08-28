@@ -92,6 +92,10 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
 - [ ] 涉及长耗时外部作业 → 写**等待配方**：禁止阻塞 sleep >60s，改有判据的短轮询（命令 + 达成
   条件），连续 N 次未达成 → STOP and report（缺配方则 worker 自创长 sleep 顶穿 watcher 窗口）。
 - [ ] 改动带功能旗标 → 写旗标门控：<flag 名，默认 ON/OFF + 理由>。
+- [ ] goal 声明了可写路径闭集 → 席位开工第一件事是 **Step 0 闭集核对**（10 分钟内、先于一切取证）：
+  对每个交付项打开真正的落地物（use site / SQL / Dockerfile / 注册表），列出闭集外但必改的文件；
+  有漏 ⇒ 只把 delta（file:line + 为什么必改 + 最小改法）写进 BLOCKED.md 停等，不做整份取证；
+  无漏 ⇒ 回执一行「闭集核对：无 delta」后开工。
 - [ ] 本 goal 新造门/上限/仪式（合同硬门、行数上限、证据文档仪式）→ 先向主理人报，且同行附
   **kill criterion**（什么证据证明它是净负债）；无此行不进合同（复盘按 GATE-AUDIT 结账）。
 - [ ] goal 含合并/发布类终态动作 → 前置写成机械外部输入：「合并前置 = 编排位 steer 传回
