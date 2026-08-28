@@ -47,7 +47,7 @@ fixture）；③声称「不阻断/不误伤」的红线必须实跑，不能只
 
 ## 否定性结论与 Goodhart
 
-只有决策依赖“未观察到 X”时才触发 known-positive 校准：先证明同一检测链能看见一个已知存在的 X；否则结论保持 `UNKNOWN`。
+依赖「未观察到 X」的决策 → known-positive 校准（规则与扫描面声明单源：goal-template 场景条款 absence-evidence gate）；否则结论保持 `UNKNOWN`。
 
 ## 验证边界
 

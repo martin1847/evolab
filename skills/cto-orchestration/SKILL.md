@@ -1,7 +1,7 @@
 ---
 name: cto-orchestration
 version: 1.7.4
-description: "CTO/orchestrator 模式管理多 agent 软件交付：agentctl 统一派工（一条 duplex lane、三引擎原生协议，轮内 steer）、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目；用户说'复盘 / 收口 / retro / retrospective'时也必须触发（七步仪式 + retro-check 硬门），说'盘点 / 接下来做什么 / 规划下一批 / stocktake'时同样触发（盘点仪式，只提案不动工）。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
+description: "CTO/orchestrator 模式管理多 agent 软件交付：agentctl 统一派工（一条 duplex lane、三引擎原生协议，轮内 steer）、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目；用户说'复盘 / 收口 / retro / retrospective'时也必须触发（七步仪式 + retro-check 硬门），说'盘点 / stocktake'时同样触发（盘点仪式，只提案不动工）。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
 metadata:
   requires:
     bins: ["tmux", "omp", "codex"]
@@ -9,8 +9,7 @@ metadata:
 
 # CTO Orchestration — 多 agent 软件交付
 
-> 这是领域无关内核 `orchestrator-core` 的写码皮：主干只保留写码域每次都要用的判据与路由，命令细节、
-> 故障矩阵和模板按需读 `references/`。
+> 主干只留每次派工都要用的判据与路由；命令细节、故障矩阵和模板按需读 `references/`。
 
 三条铁律：
 
@@ -30,9 +29,9 @@ metadata:
 
 默认用 omp 执行、codex 评审，但**工具名不证明异构**；派工前看实际 model/backend，避免执行席与评审席落到同一 lineage 或 quota 池。
 
-派工统一走 `agentctl start|steer|status|watch|stop`——**一条 lane、三引擎**各跑原生 duplex 协议。
-**控制原则：能力差异不分叉车道，由接口 typed 拒绝 + 指正路，绝不静默降级**；谁支持什么由
-runtime 自己讲（`agentctl capabilities`，状态词表 `agentctl states`），本文不留第二份能力表。
+派工统一走 `agentctl start|steer|status|watch|stop`——**一条 lane、三引擎**各跑原生 duplex 协议；
+能力差异不分叉车道、由接口 typed 拒绝 + 指正路。谁支持什么问 runtime（`agentctl capabilities`，
+状态词表 `agentctl states`），本文不留第二份能力表。
 
 另有 **Agent subagent**（浏览器 / MCP / 隔离主上下文的读密集工作：独立上下文、只回蒸馏结论、显式按任务分档 model）。
 需要人工现场时直接 `tmux attach` 旁观，worker 控制始终走协议。

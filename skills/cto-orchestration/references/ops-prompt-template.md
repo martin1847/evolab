@@ -14,9 +14,8 @@
 <环境/库/trace 范围 + 精确 id>
 
 ## Check 0 —（部署验证类必加）running-state trap
-验证 RUNNING 容器内的实际配置（docker exec ... env），不是磁盘上的文件——
-compose env_file 在容器创建时注入，docker restart 不会重读，必须 recreate。
-不通过则后续检查无意义，报告并停止。
+验证 RUNNING 容器内的实际配置（docker exec ... env），不是磁盘上的文件（env_file 只在 create 注入，
+restart 不重读）。不通过则后续检查无意义，报告并停止。
 
 ## Queries / Checks（每项一个结果表）
 1. <SQL/查询全文，占位符 <table> 注明按实际 schema 替换> —— 预期读数 + 判定规则

@@ -49,8 +49,7 @@
    retro-check 1b 只检测告警，reset 归编排者）+
    **敞口清单**（=下会话入口；敞口要变下一批选题时走盘点仪式 `stocktake.md`，取舍判据单源在彼）。
 5. **治理同步（与 memory 更新同级、不可省）**：文档归档（→ `orchestration/archive/` + 索引行）+
-   **ACTIVE_CONTEXT 整篇重写**（非追加，~60 行）+ **roadmap 翻状态** + **决策队列先清再刷**（若用
-   `DECISION_QUEUE.md`：先移除已处理项，再把 revisit 到期项重浮、给周期全局图。队列只存活跃项，旧决定靠 git history 留痕）。
+   **ACTIVE_CONTEXT 整篇重写**（非追加，~60 行）+ **roadmap 翻状态** + **决策队列先清再刷**（规则单源 `decision-queue.md` §队列机制：先移除已处理项，再重浮 revisit 到期项、给周期全局图）。
 6. **memory 治理**：见下「memory 治理」。
 7. **session 切换决策**：见下「session 切换决策」。
 

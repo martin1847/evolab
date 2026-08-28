@@ -133,7 +133,6 @@ exit code、名字与语义是运行时事实 → `agentctl states`（`--json` �
 产生（不读任何时钟）；一次性读者（`status` / 单发读）只核结构、**永不因"租约看起来旧"判 12**，
 因此它发现不了 wedged 守护环——要判停滞就挂 `agentctl watch`。
 身份三元组 `session_id` / `attempt_id` / `process_incarnation`（pid@start-time）与其提交点、
-陈旧记录的拒收规则、回执哈希取代 mtime 的条件——判据在代码注释与 `identity.py`，设计经过在 git log。
 
 - **Agent 工具异步 subagent 的完成通知有黑洞**：只在"停止且自身无存活后台子进程"时才发；子 agent 自起
   后台 fork（E2E/monitor）→ 父 idle 而通知永不来。
@@ -141,9 +140,8 @@ exit code、名字与语义是运行时事实 → `agentctl states`（`--json` �
 
 ## 判完成要正向证据、不凭 idle / watcher 裁决
 
-watcher 裁决是线索不是判决：DONE 收货前自己核**正向交付物**（本地 commit / 产物计数达标 / 显式
-review 标记）。agent 自起后台 job 会 yield＝呈 idle 但没完成（bg 跑完自动续）——判 DONE 认
-"正向交付物 + idle 稳定"，`沉默 ≠ 交付` 同族。
+watcher 裁决是线索不是判决：DONE 收货走 dispatch-baseline「收工核证四件套」（单源）；agent 自起后台
+job 会呈 idle 但没完成——`沉默 ≠ 交付`。
 
 ## 引擎级注意
 
@@ -190,7 +188,7 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   零文件伤害），任何链式/env 前缀/多 `-C`/解析歧义/`lexists` 命中都落回 DENY。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
   判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）；⑨ 浏览器归属：`playwright-cli attach`
   带接管旗标（CDP / 浏览器扩展）→ 默认 DENY，主理人批后 `touch /tmp/cto-allow-browser-attach` 一次性放行；正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
-  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）进管道 → DENY（rc 被末命令吞、帧被截）；⑫ 门命令与 `git commit` 同一 `;` 复合 → DENY（commit 不再依赖门 rc）；⑬ codex brief 含攻击味措辞 → WARN（cyberPolicy 误拦 n=4）。
+  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）位于管道**非末端** → DENY（末端放行；rc 被末命令吞、帧被截）；⑫ 门命令段以 `;` 结束且其后接 `git commit` → DENY（commit 不再依赖门 rc；`&&` 链放行）；⑬ 直接派 `agentctl start codex --goal <brief>` 时扫该 brief 的六个字面攻击词 → WARN（brief 读不到也 WARN；cyberPolicy 误拦 n=4）。
   ①用剥引号视图，④用原始 cmd，⑤⑥⑧⑩只认命令位（路径当参数
   不拦）；⑨判归一化后的 shell 执行面（与⑧同一套：剥引号 span + 去反斜杠，故转义写法照拦；
   代价是字面量进 shell 命令即拒，已接受的假阳性）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
