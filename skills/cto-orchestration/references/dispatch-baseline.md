@@ -24,7 +24,6 @@
   改动重叠才 rebase（或 merge base 进来）——判据细节与合后 ancestry 陷阱归你所在仓的 Git 协作
   规范，此处不复读。编排位只记一条：多会话并发时 base 常被别的 PR 推进，
   **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
-- 按 SHA 部署的项目：squash / rebase-merge 的 ancestry 都干净线性（`contains <sha>` 成立）。
 - **同 cwd 起第二席前先收割 BLOCKED.md**：BLOCKED.md 是席位间共享路径——前席遗留不清，
   新席正确拒动他席文件而卡死（同日 n=2）。编排位收割（读取归档其内容）后删除，再派新席。
 - **路径闭集派前枚举 use site**：闭集由设计视角写出会漏第三处引用——派前对交付项触碰的符号

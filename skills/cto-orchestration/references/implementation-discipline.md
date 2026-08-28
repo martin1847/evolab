@@ -39,7 +39,7 @@ fixture）；③声称「不阻断/不误伤」的红线必须实跑，不能只
 ②本次的绿产生于门**落地之后**（比该 required check 的 `completed_at` 与门合入时间；旧绿要
 逼一次新 head 重跑——门已进 base 用 `update-branch`，base 未动则空 commit push；strict 只
 强制齐平 base，不能当新鲜度证明）。两个失败态都不报错、只静默变绿（ruleset include 漏路径 →
-门红照样自合；门落地前的旧绿被计数）。同族条目见 agent-backend selfcheck-gates「门的适用性纪律」。
+门红照样自合；门落地前的旧绿被计数）。
 
 ## 病类收敛
 
@@ -47,7 +47,7 @@ fixture）；③声称「不阻断/不误伤」的红线必须实跑，不能只
 
 ## 否定性结论与 Goodhart
 
-只有决策依赖“未观察到 X”时才触发 known-positive 校准：先证明同一检测链能看见一个已知存在的 X；否则结论保持 `UNKNOWN`。验证动作数量不是验证有效性，坏验证会把不知道伪装成知道。
+只有决策依赖“未观察到 X”时才触发 known-positive 校准：先证明同一检测链能看见一个已知存在的 X；否则结论保持 `UNKNOWN`。
 
 ## 验证边界
 

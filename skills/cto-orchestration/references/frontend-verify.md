@@ -13,7 +13,7 @@
 | **探索 / 定位 / 临时诊断** | `@playwright/cli`（命令 `playwright-cli`）：`snapshot` 取 ref → `find` 搜大快照 → `generate-locator` 出 locator；`requests` / `console` 读联网与运行时 | 真浏览器且省 token——工具 schema 不进上下文，命令即证据可贴进 goal。看得到"渲染对不对"与**前端自己的联网 bug**（代理没配、请求 pending）。ref 定位比坐标/截图稳，坐标/vision 仅作 fallback。 |
 | **断言真源 / 重复执行 / 部署后验收** | `@playwright/test` 的 `.spec.ts` | selector 与 oracle 稳定后落 spec；本地 build 与已部署环境**复用同一 spec**，只切 `use.baseURL`（按 `process.env` 分支）与 auth fixture（`auth.setup.ts` setup project + `dependencies` + `storageState`；凭据落 `playwright/.auth` 且 gitignore）。 |
 | **后端 ground-truth** | `curl` + bearer token | 抓 SSE 逐事件时序（`curl -N`）、探 API、提 token、脚本化。**绕过前端网络层 → 验不了前端行为**，别拿它当渲染验证。 |
-| **Playwright MCP（例外形态）** | 同一套工具的 MCP 前端 | 不是"能力缺口"（未发现 MCP 独有能力），是形态差异：默认 headed、贵（工具 schema + 快照进上下文），适合模型在 agentic loop 内逐 tool 迭代或要人眼盯的场景。 |
+| **Playwright MCP（例外形态）** | 同一套工具的 MCP 前端 | 不是"能力缺口"，是形态差异：默认 headed、贵（工具 schema + 快照进上下文），适合模型在 agentic loop 内逐 tool 迭代或要人眼盯的场景。 |
 
 **浏览器归属与登录态**：默认 Playwright 自起的浏览器，**登录态跟项目走、不用临时 profile**——
 每角色一份 storageState（上表的 auth fixture），一个项目一个命名会话 `-s=<project>` 天然隔离、
@@ -95,7 +95,7 @@ worktree/子仓里搜不到；别指望它自己找、别 symlink 进仓库）�
 的工作树时，在页面加载前把配置对象用 `Object.defineProperty(..., {writable:false})` 锁住，
 让页面自身的注入脚本覆盖失败（零文件改动）。**关键是"加载前"**：用 `page.addInitScript`
 （`playwright-cli run-code` 或 spec 里直接调，每次导航在页面脚本前跑）——**不是**加载后求值的
-`evaluate` 类，那抢不到页面自己注入之前。实测验证过（addInitScript 先跑 + writable:false 挡掉覆盖）。
+`evaluate` 类，那抢不到页面自己注入之前。。
 
 ## 新项目接入
 

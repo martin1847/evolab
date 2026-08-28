@@ -53,24 +53,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 - 需要人工现场 = `tmux attach -t <session>` 旁观 / `tmux capture-pane -p`
   手动尸检；worker 控制始终走协议。
 
-## Why：为什么是协议、不是屏幕
-
-三引擎都有官方 headless 双工面——直接消费结构化事件流 + 进程退出与文件，状态**确定可判**；
-抓屏猜状态与 send-keys 注入不可靠。完整数据与论证见 meta 文《protocol-not-screen》。
-
-## duplex 车道机制
-
-```text
-tmux pane 内：  exec 3<>$RUN/<s>.duplex.in            # fifo 读写打开：引擎 stdin 永不 EOF
-               <engine-cmd> <&3 >> events.jsonl 2>> stderr.log
-               echo $? > rc.tmp && mv rc.tmp rc        # 引擎退出才落 rc（tmp+rename 原子发布）
-engine-cmd：   omp --mode=rpc …                        # JSON-line RPC（steer/follow_up/get_state）
-               claude -p --input-format stream-json --output-format stream-json \
-                      --verbose --permission-mode bypassPermissions …
-               codex app-server                        # JSON-RPC（handshake 建 thread，v1 参数形状）
-steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影只认 steer 后完整帧
-               （omp = 活体 get_state 往返；claude = result 帧；codex = turn/completed）
-```
+## duplex 车道（机制归代码与 meta 文《protocol-not-screen》，此处只留编排位要知道的）
 
 - goal 投递 = `prompt` 帧（正文 = goal 文件 + HEADLESS 协议 footer：立即开工**除非合同承诺了开工前
   核对**、阻塞**或合同门要求停下等裁决**时写 `<cwd>/BLOCKED.md` 停下——fresh BLOCKED.md 映射
@@ -87,10 +70,8 @@ steer/status： duplexctl.py 产协议帧 → flock 单写者写 fifo；投影�
   判定归 `duplexctl check-params`，`start` 与 `steer -d` 同门。另：进 meta 的参数面值一律拒含换行（否则注入 meta key，可无声改档），写点 `meta_update` 兜底引擎回传值。
 - 单写者纪律：所有 fifo 写经 `duplexctl.py`（flock）；并发 steer 由锁串行。
 
-codex 引擎注：app-server 官方标 experimental，但错误帧自描述（参数漂移当场报全量合法值）、
-握手/turn/steer 全链实证；协议假设由 fake 引擎钉进 hermetic 门。`--workflow review-loop --max-rounds N`
-预算与 SHIP-BLOCKING 续轮租约已移植进 duplex meta，三引擎通用（每次 goal/steer 投递计一轮，
-超限 `BUDGET-EXHAUSTED` exit 9）。
+`--workflow review-loop --max-rounds N` 预算与 SHIP-BLOCKING 续轮租约在 duplex meta，三引擎通用
+（每次 goal/steer 投递计一轮，超限 `BUDGET-EXHAUSTED` exit 9）。
 
 ## Launch
 
@@ -158,7 +139,6 @@ exit code、名字与语义是运行时事实 → `agentctl states`（`--json` �
   后台 fork（E2E/monitor）→ 父 idle 而通知永不来。
   对策：别只信完成通知（fallback 自检兜底）；派工要求验证同回合做完、不留孤儿 fork、里程碑 SendMessage 回 main。
 
-
 ## 判完成要正向证据、不凭 idle / watcher 裁决
 
 watcher 裁决是线索不是判决：DONE 收货前自己核**正向交付物**（本地 commit / 产物计数达标 / 显式
@@ -173,8 +153,7 @@ review 标记）。agent 自起后台 job 会 yield＝呈 idle 但没完成（bg
   价值，标注即可）。
 - **omp `--model` fuzzy match 会开交互 picker** 吃掉派发（会话卡在选择器）——引擎 args 只传 EXACT id
   （`--model=anthropic/claude-opus-4-8`）。
-- **裸 send-keys 坑**（仅剩人工 attach 场景相关，guard ④ 拦）：长中文/全角触发 omp 模糊搜索弹窗
-  吃 Enter 且关不掉；bracketed-paste 吞尾部 Enter；>2000 字符 paste 损坏。协议帧车道天然免疫。
+- **裸 send-keys 坑**由 guard ④ 拦（长/CJK 文本在人工 attach 面必坏），控制一律走协议帧。
 - omp rpc 面无版本稳定性文档：launch 的 ready 握手即 preflight，握手失败 = fail-fast 清场重来，
   不带病跑。
 - **claude queued steer 的 turn 归属无引擎关联面**（诚实边界）：turn A 运行中排队 steer B，
@@ -232,7 +211,6 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 
 不另造 settings 脚手架——并进 `repo-governance-bootstrap` §11 已建的那份。**不靠 skill frontmatter
 `hooks:` 自注册**（mid-session 经 Skill 工具激活不注册 → 显式 wiring 才可靠）。
-
 
 ## cwd 锚定（多仓工作区）
 

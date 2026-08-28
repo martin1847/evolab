@@ -4,14 +4,8 @@
 > 这是 SKILL 铁律③（主理人持判断，不持状态）的操作化：不是每事问，而是把"该谁决"事先设计掉。
 > 审批流与工作记忆是两种东西，拆开——**三档委派应下沉 harness 权限层，
 > 队列文件只装人脑的判断题（🔴/💤）**。这是目标架构，不冒充当前通用实现：本 bundle 已落地的是
-> 可选 freshness reminder 与 retro warning，尚无通用 T1 自动记账 / T2 deny。散文规则会随长上下文稀释
-> （context rot / instruction drift），官方判词："Permission rules are **enforced by Claude Code,
-> not by the model**. Instructions in your prompt or CLAUDE.md **shape** what Claude tries to do,
-> but they don't change what Claude Code **allows**."（code.claude.com/docs/en/permissions）
-
-## 负担的两个来源（都靠设计解，非靠人更努力）
-1. **状态存在主理人脑子里**（"怕忘记"）——开着的环靠记忆持有 = 持续占工作内存。
-2. **"哪些该我决"模糊**（"纠结"）——每件事都隐隐像要他拍，于是每件都耗他。
+> 可选 freshness reminder 与 retro warning，尚无通用 T1 自动记账 / T2 deny；散文规则随长上下文稀释，
+> 权限只有 harness 强制才算数。
 
 ## 架构：三层各归其位
 
@@ -27,8 +21,7 @@
   - **T2 动手前必问**（不可逆/对外、战略/优先级/钱/价值、有实质下行的真模糊）→ `ask`/`deny` rules + PreToolUse deny。
 - **需要即时拍板的 ≤4 个问题**：用 harness 原生批量提问（如 AskUserQuestion，1-4 问 × 每问 2-4 选项，
   带推荐与默认），别一问一 turn 切碎注意力；**异步/不急的进队列**。
-- 队列瘦身后只剩权限系统管不了的**判断题**——这正是它该有的形态：审批流要"不可遗忘、可批量、可恢复"，
-  业界收敛到结构化机制（interrupt 队列 / approval inbox / permission rules）；工作记忆才适合 markdown。
+- 队列瘦身后只剩权限系统管不了的**判断题**——审批流要"不可遗忘、可批量、可恢复"，工作记忆才适合 markdown。
 
 ## 队列机制（六件，编排者维护、对主理人零增量）
 
@@ -63,30 +56,10 @@
   伪精确的门比诚实的提醒更糟（误拦 + Stop hook 8 次连 block 熔断）。若未来 T2 拦截落 marker 文件，
   可升级为门。
 
-## 失败模式（盯住）
-
-- **队列腐烂（编排者忘更新）** → hook + 收口 warning 降低漏检；语义质量仍靠检查点纪律。
-- **橡皮图章 / 失去态势感知** → 心跳 + 升级包强制带"已做步骤"。
-- **聚合盲区** → 绊线（机制 3）。
-- **HOLD 烂掉** → revisit 触发（机制 6）。
-- **队列长出第二职能**（进度/待办混进来）→ 按「架构」表归位：🟡 归 ACTIVE_CONTEXT/任务系统。
-
 ## 落在哪（三层治理，勿混）
 - **队列实例**（含具体待决项）→ 项目 `docs/`（随项目走）。
 - **本实践方法论** → 本 skill（跨项目沉淀，项目无关）。
 - **编排者私有的"本项目决策/教训"** → memory（私有指针）。
-
-## 出处诚实标注
-- [research-backed]：GTD open-loops；Masicampo & Baumeister 2011；Leroy 注意力残留；context rot /
-  lost-in-the-middle（Anthropic context-engineering 博文 + Liu et al. 2023）。
-- [官方机制]：permission rules 判词与 enforced-not-shaped 分界（code.claude.com/docs/en/permissions）；
-  hooks "deterministic control … rather than relying on the LLM to choose"（hooks-guide）；
-  AskUserQuestion 1-4 问批量。业界同构：LangGraph interrupt + Agent Inbox、OpenAI Agents SDK
-  `interruptions` 批量审批——审批流用结构化机制是三家收敛，非本 skill 独创。
-- [doctrine, 非实证]：Amazon 单向/双向门、Management 3.0 委派层级、management-by-exception、
-  chief-of-staff 实践。**刻意不用**：决策疲劳/ego depletion（复现失败）——减负论据建在 open-loops +
-  注意力残留上。
-- [composed]：聚合绊线、阈值/节奏数值——机制对、数值靠判断。
 
 ## 队列模板（copy-paste 骨架，项目无关）
 ```markdown
