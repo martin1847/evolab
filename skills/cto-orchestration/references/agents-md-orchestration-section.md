@@ -23,7 +23,7 @@
 多个 agent 会话并发运行，每个 agent 必须：
 - 待在分配给它的 **scope 内**（即 goal 文档）；不改属于其他会话 scope 的文件。
 - 被阻塞、goal 没写明、或想扩张 scope 时：**停下并上报**，不自行授权、不合理化猜测。
-- 不改既有用户可见行为，除非是明确批准的修复——行为变更一律藏在 env flag 后、默认 OFF。
+- 除非修复已获明确批准，否则不改既有用户可见行为；获批的行为变更藏在 env flag 后、默认 OFF。
 - trace / 日志 / docs 里脱敏 secrets 与客户敏感值；凭据只存于 <凭据中枢，如 1Password / Vault>，绝不进仓库树。
 - 未经明确批准，绝不把本地实验连到生产数据。
 - commit 留本地，直到 owner 明确批准 push；push 到 feature 分支 + PR，绝不 force 推共享分支。

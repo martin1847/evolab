@@ -127,9 +127,9 @@ chk_not_contains "retro does not call every check a hard gate" "未全过不算�
 
 value_gate='Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only falsifier actually run> => <observed result>'
 chk_eq "goal has exactly one conditional value-gate line" 1 "$(grep -cF "$value_gate" "$GOAL")"
-chk_contains "value gate targets uncertain expensive direction" "高不确定方向准备进入昂贵设计/实现" "$goal_body"
+chk_contains "value gate: exemption condition precedes the action" "取证 / 机械改动 / 纯研究且不新增防御层或复杂度的 goal → 删下一行" "$goal_body"
 chk_contains "value gate requires probe before dispatch" "先跑最便宜证伪" "$goal_body"
-chk_contains "forensic/mechanical work deletes value gate" "取证 / 机械改动和纯研究删除它" "$goal_body"
+chk_contains "everything else keeps the value gate line" "其余 goal（含所有新增防御层/复杂度的）→ 先跑最便宜证伪、保留下一行" "$goal_body"
 chk_not_contains "goal has no fixed Existing coverage field" "Existing coverage:" "$goal_body"
 chk_not_contains "goal has no fixed Incremental value field" "Incremental value:" "$goal_body"
 chk_not_contains "goal has no fixed Cheapest falsification field" "Cheapest falsification" "$goal_body"

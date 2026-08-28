@@ -1,7 +1,7 @@
 ---
 name: cto-orchestration
 version: 1.7.4
-description: "CTO/orchestrator 模式管理多 agent 软件交付：agentctl 统一派工（一条 duplex lane、三引擎原生协议，轮内 steer）、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目；用户说'复盘 / 复盘仪式 / 收口 / retro / retrospective'时也必须触发——复盘一律走本 skill 的七步仪式 + retro-check 硬门，不即兴发挥。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
+description: "CTO/orchestrator 模式管理多 agent 软件交付：agentctl 统一派工（一条 duplex lane、三引擎原生协议，轮内 steer）、goal 合同驱动、typed watcher、异构评审、真路径验收与主理人减负。适用于用户要求'你做 CTO/编排者'、'派 omp/codex 去做'、'goal 模式派发'、管理多会话开发或把这套工作流接入新项目；用户说'复盘 / 收口 / retro / retrospective'时也必须触发（七步仪式 + retro-check 硬门），说'盘点 / 接下来做什么 / 规划下一批 / stocktake'时同样触发（盘点仪式，只提案不动工）。新项目先用 repo-governance-bootstrap 建治理骨架。不要用于单 agent 小任务、无需评审循环的局部改动或纯文档初始化。"
 metadata:
   requires:
     bins: ["tmux", "omp", "codex"]
@@ -42,14 +42,13 @@ runtime 自己讲（`agentctl capabilities`，状态词表 `agentctl states`）�
 ## 1. 每次派工闭环
 
 1. **校准基线**：fetch 远端，确认目标 base 与 worktree；base 未动不仪式性 rebase。只读 scout 也显式指定 cwd/base，防静默继承过期 checkout。命令与核证见 `references/dispatch-baseline.md`。
-2. **写自包含 goal**：一个 goal = 一个可独立交付的单元 + 一个清晰交付物；每条 Done-when 绑定证明命令，写清 scope、out-of-scope、stop-and-report。高不确定方向进入昂贵设计/实现前，先跑最便宜证伪；preflight 门默认开（start 校验 goal 的 Preflight 声明已解），取证 / 机械 / 纯研究类 goal 用 `--no-preflight` 显式豁免。单行合同、Premises 与 Value gate 直接用 `references/goal-template.md`。
-3. **派发并挂 watcher**：`agentctl start <engine> <session> <cwd> --goal <abs> [--deliverable <glob>]`
-   ——goal 帧被接受即返回、**不会自动 watch**，紧接着用宿主受控后台跑 `agentctl watch`；先接线
-   `references/agentctl/guard-hooks.json`（高频机械失误归 guard，主干不复制其规则表）。
-   理解门与 BLOCKED 协议由 runtime footer 固定追加（真源，本文不复制字面）；编排位记一条：
+2. **写自包含 goal**：一个 goal = 一个可独立交付的单元 + 一个清晰交付物；每条 Done-when 绑定证明命令，写清 scope、out-of-scope、stop-and-report。高不确定方向进入昂贵设计/实现前，先跑最便宜证伪；取证 / 机械 / 纯研究类 goal 用 `--no-preflight` 显式豁免，其余 goal 默认过 preflight 门（start 校验 Preflight 声明已解）。单行合同、Premises 与 Value gate 直接用 `references/goal-template.md`。
+3. **派发并挂 watcher**：`agentctl start …`——goal 帧被接受即返回、**不会自动 watch**，紧接着用宿主
+   受控后台跑 `agentctl watch`；先接线 `references/agentctl/guard-hooks.json`（高频机械失误归 guard，
+   主干不复制其规则表）。理解门与 BLOCKED 协议由 runtime footer 固定追加（真源，本文不复制字面）：
    合同承诺了开工前核对 → worker 把复述写进 `<cwd>/BLOCKED.md` 等裁决，其余场景复述完即开工。
 4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；词表跑 `agentctl states`，处置见 agentctl README。
-5. **steering 走 `agentctl steer`**：默认排队/下一轮，`--now` mid-turn，`--replace` 弃当前重来；
+5. **steering 走 `agentctl steer`**：默认排队/下一轮，`--now` 原生 mid-turn（omp/codex；claude 降级为排队）、`--replace` 弃当前重来；
    引擎能力差异查 `agentctl capabilities`，不支持的组合由接口当场拒绝并指正路。投递成功 ≠ 模型照做，
    验收仍看交付物。每个后续 turn 都重新挂 `agentctl watch`。
 6. **Implemented → Verified**：必须同时有 fresh 正向交付证据、不同 lineage 的独立评审、真实用户路径 E2E。先本机真路径，再部署，再部署环境 E2E，最后才关单；git 集成与 push 门禁归 Git workflow 标准。
@@ -59,8 +58,7 @@ runtime 自己讲（`agentctl capabilities`，状态词表 `agentctl states`）�
 - 按风险定深度：低风险走轻量 review；鉴权、迁移、基建、大重构走 `references/review-dispatch.md` 的完整循环。
 - **goal 评审：白名单免评，其余必评**——命中免评白名单（唯一清单在 `references/review-dispatch.md` §goal-review，共同硬门=不新增任何决策面）→ 跳过；未命中或拿不准 → 派发前 1 轮冷上下文 goal-review（仪器六问 + 契约三问，同节）。
 - **直写也要合同**：编排位自己直写 shipped 面（教义 / 门 / guard）动手前，同样先写最小合同——
-  Done-when + 坏样本来源 + scope 三行即可，评审 brief 随附；无合同的直写单元评审面按不完整
-  处理、评审者当 finding 报。
+  Done-when + 坏样本来源 + scope 三行即可，评审 brief 随附；无合同的直写单元评审者当 finding 报。
 - brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。
 - 先枚举执行分叉；轴装配先查 path→轴映射表（表命中必进 brief，判断只增补），再点名 `缺失消费者`、
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。
@@ -105,13 +103,12 @@ runtime 自己讲（`agentctl capabilities`，状态词表 `agentctl states`）�
 - `docs/orchestration/` 是共享 SoT：live 只留在跑/在等事项，完结物归档；memory 只存编排者私有教训和入口，不替代共享 docs。
 - runtime evidence 推翻 audit/scout 时，同轮回写源文档 `REFUTED CLAIMS`（claim / evidence / pointer），不只记在摘要。
 - 外部任务系统存在时，它是状态 SoT；roadmap 只做映射，不养第二套账。
-- **复盘仪式**（触发词：复盘 / 收口 / retro；事件点：收口 / 压缩前 / 已关单被打回〔ReOpen〕后）：读
-  `references/retrospective.md` 七步逐条勾，再跑 `references/retro-check.sh`；不即兴发挥。脚本只覆盖
-  机械代理与 warning，不能替代语义复盘；同时清理已完成会话和孤儿进程。压缩点自动提醒 wiring 真源 =
-  `references/retro-hooks.json`（可选接入，schema 限制与形态见该文件）。
+- **复盘仪式**（触发词：复盘 / 收口 / retro；事件点：收口 / 压缩前 / ReOpen 后）：读
+  `references/retrospective.md` 七步逐条勾，再跑 `references/retro-check.sh`；不即兴发挥。
+  压缩点自动提醒 wiring 真源 = `references/retro-hooks.json`（可选接入）。
 - **盘点仪式**（触发词：盘点 / 接下来做什么 / 规划下一批）：读 `references/stocktake.md`
   四步逐条勾；选题取舍判据单源在该文件，不即兴。
-- 主理人只决战略、不可逆、钱与价值。决策队列、T0/T1/T2 语义和静默默认见 `references/decision-queue.md`；队列只存活跃项，已清残留由 hook 提醒 + retro 硬失败，新鲜度仍是软告警。
+- 主理人只决战略、不可逆、钱与价值。决策队列、T0/T1/T2 语义和静默默认见 `references/decision-queue.md`。
 
 ## 6. 专项路由（用到才读）
 

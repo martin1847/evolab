@@ -21,10 +21,10 @@ build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 <可选（实现/评审类默认保留）：worktree 就绪先 `codegraph init`，代码定位 / blast radius 优先
 `codegraph explore "<符号或问题>"`；未装或无索引 = **非 blocker**，回退 grep/通读，不停下问。>
 
-> 高不确定方向准备进入昂贵设计/实现时，先跑最便宜证伪，再保留下一行（preflight 门默认校验
-> 其形态）；取证 / 机械改动和纯研究删除它、派发加 `--no-preflight`——新增防御层/复杂度
-> 的 goal 除外：该行必留且含存在性探针（见场景条款）。探针命令锚 repo 根——只扫子目录会漏
-> 兄弟目录的真实调用方，前提假则 goal 塌。
+> 取证 / 机械改动 / 纯研究且不新增防御层或复杂度的 goal → 删下一行、派发加 `--no-preflight`；
+> 其余 goal（含所有新增防御层/复杂度的）→ 先跑最便宜证伪、保留下一行（preflight 门校验其形态，
+> 新增防御层者须含存在性探针，见场景条款）。探针命令锚 repo 根——只扫子目录会漏兄弟目录的
+> 真实调用方，前提假则 goal 塌。
 Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only falsifier actually run> => <observed result>
 
 ## Pre-triage hypotheses (verify, don't trust)

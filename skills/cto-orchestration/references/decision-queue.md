@@ -50,7 +50,7 @@
 
 - **平时 / 新上下文**：`queue-freshness.py`（SessionStart + UserPromptSubmit，wiring 真源
   `queue-hooks.json`，可选接入）检出已清区残留与 stale queue。SessionStart 每次冒泡，运行中提醒
-  ≤1 次/小时。hook 不删数据；它明确标注残留项已关闭，禁止再活化。
+  按 `QUEUE_NAG_INTERVAL_SECS` 节流（默认 1 小时）。hook 不删数据；它明确标注残留项已关闭，禁止再活化。
 - **收口**：`retro-check.sh` 对“已清区仍有正文”返回 blocking FAIL；队列仅不新鲜仍只告警、exit 0。
 - **为什么是提醒不是 Stop-block**：block 需要"本 turn 存在未记账 T2"的确定性信号，当前无此信号源——
   伪精确的门比诚实的提醒更糟（误拦 + Stop hook 8 次连 block 熔断）。若未来 T2 拦截落 marker 文件，

@@ -8,9 +8,10 @@
 > [修复派回模板](#修复派回-omp-模板) · [对抗式评审循环展开](#skill-2-对抗式评审循环的展开)（深度分档 / 冷上下文 / 高危轴 / ledger + 收敛）
 
 > 首轮：brief 写成文件（`docs/orchestration/*_REVIEW_BRIEF.md`），
-> `agentctl start codex <proj>-<task>-codex <同一worktree> --goal <brief.md> --workflow review-loop
-> --max-rounds <N>`——与 omp 派发同构。start 返回后立即另挂 `agentctl watch`；复审轮同样是
-> `agentctl steer -f` + `watch`。裸 `tmux new-session` 绕过 durable state 与 lane routing，别用。
+> `agentctl start codex <proj>-<task>-codex <同一worktree> --goal <brief.md> --review
+> --deliverable <REVIEW_codex.md> --workflow review-loop --max-rounds <N>`——与 omp 派发同构
+> （`--review` 进评审档、`--deliverable` 给产物 freshness gate，缺一即无 typed 交付）。挂 watch 与复审轮
+> `steer -f` 同 SKILL §1；裸 `tmux new-session` 绕过 durable state 与 lane routing，别用。
 > 初轮计入总轮数；stop-loss 只认 runtime meta（duplex 会话档），GOAL/brief 不复制轮数。到限后 send 返回
 > `BUDGET-EXHAUSTED`（exit 9），不得绕过，转人工裁决。
 > 差分口径统一 **three-dot**（`origin/<base>...HEAD`，对 merge-base 差分）：并发合并环境下 stale base 的
@@ -22,9 +23,7 @@
 >   攻击词汇（对象：投给引擎的 prompt 文本；安全型内容过滤只判 prompt，被读文件不进判定）。
 > - [ ] codex 轮被 cyberPolicy 拦 → 重投前先净化 prompt：敏感细节移入被读文件、prompt 只留
 >   中性指针；仍被拦 → 开新会话兜底（对象：该评审任务；失败轮照常计入轮数预算）。
-> - [ ] 变更集含编排位直写单元（教义 / 门 / guard）→ Context docs 附该单元的最小合同
->   （Done-when + 坏样本来源 + scope，SKILL §2「直写也要合同」）；无合同的直写单元
->   要求评审者当 finding 报——评审面不完整。
+> - [ ] 变更集含编排位直写单元（教义 / 门 / guard）→ Context docs 附其最小合同（SKILL §2「直写也要合同」）。
 
 ## goal-review（派发前，白名单免评 + 其余必评）
 

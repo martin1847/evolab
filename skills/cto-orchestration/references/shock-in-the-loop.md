@@ -42,8 +42,8 @@
 
 ## 4. 配套硬门
 
-- **自指门**：一个测试扫全部 DENY 源码，断言每条指针存在且目标文件/节真实（防文档腐烂，
-  参考实现 `test/hook-deny-pointer.test.sh` 形态：AST 抽 DENY 字符串 → 校验 `Read:` 目标）。
+- **自指门**：一个测试扫列明的 guard 源码，断言每条 DENY 的 `Read:` 指针目标文件存在（防文档腐烂，
+  参考实现 `test/hook-deny-pointer.test.sh`；节锚不校验，新增 guard 文件须加进其扫描清单）。
 - **override 有形**：需要逃生舱的 DENY 给一个显式、可审计的 override 动作（如
   `touch /tmp/<allow-marker>`），并在文案里写清**什么动机可用**——override 面向"经核实的
   任何正当动机"，不只文案里举的那一种（只举一种场景的文案会把其他正当动机劝退）。
@@ -54,5 +54,5 @@
 DENY: Agent dispatch missing explicit model tier.
 Why: 2026-07-10 长上下文评审派发默认档打满 quota（实证）。          ← why+日期
 Fix: 重派并显式钉档：Agent(..., model: "opus"|"haiku")。            ← 正路命令
-Read: cto-orchestration/references/agentctl/README.md §P0c        ← owning-doc 指针
+Read: cto-orchestration/SKILL.md §0                              ← owning-doc 指针
 ```

@@ -5,8 +5,8 @@ Detect and steer coding agents without ever reading a terminal pane. **Surface =
 codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux 只做进程保活（worker 独立于
 编排者进程树）；终态真相只来自 typed exit code——协议帧、rc 文件与交付物，**永不抓屏**。
 
-> 本文只写 CLI 讲不了的：语义、失败形态、判断。凡是能从 `agentctl` / `agentctl capabilities` /
-> `agentctl states` 问出来的事实，这里一律不留副本——副本只会漂。
+> 本文只写 CLI 讲不了的：语义、失败形态、判断。能从 `agentctl` / `capabilities` / `states` 问出来的
+> 事实以 CLI 为准；本文偶有的复述（exit 码、resume 命令、env 覆盖）漂移时 CLI 赢。
 
 ## agentctl —— 当前命令面
 
@@ -55,9 +55,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 ## duplex 车道（机制归代码与 meta 文《protocol-not-screen》，此处只留编排位要知道的）
 
-- goal 投递 = `prompt` 帧（正文 = goal 文件 + HEADLESS 协议 footer：立即开工**除非合同承诺了开工前
-  核对**、阻塞**或合同门要求停下等裁决**时写 `<cwd>/BLOCKED.md` 停下——fresh BLOCKED.md 映射
-  exit 4，三引擎同协议）。
+- goal 投递 = `prompt` 帧（正文 = goal 文件 + HEADLESS 协议 footer：合同承诺了开工前核对、阻塞、
+  或合同门要求停下等裁决时 → 写 `<cwd>/BLOCKED.md` 停下（fresh BLOCKED.md 映射 exit 4，三引擎同协议）；
+  其余情况立即开工）。
 - **崩溃恢复腿**：照 `agentctl capabilities` 的 `resume` 行走——degraded 两家（`stop` 后重开会话、
   engine args 由 start 原样转发）正路在各自 note 里；codex 唯一 supported，握手内续 thread：
   `agentctl start codex <s> <cwd> --goal <f> --resume-thread <threadId>`（supported 不带 note，故写这）。
@@ -189,15 +189,15 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   `git [-C <path>] worktree prune` 且 porcelain 证明所有 prunable 目录都已消失 → 放行（纯元数据、
   零文件伤害），任何链式/env 前缀/多 `-C`/解析歧义/`lexists` 命中都落回 DENY。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
   判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）；⑨ 浏览器归属：`playwright-cli attach`
-  带接管旗标（CDP / 浏览器扩展）→ DENY，正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
-  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）。
+  带接管旗标（CDP / 浏览器扩展）→ 默认 DENY，主理人批后 `touch /tmp/cto-allow-browser-attach` 一次性放行；正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
+  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）进管道 → DENY（rc 被末命令吞、帧被截）；⑫ 门命令与 `git commit` 同一 `;` 复合 → DENY（commit 不再依赖门 rc）；⑬ codex brief 含攻击味措辞 → WARN（cyberPolicy 误拦 n=4）。
   ①用剥引号视图，④用原始 cmd，⑤⑥⑧⑩只认命令位（路径当参数
   不拦）；⑨判归一化后的 shell 执行面（与⑧同一套：剥引号 span + 去反斜杠，故转义写法照拦；
   代价是字面量进 shell 命令即拒，已接受的假阳性）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：
   browser/E2E 派发含 `mcp__chrome-devtools` → DENY（逼 Playwright，P0a）；派发未显式钉 `model` 档 →
-  DENY（P0c）；e2e-runner 派发 model 非便宜档 → DENY（P0d）；Pre·TaskStop|KillShell：目标 `.output`
-  120s 内还在长 = 活的 → DENY（**完成通知黑洞**与"零截图≠卡死"实证；override =
+  DENY（P0c）；e2e-runner 派发 model 非便宜档 → DENY（P0d）；Pre·TaskStop|KillShell：目标 `.output` 与 subagent transcript 取最鲜 mtime，
+  120s 内还在长 = 活的 → DENY（Agent 型 `.output` 常是静态 stub，判活主要靠 transcript）（**完成通知黑洞**与"零截图≠卡死"实证；override =
   `touch /tmp/cto-allow-kill-<id>`，适用于**任何经核实的杀单动机**——含"派错前提"，P0b）；
   Post·Agent：browser 派发注入 deadline-watch 提醒（必须 JSON `additionalContext`，纯 stdout 黑洞）。
 
