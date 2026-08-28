@@ -291,7 +291,8 @@ out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "G9/trailing-prose rc"
 assert_has "$out" "malformed GATE-AUDIT line" "G9/trailing prose rejected"
 # Case G10 — a keep reason may contain parentheses; it is a real reason, not malformed
-# (kills: reason body narrowed back to \([^)]*\), which turned the FAIL path into a warn bypass)
+# (kills: reason body narrowed back to \([^)]*\), which misjudged a non-empty nested-paren
+#  reason as malformed — warn noise, record escapes the judged surface; not a FAIL bypass)
 r="$(mkrepo)"; printf 'GATE-AUDIT: nested-reason hits=0 false=3 action=keep(主理人裁：先留(下批再看))\n' > "$r/docs/LESSONS.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "G10/nested-paren reason rc"
