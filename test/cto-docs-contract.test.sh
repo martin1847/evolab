@@ -68,7 +68,14 @@ chk_contains "subagent owns browser MCP isolated reads" "浏览器 / MCP / 隔�
 chk_contains "start does not auto-watch" "不会自动 watch" "$skill_body"
 chk_contains "capability gap refuses instead of forking" "拒绝" "$skill_body"
 chk_contains "delivery is not obedience" "投递成功 ≠ 模型照做" "$skill_body"
-chk_contains "runtime refuses busy codex steer" "codex has no queue" "$duplexctl_body"
+# was "runtime refuses busy codex steer" / "codex has no queue": the queue-vs-now-vs-replace
+# triple is gone (2026-08-29). The invariant that replaced it is stronger — ONE steer verb whose
+# route comes from the engine's LIVE turn state, so a busy codex is steered mid-turn instead of
+# refused and no operator flag can be forgotten.
+chk_contains "steer routes on the live turn state, not an operator flag" \
+  "def steer_delivery" "$duplexctl_body"
+chk_contains "and the retired opt-in flag is refused with the new semantics" \
+  "delivers as soon as the engine allows" "$agentctl_body"
 chk_contains "implementation detail is progressively loaded" "references/implementation-discipline.md" "$skill_body"
 chk_contains "preflight gate defaults on, exemption is explicit" '`--no-preflight`' "$skill_body"
 chk_contains "duplex lane defaults the preflight gate on" 'PREFLIGHT=1;' "$agentctl_body"

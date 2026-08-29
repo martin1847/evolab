@@ -1,9 +1,9 @@
 --- a/skills/cto-orchestration/references/agentctl/duplexctl.py
 +++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
-@@ -1263,6 +1263,9 @@
- # branch is attached here rather than inside the cell that names it.
- PROVIDERS["codex"]["capabilities"]["queuedSteer"]["impl"] = codex_route_start
- 
+@@ -2392,6 +2392,9 @@
+         },
+     },
+ }
 +# MUTATION: codex is handed omp's contract wholesale — one flat "common" map.
 +PROVIDERS["codex"]["capabilities"] = dict(PROVIDERS["omp"]["capabilities"])
 +

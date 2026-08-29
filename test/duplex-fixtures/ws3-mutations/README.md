@@ -20,8 +20,8 @@ tracebacks between the damage assertions (cold review R1, MAJOR).
 | patch | predicate it removes | observed red |
 |---|---|---|
 | `M1-fixture-provider-unlisted.patch` | every adapter with routes/projection is contracted | C1 — a `fixtureprov` adapter hand-added to the DERIVED `ROUTES`/`PROJECTORS` that no cell declares |
-| `M2-advertise-unrouted-supported.patch` | a non-unsupported state needs exactly one realization | C2 — claude `replaceTurn` flipped to `supported` with neither route nor surface |
-| `M3-claude-degraded-to-supported.patch` | a degradation is never advertised as the native capability | C4 — claude `midTurnSteer` relabelled `supported`, note and fallback gone |
+| `M2-advertise-unrouted-supported.patch` | a non-unsupported state needs exactly one realization | C2 — claude `interruptTurn` flipped to `supported` with neither route nor surface |
+| `M3-claude-degraded-to-supported.patch` | a degradation is never advertised as the native capability | C4 — claude `steer` relabelled `supported`, note gone (13 reds, incl. the C8 behaviour row) |
 | `M4-flatten-codex-onto-omp.patch` | provider maps stay provider-specific | C5 — codex handed omp's capability map wholesale |
 | `M5-drop-provider-from-table.patch` | a launched provider cannot vanish from the contract | C1 — codex deleted from `PROVIDERS` while the suite still starts it |
 
@@ -51,13 +51,13 @@ the property, not sloppiness:
   table removes its ROUTING and its LAUNCH SPEC too — `capability()` fails closed with
   `unknown duplex engine: codex — no capability contract`. A dropped provider that kept
   working would mean nothing was actually consuming the table.
-- **M2** also reds **C3**: with `replaceTurn` advertised as supported the capability gate stops
+- **M2** also reds **C3**: with `interruptTurn` advertised as supported the capability gate stops
   refusing, so the honest `stop` + `--resume` path is never printed. The rejection message and
   the published note are one string.
 - **M3** also reds one **C8** row: the runtime stops announcing the degradation, which is the
   behavioural half of the same lie.
 - **M4** also reds C2/C3/C7/C8: a flattened "common" contract is not merely cosmetically
-  wrong, it is mechanically unroutable — codex ends up declaring omp's `follow_up` /
+  wrong, it is mechanically unroutable — codex ends up declaring omp's `steer|follow_up` /
   `abort_and_prompt` routes, whose branches it cannot even invoke.
 - **N3** also reds every claude C8 row, because a provider whose launch name drifted from the
   contract cannot be started at all — which is the whole point.

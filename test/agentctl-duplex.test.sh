@@ -109,11 +109,9 @@ chk_not_contains "setWidget chrome does not read as WAITING" "WAITING-INPUT" "$o
 
 out="$(bash "$AGENTCTL" steer dxA -m "adjust course" 2>&1)"; rc=$?
 chk_eq "steer default rc0" 0 "$rc"
-chk_contains "steer default → follow_up frame" '"type":"follow_up"' "$(cat "$SANDBOX/omp.log")"
-out="$(bash "$AGENTCTL" steer dxA -m "right now" --now 2>&1)"
-chk_contains "steer --now → steer frame" '"type":"steer"' "$(cat "$SANDBOX/omp.log")"
-out="$(bash "$AGENTCTL" steer dxA -m "start over" --replace 2>&1)"
-chk_contains "steer --replace → abort_and_prompt frame" '"type":"abort_and_prompt"' "$(cat "$SANDBOX/omp.log")"
+chk_contains "idle steer → next-turn frame" '"type":"follow_up"' "$(cat "$SANDBOX/omp.log")"
+out="$(bash "$AGENTCTL" steer dxA -m "start over" --interrupt 2>&1)"
+chk_contains "steer --interrupt → abort_and_prompt frame" '"type":"abort_and_prompt"' "$(cat "$SANDBOX/omp.log")"
 
 # deliverable gate: RELATIVE glob resolves against the session cwd (2026-07-19 regression)
 out="$(bash "$AGENTCTL" steer dxA -m "produce the file" -d "out-*.md" 2>&1)"; rc=$?
@@ -167,8 +165,10 @@ out="$(AGENT_WATCH_MAX_POLLS=6 bash "$AGENTCTL" watch dxC 2>&1)"; rc=$?
 chk_eq "duplex watch confirms stable DONE" 0 "$rc"
 chk_eq "watch DONE ends with a machine-readable tail" "EXIT=0" "$(printf '%s\n' "$out" | tail -1)"
 chk_contains "typed DONE line survives beside the tail" "=== [dxC] DONE" "$out"
-out="$(bash "$AGENTCTL" steer dxC -m "one more thing" --now 2>&1)"
-chk_contains "claude --now degrades to queued, said out loud" "no public interrupt frame" "$out"
+# dxC is IDLE (its result frame landed): the steer opens the next turn at once, so there is
+# no degradation to announce. The mid-turn half is proven on a gated session further down.
+out="$(bash "$AGENTCTL" steer dxC -m "one more thing" 2>&1)"
+chk_not_contains "idle claude steer announces no degradation" "QUEUED message" "$out"
 bash "$AGENTCTL" stop dxC >/dev/null 2>&1
 unset FAKE_PROVIDER_LOG
 
@@ -258,7 +258,8 @@ chk_eq "post-steer turn 2 DONE" 0 "$rc"
 chk_eq "sent-journal has one entry per rotation" 2 "$(wc -l < "$WATCH_RUN_DIR/rxG.duplex.sent-journal" | tr -d ' ')"
 chk_contains "journal entries carry offsets, no frame bodies" '"offset"' "$(cat "$WATCH_RUN_DIR/rxG.duplex.sent-journal")"
 
-# claude --replace is refused with the honest path, never silently degraded —
+# `--replace` is the retired spelling of --interrupt and stays a SILENT alias: claude has no
+# such frame, so it is refused with the honest path, never silently degraded —
 # and a refused steer must NOT touch the deliverable gate (R2 regression)
 out="$(bash "$AGENTCTL" steer rxG -m "start over" --replace -d "never-*.md" 2>&1)"; rc=$?
 chk_eq "claude replace refused" 1 "$rc"
@@ -350,18 +351,19 @@ done
 out="$(bash "$AGENTCTL" status cxA 2>&1)"; rc=$?
 chk_eq "codex turn completed → DONE" 0 "$rc"
 chk_contains "DONE carries final answer summary" "turn-1 complete" "$out"
-# idle: default steer = next turn; --now refused (engine truth: no active turn)
+# idle: one steer verb, and it opens the next turn immediately (no queue anywhere in codex)
 out="$(bash "$AGENTCTL" steer cxA -m "again" 2>&1)"; rc=$?
 chk_eq "idle steer starts next turn rc0" 0 "$rc"
-# wait for turn 2's terminal before asserting idle refusal — asserting while turn 2 is
-# still active would make --now legitimately succeed (review S3 race, 2026-07-19)
+chk_contains "idle steer used the next-turn method" '"method":"turn/start"' "$(cat "$SANDBOX/codex.log")"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   [ "$(grep -c 'turn/completed' "$WATCH_RUN_DIR/cxA.duplex.events.jsonl" 2>/dev/null)" -ge 2 ] && break
   /bin/sleep 0.2
 done
+# the retired opt-in flag is a typed refusal that teaches the new default, never a no-op
 out="$(bash "$AGENTCTL" steer cxA -m "mid" --now 2>&1)"; rc=$?
-chk_eq "idle --now refused" 1 "$rc"
-chk_contains "refusal names default steer" "default steer" "$out"
+chk_eq "--now refused (the flag is gone)" 1 "$rc"
+chk_contains "the refusal teaches the new default" "delivers as soon as the engine allows" "$out"
+chk_contains "and names the escalation instead" "--interrupt" "$out"
 bash "$AGENTCTL" stop cxA >/dev/null 2>&1
 # resume leg: handshake uses thread/resume with the given id
 out="$(bash "$AGENTCTL" start codex cxV "$WT" --goal "$SANDBOX/goal.md" --resume-thread old-thread-9 2>&1)"; rc=$?
@@ -382,22 +384,20 @@ chk_eq "model + resume-thread is refused rc1, naming both ways forward" 1 "$refu
 chk_eq "the refusal owns nothing: no meta, no fifo, no lane state for that session" "" \
   "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^cxM\.' | tr '\n' ' ')"
 
-# active-turn window: default steer refused (no queue), --now = native turn/steer
+# active-turn window: the SAME steer verb now reaches INSIDE the running turn
 export FAKE_CODEX_GATE="$SANDBOX/cx-gate"
 out="$(bash "$AGENTCTL" start codex cxB "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
 chk_eq "gated codex start rc0" 0 "$rc"
 /bin/sleep 0.3
 out="$(bash "$AGENTCTL" status cxB 2>&1)"; rc=$?
 chk_eq "gated turn → RUNNING 10" 10 "$rc"
-out="$(bash "$AGENTCTL" steer cxB -m "queue me" 2>&1)"; rc=$?
-chk_eq "busy default steer refused (no queue)" 1 "$rc"
-chk_contains "refusal teaches --now" "use --now" "$out"
-out="$(bash "$AGENTCTL" steer cxB -m "adjust" --now 2>&1)"; rc=$?
-chk_eq "busy --now rc0 (native mid-turn steer)" 0 "$rc"
+out="$(bash "$AGENTCTL" steer cxB -m "supersede that" 2>&1)"; rc=$?
+chk_eq "busy default steer rc0 (native mid-turn steer, no queue involved)" 0 "$rc"
+chk_not_contains "no queue-era refusal survives" "has no queue" "$out"
 chk_contains "turn/steer frame with expectedTurnId" '"expectedTurnId":"turn-1"' "$(cat "$SANDBOX/codex.log")"
-# --replace on the ACTIVE turn: interrupt (single terminal) + fresh turn
-out="$(bash "$AGENTCTL" steer cxB -m "start over" --replace 2>&1)"; rc=$?
-chk_eq "active replace rc0 (interrupt+start)" 0 "$rc"
+# --interrupt on the ACTIVE turn: interrupt (single terminal) + fresh turn
+out="$(bash "$AGENTCTL" steer cxB -m "start over" --interrupt 2>&1)"; rc=$?
+chk_eq "active interrupt rc0 (interrupt+start)" 0 "$rc"
 chk_contains "interrupt frame sent" '"method":"turn/interrupt"' "$(cat "$SANDBOX/codex.log")"
 chk_eq "interrupted turn has exactly one terminal" 1 "$(grep -c '"id":"turn-1","status":"interrupted"' "$WATCH_RUN_DIR/cxB.duplex.events.jsonl")"
 : > "$FAKE_CODEX_GATE"
@@ -1018,5 +1018,322 @@ chk_contains "no-deliverable footer keeps the base second line" "further instruc
 # the hint text must live in the LIVE-idle verdict block (source pin; anchored BEFORE the
 # verdict print where the hint is assembled)
 chk_contains "hint wired on live-idle verdict" "2nd+ idle episode this session" "$(grep -B14 "IDLE-NO-DELIVERABLE: engine idle but" "$AW_DIR/duplexctl.py")"
+
+echo "== steer semantics: ONE verb that delivers ASAP, ONE escalation that interrupts =="
+# The field disease this section defends against (2026-08-28, downstream seat): with a
+# three-verb steer (queue / --now / --replace) a 35-60min turn swallowed the operator's
+# newest ruling — the flag that would have made it land mid-turn was forgotten twice in one
+# night, so the engine executed a decision the batch had already overtaken. Contract now:
+# the DEFAULT delivers as soon as the engine allows and nobody opts into that.
+sweep_fakes; sandbox_new; install_running_tmux
+WT="$SANDBOX/wts"; mkdir -p "$WT"
+printf 'do the steer thing\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$SANDBOX/goal.md"
+export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
+export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
+# the live turn state the selector reads, as a FILE: the engine is already up by then
+export FAKE_OMP_STATE_FILE="$SANDBOX/omp.state"
+export FAKE_PROVIDER_LOG="$SANDBOX/sv-omp.log"
+rm -f "$FAKE_OMP_STATE_FILE"
+bash "$AGENTCTL" start omp svA "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+
+# ① IDLE session: the default steer opens the next turn AT ONCE — no flag, no waiting
+: > "$SANDBOX/sv-omp.log"
+out="$(bash "$AGENTCTL" steer svA -m "first ruling" 2>&1)"; rc=$?
+chk_eq "① idle default steer rc0 — opening the next turn AT ONCE is not a degradation" 0 "$rc"
+chk_not_contains "① and no typed boundary verdict is published" "DELIVERED-NEXT-TURN" "$out"
+chk_contains "① it used the next-turn route" '"type":"follow_up"' "$(cat "$SANDBOX/sv-omp.log")"
+chk_eq "① and never the mid-turn route" 0 "$(grep -c '"type":"steer"' "$SANDBOX/sv-omp.log")"
+
+# ② RUNNING turn: the SAME verb now reaches INSIDE it (this is the whole point of the batch)
+printf 'streaming' > "$FAKE_OMP_STATE_FILE"
+: > "$SANDBOX/sv-omp.log"
+out="$(bash "$AGENTCTL" steer svA -m "supersede the first ruling" 2>&1)"; rc=$?
+chk_eq "② mid-turn default steer rc0" 0 "$rc"
+chk_not_contains "② a steer that REACHED the turn publishes no boundary verdict" \
+  "DELIVERED-NEXT-TURN" "$out"
+chk_contains "② the same verb reached inside the running turn" '"type":"steer"' \
+  "$(cat "$SANDBOX/sv-omp.log")"
+chk_eq "② and did NOT fall back to the queue route" 0 \
+  "$(grep -c '"type":"follow_up"' "$SANDBOX/sv-omp.log")"
+
+# ④ the retired opt-in flag: a typed refusal that teaches the default and delivers NOTHING
+: > "$SANDBOX/sv-omp.log"
+out="$(bash "$AGENTCTL" steer svA -m "urgent" --now 2>&1)"; rc=$?
+chk_eq "④ --now refused rc1" 1 "$rc"
+chk_contains "④ the refusal names the new default" "delivers as soon as the engine allows" "$out"
+chk_contains "④ and points at the escalation" "--interrupt" "$out"
+chk_eq "④ nothing reached the engine" 0 "$(grep -c '"message"' "$SANDBOX/sv-omp.log")"
+
+# ⑤ `--replace` is the retired SPELLING of --interrupt: same frame, same rc, no chatter
+: > "$SANDBOX/sv-omp.log"
+bash "$AGENTCTL" steer svA -m "start over, new spelling" --interrupt >/dev/null 2>&1
+newf="$(grep -c '"type":"abort_and_prompt"' "$SANDBOX/sv-omp.log")"
+: > "$SANDBOX/sv-omp.log"
+out="$(bash "$AGENTCTL" steer svA -m "start over, old spelling" --replace 2>&1)"; rc=$?
+oldf="$(grep -c '"type":"abort_and_prompt"' "$SANDBOX/sv-omp.log")"
+chk_eq "⑤ --replace ≡ --interrupt: the same frame on the wire" "$newf" "$oldf"
+chk_eq "⑤ the alias really is one frame, not zero" 1 "$oldf"
+chk_eq "⑤ and it succeeds like the new spelling" 0 "$rc"
+chk_not_contains "⑤ the alias stays silent (no deprecation noise)" "deprecat" "$out"
+
+# ⑥ 量具坏 (the router's gauge): when the live turn state cannot be READ at all, the steer
+# must still be DELIVERED by the next-turn route and say so — a lost instruction is the one
+# failure worse than a late one. FAKE_OMP_BAD_STATE makes get_state answer unsuccessfully.
+# svA stays up: FAKE_OMP_BAD_STATE only reaches an engine started AFTER the export
+export FAKE_OMP_BAD_STATE=1 FAKE_PROVIDER_LOG="$SANDBOX/sv-blind.log"
+printf 'streaming' > "$FAKE_OMP_STATE_FILE"     # would be MID-TURN if the gauge worked
+bash "$AGENTCTL" start omp svB "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+: > "$SANDBOX/sv-blind.log"
+out="$(bash "$AGENTCTL" steer svB -m "ruling the operator must not lose" 2>&1)"; rc=$?
+chk_eq "⑥ 量具坏: DELIVERED-NEXT-TURN 15 — delivered, not refused" 15 "$rc"
+chk_contains "⑥ 量具坏: by the next-turn route, which always lands" '"type":"follow_up"' \
+  "$(cat "$SANDBOX/sv-blind.log")"
+chk_eq "⑥ 量具坏: and never by the mid-turn route it could not justify" 0 \
+  "$(grep -c '"type":"steer"' "$SANDBOX/sv-blind.log")"
+chk_contains "⑥ 量具坏: the typed class is on stdout" "DELIVERED-NEXT-TURN" "$out"
+chk_contains "⑥ 量具坏: reason says the state was undecidable" "reason=undecidable" "$out"
+chk_contains "⑥ 量具坏: and the detail names the measurement that failed" "get_state" "$out"
+bash "$AGENTCTL" stop svB >/dev/null 2>&1
+unset FAKE_OMP_BAD_STATE
+
+# ⑥b 量具坏, second kind (SHIP-BLOCKING, cold review R1 §1): get_state ANSWERS, and publishes
+# a NON-boolean isStreaming. Python truthiness is wrong in BOTH directions — the JSON string
+# `"false"` is truthy (a dead turn read as live, so a mid-turn frame is aimed at a turn that
+# already ended) and `0` is falsy (a live turn read as idle). Only `true`/`false` may decide.
+for raw in '"false"' '0'; do
+  s="svS$(printf '%s' "$raw" | tr -cd 'a-z0-9')"
+  export FAKE_OMP_STREAM_RAW="$raw" FAKE_PROVIDER_LOG="$SANDBOX/sv-$s.log"
+  printf 'streaming' > "$FAKE_OMP_STATE_FILE"   # would be MID-TURN if the gauge were readable
+  bash "$AGENTCTL" start omp "$s" "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+  : > "$SANDBOX/sv-$s.log"
+  out="$(bash "$AGENTCTL" steer "$s" -m "ruling that must not go mid-turn" 2>&1)"; rc=$?
+  chk_eq "⑥b 量具坏 isStreaming=$raw: DELIVERED-NEXT-TURN 15 — delivered, not refused" 15 "$rc"
+  chk_contains "⑥b 量具坏 isStreaming=$raw: by the next-turn route, which always lands" \
+    '"type":"follow_up"' "$(cat "$SANDBOX/sv-$s.log")"
+  chk_eq "⑥b DAMAGE ORACLE isStreaming=$raw: a non-boolean never buys the mid-turn route" 0 \
+    "$(grep -c '"type":"steer"' "$SANDBOX/sv-$s.log")"
+  chk_contains "⑥b 量具坏 isStreaming=$raw: the typed class is on stdout" \
+    "DELIVERED-NEXT-TURN" "$out"
+  chk_contains "⑥b 量具坏 isStreaming=$raw: reason says the state was undecidable" \
+    "reason=undecidable" "$out"
+  chk_not_contains "⑥b 量具坏 isStreaming=$raw: NOT a missing-capability degradation" \
+    "reason=capability" "$out"
+  chk_contains "⑥b 量具坏 isStreaming=$raw: and WHICH flag broke the gauge" "isStreaming" "$out"
+  chk_contains "⑥b 量具坏 isStreaming=$raw: named as broken, never as idle" "gauge broken" "$out"
+  # the PROJECTOR takes the same road: a reading it does not have keeps the session
+  # non-terminal, exactly like an unanswered get_state — it must never fall through to IDLE
+  rc="$(bash "$AGENTCTL" status "$s" >/dev/null 2>&1; echo $?)"
+  chk_eq "⑥b 量具坏 isStreaming=$raw: status stays RUNNING 10, never DONE" 10 "$rc"
+  bash "$AGENTCTL" stop "$s" >/dev/null 2>&1
+done
+unset FAKE_OMP_STREAM_RAW
+# PAIRED GREEN: the knob is not what makes it undecidable — a REAL JSON boolean decides, and
+# `false` decides IDLE (so the queue half is chosen on a MEASUREMENT, not on a refusal)
+export FAKE_OMP_STREAM_RAW='false' FAKE_PROVIDER_LOG="$SANDBOX/sv-bool.log"
+printf 'streaming' > "$FAKE_OMP_STATE_FILE"
+bash "$AGENTCTL" start omp svBool "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+: > "$SANDBOX/sv-bool.log"
+out="$(bash "$AGENTCTL" steer svBool -m "decided idle" 2>&1)"; rc=$?
+chk_eq "⑥b PAIRED GREEN: a real JSON false steers rc0 — a MEASUREMENT, not a refusal" 0 "$rc"
+chk_contains "⑥b PAIRED GREEN: by the next-turn route" '"type":"follow_up"' \
+  "$(cat "$SANDBOX/sv-bool.log")"
+chk_not_contains "⑥b PAIRED GREEN: and publishes no typed boundary verdict at all" \
+  "DELIVERED-NEXT-TURN" "$out"
+bash "$AGENTCTL" stop svBool >/dev/null 2>&1
+unset FAKE_OMP_STREAM_RAW
+
+# ⑦ 量具坏 (codex's gauge, cold review R1 §1 NON-BLOCKING): the events stream IS codex's
+# turn-state protocol truth. An unparseable stream was folded into an empty frame list and
+# read as a KNOWN-IDLE engine: the same safe route, but a gauge failure published as a
+# measurement. It must now say undecidable out loud and name the stream that failed.
+export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
+export FAKE_PROVIDER_LOG="$SANDBOX/sv-cx.log"
+bash "$AGENTCTL" start codex svC "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+chk_eq "⑦ the codex goal turn reached its boundary before the stream is damaged" 1 \
+  "$(seen "$WATCH_RUN_DIR/svC.duplex.events.jsonl" '"method":"turn/completed"')"
+printf 'THIS IS NOT JSON AT ALL\n' >> "$WATCH_RUN_DIR/svC.duplex.events.jsonl"
+: > "$SANDBOX/sv-cx.log"
+out="$(bash "$AGENTCTL" steer svC -m "ruling the operator must not lose" 2>&1)"; rc=$?
+chk_eq "⑦ 量具坏: DELIVERED-NEXT-TURN 15 — delivered, not refused" 15 "$rc"
+chk_contains "⑦ 量具坏: by the next-turn route, which always lands" '"method":"turn/start"' \
+  "$(cat "$SANDBOX/sv-cx.log")"
+chk_contains "⑦ 量具坏: the typed class is on stdout" "DELIVERED-NEXT-TURN" "$out"
+chk_contains "⑦ 量具坏: reason says the state was undecidable" "reason=undecidable" "$out"
+chk_contains "⑦ 量具坏: and WHICH gauge failed — never a bare 'idle'" \
+  "events stream unparseable" "$out"
+bash "$AGENTCTL" stop svC >/dev/null 2>&1
+
+# ⑧ 量具坏 + --interrupt — SHIP-BLOCKING through R3, semantics REVERSED in R4. An
+# UNJUDGEABLE turn state licenses NO interrupt frame at all: codex `turn/interrupt`
+# REQUIRES turnId (TurnInterruptParams, app-server v0.144.5/v0.147.0), so R3's
+# threadId-only handshake was a frame the real engine rejects — it passed only because the
+# fixture auto-filled the id. The honest answer is a typed refusal BEFORE the wire: no
+# frame, no rotation, and a sentence carrying 病名 + 正路 + Read 指针.
+cx_attempt() { # $1 session — the active attemptId, "" when there is no record
+  python3 -c '
+import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get("attemptId")
+except Exception:
+    v = None
+print("" if v is None else v)' "$WATCH_RUN_DIR/$1.identity.d/active.json"
+}
+export FAKE_CODEX_GATE="$SANDBOX/cx-intr-gate"
+export FAKE_PROVIDER_LOG="$SANDBOX/sv-cxi.log"
+bash "$AGENTCTL" start codex svI "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+/bin/sleep 0.3
+rc="$(bash "$AGENTCTL" status svI >/dev/null 2>&1; echo $?)"
+chk_eq "⑧ the gated goal turn really is still RUNNING when the gauge breaks" 10 "$rc"
+printf 'THIS IS NOT JSON AT ALL\n' >> "$WATCH_RUN_DIR/svI.duplex.events.jsonl"
+: > "$SANDBOX/sv-cxi.log"
+A_BEFORE="$(cx_attempt svI)"
+chk_eq "⑧ PAIRED GREEN: there IS an attempt record to lose" 1 \
+  "$([ -n "$A_BEFORE" ] && echo 1 || echo 0)"
+out="$(bash "$AGENTCTL" steer svI -m "start over" --interrupt 2>&1)"; rc=$?
+chk_eq "⑧ 量具坏 over an ACTIVE turn: the undecidable state is a typed refusal (rc2)" 2 "$rc"
+chk_eq "⑧ DAMAGE ORACLE: NO interrupt frame — the engine can only reject a turnId-less one" 0 \
+  "$(grep -c '"method":"turn/interrupt"' "$SANDBOX/sv-cxi.log")"
+chk_eq "⑧ DAMAGE ORACLE: and no replacement turn either" 0 \
+  "$(grep -c '"method":"turn/start"' "$SANDBOX/sv-cxi.log")"
+chk_eq "⑧ DAMAGE ORACLE: the attempt did NOT rotate — supervision of the live attempt survives" \
+  "$A_BEFORE" "$(cx_attempt svI)"
+chk_contains "⑧ 病名: the refusal names the id it cannot get" "needs the running turn's id" "$out"
+chk_contains "⑧ 病名: and WHICH gauge failed — never a bare 'idle'" \
+  "events stream unparseable" "$out"
+chk_contains "⑧ 正路 a: repair or clear the stream, then re-run" "re-run --interrupt" "$out"
+chk_contains "⑧ 正路 b: or stop and resume" "restart with resume args" "$out"
+chk_contains "⑧ Read 指针: the operator is pointed at the damaged stream" \
+  "svI.duplex.events.jsonl" "$out"
+chk_contains "⑧ and it says outright that nothing was sent" "nothing was sent" "$out"
+: > "$FAKE_CODEX_GATE"
+bash "$AGENTCTL" stop svI >/dev/null 2>&1
+unset FAKE_CODEX_GATE
+
+# ⑧b INPUT-COLLAPSE ORACLE: the SAME broken gauge on a genuinely IDLE engine. Since R4 the
+# refusal happens BEFORE the wire, so agentctl no longer has the engine's answer to tell
+# these two apart — with the gauge broken, "turn still running" (⑧) and "engine idle" (⑧b)
+# are literally the same input, and the two cases must therefore be the same shape. That is
+# the point of keeping ⑧b: it proves the refusal is NOT conditional on liveness, and that
+# the idle side rotates nothing either. R3 sent a threadId-only handshake here and read the
+# engine's rejection as the verdict; that frame is malformed under TurnInterruptParams, so
+# the operator was shown an engine-voiced error for what is really their own broken gauge.
+export FAKE_PROVIDER_LOG="$SANDBOX/sv-cxj.log"
+bash "$AGENTCTL" start codex svJ "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+chk_eq "⑧b the goal turn reached its boundary — the engine really is idle" 1 \
+  "$(seen "$WATCH_RUN_DIR/svJ.duplex.events.jsonl" '"method":"turn/completed"')"
+printf 'THIS IS NOT JSON AT ALL\n' >> "$WATCH_RUN_DIR/svJ.duplex.events.jsonl"
+: > "$SANDBOX/sv-cxj.log"
+B_BEFORE="$(cx_attempt svJ)"
+chk_eq "⑧b PAIRED GREEN: there IS an attempt record to lose" 1 \
+  "$([ -n "$B_BEFORE" ] && echo 1 || echo 0)"
+out="$(bash "$AGENTCTL" steer svJ -m "start over" --interrupt 2>&1)"; rc=$?
+chk_eq "⑧b an undecidable state over a REAL idle engine is the same typed refusal (rc2)" 2 "$rc"
+chk_eq "⑧b INPUT-COLLAPSE: no interrupt frame here either — liveness cannot be a condition" 0 \
+  "$(grep -c '"method":"turn/interrupt"' "$SANDBOX/sv-cxj.log")"
+chk_eq "⑧b DAMAGE ORACLE: no replacement turn was ever sent" 0 \
+  "$(grep -c '"method":"turn/start"' "$SANDBOX/sv-cxj.log")"
+chk_eq "⑧b and the attempt did NOT rotate under a refusal" "$B_BEFORE" "$(cx_attempt svJ)"
+chk_contains "⑧b the sentence blames the GAUGE, never the engine" \
+  "the events gauge cannot supply it" "$out"
+chk_not_contains "⑧b DAMAGE ORACLE: never an engine-voiced verdict for our own broken gauge" \
+  "not accepted" "$out"
+bash "$AGENTCTL" stop svJ >/dev/null 2>&1
+# PAIRED GREEN: an intact stream is a real reading, so nothing is announced as undecidable
+export FAKE_PROVIDER_LOG="$SANDBOX/sv-cx2.log"
+bash "$AGENTCTL" start codex svD "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+chk_eq "⑦ PAIRED GREEN: the goal turn completed on the clean lane too" 1 \
+  "$(seen "$WATCH_RUN_DIR/svD.duplex.events.jsonl" '"method":"turn/completed"')"
+out="$(bash "$AGENTCTL" steer svD -m "clean-stream ruling" 2>&1)"; rc=$?
+chk_eq "⑦ PAIRED GREEN: a readable stream steers rc0" 0 "$rc"
+chk_not_contains "⑦ PAIRED GREEN: and publishes no typed boundary verdict" \
+  "DELIVERED-NEXT-TURN" "$out"
+bash "$AGENTCTL" stop svD >/dev/null 2>&1
+export FAKE_PROVIDER_LOG="$SANDBOX/sv-omp.log"
+
+# ③ QUEUE VISIBILITY: the engine reports only a DEPTH (`queued=6` was a black box), so the
+# lane keeps the record and status lists exactly that many entries, newest last.
+printf 'streaming' > "$FAKE_OMP_STATE_FILE"
+out="$(bash "$AGENTCTL" status svA 2>&1)"; rc=$?
+chk_eq "③ PAIRED GREEN: streaming with an empty queue is still RUNNING 10" 10 "$rc"
+chk_eq "③ PAIRED GREEN: a depth of 0 lists nothing at all" 0 \
+  "$(printf '%s\n' "$out" | grep -c '^queued: ')"
+# NB3.3: $WT is not a git repo, so the work-trace probe cannot be JUDGED. An unjudgeable gauge
+# owes the operator an ADMISSION, never a timestamp — publishing the failure moment as
+# `last_progress_at` made the gauge's own clock look like the work's (cold review R1 §3).
+chk_contains "③ an unjudgeable progress probe says so" "progress=unknown" "$out"
+chk_not_contains "③ and fabricates NO last_progress_at out of its own failure" \
+  "last_progress_at=" "$out"
+bash "$AGENTCTL" stop svA >/dev/null 2>&1
+export FAKE_OMP_QUEUED=2 FAKE_PROVIDER_LOG="$SANDBOX/sv-q.log"
+# IDLE, so every steer below takes the QUEUE half (`follow_up`): a queue DEPTH can only be an
+# index into deliveries that really entered the queue.
+rm -f "$FAKE_OMP_STATE_FILE"
+bash "$AGENTCTL" start omp svQ "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+# a long MULTI-LINE steer first (it ages out of the listing): the log must keep a bounded
+# single-line head, never the body — the events stream is where full frames live
+printf 'ancient ruling with a very long first line %s\nsecond line of the same steer\n' \
+  "$(python3 -c 'print("x" * 200)')" > "$SANDBOX/long-steer.txt"
+bash "$AGENTCTL" steer svQ -f "$SANDBOX/long-steer.txt" >/dev/null 2>&1
+bash "$AGENTCTL" steer svQ -m "older ruling: use plan A" >/dev/null 2>&1
+bash "$AGENTCTL" steer svQ -m "newer ruling: plan A is dead, do B" >/dev/null 2>&1
+out="$(bash "$AGENTCTL" status svQ 2>&1)"; rc=$?
+chk_eq "③ queued messages keep the session non-terminal (RUNNING 10)" 10 "$rc"
+chk_contains "③ status still reports the engine's own depth" "queued=2" "$out"
+chk_eq "③ exactly queue-depth entries are listed (the older ones age out)" 2 \
+  "$(printf '%s\n' "$out" | grep -c '^queued: ')"
+chk_contains "③ the OLDER of the two is visible by its first line" "older ruling: use plan A" "$out"
+chk_contains "③ and the NEWER one too" "newer ruling: plan A is dead" "$out"
+chk_contains "③ each entry names the QUEUE route it was delivered by" "steer:follow_up" "$out"
+chk_eq "③ every logged line has one bounded head, never a body" "ok" \
+  "$(python3 -c '
+import json, sys
+recs = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+bad = [r for r in recs
+       if len(r["head"].encode("utf-8")) > 80 or "\n" in r["head"] or not r["mode"]]
+print("ok" if recs and not bad else "BAD:%s/%s" % (len(bad), len(recs)))' \
+    "$WATCH_RUN_DIR/svQ.steer-log.jsonl")"
+chk_eq "③ one line per delivered steer, and the goal delivery is not one" 3 \
+  "$(grep -c . "$WATCH_RUN_DIR/svQ.steer-log.jsonl")"
+
+# ③b MIXED ROUTE (SHIP-BLOCKING, cold review R1 §4): steer-log records EVERY delivery on the
+# lane, but a MID-TURN steer never entered the queue. Tailing the raw log by the engine's
+# depth therefore listed that mid-turn frame AS a queued item and pushed the real queued
+# ruling out of the window — `queued=2` showed one message the engine was not holding and hid
+# one it was. The listing filters on the DECLARED queue route now, not on the verb.
+printf 'streaming' > "$FAKE_OMP_STATE_FILE"       # the next steer goes MID-TURN
+out="$(bash "$AGENTCTL" steer svQ -m "mid-turn A never entered the queue" 2>&1)"; rc=$?
+chk_eq "③b the mid-turn steer itself succeeded (rc0)" 0 "$rc"
+chk_contains "③b and really used the mid-turn route" '"type":"steer"' "$(cat "$SANDBOX/sv-q.log")"
+chk_contains "③b the lane still RECORDS it — every delivery is logged, queued or not" \
+  '"mode":"steer:steer"' "$(cat "$WATCH_RUN_DIR/svQ.steer-log.jsonl")"
+chk_eq "③b one line per delivered steer, the mid-turn one included" 4 \
+  "$(grep -c . "$WATCH_RUN_DIR/svQ.steer-log.jsonl")"
+out="$(bash "$AGENTCTL" status svQ 2>&1)"; rc=$?
+chk_eq "③b the session is still RUNNING 10" 10 "$rc"
+chk_contains "③b and still reports the engine's own depth" "queued=2" "$out"
+chk_eq "③b DAMAGE ORACLE: a mid-turn delivery is NOT a queued item" 0 \
+  "$(printf '%s\n' "$out" | grep -c 'mid-turn A never entered the queue')"
+chk_contains "③b PAIRED GREEN: the real queued ruling it used to hide is listed again" \
+  "older ruling: use plan A" "$out"
+chk_contains "③b together with the newest queued one" "newer ruling: plan A is dead" "$out"
+chk_eq "③b still exactly queue-depth entries" 2 \
+  "$(printf '%s\n' "$out" | grep -c '^queued: ')"
+chk_eq "③b and EVERY listed entry names the queue route" 2 \
+  "$(printf '%s\n' "$out" | grep -c '^queued: .*steer:follow_up')"
+rm -f "$FAKE_OMP_STATE_FILE"
+# 量具坏 (the listing's gauge): with the record gone the depth is still real, so the listing
+# must say it cannot answer and point at the raw stream — silence would read as "queue empty"
+rm -f "$WATCH_RUN_DIR/svQ.steer-log.jsonl"
+out="$(bash "$AGENTCTL" status svQ 2>&1)"; rc=$?
+chk_eq "③ 量具坏: a missing delivery record does not change the typed state" 10 "$rc"
+chk_contains "③ 量具坏: the listing admits it has no record" "no delivery record" "$out"
+chk_contains "③ 量具坏: and still reports the depth it could not explain" "queued=2" "$out"
+chk_eq "③ 量具坏: and lists nothing it cannot substantiate" 0 \
+  "$(printf '%s\n' "$out" | grep -c '^queued: ')"
+bash "$AGENTCTL" stop svQ >/dev/null 2>&1
+chk_eq "③ stop removes the delivery log with the rest of the control state" 0 \
+  "$([ -e "$WATCH_RUN_DIR/svQ.steer-log.jsonl" ] && echo 1 || echo 0)"
+unset FAKE_OMP_QUEUED FAKE_OMP_STATE_FILE FAKE_PROVIDER_LOG
+sweep_fakes; sandbox_clean
 
 summary

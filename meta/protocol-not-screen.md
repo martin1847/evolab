@@ -29,10 +29,10 @@ typed exit code、协议帧、rc 文件与交付物新鲜度——**永不抓屏
 | 维度 | 屏幕/轮询时代 | 协议时代（两日重载实测） |
 |---|---|---|
 | 派发确认 | fire-and-forget，送达不可证 | goal 帧 correlated ack，送达机械可证 |
-| 轮中纠偏 | 不可能（运行中拒收；实证 workaround 是往 worker 文件树里塞信号文件） | `steer --now` 同轮吸收；idle 续轮免重派仪式 |
+| 轮中纠偏 | 不可能（运行中拒收；实证 workaround 是往 worker 文件树里塞信号文件） | `steer` 默认尽快送达（turn 中原生 mid-turn 同轮吸收）；idle 续轮免重派仪式 |
 | 一次纠偏成本 | 一整轮返工（实测 30-60min） | ≈ 0 额外轮 |
 | watcher 回传 | 无界——365KB / 799KB 两次撞进编排者上下文（同族事故：147KB 单行回显 ≈ 88k tokens） | 有界 1-2KB/轮，**~400× 缩减** |
-| 完成判定 | 抓屏正则 + idle 猜测 | typed exit（0-10 词汇）+ 交付物 freshness 门，11/11 准确 |
+| 完成判定 | 抓屏正则 + idle 猜测 | typed exit（词表 `agentctl states` 自述）+ 交付物 freshness 门 |
 | 重载面 | — | 2 天 11 会话、20+ 次 steer 零丢帧、并发 2-3 无冲突；watcher 被外部杀 2 次，stateless re-arm 零状态损失 |
 | 维护面 | 控制面 5 个入口 | 1 个入口，代码 1884→~1100 行（TUI 车道整条 -2556 行） |
 

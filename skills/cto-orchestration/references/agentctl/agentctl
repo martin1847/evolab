@@ -3,7 +3,7 @@
 #
 #   agentctl start  <omp|codex|claude> <session> <cwd> --goal F [--deliverable G]
 #                   [--no-preflight] [--review] [engine args...]
-#   agentctl steer  <session> (-m TEXT | -f FILE) [--now | --replace] [-d|--deliverable G]
+#   agentctl steer  <session> (-m TEXT | -f FILE) [--interrupt] [-d|--deliverable G]
 #   agentctl status <session>            # one-shot typed state (exit = verdict)
 #   agentctl watch  <session> [--inline]  # block until terminal; typed exits (vocabulary below)
 #   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
@@ -43,7 +43,7 @@ ctl() { "$PY" "$CTL" --run-dir "$DIR" "$@"; }
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
   echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [engine args...]" >&2
-  echo "       agentctl steer <session> (-m TEXT | -f FILE) [--now | --replace] [-d G]" >&2
+  echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
   echo "       agentctl status <session> | watch <session> [--inline] | stop <session> [cwd] | capabilities [--json] | states [--json]" >&2
   echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
   exit 1
@@ -339,12 +339,16 @@ cmd_start() {
 }
 
 cmd_steer() {
-  S="${1:?usage: agentctl steer <session> (-m TEXT | -f FILE) [--now|--replace] [-d G]}"; shift
+  S="${1:?usage: agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]}"; shift
   MODE=""; ARG=""; VERB="steer"; NEWDELIV=""
   while [ "$#" -gt 0 ]; do case "$1" in
     -m|-f) MODE="$1"; ARG="${2:?$1 needs a value}"; shift 2;;
-    --now) VERB="steer-now"; shift;;
-    --replace) VERB="replace"; shift;;
+    # ONE steering verb (default) + ONE escalation. `--replace` is kept as a SILENT alias of
+    # the renamed escalation so live runbooks keep working; `--now` is GONE, because a
+    # plain steer already delivers as soon as the engine allows (the flag existed to opt IN
+    # to that, and forgetting it is what queued rulings behind 35-60min turns in the field).
+    --interrupt|--replace) VERB="interrupt"; shift;;
+    --now) echo "ERR: --now was removed: a plain 'agentctl steer' now delivers as soon as the engine allows (mid-turn where the engine has that route, next turn when idle). Drop the flag; use --interrupt to abandon the running turn." >&2; exit 1;;
     -d|--deliverable) NEWDELIV="${2:?-d needs a glob}"; shift 2;;
     *) echo "ERR: unknown steer option '$1'" >&2; usage;;
   esac; done
@@ -363,9 +367,9 @@ cmd_steer() {
       fi
       # The terminal record is NOT cleared here: a REFUSED steer opens no round and the
       # conclusion it would destroy is still every attached waiter's answer (R2 F-02) — duplexctl
-      # unlinks it inside commit_round_state, at the instant the round counter moves. `--replace`
-      # mints a NEW attempt, so the supervisor is about to go stale: retire it here.
-      [ "$VERB" = replace ] && retire_supervisor "$S" "agentctl steer --replace is opening a new attempt"
+      # unlinks it inside commit_round_state, at the instant the round counter moves.
+      # `--interrupt` mints a NEW attempt, so the supervisor is about to go stale: retire it here.
+      [ "$VERB" = interrupt ] && retire_supervisor "$S" "agentctl steer --interrupt is opening a new attempt"
       # -d rides duplexctl: applied atomically, only after delivery
       if [ "$MODE" = -f ]; then exec "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --file "$ARG" ${NEWDELIV:+--deliverable "$NEWDELIV"}
       else exec "$PY" "$CTL" --run-dir "$DIR" send "$S" --verb "$VERB" --text "$ARG" ${NEWDELIV:+--deliverable "$NEWDELIV"}; fi ;;
@@ -400,6 +404,7 @@ supervisor_env() {
   local out="AGENT_WATCH_DIR=$(q "$DIR") " k v
   for k in PATH AGENTCTL_PYTHON AGENT_WATCH_POLL_SECS AGENT_WATCH_MAX_POLLS \
            AGENT_WATCH_SILENT_POLLS AGENT_WATCH_STATUS_TIMEOUT AGENT_WATCH_STALL_MINS \
+           AGENT_WATCH_PROGRESS_MINS \
            AGENTCTL_REAP_GRACE AGENTCTL_PUBLISH_BARRIER TMPDIR; do
     eval "v=\${$k:-}"
     [ -n "$v" ] && out="$out$k=$(q "$v") "

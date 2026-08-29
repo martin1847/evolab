@@ -15,16 +15,16 @@ module opens these files. Layout (one record, per session, inside the session st
 
 Identity triple:
     sessionId            stable across follow-up rounds
-    attemptId            new UUID on start and on every state-resetting steer (--replace)
+    attemptId            new UUID on start and on every state-resetting steer (--interrupt)
     processIncarnation   "<pid>@<start-time>" of the engine's supervisor pane — NOT the pid
                          alone (recyclable) and NOT the tmux name (reused verbatim)
 
 Transitions and their commit points (the record is written BEFORE the frame goes out; a
 failed write FAILS the verb, so no frame ever carries an identity that is not durable):
     start    prompt verb   new sessionId + new attemptId + captured incarnation
-    replace  replace verb  same sessionId, new attemptId, re-captured incarnation
-    resume   resume verb   same sessionId + attemptId, NEW incarnation (new process)
-    queued / --now steer   no write: a non-resetting steer keeps the whole triple
+    replace  interrupt verb  same sessionId, new attemptId, re-captured incarnation
+    resume   resume verb     same sessionId + attemptId, NEW incarnation (new process)
+    plain steer (any route)  no write: a non-resetting steer keeps the whole triple
 
 Staleness is DERIVED at read time — stamp vs the active record — and never written back:
 the stale evidence stays on disk for post-mortem (single writer of truth). Discrimination is
@@ -83,7 +83,7 @@ UNKNOWN = "IDENTITY-UNKNOWN"
 # `10 RUNNING` is deliberately absent — it is not a terminal state and can never be published.
 TERMINAL_CLASSES = {0: "DONE", 2: "FAILED", 4: "WAITING-INPUT", 5: "STALLED-EXTERNAL",
                     6: "IDLE-NO-DELIVERABLE", 7: "WATCH-TIMEOUT", 8: "ENGINE-SILENT",
-                    11: "STALLED-STREAM"}
+                    11: "STALLED-STREAM", 14: "STALLED-PROGRESS"}
 # how much of classify's human line the record carries — bounded, diagnostics only
 DETAIL_MAX = 600
 # The bound is enforced LINE-WISE on the WHOLE field, never mid-line. classify's stdout is one

@@ -33,7 +33,9 @@ ORACLE="0 DONE
 9 BUDGET-EXHAUSTED
 10 RUNNING
 11 STALLED-STREAM
-12 SUPERVISOR-LOST"
+12 SUPERVISOR-LOST
+14 STALLED-PROGRESS
+15 DELIVERED-NEXT-TURN"
 
 echo "== S1: the human table publishes every state the orchestrator lane can report =="
 human="$(states)"
@@ -45,7 +47,7 @@ while read -r code name; do
   missing="$missing $code/$name"
 done <<< "$ORACLE"
 chk_eq "every expected state appears in the human table" \
-  "ALL-PUBLISHED 11" "$([ -n "$human" ] && [ -z "$missing" ] && echo "ALL-PUBLISHED 11" \
+  "ALL-PUBLISHED 13" "$([ -n "$human" ] && [ -z "$missing" ] && echo "ALL-PUBLISHED 13" \
                         || echo "MISSING${missing:-:empty-output}")"
 
 echo "== S2: --json parses and carries exactly the human table's rows =="
@@ -57,7 +59,7 @@ doc = json.loads(run("--json"))
 rows = [ln for ln in run().splitlines() if ln[:4].strip().isdigit()]
 print("json=%d human=%d" % (len(doc["states"]), len(rows)))
 ' "$AGENTCTL")"
-chk_eq "json entries == human rows" "json=11 human=11" "$counts"
+chk_eq "json entries == human rows" "json=13 human=13" "$counts"
 
 echo "== S3: only two spellings exist; anything else is refused =="
 bogus="$(states --bogus 2>&1)"; rc=$?
@@ -99,7 +101,7 @@ for n in ast.walk(tree):
             bad.append("bare-literal-verdict:%s:%d:%d" % (base, a.lineno, a.value))
 print(" ".join(bad) if bad else "CONSISTENT %d" % len(published))
 ' "$CTL")"
-chk_eq "no unpublished typed code and no bare-literal verdict" "CONSISTENT 11" "$violations"
+chk_eq "no unpublished typed code and no bare-literal verdict" "CONSISTENT 13" "$violations"
 
 # S4b — the SECOND production definition. duplexctl's table is the claimed single source, but
 # identity.py hand-maintains the terminal subset (it gates whether a typed result may be
@@ -119,6 +121,6 @@ bad += [f"name-disagrees:{c}:{tc[c]}!={pub[c]}" for c in sorted(tc)
         if c in pub and tc[c] not in pub[c].split("|")]
 print(" ".join(bad) if bad else "AGREES %d" % len(tc))
 ' "$(dirname "$CTL")/identity.py")"
-chk_eq "S4b identity.py terminal map agrees with the published vocabulary" "AGREES 8" "$id_drift"
+chk_eq "S4b identity.py terminal map agrees with the published vocabulary" "AGREES 9" "$id_drift"
 
 summary

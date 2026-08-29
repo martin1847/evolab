@@ -1,16 +1,16 @@
 --- a/skills/cto-orchestration/references/agentctl/duplexctl.py
 +++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
-@@ -1182,12 +1182,7 @@
-             # ack, so `send` reports delivery, never acceptance.
-             "queuedSteer": _cap(SUPPORTED, route="user", impl=build_frame),
-             # THE degradation this contract exists to stop advertising as native steering.
--            "midTurnSteer": _cap(
+@@ -2312,12 +2312,7 @@
+             # frame, so it lands at the turn BOUNDARY. THE degradation this contract exists
+             # to stop advertising as native steering. The protocol has no per-frame ack, so
+             # `send` reports delivery, never acceptance.
+-            "steer": _cap(
 -                DEGRADED, route="user", impl=build_frame,
--                note="claude has no public interrupt frame — `--now` is delivered as a "
--                     "QUEUED steer that lands at the next turn boundary, NOT native "
--                     "mid-turn steering",
--                fallback="steer"),
-+            "midTurnSteer": _cap(SUPPORTED, route="user", impl=build_frame),
-             "replaceTurn": _cap(
+-                note="claude has no public mid-turn frame — while a turn is RUNNING the "
+-                     "steer is delivered as a QUEUED message that lands at the next turn "
+-                     "boundary, NOT inside the running turn (idle: it opens the next turn "
+-                     "immediately)"),
++            "steer": _cap(SUPPORTED, route="user", impl=build_frame),
+             "interruptTurn": _cap(
                  UNSUPPORTED,
                  refusal="claude has no interrupt/replace frame — `agentctl stop` the "

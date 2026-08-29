@@ -1,6 +1,6 @@
 --- a/skills/cto-orchestration/references/agentctl/duplexctl.py
 +++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
-@@ -1272,6 +1272,10 @@
+@@ -2401,6 +2401,10 @@
            for name, caps in CAPABILITIES.items()}
  # engine → state projector, consumed by classify.
  PROJECTORS = {name: rec["projector"] for name, rec in PROVIDERS.items()}
@@ -10,4 +10,4 @@
 +PROJECTORS["fixtureprov"] = project_claude
  
  
- def capability_document() -> dict:
+ # The watch lane's published contract, same spirit as the capability table: ONE table, read by

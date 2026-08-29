@@ -12,15 +12,18 @@ one typed line + a <=600-char summary (the 147KB single-line agent_end replay
 going into the orchestrator context was a field-reported token bomb).
 
 Engines (one uniform surface; an impl that lacks a capability REFUSES cleanly —
-Java-interface style — instead of silently degrading):
-  omp    : --mode=rpc JSON-lines. prompt/steer(follow_up)/steer-now(steer)/
-           replace(abort_and_prompt); get_state for live status.
-  claude : -p --input-format stream-json. steer = natively queued to the next
-           turn; --now degrades to queued (told); --replace refused (stop+resume).
-  codex  : app-server JSON-RPC (spike-verified 2026-07-19 on 0.144.5, v1 param
-           shapes). steer default = NEXT turn only (no queue: busy → refuse,
-           idle → turn/start); --now = native mid-turn turn/steer{expectedTurnId};
-           --replace = turn/interrupt + turn/start. threadId persisted in meta.
+Java-interface style — instead of silently degrading). ONE steering verb, and it means
+DELIVER AS SOON AS THE ENGINE ALLOWS: the LIVE TURN STATE picks the route, never a flag
+(field 2026-08-28: with a queue-vs-now-vs-replace triple the operator queued behind a
+35-60min turn and the engine then executed a ruling the batch had already overtaken).
+  omp    : --mode=rpc JSON-lines. steer = `steer` frame mid-turn / `follow_up` when idle;
+           interrupt = abort_and_prompt; prompt delivers the goal, get_state reads status.
+  claude : -p --input-format stream-json. ONE `user` frame: it opens the next turn at once
+           when idle, and lands at the turn BOUNDARY while a turn runs — degraded, and said
+           out loud; interrupt refused (stop+resume).
+  codex  : app-server JSON-RPC (spike-verified 2026-07-19 on 0.144.5, v1 param shapes).
+           steer = turn/steer{expectedTurnId} mid-turn / turn/start when idle;
+           interrupt = turn/interrupt + turn/start. threadId persisted in meta.
 """
 from __future__ import annotations
 
@@ -28,6 +31,7 @@ import argparse
 import fcntl
 import fnmatch
 import glob as globmod
+import hashlib
 import json
 import math
 import os
@@ -76,6 +80,9 @@ EXIT_BUDGET_EXHAUSTED = 9
 EXIT_RUNNING = 10
 EXIT_STALLED_STREAM = 11
 EXIT_SUPERVISOR_LOST = 12
+# 13 is the waiter-internal arm handshake (plumbing, see above), so the next typed code is 14
+EXIT_STALLED_PROGRESS = 14
+EXIT_DELIVERED_NEXT_TURN = 15
 
 TYPED_STATE_SCHEMA_VERSION = 1
 TYPED_STATES: tuple[tuple[int, str, str], ...] = (
@@ -105,6 +112,14 @@ TYPED_STATES: tuple[tuple[int, str, str], ...] = (
     (EXIT_SUPERVISOR_LOST, "SUPERVISOR-LOST",
      "no fenced terminal record for this attempt+round, and the sensing supervisor cannot "
      "be shown to be running (reason=dead) or cannot be judged at all (reason=unknown)"),
+    (EXIT_STALLED_PROGRESS, "STALLED-PROGRESS",
+     "the engine keeps streaming but the work left no trace for a whole window: HEAD, the "
+     "dirty-tree hash, the deliverable's mtime and BLOCKED.md all stood still"),
+    (EXIT_DELIVERED_NEXT_TURN, "DELIVERED-NEXT-TURN",
+     "a steer was DELIVERED, but by the next-turn route while a turn was running — so it "
+     "lands at the turn boundary, not inside that turn: the engine declares no mid-turn "
+     "route (reason=capability), or the live turn state could not be judged "
+     "(reason=undecidable)"),
 )
 
 
@@ -122,6 +137,14 @@ class Session:
         self.wlock = os.path.join(run_dir, f"{name}.duplex.wlock")
         self.sent_offset = os.path.join(run_dir, f"{name}.duplex.sent-offset")
         self.intent = os.path.join(run_dir, f"{name}.duplex.write-intent")
+        # steer/progress sidecars: the delivery record that makes `queued=N` readable, and
+        # the work-trace fingerprint STALLED-PROGRESS accumulates over. Both are lane control
+        # state (stop removes them); neither is ever read as terminal truth.
+        self.steer_log = os.path.join(run_dir, f"{name}.steer-log.jsonl")
+        self.progress = os.path.join(run_dir, f"{name}.duplex.progress")
+        # live queue depth, set by the projector that can actually ask the engine (omp).
+        # 0 = no queue / not asked: engines without a queue print no listing at all.
+        self.queued = 0
         self.meta = {}
         if os.path.exists(self.meta_path):
             with open(self.meta_path, encoding="utf-8") as fh:
@@ -211,10 +234,14 @@ def clip(text: str, limit: int = SUMMARY_CHARS) -> str:
 SUPPORTED, DEGRADED, UNSUPPORTED, EXPERIMENTAL = (
     "supported", "degraded", "unsupported", "experimental")
 CAPABILITY_STATES = (SUPPORTED, DEGRADED, UNSUPPORTED, EXPERIMENTAL)
-CAPABILITY_SCHEMA_VERSION = 1
+# BUMPED 1 -> 2 by the ASAP steer batch: the capability KEYS changed shape (the three verbs
+# `queuedSteer`/`midTurnSteer`/`replaceTurn` became `steer`/`interruptTurn`), which is not a
+# compatible addition. A machine consumer pinned to v1 must be able to REFUSE this document
+# instead of reading the new keys as missing fields (cold review R1).
+CAPABILITY_SCHEMA_VERSION = 2
 
 # the closed capability vocabulary, in output order
-CAPABILITY_ORDER = ("queuedSteer", "midTurnSteer", "replaceTurn", "structuredAsk",
+CAPABILITY_ORDER = ("steer", "interruptTurn", "structuredAsk",
                     "structuredReply", "resume", "permissionEnforcement")
 
 # WHAT EACH CAPABILITY MEANS. Written down because a criterion applied unevenly is the same
@@ -223,10 +250,10 @@ CAPABILITY_ORDER = ("queuedSteer", "midTurnSteer", "replaceTurn", "structuredAsk
 # judged against the sentence here — the OPERATION the operator can invoke through
 # `agentctl`, not the protocol niceness of how the lane serves it.
 CAPABILITY_DEFINITIONS = {
-    "queuedSteer": "deliver a message that the engine consumes at/after the current turn "
-                   "boundary, without discarding the running turn",
-    "midTurnSteer": "deliver a message that reaches the engine INSIDE the running turn",
-    "replaceTurn": "abandon the running turn and start a replacement in the same session",
+    "steer": "deliver a message to a live session AS SOON AS the engine allows it — inside "
+             "the running turn where the engine has a mid-turn route, as the next turn when "
+             "the session is idle. ONE operation: the live turn state picks the route",
+    "interruptTurn": "abandon the running turn and start a replacement in the same session",
     "structuredAsk": "the engine's own question reaches the operator as a typed "
                      "WAITING-INPUT projection, not as prose to be read out of a log",
     "structuredReply": "answer such a question through a dedicated agentctl verb",
@@ -235,11 +262,17 @@ CAPABILITY_DEFINITIONS = {
     "permissionEnforcement": "the runtime constrains what the engine may do and enforces it",
 }
 
+# A steer cell's route is an ALTERNATION — "<mid-turn>|<next-turn>" — and the branch emits
+# EXACTLY ONE half, whichever the live turn state selects (steer_delivery below). A single
+# name means the engine has only that one frame, which is also WHY such a cell is DEGRADED:
+# while a turn runs, that frame cannot land inside it. (`+` is the other composite: a
+# SEQUENCE whose halves are BOTH sent, used by codex's interrupt handshake.)
+STEER_ROUTE_SEP = "|"
+
 # the send verbs that ARE capability claims. `prompt` (goal delivery) and `get-state`
 # (omp's liveness probe) are lane plumbing: without them the lane cannot exist at all,
 # so they are not provider capabilities and carry no state.
-VERB_CAPABILITY = {"steer": "queuedSteer", "steer-now": "midTurnSteer",
-                   "replace": "replaceTurn"}
+VERB_CAPABILITY = {"steer": "steer", "interrupt": "interruptTurn"}
 
 # Non-protocol realizations. A capability served by one of these has no wire route, so the
 # drift gate cannot check it against ROUTES — the behaviour battery must. Closed set:
@@ -250,29 +283,35 @@ CAPABILITY_SURFACES = (SURFACE_START_ARGV,)
 
 
 def _cap(state: str, route: str = "", note: str = "", refusal: str = "",
-         fallback: str = "", surface: str = "", detect: dict | None = None,
+         surface: str = "", detect: dict | None = None, queue_routes: tuple[str, ...] = (),
          start_flag: str = "", impl=None) -> dict:
     """One capability cell.
 
     state    — closed enum; never a boolean, because behaviour here is provider-specific.
     route    — the wire name (frame type / JSON-RPC method) the branch emits, "" if none.
+               May be composite: `a|b` = alternation (one half goes out, state-selected),
+               `a+b` = sequence (both go out, in order). See STEER_ROUTE_SEP.
     impl     — the branch that performs `route`; ROUTES is built from these pairs.
     surface  — a non-protocol realization (see CAPABILITY_SURFACES) when there is no route.
     note     — published EXACTLY for degraded (names the degradation) and unsupported
                (names the recommended supported path). A supported cell publishes no note:
                the state is the whole claim. A refusal doubles as the note, so the rejected
-               operator and the contract reader see one sentence.
+               operator and the contract reader see one sentence. A degraded steer prints
+               this note VERBATIM at the moment it degrades — one sentence, two surfaces.
     refusal  — what a refused verb prints.
-    fallback — the verb a degraded capability is honestly served by instead.
     detect   — projector-side recognition data (ask frame noise / ask method names), read
                BACK by the projector so the contract owns it too.
+    queue_routes — the subset of `route`'s halves whose delivery really enters an engine-held
+               QUEUE. Read back by the steer-log listing, which a queue DEPTH indexes: a
+               mid-turn frame and a turn-opening frame both leave the lane without queueing
+               anything, so neither may be listed as a queued item.
     start_flag — the `agentctl start` flag that drives this capability, if any.
     """
     published = note or refusal
     if state == SUPPORTED or state == EXPERIMENTAL:
         published = ""      # notes exist exactly where the state is not self-explanatory
     return {"state": state, "note": published, "refusal": refusal, "route": route,
-            "fallback": fallback, "surface": surface, "detect": detect or {},
+            "surface": surface, "detect": detect or {}, "queue_routes": tuple(queue_routes),
             "start_flag": start_flag, "impl": impl}
 
 
@@ -295,9 +334,18 @@ def capability(engine: str, name: str) -> dict:
 
 
 def route_of(engine: str, verb: str) -> str:
-    """The wire route a capability verb resolves to — "" when the provider does not have it."""
+    """The route id a capability verb resolves to — "" when the provider does not have it.
+    For a steer this is the whole ALTERNATION: WHICH half reaches the wire is a function of
+    the live turn state, and only steer_delivery() may answer that."""
     name = VERB_CAPABILITY.get(verb)
     return capability(engine, name)["route"] if name else ""
+
+
+def steer_halves(cell: dict) -> tuple[str, str]:
+    """(mid-turn route, next-turn route) of a steer cell. One name = the engine has a single
+    frame, so both halves are that frame."""
+    mid, sep, nxt = cell["route"].partition(STEER_ROUTE_SEP)
+    return mid, (nxt if sep else mid)
 
 
 # ── frames ────────────────────────────────────────────────────────────────────
@@ -326,15 +374,43 @@ def codex_text_input(text: str) -> list:
     return [{"type": "text", "text": text}]
 
 
-def codex_active_turn(sess: Session):
+def codex_frames(sess: Session) -> tuple[list[dict] | None, str]:
+    """(every COMPLETE frame on the lane, "") or (None, why) when the events stream ITSELF
+    could not be read. A stream that is unreadable, corrupt, or holds no complete frame yet is
+    a BROKEN GAUGE, not an idle engine: folding it into an empty frame list picked the same
+    safe route but published a state nobody measured, so a gauge failure was indistinguishable
+    from a known-idle session (cold review R1). The caller must say undecidable out loud."""
+    try:
+        with open(sess.events, "rb") as fh:
+            blob = fh.read()
+    except OSError:
+        return None, f"codex events stream unreadable ({sess.events})"
+    body, nl, _tail = blob.rpartition(b"\n")
+    if not nl:
+        return None, (f"codex events stream holds no complete frame yet "
+                      f"({len(blob)}B unterminated)")
+    lines = [ln.strip() for ln in body.decode("utf-8", errors="replace").splitlines()
+             if ln.strip()]
+    frames, corrupt = [], 0
+    for line in lines:
+        try:
+            frames.append(json.loads(line))
+        except json.JSONDecodeError:
+            corrupt += 1
+    if corrupt or not frames:
+        return None, (f"codex events stream unparseable ({corrupt} corrupt of "
+                      f"{len(lines)} complete line(s))")
+    return frames, ""
+
+
+def codex_turn_from(frames: list[dict], ours: str | None):
     """Latest turn/started without a later matching turn/completed, ON OUR THREAD
     only — the engine multiplexes sub-threads (its own sub-agents) onto the same
     app-server stream, and an unfiltered read let a sub-thread's turn/completed
     masquerade as our turn boundary (caught live by the first dogfood review
     session, 2026-07-19)."""
-    ours = sess.meta.get("thread")
     active = None
-    for frame in complete_frames_from(sess, 0):
+    for frame in frames:
         method = frame.get("method")
         params = frame.get("params") or {}
         if ours and params.get("threadId") not in (None, ours):
@@ -352,14 +428,25 @@ def codex_active_turn(sess: Session):
     return active
 
 
+def codex_active_turn(sess: Session) -> tuple[str | None, str]:
+    """(active turn id or None, "") — or (None, why) when the events stream ITSELF could not
+    be read. The diagnosis rides along because "no turn" and "no measurement" license
+    different frames: folding them together let a replacement rotate the attempt on a session
+    whose turn was still running (verify R2)."""
+    frames, why = codex_frames(sess)
+    if frames is None:
+        return None, why
+    return codex_turn_from(frames, sess.meta.get("thread")), ""
 
-def build_frame(engine: str, verb: str, text: str, req_id: str) -> str:
-    """The wire frame for one verb. A CAPABILITY verb takes its frame type from the one
-    capability table (`route` IS the wire name), so a frame type cannot exist without a
-    declared capability; `prompt` / `get-state` are lane plumbing and stay literal."""
+
+
+def build_frame(engine: str, verb: str, text: str, req_id: str, route: str = "") -> str:
+    """The wire frame for one verb. A CAPABILITY verb's frame type IS `route`, which the
+    caller resolves through the one capability table (a steer resolves it from the live turn
+    state), so a frame type cannot exist without a declared capability; `prompt` /
+    `get-state` are lane plumbing and stay literal."""
     if engine == "omp":
-        omp_type = {"prompt": "prompt", "get-state": "get_state"}.get(verb) \
-            or route_of("omp", verb)
+        omp_type = {"prompt": "prompt", "get-state": "get_state"}.get(verb) or route
         if not omp_type:
             die(f"unsupported omp verb: {verb}")
         frame = {"id": req_id, "type": omp_type}
@@ -367,7 +454,7 @@ def build_frame(engine: str, verb: str, text: str, req_id: str) -> str:
             frame["message"] = text
         return json.dumps(frame, ensure_ascii=False)
     if engine == "claude":
-        claude_type = "user" if verb == "prompt" else route_of("claude", verb)
+        claude_type = "user" if verb == "prompt" else route
         if not claude_type:
             die(f"unsupported claude verb: {verb} (no public interrupt/replace frame)")
         return json.dumps(
@@ -729,10 +816,39 @@ def scan_quota(sess: Session) -> bool:
 
 
 # ── per-engine idle/waiting projection ────────────────────────────────────────
-def project_omp(sess: Session) -> tuple[str, str]:
-    """Returns (state, detail): state in RUNNING|IDLE|WAITING. Live-queries
-    get_state through the fifo (documented verb; request-response closes over
-    the events file)."""
+def json_bool(data: dict, key: str) -> bool | None:
+    """A protocol boolean, or None when the gauge did not answer with one. Python truthiness
+    is the WRONG reader here and the failure is asymmetric in both directions: the JSON string
+    `"false"` is truthy (a dead turn read as live) and the integer `0` is falsy (a live turn
+    read as dead). Only `true` and `false` decide; a missing key, a null, a number or a string
+    is UNDECIDABLE (cold review R1)."""
+    value = data.get(key)
+    return value if value is True or value is False else None
+
+
+# the two protocol booleans that TOGETHER define "a turn is running on omp right now"
+OMP_TURN_FLAGS = ("isStreaming", "isCompacting")
+
+
+def omp_stream_flags(data: dict) -> tuple[bool | None, str]:
+    """(a turn is running, why-not). BOTH flags must be real JSON booleans: this is the one
+    fact the ASAP router and the projector select on, so half a reading is no reading."""
+    read = {key: json_bool(data, key) for key in OMP_TURN_FLAGS}
+    broken = [key for key, value in read.items() if value is None]
+    if broken:
+        shown = {key: data.get(key) for key in broken}
+        return None, ("get_state answered with a non-boolean "
+                      + "/".join(broken) + " (gauge broken, NOT idle): "
+                      + clip(json.dumps(shown, ensure_ascii=False), 160))
+    return any(read.values()), ""
+
+
+def omp_get_state(sess: Session) -> tuple[dict | None, str]:
+    """One correlated get_state round trip: (data, why-not). Live-queries through the fifo
+    (documented verb; request-response closes over the events file). `data` is None when the
+    engine did not answer or answered anomalously — a rejected/malformed response must stay
+    NON-terminal, since mapping it to idle would manufacture a false DONE out of an engine
+    error — and `why-not` is the sentence a caller can print."""
     offset = events_size(sess)
     req_id = f"ctl-{uuid.uuid4().hex[:12]}"
     write_frame(sess, build_frame("omp", "get-state", "", req_id))
@@ -741,17 +857,37 @@ def project_omp(sess: Session) -> tuple[str, str]:
         lambda f: f.get("id") == req_id and f.get("type") == "response",
         timeout=6.0)
     if reply is None:
-        return "RUNNING", "get_state unanswered in 6s (engine busy or wedged; MAX_POLLS bounds this)"
-    # a rejected/malformed response must stay NON-terminal — mapping it to idle
-    # would manufacture a false DONE out of an engine error
+        return None, "get_state unanswered in 6s (engine busy or wedged; MAX_POLLS bounds this)"
     if reply.get("command") != "get_state" or reply.get("success") is not True \
             or not isinstance(reply.get("data"), dict):
-        return "RUNNING", f"get_state anomalous response (kept non-terminal): {clip(json.dumps(reply, ensure_ascii=False), 200)}"
-    data = reply["data"]
-    if data.get("isStreaming") or data.get("isCompacting"):
-        return "RUNNING", f"streaming, queued={data.get('queuedMessageCount', 0)}"
-    if data.get("queuedMessageCount"):
-        return "RUNNING", "idle but messages queued"
+        return None, ("get_state anomalous response (kept non-terminal): "
+                      f"{clip(json.dumps(reply, ensure_ascii=False), 200)}")
+    return reply["data"], ""
+
+
+def project_omp(sess: Session) -> tuple[str, str]:
+    """Returns (state, detail): state in RUNNING|IDLE|WAITING."""
+    data, why = omp_get_state(sess)
+    if data is None:
+        return "RUNNING", why
+    # the queue DEPTH is the index the steer log is listed by: `queued=6` alone was a black
+    # box (field 2026-08-28 — six rulings in flight, no way to see WHICH).
+    try:
+        sess.queued = int(data.get("queuedMessageCount") or 0)
+    except (TypeError, ValueError):
+        sess.queued = 0
+    active, why = omp_stream_flags(data)
+    if active is None:
+        # same road as an unanswered get_state: a gauge we cannot read keeps the session
+        # NON-terminal. It must never fall through to the idle branch below.
+        return "RUNNING", f"{why} — kept non-terminal, queued={sess.queued}"
+    if active:
+        return "RUNNING", f"streaming, queued={sess.queued}"
+    if sess.queued:
+        # the DEPTH goes in the detail on this half too: `queued=N` is what the steer-log
+        # listing below is indexed by, and an operator reading only the typed line otherwise
+        # saw "messages queued" with no idea how many
+        return "RUNNING", f"idle but queued={sess.queued}"
     # idle: is there an unanswered real question? The frame type, the connect-time UI chrome
     # to ignore and the frames that clear a pending ask all come from the structuredAsk cell —
     # this projector IS omp's structuredAsk route, so it must not carry its own literals.
@@ -892,6 +1028,78 @@ def project_codex(sess: Session) -> tuple[str, str]:
     if err or status not in ("completed",):
         return "ERROR", clip(f"turn status={status} error={err}")
     return "IDLE", clip(answer_text) or "turn completed"
+
+
+# ── live turn state: the ONE fact an ASAP steer routes on ────────────────────────────
+# Every engine answers "is a turn running RIGHT NOW" from its own protocol truth — never from
+# a clock, and never from an operator flag. UNDECIDABLE reads as "no turn": the next-turn
+# route always DELIVERS (it is the engine's own queue / next-turn path), while a mid-turn
+# frame aimed at an idle engine can be rejected and lose the message. 宁钝勿敏, the same rule
+# the stream probe follows: a steer that lands one boundary late beats a steer that vanishes.
+def omp_turn_active(sess: Session) -> tuple[bool | None, str]:
+    data, why = omp_get_state(sess)
+    if data is None:
+        return None, why
+    return omp_stream_flags(data)
+
+
+def claude_turn_active(sess: Session) -> tuple[bool | None, str]:
+    """claude's stream IS its turn signal: a `result` frame ends the turn — unless the harness
+    still owes background tasks, in which case it auto-continues and the turn is still the
+    engine's. Nothing since the last delivery = the engine owns a turn."""
+    try:
+        sent = int(open(sess.sent_offset, encoding="utf-8").read().strip())
+    except (OSError, ValueError):
+        sent = 0
+    frames = complete_frames_from(sess, sent)
+    if not frames or frames[-1].get("type") != "result":
+        return True, ""
+    return bool(claude_pending_background_tasks(frames)), ""
+
+
+def codex_turn_active(sess: Session) -> tuple[bool | None, str]:
+    frames, why = codex_frames(sess)
+    if frames is None:
+        return None, why
+    return codex_turn_from(frames, sess.meta.get("thread")) is not None, ""
+
+
+TURN_ACTIVE = {"omp": omp_turn_active, "claude": claude_turn_active,
+               "codex": codex_turn_active}
+
+
+# the reason words of a DELIVERED-NEXT-TURN verdict, in the order the selector can produce them
+STEER_NEXT_TURN_REASONS = ("capability", "undecidable")
+
+
+def steer_delivery(engine: str, sess: Session) -> tuple[str, str, str]:
+    """(wire route, reason, detail) for ONE steer, decided by the engine's live turn state.
+
+    THE ASAP semantic, in one place: the mid-turn half while a turn runs on an engine that has
+    one, the next-turn half otherwise.
+
+    `reason` is EMPTY whenever the chosen route IS as soon as the engine allows — mid-turn on a
+    running turn, or the next-turn route on an idle engine, which opens that turn at once. It is
+    non-empty exactly when a RUNNING turn could not be reached, and then it is the reason word
+    of the typed DELIVERED-NEXT-TURN exit:
+      capability  — the engine declares no mid-turn route at all (its steer cell is DEGRADED)
+      undecidable — the live turn state could not be JUDGED, so 宁钝勿敏 takes the route that
+                    always lands (a steer one boundary late beats a steer that vanishes)
+    `detail` names the missing capability or the measurement that failed. A typed code plus a
+    bounded fact, never a paragraph: the prose note this used to print was routinely lost by
+    wrappers that keep only the exit code (owner ruling, R2)."""
+    cell = capability(engine, "steer")
+    mid, nxt = steer_halves(cell)
+    active, why = TURN_ACTIVE[engine](sess)
+    if active is None:
+        # NAME the broken gauge: "undecidable" without the measurement that failed is how a
+        # gauge fault gets read back as a known-idle engine (cold review R1).
+        return nxt, "undecidable", why
+    if not active:
+        return nxt, "", ""
+    if cell["state"] == DEGRADED:
+        return nxt, "capability", f"{engine} declares no mid-turn steer route"
+    return mid, "", ""
 
 
 def marker_verdict(store) -> tuple[str, str, dict] | None:
@@ -1244,6 +1452,296 @@ def stream_stalled(sess: Session, engine: str) -> tuple[bool, str]:
                   f"({len(descendants)} descendant(s))")
 
 
+# ── progress fingerprint: "streaming, and nothing is happening" ──────────────────────
+# STALLED-STREAM answers "the stream stopped". THIS answers the other field failure, which
+# the stream probe is blind to by construction: the engine keeps emitting frames — thinking,
+# tool calls, retries, re-reads — and the WORK stands still (field 2026-08-28, downstream
+# seat: 2.5h of healthy streaming, zero commits, zero deliverable bytes, nobody called).
+#
+# The fingerprint is deliberately COARSE and made only of traces an operator would also
+# accept as progress: HEAD, the porcelain hash of the dirty tree, the newest mtime WITHIN
+# that dirty set, the newest mtime under the declared deliverable glob, and BLOCKED.md's
+# mtime. The dirty-set mtime is not redundant: porcelain reports WHICH files are dirty and
+# never what is in them, so half an hour of edits to one already-untracked file left the
+# hash bit-identical (caught by this batch's own paired-green fixture). A probe that cannot
+# be JUDGED (git missing, cwd not a repo, command error, a dirty set past the bounded scan)
+# reads as PROGRESS — the window restarts and this state never fires. 宁钝勿敏, the same rule
+# the stream probe follows: the honest fallback for a session nobody can judge is
+# WATCH-TIMEOUT, never a fabricated verdict. An ABSENT file is not a broken probe: absence is
+# a decided fact and participates in the fingerprint.
+PROGRESS_DIRTY_MAX = 500      # more dirty paths than this ⇒ UNJUDGEABLE, never a silent prefix
+PROGRESS_MINS_DEFAULT = 30
+
+
+def progress_window_mins() -> float:
+    """AGENT_WATCH_PROGRESS_MINS: minutes of frozen work-trace before STALLED-PROGRESS.
+    <=0 disables the probe entirely (no state, no timestamp, no verdict)."""
+    try:
+        return float(os.environ.get("AGENT_WATCH_PROGRESS_MINS",
+                                    str(PROGRESS_MINS_DEFAULT)))
+    except ValueError:
+        return float(PROGRESS_MINS_DEFAULT)
+
+
+def _stamp(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts))
+
+
+def _git_out(cwd: str, *argv: str) -> str | None:
+    """A bounded git read. None = UNJUDGEABLE (no git, not a repo, error, timeout), which
+    every caller must read as progress rather than as 'nothing changed'."""
+    try:
+        proc = subprocess.run(["git", "-C", cwd, *argv], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.decode("utf-8", "replace")
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _newest_mtime(paths) -> float:
+    newest = 0.0
+    for path in paths:
+        try:
+            newest = max(newest, os.path.getmtime(path))
+        except OSError:
+            continue          # vanished between listing and stat: bounded, not a gauge fault
+    return newest
+
+
+def _porcelain_paths(porcelain: str) -> tuple[list[str], bool]:
+    """(paths, overflowed) out of `status --porcelain -z`, repo-root relative. Each record is
+    `XY <path>\\0`; a rename/copy is followed by an EXTRA NUL-terminated ORIGIN path which
+    must be CONSUMED, never read as its own dirty entry — the destination is the live file.
+    `-z` is the only porcelain form that carries a path containing a space, a quote or a
+    newline without escaping it, so there is nothing to unquote here.
+
+    `overflowed` is the honest answer to a dirty set larger than the bounded scan. Silently
+    keeping the first PROGRESS_DIRTY_MAX paths published a mtime measured over a PREFIX as if
+    it covered the tree: with 501 dirty files, all the work happening in the 501st left the
+    fingerprint bit-identical and fired STALLED-PROGRESS on a session that was moving (cold
+    review R1 SB3, reproduced in verify R2). The scan stays bounded — the READING is refused."""
+    records = porcelain.split("\0")
+    paths, i = [], 0
+    while i < len(records):
+        entry = records[i]
+        i += 1
+        if len(entry) < 4:                      # "" (trailing NUL) or a truncated record
+            continue
+        status, path = entry[:2], entry[3:]
+        if "R" in status or "C" in status:
+            i += 1                              # the origin path rides its own record
+        if path:
+            paths.append(path)
+            if len(paths) > PROGRESS_DIRTY_MAX:
+                return paths, True
+    return paths, False
+
+
+def progress_fingerprint(sess: Session) -> tuple[str | None, str]:
+    """(work-trace fingerprint, "") — or (None, why) when ANY probe could not be judged."""
+    cwd = sess.meta.get("cwd", "")
+    if not cwd or not os.path.isdir(cwd):
+        return None, f"session cwd is not a directory ({cwd or 'unset'})"
+    head = _git_out(cwd, "rev-parse", "HEAD")
+    # `--untracked-files=all` is not a nicety. The DEFAULT folds a whole untracked directory
+    # into one `?? dir/` line, so continuous edits to `dir/file` left both the porcelain set
+    # and the listed directory's mtime bit-identical: real uncommitted work read as frozen and
+    # fired a false STALLED-PROGRESS (cold review R1). Expanding to every untracked FILE is
+    # what makes the dirty set track the work instead of its container.
+    porcelain = _git_out(cwd, "status", "--porcelain", "--untracked-files=all", "-z")
+    top = _git_out(cwd, "rev-parse", "--show-toplevel")
+    if head is None or porcelain is None or top is None:
+        return None, "no git, cwd not a repo, or the command failed"
+    # porcelain paths are repo-root relative, so they are resolved against the top level the
+    # same command tree reported — never against the session cwd, which may be a subdir
+    root = top.strip() or cwd
+    names, overflowed = _porcelain_paths(porcelain)
+    if overflowed:
+        return None, (f"the dirty set exceeds the bounded scan (>{PROGRESS_DIRTY_MAX} paths), "
+                      "so the file-mtime half of the fingerprint would cover a prefix and "
+                      "call work outside it frozen")
+    dirty_paths = [os.path.join(root, path) for path in names]
+    parts = [f"head={_digest(head)}", f"dirty={_digest(porcelain)}",
+             f"dirtymtime={_newest_mtime(dirty_paths):.3f}"]
+    pattern = sess.meta.get("deliverable", "")
+    if pattern:
+        # same resolution rule as the freshness gate: a relative glob is the SESSION cwd's
+        if not os.path.isabs(pattern):
+            pattern = os.path.join(cwd, pattern)
+        parts.append(f"deliv={_newest_mtime(globmod.glob(pattern)):.3f}")
+    try:
+        blocked = f"{os.path.getmtime(os.path.join(cwd, 'BLOCKED.md')):.3f}"
+    except OSError:
+        blocked = "-"
+    parts.append(f"blocked={blocked}")
+    return "|".join(parts), ""
+
+
+def progress_state(run_dir: str, name: str) -> dict:
+    """The persisted window: {round, fp, since}. Unreadable/garbage reads as EMPTY, which
+    restarts the window — never as a frozen one."""
+    try:
+        with open(os.path.join(run_dir, f"{name}.duplex.progress"), encoding="utf-8") as fh:
+            record = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def _progress_write(sess: Session, record: dict) -> bool:
+    tmp = f"{sess.progress}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(record, fh)
+        os.replace(tmp, sess.progress)
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def progress_verdict(sess: Session) -> tuple[bool, str, str, str]:
+    """(frozen, why, observed_change_at, undecidable) — FOUR facts, deliberately not folded
+    into one (cold review R1).
+
+    `frozen` is the STALLED-PROGRESS verdict. `observed_change_at` is the last observation at
+    which the trace was JUDGED to move (or at which this round / this window opened); a probe
+    nobody could judge never becomes one, because a gauge failing at 14:03 is not the work
+    moving at 14:03. `undecidable` is the sentence naming that state, empty when the probe
+    answered — an unjudgeable read only FORBIDS the verdict, it never manufactures a progress
+    timestamp or a `changed` conclusion. A new round restarts the window: new instructions
+    deserve their own clock. State we cannot persist yields no verdict at all — a window
+    cannot accumulate in memory across the one-shot classifies that make it up."""
+    mins = progress_window_mins()
+    if mins <= 0:
+        return False, "", "", ""
+    now = time.time()
+    rnd = sess.meta.get("round", "0")
+    fp, fp_why = progress_fingerprint(sess)
+    prev = progress_state(sess.run, sess.name)
+    try:
+        moved = float(prev["moved"])
+    except (KeyError, TypeError, ValueError):
+        moved = 0.0
+    if fp is None:
+        # unjudgeable probe = progress. Rewriting the WINDOW here (not just skipping) means a
+        # permanently broken probe can never be followed by one lucky read that fires. The
+        # fingerprint is CARRIED OVER, so the next good read of an unchanged tree is not
+        # mistaken for movement either, and `moved` is left exactly where it was.
+        _progress_write(sess, {"round": rnd, "fp": prev.get("fp", ""), "since": now,
+                               "moved": moved, "judgeable": False})
+        return False, "", (_stamp(moved) if moved else ""), (
+            f"work-trace probe unjudgeable ({fp_why}) — this read proves nothing about "
+            "progress and may never fire STALLED-PROGRESS")
+    if prev.get("fp") != fp or prev.get("round") != rnd or not prev.get("since"):
+        # A baseline rebuilt on the FIRST judgeable read after a broken gauge is NOT a
+        # movement: the window it replaces was opened by a read nobody could judge, so the
+        # difference between the two fingerprints is unattributed — crediting it moved the
+        # progress clock to the recovery instant and made `None → SAME → SAME` report
+        # `progress=changed` (verify R2 NB3.3). Rebuild the window, carry `moved` untouched,
+        # and let the next read that measures a REAL change move it.
+        recovered = prev.get("judgeable") is False
+        moved = moved if recovered else now
+        if not _progress_write(sess, {"round": rnd, "fp": fp, "since": now,
+                                      "moved": moved, "judgeable": True}):
+            return False, "", "", ""
+        return False, "", (_stamp(moved) if moved else ""), ""
+    if not prev.get("judgeable"):
+        # the window was last rewritten by a BROKEN read; this one measured the same trace, so
+        # the record becomes judged again without inventing a movement that never happened
+        _progress_write(sess, {**prev, "judgeable": True})
+    try:
+        since = float(prev["since"])
+    except (TypeError, ValueError):
+        return False, "", "", ""
+    # `moved` is 0 exactly when no JUDGED movement was ever recorded (the window was opened or
+    # rebuilt by an unjudgeable read). Publish NO timestamp there: `since` is the window's own
+    # opening moment — the gauge's clock, not the work's.
+    at = _stamp(moved) if moved else ""
+    frozen_for = now - since
+    if frozen_for < mins * 60:
+        return False, "", at, ""
+    return True, (f"still streaming, but nothing moved for {int(frozen_for // 60)}min: HEAD, "
+                  f"the dirty-tree hash and its file mtimes, the deliverable mtime and "
+                  f"BLOCKED.md are all unchanged since {_stamp(since)}"), at, ""
+
+
+# ── steer delivery log: what `queued=N` is actually holding ──────────────────────────
+# duplexctl is the single writer on this lane, so it is the only thing that CAN keep this
+# record: one bounded line per delivered steer. The engine reports a queue DEPTH and nothing
+# more (field 2026-08-28: `queued=6` with no way to see whether a superseded ruling was about
+# to execute), so the depth indexes this log's tail.
+STEER_LOG_HEAD_BYTES = 80
+
+
+def steer_log_append(sess: Session, mode: str, text: str) -> None:
+    """Best effort, exactly like the offset journal: a failed log write must never fail the
+    steer. Never the body — the full frame is already in the events stream."""
+    head = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    head = head.encode("utf-8")[:STEER_LOG_HEAD_BYTES].decode("utf-8", "ignore")
+    try:
+        with open(sess.steer_log, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.time(), "mode": mode, "head": head},
+                                ensure_ascii=False, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
+def queue_routes(engine: str) -> tuple[str, ...]:
+    """The wire routes whose delivery really ENTERS the engine's queue. Declared by the steer
+    cell, because only the cell knows WHICH half is a queue at all: omp's next-turn half is
+    `follow_up`, an engine-held queue, while codex's is `turn/start`, which opens a turn
+    immediately and holds nothing."""
+    return tuple(capability(engine, "steer").get("queue_routes") or ())
+
+
+def print_steer_queue(sess: Session, engine: str) -> None:
+    """List what the engine still holds, newest last. ONLY a live depth opens this listing:
+    an engine with no queue surface reports 0 and prints nothing at all.
+
+    The depth indexes the QUEUED deliveries alone. steer-log records EVERY delivery on the
+    lane — mid-turn steers and interrupts included — and neither of those ever entered the
+    queue, so tailing the raw log listed a mid-turn steer as a queued item and pushed the
+    real one out of the window (cold review R1). The filter is the declared queue route, not
+    the verb: only the route the selector actually used can say where the message went."""
+    depth = sess.queued
+    if depth <= 0:
+        return
+    wanted = {f"steer:{route}" for route in queue_routes(engine)}
+    try:
+        with open(sess.steer_log, encoding="utf-8", errors="replace") as fh:
+            raw = [ln for ln in fh.read().splitlines() if ln.strip()]
+    except OSError:
+        raw = []
+    queued = []
+    for line in raw:
+        try:
+            rec = json.loads(line)
+            when = _stamp(float(rec.get("ts") or 0))
+        except (ValueError, TypeError):
+            continue
+        if rec.get("mode") in wanted:
+            queued.append((when, rec))
+    if not queued:
+        print(f"queued={depth}: no delivery record on this lane (log unreadable, no QUEUED "
+              "delivery recorded, or the queue predates it) — read the events stream")
+        return
+    if len(queued) < depth:
+        print(f"queued={depth}: only {len(queued)} queued delivery recorded on this lane — "
+              "the rest predates the record; read the events stream for those")
+    for when, rec in queued[-depth:]:
+        print(f"queued: {when} {rec.get('mode', '?')} {rec.get('head', '')}")
+
+
 def _idle_marks_path(sess: Session) -> str:
     return os.path.join(sess.run, f"{sess.name}.duplex.idle-marks")
 
@@ -1445,7 +1943,20 @@ def classify(sess: Session) -> int:
                   "work from the checkout/commits first, then agentctl stop "
                   "(AGENT_WATCH_STALL_MINS tunes the window; 0 disables)")
             return EXIT_STALLED_STREAM
+        frozen, why, at, undecided = progress_verdict(sess)
+        if frozen:
+            print(f"STALLED-PROGRESS: {why} — read the events tail FIRST, then steer a "
+                  "concrete next step or interrupt the turn; never read this as DONE "
+                  "(AGENT_WATCH_PROGRESS_MINS tunes the window; 0 disables)")
+            print_steer_queue(sess, engine)
+            return EXIT_STALLED_PROGRESS
         print(f"RUNNING: {detail}")
+        # the two are independent: a broken gauge publishes the ADMISSION, never a timestamp
+        if undecided:
+            print(f"progress=unknown: {undecided}")
+        if at:
+            print(f"last_progress_at={at}")
+        print_steer_queue(sess, engine)
         return EXIT_RUNNING
     ok, hit = deliverable_fresh(sess)
     receipt = None if ok else delivered_receipt(store)
@@ -1493,22 +2004,29 @@ def cmd_send(args: argparse.Namespace) -> int:
 # Registered in ROUTES under the SAME route id the capability table declares, and each
 # handler sends exactly that id as its JSON-RPC method — the declared route IS the wire
 # truth, not a label sitting beside it.
-def codex_route_start(sess: Session, ctx: dict):
-    """`turn/start` — goal delivery (`prompt`) and the queuedSteer capability. codex has no
-    queue, so as a STEER this route refuses while a turn is active, with the capability
-    table's own refusal text."""
-    if ctx["verb"] == "steer" and ctx["active"] is not None:
-        die(capability("codex", "queuedSteer")["refusal"])
-    return codex_request(sess, ctx["route"],
-                         {"threadId": ctx["thread"], "input": codex_text_input(ctx["text"])},
-                         on_ready=ctx["on_ready"])
+def codex_start_turn(sess: Session, thread: str, text: str, method: str = "turn/start",
+                     on_ready=None):
+    """One fresh turn on our thread. Goal delivery (`prompt`) and the next-turn half of a
+    steer are the SAME wire operation, so they are the same call — `method` comes from the
+    capability cell when a steer makes it, and is the literal lane default for `prompt`."""
+    return codex_request(sess, method,
+                         {"threadId": thread, "input": codex_text_input(text)},
+                         on_ready=on_ready)
 
 
 def codex_route_steer(sess: Session, ctx: dict):
-    """`turn/steer` — native mid-turn steering, guarded by the expected turn id."""
+    """`turn/steer|turn/start` — ASAP delivery. WHICH half goes out was decided by the live
+    turn state (ctx["wire"], from steer_delivery); the mid-turn half is guarded by the
+    expected turn id, so a steer can never land in a turn that rotated under it."""
+    mid, nxt = steer_halves(capability("codex", "steer"))
+    if ctx["wire"] != mid:
+        return codex_start_turn(sess, ctx["thread"], ctx["text"], nxt, ctx["on_ready"])
     if ctx["active"] is None:
-        die("no active turn to steer — default steer starts the next turn instead")
-    return codex_request(sess, ctx["route"],
+        # the turn ended between the state read and this frame: refuse rather than send a
+        # mid-turn frame with no turn to name — re-running the steer opens the next turn
+        die("the turn ended between the live-state read and delivery — nothing was sent; "
+            "re-run agentctl steer (it will open the next turn)")
+    return codex_request(sess, mid,
                          {"threadId": ctx["thread"], "expectedTurnId": ctx["active"],
                           "input": codex_text_input(ctx["text"])},
                          on_ready=ctx["on_ready"])
@@ -1518,14 +2036,30 @@ def codex_route_replace(sess: Session, ctx: dict):
     """`turn/interrupt+turn/start` — the two methods in the route id are the two frames this
     branch really sends, in that order."""
     interrupt, start = ctx["route"].split("+")
-    thread, active = ctx["thread"], ctx["active"]
+    thread, active, why = ctx["thread"], ctx["active"], ctx["active_why"]
+    if why:
+        # `why` is a BROKEN GAUGE, not an idle engine — and not a licence to improvise a
+        # frame either. codex `turn/interrupt` REQUIRES `turnId` (TurnInterruptParams,
+        # app-server v0.144.5/v0.147.0), so with the id unreadable there is NO interrupt
+        # frame this branch may legally send. R3 sent a threadId-only one on the theory
+        # that a thread holds at most one turn; the real engine rejects it as malformed,
+        # and only the fixture's auto-fill made that look accepted (verify R4). Refuse
+        # BEFORE the wire: an engine round trip that can only be refused is not evidence,
+        # and a refusal the operator reads as an engine verdict is worse than no frame.
+        die(f"cannot {interrupt}: it needs the running turn's id and the events gauge "
+            f"cannot supply it ({why}) — nothing was sent, the attempt did not rotate. "
+            f"Read {sess.events} to see the damage, then either repair/clear that stream "
+            f"and re-run --interrupt, or agentctl stop {sess.name} and restart with "
+            f"resume args.", EXIT_FAILED)
     if active is not None:
         pre_offset = events_size(sess)
-        intr = codex_request(sess, interrupt, {"threadId": thread, "turnId": active})
+        intr = codex_request(sess, interrupt,
+                             {"threadId": thread, "turnId": active})
         if intr is None or "error" in intr:
             die(f"{interrupt} not accepted: {clip(json.dumps(intr, ensure_ascii=False), 200)}", EXIT_FAILED)
         # only OUR turn's terminal frame opens the replacement; a stray
-        # completion or a timeout must refuse (review S2 2026-07-19)
+        # completion or a timeout must refuse (review S2 2026-07-19). The id is always
+        # readable on this path — an unreadable gauge was refused above.
         done = wait_for(
             sess, pre_offset,
             lambda f: f.get("method") == "turn/completed"
@@ -1536,7 +2070,7 @@ def codex_route_replace(sess: Session, ctx: dict):
             die("interrupted turn did not reach a terminal state in 15s — NOT starting "
                 "the replacement; check status, then retry or stop+resume", EXIT_FAILED)
     # THE codex replace commit point: the engine has accepted the interrupt and the
-    # interrupted turn is terminal (or there was nothing to interrupt), so the replacement
+    # interrupted turn is terminal (or the turn state was READ as idle), so the replacement
     # really is about to be written — and the new attempt is durable before that frame goes
     # out. A refusal above returns without rotating anything.
     ctx["commit"]("replace")
@@ -1561,25 +2095,39 @@ def send_frame(args: argparse.Namespace) -> int:
     if os.path.exists(sess.intent):
         die("a previous frame write died mid-stream (write-intent marker present) — the "
             "engine's input stream is tainted: agentctl stop, then restart with resume args", EXIT_FAILED)
-    if args.verb in ("prompt", "steer", "steer-now", "replace"):
+    if args.verb in ("prompt", "steer", "interrupt"):
         check_review_budget(sess, text)
-    # ── capability gate ───────────────────────────────────────────────────────────────
-    # The ONE table decides what this verb may do on this engine. No per-engine special case
+    # ── capability gate + route selection ─────────────────────────────────────────────
+    # The ONE table decides what this verb may do on this engine, and — for a steer — WHICH
+    # of its routes the engine's LIVE turn state allows right now. No per-engine special case
     # lives here, and the sentence a rejected operator reads is the sentence
     # `agentctl capabilities` publishes — they cannot drift apart.
     cap_name = VERB_CAPABILITY.get(args.verb)
+    wire = ""
+    # a steer that could NOT reach a running turn is its own typed verdict, published only
+    # after the frame really landed (see delivered_rc below) — never as a pre-delivery guess
+    nxt_reason = nxt_detail = ""
     if cap_name:
         cap_entry = capability(engine, cap_name)
         if cap_entry["state"] == UNSUPPORTED:
             # degrading an unsupported verb into a lesser one would silently keep the doomed
             # turn running — refuse and route the operator to the honest path instead
             die(cap_entry["refusal"])
-        if cap_entry["fallback"]:
-            # a DEGRADED capability honestly served by another verb: name the degradation out
-            # loud, then route to the verb that actually exists
-            print(f"note: {cap_entry['note']}")
-            args.verb = cap_entry["fallback"]
-            cap_name = VERB_CAPABILITY[args.verb]
+        if args.verb == "steer":
+            wire, nxt_reason, nxt_detail = steer_delivery(engine, sess)
+        else:
+            wire = cap_entry["route"]
+
+    def delivered_rc() -> int:
+        """The typed verdict of a frame that DID land. A steer stopped at the turn boundary
+        gets its own exit code: the operator's next move differs (wait out the boundary vs.
+        assume the running turn already saw it), and a stdout note carrying that difference was
+        routinely swallowed by wrappers that keep only the exit code (owner ruling, R2). Every
+        other delivered frame — prompt, interrupt, a mid-turn steer — is plain DONE."""
+        if not nxt_reason:
+            return EXIT_DONE
+        print(f"DELIVERED-NEXT-TURN: reason={nxt_reason} {nxt_detail}".rstrip())
+        return EXIT_DELIVERED_NEXT_TURN
     # Identity commit points. The record must be durable BEFORE the frame it authorises
     # leaves — but no earlier than the point where that frame is actually going to be sent:
     # a codex --replace whose interrupt handshake times out is REFUSED, and rotating the
@@ -1587,7 +2135,7 @@ def send_frame(args: argparse.Namespace) -> int:
     # over-rejecting its own later evidence and invalidating an armed watcher (cold review
     # R1). So `prompt` commits here, and `replace` commits at its engine's real
     # replacement-frame commit point (immediately below for a single-frame replace, after the
-    # interrupt handshake for codex). A queued/--now steer keeps the whole triple.
+    # interrupt handshake for codex). A steer keeps the whole triple.
     def commit_identity(kind: str) -> None:
         store = identity.IdentityStore(args.run_dir, args.session)
         try:
@@ -1600,7 +2148,7 @@ def send_frame(args: argparse.Namespace) -> int:
 
     if args.verb == "prompt":
         commit_identity("start")
-    elif args.verb == "replace" and engine != "codex":
+    elif args.verb == "interrupt" and engine != "codex":
         # omp's abort_and_prompt IS the replacement frame: there is no separate handshake to
         # wait for, so the commit point is right here, before write_frame.
         commit_identity("replace")
@@ -1612,7 +2160,7 @@ def send_frame(args: argparse.Namespace) -> int:
         # first byte: a steer whose delivery cannot start must NOT rotate the
         # deliverable epoch or move the sent-offset (stale-gate + phantom
         # ENGINE-SILENT otherwise, review S2 2026-07-19)
-        if args.verb in ("prompt", "steer", "steer-now", "replace"):
+        if args.verb in ("prompt", "steer", "interrupt"):
             # AUTHORITATIVE budget/lease check on FRESH meta, under the writer flock —
             # the pre-flight check outside the lock is only a fast-fail; two concurrent
             # senders could both pass it and overrun the hard cap (review S1 2026-07-19)
@@ -1666,21 +2214,35 @@ def send_frame(args: argparse.Namespace) -> int:
                                          "offset": offset_box["v"]}) + "\n")
             except OSError:
                 pass
+            # steer delivery log: the queue's contents, since the engine only reports a
+            # depth. Same commit point as the offset journal (delivery is starting) and the
+            # same best-effort rule. `prompt` is goal delivery, not a steer, and is not logged.
+            if args.verb in ("steer", "interrupt"):
+                steer_log_append(sess, f"{args.verb}:{wire}", text)
 
     if engine == "codex":
         thread = sess.meta.get("thread") or die("no threadId in meta — handshake incomplete")
         if not cap_name and args.verb != "prompt":
             die(f"unsupported codex verb: {args.verb}")
-        # `prompt` is lane plumbing and rides the same turn/start route; every CAPABILITY
-        # verb resolves its route through the one table.
-        route = route_of(engine, args.verb) if cap_name else "turn/start"
-        handler = ROUTES[engine].get(route)
-        if handler is None:
-            die(f"codex declares route '{route}' with no executable branch — the capability "
-                "contract and the routing are out of sync")
-        reply = handler(sess, {"thread": thread, "text": text, "verb": args.verb,
-                               "active": codex_active_turn(sess), "route": route,
-                               "on_ready": commit_round_state, "commit": commit_identity})
+        if args.verb == "prompt":
+            # goal delivery is lane PLUMBING: it opens a turn directly instead of borrowing a
+            # capability route, because the only cell that names turn/start owns it as one
+            # half of the steer alternation.
+            reply = codex_start_turn(sess, thread, text, on_ready=commit_round_state)
+        else:
+            # the capability's whole route id (the alternation for a steer); `wire` below is
+            # the half the live turn state already selected
+            route = route_of(engine, args.verb)
+            handler = ROUTES[engine].get(route)
+            if handler is None:
+                die(f"codex declares route '{route}' with no executable branch — the capability "
+                    "contract and the routing are out of sync")
+            active, active_why = codex_active_turn(sess)
+            reply = handler(sess, {"thread": thread, "text": text, "verb": args.verb,
+                                   "active": active, "active_why": active_why,
+                                   "route": route, "wire": wire,
+                                   "on_ready": commit_round_state,
+                                   "commit": commit_identity})
         if reply is None:
             print("WARN: no JSON-RPC response in 20s — frame delivered, engine may be busy; verify with agentctl status")
             return 3
@@ -1690,10 +2252,11 @@ def send_frame(args: argparse.Namespace) -> int:
         print(f"OK: {args.verb} accepted by engine (correlated JSON-RPC response)")
         if args.deliverable:
             _deliverable_moved(args.run_dir, args.session, args.deliverable)
-        return 0
+        return delivered_rc()
 
     req_id = f"ctl-{uuid.uuid4().hex[:12]}"
-    write_frame(sess, build_frame(engine, args.verb, text, req_id), on_ready=commit_round_state)
+    write_frame(sess, build_frame(engine, args.verb, text, req_id, wire),
+                on_ready=commit_round_state)
     offset = offset_box.get("v", events_size(sess))
     if engine == "omp":
         reply = wait_for(
@@ -1709,11 +2272,11 @@ def send_frame(args: argparse.Namespace) -> int:
         print(f"OK: {args.verb} accepted by engine (correlated response)")
         if args.deliverable:
             _deliverable_moved(args.run_dir, args.session, args.deliverable)
-        return 0
+        return delivered_rc()
     print(f"OK: {args.verb} delivered to engine stdin (claude queues it natively; no per-frame ack exists)")
     if args.deliverable:
         _deliverable_moved(args.run_dir, args.session, args.deliverable)
-    return 0
+    return delivered_rc()
 
 
 def _deliverable_moved(run_dir: str, session: str, glob_: str) -> None:
@@ -1930,9 +2493,12 @@ PROVIDERS: dict[str, dict] = {
         "sandbox": {},
         "projector": project_omp,
         "capabilities": {
-            "queuedSteer": _cap(SUPPORTED, route="follow_up", impl=build_frame),
-            "midTurnSteer": _cap(SUPPORTED, route="steer", impl=build_frame),
-            "replaceTurn": _cap(SUPPORTED, route="abort_and_prompt", impl=build_frame),
+            # both halves are native: `steer` reaches INSIDE the running turn, `follow_up`
+            # opens the next one when the session is idle — and `follow_up` is the half that
+            # lands in the engine's QUEUE, which is what the depth-indexed listing counts
+            "steer": _cap(SUPPORTED, route="steer|follow_up",
+                          queue_routes=("follow_up",), impl=build_frame),
+            "interruptTurn": _cap(SUPPORTED, route="abort_and_prompt", impl=build_frame),
             # engine questions arrive as extension_ui_request frames and project as
             # WAITING-INPUT; the connect-time setWidget push is UI chrome, not a question
             "structuredAsk": _cap(
@@ -1970,17 +2536,19 @@ PROVIDERS: dict[str, dict] = {
         "sandbox": {},
         "projector": project_claude,
         "capabilities": {
-            # native queue: lands at the next turn boundary. The protocol has no per-frame
-            # ack, so `send` reports delivery, never acceptance.
-            "queuedSteer": _cap(SUPPORTED, route="user", impl=build_frame),
-            # THE degradation this contract exists to stop advertising as native steering.
-            "midTurnSteer": _cap(
-                DEGRADED, route="user", impl=build_frame,
-                note="claude has no public interrupt frame — `--now` is delivered as a "
-                     "QUEUED steer that lands at the next turn boundary, NOT native "
-                     "mid-turn steering",
-                fallback="steer"),
-            "replaceTurn": _cap(
+            # ONE frame, and the honest consequence of that: idle → it opens the next turn at
+            # once (which IS as soon as possible, exit 0), mid-turn → there is no public
+            # interrupt frame, so it lands at the turn BOUNDARY and the verb exits
+            # DELIVERED-NEXT-TURN reason=capability. THE degradation this contract exists to
+            # stop advertising as native steering. The protocol has no per-frame ack, so `send`
+            # reports delivery, never acceptance.
+            "steer": _cap(
+                DEGRADED, route="user", queue_routes=("user",), impl=build_frame,
+                note="claude has no public mid-turn frame: a steer sent while a turn is "
+                     "RUNNING is a QUEUED message landing at the boundary, NOT inside the "
+                     "running turn — typed exit DELIVERED-NEXT-TURN reason=capability "
+                     "(idle: it opens the next turn immediately, exit 0)"),
+            "interruptTurn": _cap(
                 UNSUPPORTED,
                 refusal="claude has no interrupt/replace frame — `agentctl stop` the "
                         "session, then restart with `--resume <session_id>` (engine args) "
@@ -2018,19 +2586,15 @@ PROVIDERS: dict[str, dict] = {
         "sandbox": CODEX_SANDBOX,
         "projector": project_codex,
         "capabilities": {
-            # a route that EXISTS but refuses under a named condition is degraded, not
-            # supported: the refusal below is the string the busy-turn branch prints.
-            "queuedSteer": _cap(
-                DEGRADED, route="turn/start", impl=None,
-                note="codex has no queue: a default steer starts the NEXT turn when idle "
-                     "and is REFUSED while a turn is active",
-                refusal="codex has no queue — a turn is ACTIVE: use --now (native mid-turn "
-                        "turn/steer) or wait for DONE, then steer the next turn"),
-            "midTurnSteer": _cap(SUPPORTED, route="turn/steer", impl=codex_route_steer),
+            # both halves are native: turn/steer reaches inside the running turn (guarded by
+            # its id), turn/start opens the next one. codex has NO queue, and with the ASAP
+            # contract it no longer needs one — a steer never waits for a boundary here.
+            "steer": _cap(SUPPORTED, route="turn/steer|turn/start",
+                          impl=codex_route_steer),
             # the interrupted turn must reach a terminal frame before the replacement
             # starts; an interrupt that is not accepted refuses instead of replacing
-            "replaceTurn": _cap(SUPPORTED, route="turn/interrupt+turn/start",
-                                impl=codex_route_replace),
+            "interruptTurn": _cap(SUPPORTED, route="turn/interrupt+turn/start",
+                                  impl=codex_route_replace),
             # requestApproval / requestUserInput / elicitation project as WAITING-INPUT;
             # approvalPolicy=never should keep them from appearing at all
             "structuredAsk": _cap(
@@ -2058,10 +2622,6 @@ PROVIDERS: dict[str, dict] = {
         },
     },
 }
-# `turn/start` is shared by codex's queuedSteer route and by goal delivery (`prompt`), so its
-# branch is attached here rather than inside the cell that names it.
-PROVIDERS["codex"]["capabilities"]["queuedSteer"]["impl"] = codex_route_start
-
 # ── everything below is DERIVED from the table above ─────────────────────────
 CAPABILITIES = {name: rec["capabilities"] for name, rec in PROVIDERS.items()}
 # route id → the branch that really performs it. Send routes (frame builder / JSON-RPC
@@ -2221,7 +2781,8 @@ def cmd_providers(args: argparse.Namespace) -> int:
 
 
 STATUS_TIMEOUT_DEFAULT = 30
-SEND_TIMEOUT_DEFAULT = 40   # > the longest legitimate hold: 5s fifo-open + 30s write deadline + slack
+SEND_TIMEOUT_DEFAULT = 50   # > the longest legitimate hold: a 6s live turn-state probe (omp
+                            # get_state) + 5s fifo-open + 30s write deadline + slack
 TIMEOUT_MAX = 3600          # signal.alarm() takes a C int — a knob must never crash it, nor disable it
 
 
@@ -2378,7 +2939,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
 # published vocabulary does not have
 SUPERVISOR_EXITS = {EXIT_DONE, EXIT_FAILED, EXIT_WAITING_INPUT, EXIT_STALLED_EXTERNAL,
                     EXIT_IDLE_NO_DELIVERABLE, EXIT_WATCH_TIMEOUT, EXIT_ENGINE_SILENT,
-                    EXIT_STALLED_STREAM}
+                    EXIT_STALLED_STREAM, EXIT_STALLED_PROGRESS}
 PROCEED_TO_ARM = 13                             # arm-mode only, never leaves the waiter
 # A lease older than this is a wedged supervisor, not a live one. The window is derived, never
 # a bare constant: the supervisor renews the lease BEFORE it classifies, and one classify may
@@ -3314,6 +3875,11 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
     idle = silent = tmo = 0
     i = 1
     rnd = _session_round(run, name)   # set before any conclude path (MAX=0 corner)
+    # The work-trace window as the FIRST sensing read left it — the only thing that lets a
+    # WATCH-TIMEOUT say whether the budget ran out on a working session or a frozen one. It is
+    # captured after that read, not at arm time: before the first classify there is no window
+    # at all, and comparing "absent" to "present" called every session CHANGED.
+    armed_progress = None
     while i <= maxp:
         if args.mode == "daemon":
             # renew liveness BEFORE sensing, and let the renewal double as the identity
@@ -3330,6 +3896,8 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
         # if a steer opened the next round in between.
         rnd = _session_round(run, name)
         rc, msg = _ctl(run, "classify", name)
+        if armed_progress is None:
+            armed_progress = progress_state(run, name).get("moved")
         if rc == EXIT_RUNNING:
             silent = silent + 1 if "no output since last steer" in msg else 0
             if silent >= silent_max:
@@ -3358,8 +3926,20 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
             print(f"[{name}] heartbeat iter {i} {_clock()} — {msg}")
         i += 1
         _sleep(poll)
+    record = progress_state(run, name)
+    moved = record.get("moved")
+    if not record.get("judgeable") or not moved:
+        # the probe is disabled (window <=0), never got to persist a window, its LAST read
+        # could not be judged, or NO judged movement was ever recorded (`moved` is 0/absent
+        # exactly when the window was opened or rebuilt by an unjudgeable read, so the blind
+        # stretch is unattributed): say UNKNOWN rather than claim a measurement nobody made.
+        # An unjudgeable gauge is not evidence of movement and not evidence of stillness.
+        word = "unknown"
+    else:
+        word = "changed" if moved != armed_progress else "unchanged"
     _sense_conclude(args, rnd, EXIT_WATCH_TIMEOUT,
-                    "WATCH TIMEOUT — engine still active; re-run watch or investigate")
+                    "WATCH TIMEOUT — engine still active; re-run watch or investigate "
+                    f"progress={word}")
     return 0
 
 def _install_supervisor_traps(run_dir: str, name: str) -> None:
@@ -3411,7 +3991,8 @@ def _read_stop_sample(sample: str, token: str) -> str | None:
 
 _STOP_KEPT = ("duplex.in", "duplex.meta", "duplex.round-started", "duplex.wlock",
               "duplex.prompt", "duplex.sent-offset", "duplex.write-intent",
-              "duplex.watch.pid", "duplex.idle-marks")
+              "duplex.watch.pid", "duplex.idle-marks", "duplex.progress",
+              "steer-log.jsonl")
 
 def _control_state_paths(run_dir: str, name: str) -> list[str]:
     paths = [os.path.join(run_dir, f"{name}.{suffix}") for suffix in _STOP_KEPT]
@@ -3761,7 +4342,7 @@ def main() -> None:
     p_send = sub.add_parser("send", help="build + deliver one frame (flock single-writer)")
     p_send.add_argument("session")
     p_send.add_argument("--verb", default="steer",
-                        choices=["prompt", "steer", "steer-now", "replace", "get-state"])
+                        choices=["prompt", "steer", "interrupt", "get-state"])
     p_send.add_argument("--text")
     p_send.add_argument("--file")
     p_send.add_argument("--wait", type=float, default=10.0)

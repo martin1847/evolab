@@ -5,6 +5,11 @@ Env controls:
   FAKE_PROVIDER_LOG        append every received frame (JSON line)
   FAKE_OMP_STATE_FILE      file whose content sets get_state.isStreaming
                            ("streaming" => true, anything else/absent => false)
+  FAKE_OMP_STREAM_RAW      publish this RAW JSON value as get_state.isStreaming instead of a
+                           boolean (the broken gauge: `"false"` is a TRUTHY Python string and
+                           `0` a falsy one, so a truthiness reader invents a turn or invents
+                           an idle out of a reading that never happened)
+  FAKE_OMP_QUEUED          integer reported as get_state.queuedMessageCount (default 0)
   FAKE_OMP_DELIVERABLE     path written (with fresh mtime) after each prompt/steer
   FAKE_OMP_ASK=1           emit a real extension_ui_request (confirm) after prompt
 Protocol shape mirrors the live probe of omp 17.0.5: ready frame first, a setWidget
@@ -33,6 +38,24 @@ def streaming() -> bool:
         return False
 
 
+def stream_value():
+    raw = os.environ.get("FAKE_OMP_STREAM_RAW")
+    if raw is None:
+        return streaming()
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+def queued() -> int:
+    """Fixed at engine launch (an env var is copied into the child): export it before start."""
+    try:
+        return int(os.environ.get("FAKE_OMP_QUEUED", "0"))
+    except ValueError:
+        return 0
+
+
 log_path = os.environ.get("FAKE_PROVIDER_LOG")
 emit({"type": "ready"})
 emit({"type": "extension_ui_request", "id": "ui-widget", "method": "setWidget",
@@ -54,9 +77,9 @@ for line in sys.stdin:
             continue
         emit({"id": request_id, "type": "response", "command": "get_state",
               "success": True,
-              "data": {"isStreaming": streaming(), "isCompacting": False,
+              "data": {"isStreaming": stream_value(), "isCompacting": False,
                        "sessionId": "fake-omp-1", "messageCount": 2,
-                       "queuedMessageCount": 0}})
+                       "queuedMessageCount": queued()}})
     elif command in {"prompt", "steer", "follow_up", "abort_and_prompt"}:
         emit({"id": request_id, "type": "response", "command": command, "success": True})
         emit({"type": "agent_start"})

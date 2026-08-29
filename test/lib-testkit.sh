@@ -59,6 +59,30 @@ chk_not_contains() { # $1 label  $2 needle  $3 haystack
   esac
 }
 
+# ---- bounded waits -----------------------------------------------------------
+# Async lanes have NO per-frame ack: `agentctl steer` returns on DELIVERY (engine stdin),
+# provider logs and events sidecars are written by the engine afterwards. An immediate
+# snapshot therefore reports a frame that is merely LATE as missing, and under load that
+# reads as a real behaviour failure (cold review R1, §5). Every read of an async artifact
+# goes through this bounded wait, and the assertion is made on ITS result — so a timeout
+# still reds, but only after the frame really had its chance to appear.
+await_contains() { # $1 file  $2 exact needle  [$3 tries, 0.1s each (default 100 = 10s)]
+  local i=0 tries="${3:-100}"
+  while [ "$i" -lt "$tries" ]; do
+    if [ -f "$1" ]; then
+      case "$(cat "$1" 2>/dev/null)" in *"$2"*) return 0 ;; esac
+    fi
+    /bin/sleep 0.1
+    i=$((i+1))
+  done
+  return 1
+}
+
+# 1/0 for chk_eq, so the label names WHICH artifact never showed the marker
+seen() { # $1 file  $2 needle  [$3 tries]
+  await_contains "$1" "$2" "${3:-100}" && echo 1 || echo 0
+}
+
 summary() { # exits non-zero if any failed
   echo "-- $PASS passed, $FAIL failed --"
   if [ "$FAIL" -eq 0 ]; then echo "PASS"; return 0; else echo "FAIL"; return 1; fi

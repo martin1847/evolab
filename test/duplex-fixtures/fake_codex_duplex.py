@@ -128,8 +128,16 @@ for line in sys.stdin:
         else:
             emit({"id": req_id, "result": {"turnId": expected}})
     elif method == "turn/interrupt":
+        # the REAL protocol requires turnId (TurnInterruptParams, app-server
+        # v0.144.5/v0.147.0): a thread-only interrupt is a malformed request, never
+        # "interrupt the only turn on the thread". R3's auto-fill here (`or
+        # state["active"]`) made a frame the real engine rejects look accepted, so the
+        # broken-gauge case was green on fixture generosity alone (verify R4).
         tid = message["params"].get("turnId")
-        if state["active"] is None:
+        if not tid:
+            emit({"id": req_id, "error": {"code": -32602,
+                                          "message": "turn/interrupt requires turnId"}})
+        elif state["active"] is None:
             emit({"id": req_id, "error": {"code": -32600, "message": "no active turn"}})
         else:
             state["cancelled"].add(tid)

@@ -110,22 +110,26 @@ setup
 # branch (or a declared non-protocol surface) performs it.
 chk_eq "C2 DAMAGE ORACLE: every declared non-unsupported capability resolves to a branch" "" \
   "$(probe drift | grep -E 'no declared route|no executable branch|not executable|exactly one of route' || true)"
-# the declared route id IS the wire name the branch emits, not a label near it
-chk_eq "C2 omp queuedSteer emits the frame type it declares" \
-  "declared=follow_up emitted=follow_up" "$(probe wire omp steer)"
-chk_eq "C2 omp midTurnSteer emits the frame type it declares" \
-  "declared=steer emitted=steer" "$(probe wire omp steer-now)"
-chk_eq "C2 omp replaceTurn emits the frame type it declares" \
-  "declared=abort_and_prompt emitted=abort_and_prompt" "$(probe wire omp replace)"
-chk_eq "C2 claude queuedSteer emits the frame type it declares" \
-  "declared=user emitted=user" "$(probe wire claude steer)"
-chk_eq "C2 codex queuedSteer sends the method it declares" \
-  "declared=turn/start emitted=turn/start" "$(probe wire codex steer)"
-chk_eq "C2 codex midTurnSteer sends the method it declares" \
-  "declared=turn/steer emitted=turn/steer" "$(probe wire codex steer-now)"
-chk_eq "C2 codex replaceTurn sends BOTH methods of its route, in order" \
+# the declared route id IS the wire name the branch emits, not a label near it. A steer's
+# route is an ALTERNATION, so BOTH halves are pinned — with the live turn state (the one
+# input the selector reads) stubbed to each value in turn.
+chk_eq "C2 omp steer reaches INSIDE a running turn with the mid-turn half it declares" \
+  "declared=steer|follow_up emitted=steer" "$(probe wire omp steer active)"
+chk_eq "C2 omp steer opens the NEXT turn when the session is idle" \
+  "declared=steer|follow_up emitted=follow_up" "$(probe wire omp steer idle)"
+chk_eq "C2 omp interruptTurn emits the frame type it declares" \
+  "declared=abort_and_prompt emitted=abort_and_prompt" "$(probe wire omp interrupt)"
+chk_eq "C2 claude steer emits its one declared frame when idle" \
+  "declared=user emitted=user" "$(probe wire claude steer idle)"
+chk_eq "C2 claude steer has no second frame to reach a running turn with (hence degraded)" \
+  "declared=user emitted=user" "$(probe wire claude steer active)"
+chk_eq "C2 codex steer sends the mid-turn method it declares while a turn runs" \
+  "declared=turn/steer|turn/start emitted=turn/steer" "$(probe wire codex steer active)"
+chk_eq "C2 codex steer opens the next turn when idle" \
+  "declared=turn/steer|turn/start emitted=turn/start" "$(probe wire codex steer idle)"
+chk_eq "C2 codex interruptTurn sends BOTH methods of its route, in order" \
   "declared=turn/interrupt+turn/start emitted=turn/interrupt+turn/start" \
-  "$(probe wire codex replace)"
+  "$(probe wire codex interrupt)"
 # non-verb capabilities resolve too: structuredAsk through the projector, codex resume through
 # the handshake, omp/claude resume through the declared start-argv surface
 chk_eq "C2 omp structuredAsk names a route with an executable branch" "extension_ui_request" \
@@ -140,42 +144,47 @@ chk_eq "C2 and the provider really does forward start args" "1" "$(probe spec om
 chk_eq "C2 claude resume likewise" "start-argv" "$(probe cell claude resume surface)"
 chk_eq "C2 and claude forwards start args too" "1" "$(probe spec claude extra_argv)"
 # the other direction: an unsupported capability claims no realization at all
-chk_eq "C2 claude replaceTurn claims no route (it has no branch)" "" \
-  "$(probe cell claude replaceTurn route)"
-chk_eq "C2 claude replaceTurn claims no surface either" "" \
-  "$(probe cell claude replaceTurn surface)"
+chk_eq "C2 claude interruptTurn claims no route (it has no branch)" "" \
+  "$(probe cell claude interruptTurn route)"
+chk_eq "C2 claude interruptTurn claims no surface either" "" \
+  "$(probe cell claude interruptTurn surface)"
 teardown
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
 echo "== C3: an unsupported operation is REJECTED and the message names the supported path =="
 setup
 mk_lane cl3 claude
-out="$(bash "$AGENTCTL" steer cl3 -m "start over" --replace 2>&1)"; rc=$?
-chk_eq "C3 DAMAGE ORACLE: claude --replace is refused, never degraded into something lesser" \
+out="$(bash "$AGENTCTL" steer cl3 -m "start over" --interrupt 2>&1)"; rc=$?
+chk_eq "C3 DAMAGE ORACLE: claude --interrupt is refused, never degraded into something lesser" \
   1 "$rc"
 chk_contains "C3 the refusal says WHY" "claude has no interrupt/replace frame" "$out"
 chk_contains "C3 the refusal names the supported path (stop)" "agentctl stop" "$out"
 chk_contains "C3 the refusal names the supported path (resume)" "--resume <session_id>" "$out"
 chk_eq "C3 the refusal text IS the published note (one sentence, two surfaces)" \
-  "$(probe cell claude replaceTurn refusal)" "$(json_field providers.claude.replaceTurn.note)"
+  "$(probe cell claude interruptTurn refusal)" "$(json_field providers.claude.interruptTurn.note)"
 chk_eq "C3 nothing was delivered: no write-intent, no frame" 0 \
   "$([ -e "$WATCH_RUN_DIR/cl3.duplex.write-intent" ] && echo 1 || echo 0)"
+# the retired spelling stays a SILENT alias: same refusal, no deprecation chatter
+out2="$(bash "$AGENTCTL" steer cl3 -m "start over" --replace 2>&1)"; rc2=$?
+chk_eq "C3 --replace is still the same operation (rc)" "$rc" "$rc2"
+chk_eq "C3 --replace is still the same operation (message)" "$out" "$out2"
 
-# codex's conditional refusal: the route EXISTS but has no queue, so a busy turn is refused
+# codex used to REFUSE a steer while a turn was active (it has no queue). Under the ASAP
+# contract that refusal is gone: the mid-turn route serves it, so the verb reaches transport.
 mk_lane cx3 codex "thread=T1"
 codex_turn cx3 started
-out="$(bash "$AGENTCTL" steer cx3 -m "queue me" 2>&1)"; rc=$?
-chk_eq "C3 DAMAGE ORACLE: a busy codex default steer is refused (there is no queue)" 1 "$rc"
-chk_contains "C3 the refusal says WHY" "codex has no queue" "$out"
-chk_contains "C3 the refusal names the supported path" "use --now" "$out"
-chk_eq "C3 the codex refusal is the table's own text" \
-  "$(probe cell codex queuedSteer refusal)" \
-  "$(printf '%s' "$out" | sed -n 's/^ERR: //p' | tr -d '\n')"
-# and --now with NO active turn is refused in the other direction, before any transport
+out="$(bash "$AGENTCTL" steer cx3 -m "supersede that" 2>&1)"; rc=$?
+chk_eq "C3 DAMAGE ORACLE: a busy codex steer is no longer refused at the gate" 1 "$rc"
+chk_not_contains "C3 no queue-era refusal survives anywhere" "has no queue" "$out"
+chk_contains "C3 it got past the capability gate to the transport" "fifo has no reader" "$out"
+# the removed flag is a TYPED refusal that teaches the new semantics, never a silent no-op
 mk_lane cx3b codex "thread=T1"
 out="$(bash "$AGENTCTL" steer cx3b -m "adjust" --now 2>&1)"; rc=$?
-chk_eq "C3 an idle --now is refused too (nothing to steer mid-turn)" 1 "$rc"
-chk_contains "C3 and points at the default steer" "default steer starts the next turn" "$out"
+chk_eq "C3 --now is refused: the flag is gone" 1 "$rc"
+chk_contains "C3 and the refusal teaches the default" "delivers as soon as the engine allows" "$out"
+chk_contains "C3 and names the escalation" "--interrupt" "$out"
+chk_eq "C3 the refused flag delivered nothing" 0 \
+  "$([ -e "$WATCH_RUN_DIR/cx3b.duplex.write-intent" ] && echo 1 || echo 0)"
 # a start flag that no provider capability declares is refused at start, with the pointer
 # (a real non-empty goal: the empty-contract refusal sits earlier on the parameter surface)
 printf 'x\nPreflight: true => ok\n' > "$WATCH_RUN_DIR/cx3c.goal.md"
@@ -183,50 +192,69 @@ out="$(bash "$AGENTCTL" start omp cx3c "$WT" --goal "$WATCH_RUN_DIR/cx3c.goal.md
 chk_eq "C3 --resume-thread on a provider whose resume declares no such flag is refused" 1 "$rc"
 chk_contains "C3 and the refusal points at the runtime contract" "agentctl capabilities" "$out"
 
-# PAIRED GREEN: a SUPPORTED capability is never refused by the gate. omp --replace reaches
+# PAIRED GREEN: a SUPPORTED capability is never refused by the gate. omp --interrupt reaches
 # the transport (the lane has no engine, so it dies there) with no capability refusal at all.
 mk_lane om3 omp
-out="$(bash "$AGENTCTL" steer om3 -m "start over" --replace 2>&1)"; rc=$?
-chk_not_contains "C3 PAIRED GREEN: omp --replace is not refused by the capability gate" \
+out="$(bash "$AGENTCTL" steer om3 -m "start over" --interrupt 2>&1)"; rc=$?
+chk_not_contains "C3 PAIRED GREEN: omp --interrupt is not refused by the capability gate" \
   "no interrupt" "$out"
 chk_contains "C3 PAIRED GREEN: it got as far as the transport" "fifo has no reader" "$out"
-# PAIRED GREEN: an IDLE codex default steer is not refused either
+# PAIRED GREEN: an IDLE codex steer is not refused either
 mk_lane cx3d codex "thread=T1"
 codex_turn cx3d started
 codex_turn cx3d completed
 out="$(bash "$AGENTCTL" steer cx3d -m "next turn please" 2>&1)"; rc=$?
-chk_not_contains "C3 PAIRED GREEN: an idle codex steer is NOT refused" "codex has no queue" "$out"
+chk_not_contains "C3 PAIRED GREEN: an idle codex steer is NOT refused" "has no queue" "$out"
 chk_contains "C3 PAIRED GREEN: it reached the transport" "fifo has no reader" "$out"
 teardown
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
-echo "== C4: claude's degraded queued fallback is NEVER advertised as native mid-turn steering =="
+echo "== C4: claude's boundary delivery is NEVER advertised as mid-turn steering =="
 setup
-chk_eq "C4 DAMAGE ORACLE: claude midTurnSteer is degraded, not supported" "degraded" \
-  "$(probe cell claude midTurnSteer state)"
+chk_eq "C4 DAMAGE ORACLE: claude steer is degraded, not supported" "degraded" \
+  "$(probe cell claude steer state)"
 chk_eq "C4 DAMAGE ORACLE: the published state agrees" "degraded" \
-  "$(json_field providers.claude.midTurnSteer.state)"
-note="$(json_field providers.claude.midTurnSteer.note)"
+  "$(json_field providers.claude.steer.state)"
+note="$(json_field providers.claude.steer.note)"
 chk_eq "C4 a degraded state carries a note" 1 "$([ -n "$note" ] && echo 1 || echo 0)"
-chk_contains "C4 the note names the degradation as a QUEUED steer" "QUEUED" "$note"
-chk_contains "C4 and denies it is native mid-turn steering" "NOT native mid-turn" "$note"
+chk_contains "C4 the note names the degradation as a QUEUED message" "QUEUED" "$note"
+chk_contains "C4 and denies it reaches the running turn" "NOT inside the running turn" "$note"
+chk_contains "C4 while still naming what idle delivery really is" "opens the next turn" "$note"
 chk_not_contains "C4 the human table never calls it supported" \
-  "midTurnSteer           supported     supported" "$(caps)"
-# the RUNTIME behaves the way the contract says: --now says the degradation out loud and is
-# delivered as a queued steer, never silently
+  "steer                  supported     supported" "$(caps)"
+# The CONTRACT axis: on a busy claude the selector must take the next-turn half and the verb
+# must reach the TRANSPORT, never a capability refusal. A synthesized lane has no live engine
+# (it dies at "fifo has no reader", exactly like the C3 paired greens), so the DELIVERED
+# outcome — typed exit DELIVERED-NEXT-TURN reason=capability, owner ruling R2 — is proven on
+# the BEHAVIOUR axis in §C8 against the real fake engine. The old assertion here read the
+# pre-delivery prose note and therefore passed on a lane that never delivered anything.
 mk_lane cl4 claude
-out="$(bash "$AGENTCTL" steer cl4 -m "adjust now" --now 2>&1)"; rc=$?
-chk_contains "C4 the runtime prints the degradation before delivering" \
-  "delivered as a QUEUED steer" "$out"
-chk_eq "C4 the printed degradation IS the published note" 1 \
-  "$([ -n "$note" ] && printf '%s' "$out" | grep -cF "$note" || echo 0)"
-chk_not_contains "C4 and it is not refused (the fallback is a real path)" \
+out="$(bash "$AGENTCTL" steer cl4 -m "adjust now" 2>&1)"; rc=$?
+chk_contains "C4 a busy claude steer reaches the transport, not a capability refusal" \
+  "fifo has no reader" "$out"
+chk_not_contains "C4 and it is not refused (boundary delivery is a real path)" \
   "no interrupt/replace frame" "$out"
-# PAIRED GREEN: the providers that DO have native mid-turn steering still say supported
-chk_eq "C4 PAIRED GREEN: omp midTurnSteer is native" "supported" \
-  "$(probe cell omp midTurnSteer state)"
-chk_eq "C4 PAIRED GREEN: codex midTurnSteer is native" "supported" \
-  "$(probe cell codex midTurnSteer state)"
+chk_eq "C4 the selector took the next-turn half on a RUNNING turn" \
+  "declared=user emitted=user" "$(probe wire claude steer active)"
+chk_eq "C4 the published note points at the typed exit, not at a paragraph" 1 \
+  "$([ -n "$note" ] && printf '%s' "$note" \
+     | grep -cF "DELIVERED-NEXT-TURN reason=capability" || echo 0)"
+# PAIRED GREEN: an IDLE claude session has NOTHING to degrade — the steer opens the next turn
+# at once, and a runtime that announced a degradation there would be crying wolf.
+mk_lane cl4b claude
+printf '{"type":"result","subtype":"success","is_error":false,"result":"turn 1 complete"}\n' \
+  > "$WATCH_RUN_DIR/cl4b.duplex.events.jsonl"
+printf '0' > "$WATCH_RUN_DIR/cl4b.duplex.sent-offset"
+out="$(bash "$AGENTCTL" steer cl4b -m "next thing" 2>&1)"
+chk_not_contains "C4 PAIRED GREEN: no degradation is announced for an idle claude steer" \
+  "QUEUED" "$out"
+chk_not_contains "C4 PAIRED GREEN: and no typed boundary verdict either" \
+  "DELIVERED-NEXT-TURN" "$out"
+# PAIRED GREEN: the providers that DO reach a running turn still say supported
+chk_eq "C4 PAIRED GREEN: omp steer is native mid-turn" "supported" \
+  "$(probe cell omp steer state)"
+chk_eq "C4 PAIRED GREEN: codex steer is native mid-turn" "supported" \
+  "$(probe cell codex steer state)"
 teardown
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -241,16 +269,18 @@ chk_eq "C5 DAMAGE ORACLE: claude's map is NOT identical to codex's" 1 \
   "$([ "$codex_map" != "$claude_map" ] && echo 1 || echo 0)"
 # the differences are the REAL ones, not incidental: omp queues natively, codex cannot;
 # codex resumes in-session through the protocol, omp/claude only through a stop+start
-chk_eq "C5 omp queues natively" "supported" "$(probe cell omp queuedSteer state)"
-chk_eq "C5 codex has no queue" "degraded" "$(probe cell codex queuedSteer state)"
+chk_eq "C5 omp reaches a running turn natively" "supported" "$(probe cell omp steer state)"
+chk_eq "C5 claude cannot, and says so" "degraded" "$(probe cell claude steer state)"
+chk_eq "C5 codex reaches a running turn natively too" "supported" \
+  "$(probe cell codex steer state)"
 chk_eq "C5 codex resumes in-session through the handshake" "supported" \
   "$(probe cell codex resume state)"
 chk_eq "C5 omp resume is degraded (stop + start-argv, no in-session route)" "degraded" \
   "$(probe cell omp resume state)"
 chk_eq "C5 the published document keeps the same distinction" "degraded" \
-  "$(json_field providers.codex.queuedSteer.state)"
-chk_eq "C5 and does not copy omp's answer onto codex" "supported" \
-  "$(json_field providers.omp.queuedSteer.state)"
+  "$(json_field providers.claude.steer.state)"
+chk_eq "C5 and does not copy omp's answer onto claude" "supported" \
+  "$(json_field providers.omp.steer.state)"
 # the criterion itself is written down, so a cell cannot be judged by a private rule
 chk_contains "C5 the resume criterion is published next to the table" \
   "in-session route, or stop + start with resume args" "$(caps)"
@@ -284,11 +314,18 @@ except Exception:
     print(0)')"
 chk_eq "C6 the top level is exactly schemaVersion + providers" "providers,schemaVersion" \
   "$(printf '%s' "$doc" | python3 -c 'import json,sys;print(",".join(sorted(json.load(sys.stdin))))')"
-chk_eq "C6 schemaVersion is 1" "1" "$(json_field schemaVersion)"
-chk_eq "C6 every provider declares EXACTLY the seven contract capabilities" "ok" \
+# The verb reshape (`queuedSteer`/`midTurnSteer`/`replaceTurn` -> `steer`/`interruptTurn`) is
+# a KEY-SET change, not a compatible addition: a consumer pinned to v1 must be able to REFUSE
+# this document instead of reading the new keys as missing fields (cold review R1, §2).
+chk_eq "C6 schemaVersion is 2 — the verb reshape bumped it" "2" "$(json_field schemaVersion)"
+chk_eq "C6 DAMAGE ORACLE: NO v1 verb key may appear anywhere in a v2 document" 0 \
+  "$(printf '%s' "$doc" | grep -cE '"(queuedSteer|midTurnSteer|replaceTurn)"')"
+chk_eq "C6 and the human table publishes the same version the machine one does" 1 \
+  "$(caps | grep -c 'schemaVersion 2')"
+chk_eq "C6 every provider declares EXACTLY the six contract capabilities" "ok" \
   "$(printf '%s' "$doc" | python3 -c '
 import json, sys
-want = {"queuedSteer","midTurnSteer","replaceTurn","structuredAsk","structuredReply",
+want = {"steer","interruptTurn","structuredAsk","structuredReply",
         "resume","permissionEnforcement"}
 bad = [p + ":" + ",".join(sorted(set(c) ^ want))
        for p, c in json.load(sys.stdin)["providers"].items() if set(c) != want]
@@ -301,7 +338,7 @@ bad = [p + "." + n + ":" + ",".join(sorted(set(cell) - {"state", "note"}))
        for n, cell in caps.items() if set(cell) - {"state", "note"}]
 print("ok" if not bad else ";".join(bad))')"
 chk_eq "C6 DAMAGE ORACLE: no route / refusal / surface / fallback is published" 0 \
-  "$(printf '%s' "$doc" | grep -cE '"(route|refusal|surface|fallback|impl|detect|start_flag)"')"
+  "$(printf '%s' "$doc" | grep -cE '"(route|refusal|surface|fallback|impl|detect|start_flag|queue_routes)"')"
 chk_eq "C6 every state is inside the closed enum, and none is a boolean" "ok" \
   "$(printf '%s' "$doc" | python3 -c '
 import json, sys
@@ -345,7 +382,7 @@ doc = json.load(open(sys.argv[1]))["providers"]
 rows = [l.rstrip() for l in sys.stdin if l.strip()]
 engines = rows[1].split()[1:]
 bad = []
-for row in rows[2:2 + 7]:
+for row in rows[2:2 + 6]:
     parts = row.split()
     for engine, state in zip(engines, parts[1:]):
         if doc.get(engine, {}).get(parts[0], {}).get("state") != state:
@@ -359,7 +396,7 @@ setup
 out="$(probe drift 2>&1)"; rc=$?
 chk_eq "C7 DAMAGE ORACLE: no drift between the capability table and the routing" 0 "$rc"
 chk_eq "C7 and the gate says so explicitly" "DRIFT: none" "$out"
-chk_eq "C7 the gate covers all 21 cells (3 providers x 7 capabilities)" 21 \
+chk_eq "C7 the gate covers all 18 cells (3 providers x 6 capabilities)" 18 \
   "$(for e in $ALL_PROVIDERS; do probe capkeys "$e"; done | grep -c .)"
 chk_eq "C7 every registered route is declared by a capability" "" \
   "$(probe drift | grep 'routes with no declared capability' || true)"
@@ -424,6 +461,11 @@ printf 'do the thing\nPreflight: ls duplex-fixtures => fake engines on disk\n' >
 export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
 export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
 export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
+# the live turn state the omp selector reads: absent/anything => idle, "streaming" => a turn
+# is running. It is a FILE, not an env flip, because the engine is already up by then.
+export FAKE_OMP_STATE_FILE="$SANDBOX/omp.state"
+# one steer half per name: 1 = the mid-turn route, 2 = the next-turn route
+steer_half() { probe cell "$1" steer route | cut -d'|' -f"$2"; }
 
 # ── every provider launches under its DECLARED name and pinned argv ──────────────────────
 for e in omp claude codex; do
@@ -434,8 +476,11 @@ for e in omp claude codex; do
   # shellcheck disable=SC2086 -- deliberate split: MDL is a literal two-token flag, or empty
   out="$(bash "$AGENTCTL" start "$e" "b_$e" "$WT" --goal "$SANDBOX/goal.md" $MDL 2>&1)"; rc=$?
   chk_eq "C8 BEHAVIOUR: '$e' is a launchable provider name (start rc0)" 0 "$rc"
+  # BOUNDED, not immediate: the goal frame reaches engine stdin without a per-frame ack, so
+  # the provider log is written after `start` returns (cold review R1, §5). The needle is the
+  # goal's own first line — the one text every engine's goal frame must carry.
   chk_eq "C8 BEHAVIOUR: the goal frame really reached the $e engine" 1 \
-    "$([ -s "$SANDBOX/$e.log" ] && echo 1 || echo 0)"
+    "$(seen "$SANDBOX/$e.log" "do the thing")"
   chk_contains "C8 BEHAVIOUR: $e launched with the binary its spec declares" \
     "$(probe spec "$e" bin_env >/dev/null; basename "$(eval echo \$"$(probe spec "$e" bin_env)")")" \
     "$(cat "$FAKE_TMUX_LAUNCH_LOG")"
@@ -447,17 +492,35 @@ for e in omp claude codex; do
   fi
 done
 
-# ── omp: queuedSteer / midTurnSteer / replaceTurn each emit their declared frame ──────────
+# ── omp: ONE steer verb, and the LIVE TURN STATE picks its half — both proven on the wire ──
 export FAKE_PROVIDER_LOG="$SANDBOX/omp.log"
-bash "$AGENTCTL" steer b_omp -m "queued" >/dev/null 2>&1
-chk_contains "C8 BEHAVIOUR omp.queuedSteer: the declared follow_up frame is on the wire" \
-  "\"type\":\"$(probe cell omp queuedSteer route)\"" "$(cat "$SANDBOX/omp.log")"
-bash "$AGENTCTL" steer b_omp -m "right now" --now >/dev/null 2>&1
-chk_contains "C8 BEHAVIOUR omp.midTurnSteer: the declared steer frame is on the wire" \
-  "\"type\":\"$(probe cell omp midTurnSteer route)\"" "$(cat "$SANDBOX/omp.log")"
-bash "$AGENTCTL" steer b_omp -m "start over" --replace >/dev/null 2>&1
-chk_contains "C8 BEHAVIOUR omp.replaceTurn: the declared abort_and_prompt frame is on the wire" \
-  "\"type\":\"$(probe cell omp replaceTurn route)\"" "$(cat "$SANDBOX/omp.log")"
+rm -f "$FAKE_OMP_STATE_FILE"                     # idle session
+: > "$SANDBOX/omp.log"
+bash "$AGENTCTL" steer b_omp -m "while idle" >/dev/null 2>&1
+chk_eq "C8 BEHAVIOUR omp.steer (idle): the declared next-turn frame is on the wire" 1 \
+  "$(seen "$SANDBOX/omp.log" "\"type\":\"$(steer_half omp 2)\"")"
+# ORDERING: the negative is read only AFTER the positive marker is visible, so "absent" means
+# absent and not "not written yet"
+chk_eq "C8 BEHAVIOUR omp.steer (idle): and NOT the mid-turn frame" 0 \
+  "$(grep -c "\"type\":\"$(steer_half omp 1)\"" "$SANDBOX/omp.log")"
+printf 'streaming' > "$FAKE_OMP_STATE_FILE"      # a turn is now running
+: > "$SANDBOX/omp.log"
+out="$(bash "$AGENTCTL" steer b_omp -m "supersede that ruling" 2>&1)"; rc=$?
+# rc AND the frame: a red on the frame alone cannot tell a failed DELIVERY from a late log
+chk_eq "C8 BEHAVIOUR omp.steer (mid-turn): the steer itself succeeded (rc0)" 0 "$rc"
+chk_eq "C8 BEHAVIOUR omp.steer (mid-turn): the SAME verb now emits the mid-turn frame" 1 \
+  "$(seen "$SANDBOX/omp.log" "\"type\":\"$(steer_half omp 1)\"")"
+chk_eq "C8 BEHAVIOUR omp.steer (mid-turn): and never falls back to the queue frame" 0 \
+  "$(grep -c "\"type\":\"$(steer_half omp 2)\"" "$SANDBOX/omp.log")"
+rm -f "$FAKE_OMP_STATE_FILE"
+bash "$AGENTCTL" steer b_omp -m "start over" --interrupt >/dev/null 2>&1
+chk_eq "C8 BEHAVIOUR omp.interruptTurn: the declared abort_and_prompt frame is on the wire" 1 \
+  "$(seen "$SANDBOX/omp.log" "\"type\":\"$(probe cell omp interruptTurn route)\"")"
+# the delivery log is the queue's ONLY readable record: one line per delivered steer
+chk_eq "C8 BEHAVIOUR: every delivered steer left one bounded line in the steer log" 3 \
+  "$(grep -c . "$WATCH_RUN_DIR/b_omp.steer-log.jsonl")"
+chk_contains "C8 BEHAVIOUR: and the line carries the route it really used" \
+  "\"mode\":\"steer:$(steer_half omp 1)\"" "$(cat "$WATCH_RUN_DIR/b_omp.steer-log.jsonl")"
 bash "$AGENTCTL" stop b_omp >/dev/null 2>&1
 
 # ── omp.structuredAsk: a real engine question must PROJECT as WAITING-INPUT ───────────────
@@ -465,7 +528,7 @@ bash "$AGENTCTL" stop b_omp >/dev/null 2>&1
 export FAKE_OMP_ASK=1
 export FAKE_PROVIDER_LOG="$SANDBOX/omp-ask.log"
 bash "$AGENTCTL" start omp b_ask "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
-/bin/sleep 0.4
+await_contains "$WATCH_RUN_DIR/b_ask.duplex.events.jsonl" '"id":"ui-q1"'
 out="$(bash "$AGENTCTL" status b_ask 2>&1)"; rc=$?
 chk_eq "C8 BEHAVIOUR omp.structuredAsk: a native ask projects as WAITING-INPUT (exit 4)" 4 "$rc"
 chk_contains "C8 BEHAVIOUR omp.structuredAsk: and says so" "WAITING-INPUT" "$out"
@@ -477,50 +540,93 @@ unset FAKE_OMP_ASK
 # as a question — a projector that says WAITING for everything is not structuredAsk support
 export FAKE_PROVIDER_LOG="$SANDBOX/omp-noise.log"
 bash "$AGENTCTL" start omp b_noise "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
-/bin/sleep 0.3
+# the goal turn must be OVER before the projection is read: after agent_end any question the
+# engine was going to ask has already been emitted, so "no WAITING" is a real answer
+await_contains "$WATCH_RUN_DIR/b_noise.duplex.events.jsonl" '"type":"agent_end"'
 out="$(bash "$AGENTCTL" status b_noise 2>&1)"; rc=$?
 chk_eq "C8 PAIRED GREEN: declared UI noise never projects as a question (DONE 0)" 0 "$rc"
 chk_not_contains "C8 PAIRED GREEN: no WAITING-INPUT from chrome" "WAITING-INPUT" "$out"
 bash "$AGENTCTL" stop b_noise >/dev/null 2>&1
 
-# ── claude: queuedSteer delivers; midTurnSteer degrades to the SAME frame, out loud ───────
+# ── claude: ONE frame, and the honest split — idle opens the next turn silently, a RUNNING
+#    turn gets the degradation announced; interrupt is refused outright ───────────────────
 export FAKE_PROVIDER_LOG="$SANDBOX/claude.log"
-bash "$AGENTCTL" steer b_claude -m "queued please" >/dev/null 2>&1
-chk_contains "C8 BEHAVIOUR claude.queuedSteer: the declared user frame is on the wire" \
-  "\"type\":\"$(probe cell claude queuedSteer route)\"" "$(cat "$SANDBOX/claude.log")"
+# b_claude answered its goal turn already (no gate), so this session is IDLE
+chk_eq "C8 BEHAVIOUR claude: the goal turn really ended before the idle steer" 1 \
+  "$(seen "$WATCH_RUN_DIR/b_claude.duplex.events.jsonl" '"type":"result"')"
+out="$(bash "$AGENTCTL" steer b_claude -m "queued please" 2>&1)"
+chk_eq "C8 BEHAVIOUR claude.steer (idle): the declared user frame is on the wire" 1 \
+  "$(seen "$SANDBOX/claude.log" "\"type\":\"$(probe cell claude steer route)\"")"
+chk_not_contains "C8 BEHAVIOUR claude.steer (idle): nothing degraded, so nothing announced" \
+  "QUEUED" "$out"
 before="$(grep -c . "$SANDBOX/claude.log")"
-out="$(bash "$AGENTCTL" steer b_claude -m "now please" --now 2>&1)"
+out="$(bash "$AGENTCTL" steer b_claude -m "abandon" --interrupt 2>&1)"; rc=$?
 after="$(grep -c . "$SANDBOX/claude.log")"
-chk_contains "C8 BEHAVIOUR claude.midTurnSteer: the degradation is announced" \
-  "delivered as a QUEUED steer" "$out"
-chk_eq "C8 BEHAVIOUR claude.midTurnSteer: and it really delivered one more frame" 1 \
-  "$([ "$after" -gt "$before" ] && echo 1 || echo 0)"
-before="$(grep -c . "$SANDBOX/claude.log")"
-out="$(bash "$AGENTCTL" steer b_claude -m "abandon" --replace 2>&1)"; rc=$?
-after="$(grep -c . "$SANDBOX/claude.log")"
-chk_eq "C8 BEHAVIOUR claude.replaceTurn: unsupported means NOTHING reaches the engine" \
+chk_eq "C8 BEHAVIOUR claude.interruptTurn: unsupported means NOTHING reaches the engine" \
   "$before" "$after"
-chk_eq "C8 BEHAVIOUR claude.replaceTurn: and the verb fails" 1 "$rc"
+chk_eq "C8 BEHAVIOUR claude.interruptTurn: and the verb fails" 1 "$rc"
+chk_eq "C8 BEHAVIOUR: a REFUSED steer leaves no delivery-log line behind" 1 \
+  "$(grep -c . "$WATCH_RUN_DIR/b_claude.steer-log.jsonl")"
 bash "$AGENTCTL" stop b_claude >/dev/null 2>&1
+# the MID-TURN half needs an engine that really is inside a turn: gate it open for the goal
+# turn, then close the gate so the next turn hangs before producing anything.
+export FAKE_CLAUDE_GATE="$SANDBOX/cl-gate" FAKE_PROVIDER_LOG="$SANDBOX/claude-gate.log"
+: > "$FAKE_CLAUDE_GATE"
+bash "$AGENTCTL" start claude b_clg "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+chk_eq "C8 BEHAVIOUR claude: the gated goal turn finished before the gate closes" 1 \
+  "$(seen "$WATCH_RUN_DIR/b_clg.duplex.events.jsonl" '"type":"result"')"
+rm -f "$FAKE_CLAUDE_GATE"                 # the turn this steer opens will hang, mid-turn
+bash "$AGENTCTL" steer b_clg -m "open a turn that hangs" >/dev/null 2>&1
+# the hanging turn must really be OPEN before the mid-turn steer goes out, or the selector
+# reads an idle engine and the degradation under test is never exercised at all
+chk_eq "C8 BEHAVIOUR claude.steer (mid-turn): the turn-opening steer reached the engine" 1 \
+  "$(seen "$SANDBOX/claude-gate.log" "open a turn that hangs")"
+out="$(bash "$AGENTCTL" steer b_clg -m "supersede that ruling" 2>&1)"; rc=$?
+# OWNER RULING (R2): the degradation is a TYPED EXIT, not a stdout note — a wrapper that keeps
+# only the exit code used to lose the whole fact that the ruling never entered the running turn.
+chk_eq "C8 BEHAVIOUR claude.steer (mid-turn): typed DELIVERED-NEXT-TURN 15, never a refusal" \
+  15 "$rc"
+chk_contains "C8 BEHAVIOUR claude.steer (mid-turn): the typed class is on stdout" \
+  "DELIVERED-NEXT-TURN" "$out"
+chk_contains "C8 BEHAVIOUR claude.steer (mid-turn): reason names the MISSING CAPABILITY" \
+  "reason=capability" "$out"
+chk_not_contains "C8 BEHAVIOUR claude.steer (mid-turn): and no undecidability is claimed" \
+  "reason=undecidable" "$out"
+# the published note points at that typed code instead of carrying the explanation itself
+chk_contains "C8 BEHAVIOUR claude.steer: the capability note names the typed code" \
+  "DELIVERED-NEXT-TURN reason=capability" "$(probe cell claude steer note)"
+chk_contains "C8 BEHAVIOUR claude.steer (mid-turn): and says delivery, not acceptance" \
+  "delivered to engine stdin" "$out"
+# the wedged engine cannot log a frame it has not read yet: open the gate and prove the
+# boundary-delivered frame really was on the wire, not dropped by the degradation path
+: > "$FAKE_CLAUDE_GATE"
+chk_eq "C8 BEHAVIOUR claude.steer (mid-turn): the engine consumed it at the boundary" 1 \
+  "$(seen "$SANDBOX/claude-gate.log" "supersede that ruling" 150)"
+bash "$AGENTCTL" stop b_clg >/dev/null 2>&1
+unset FAKE_CLAUDE_GATE
 
-# ── codex: queuedSteer / midTurnSteer / replaceTurn on the wire ───────────────────────────
+# ── codex: the idle half on the wire (the active half + interrupt are gated below) ─────────
 export FAKE_PROVIDER_LOG="$SANDBOX/codex.log"
 bash "$AGENTCTL" steer b_codex -m "next turn" >/dev/null 2>&1
-chk_contains "C8 BEHAVIOUR codex.queuedSteer: the declared turn/start method is on the wire" \
-  "\"method\":\"$(probe cell codex queuedSteer route)\"" "$(cat "$SANDBOX/codex.log")"
+chk_eq "C8 BEHAVIOUR codex.steer (idle): the declared next-turn method is on the wire" 1 \
+  "$(seen "$SANDBOX/codex.log" "\"method\":\"$(steer_half codex 2)\"")"
 bash "$AGENTCTL" stop b_codex >/dev/null 2>&1
 export FAKE_CODEX_GATE="$SANDBOX/cx-gate"
 export FAKE_PROVIDER_LOG="$SANDBOX/codex-gate.log"
 bash "$AGENTCTL" start codex b_cxg "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
-/bin/sleep 0.3
-bash "$AGENTCTL" steer b_cxg -m "mid turn" --now >/dev/null 2>&1
-chk_contains "C8 BEHAVIOUR codex.midTurnSteer: the declared turn/steer method is on the wire" \
-  "\"method\":\"$(probe cell codex midTurnSteer route)\"" "$(cat "$SANDBOX/codex-gate.log")"
-bash "$AGENTCTL" steer b_cxg -m "abandon this" --replace >/dev/null 2>&1
-chk_contains "C8 BEHAVIOUR codex.replaceTurn: the interrupt half of the route is on the wire" \
-  "\"method\":\"turn/interrupt\"" "$(cat "$SANDBOX/codex-gate.log")"
-chk_contains "C8 BEHAVIOUR codex.replaceTurn: and the replacement half too" \
-  "\"method\":\"turn/start\"" "$(cat "$SANDBOX/codex-gate.log")"
+# the gated turn must be OPEN on the wire before the mid-turn steer is selected
+chk_eq "C8 BEHAVIOUR codex.steer (mid-turn): the goal turn is really running" 1 \
+  "$(seen "$WATCH_RUN_DIR/b_cxg.duplex.events.jsonl" '"method":"turn/started"')"
+bash "$AGENTCTL" steer b_cxg -m "mid turn" >/dev/null 2>&1
+chk_eq "C8 BEHAVIOUR codex.steer (mid-turn): the declared mid-turn method is on the wire" 1 \
+  "$(seen "$SANDBOX/codex-gate.log" "\"method\":\"$(steer_half codex 1)\"")"
+chk_contains "C8 BEHAVIOUR codex.steer (mid-turn): guarded by the running turn's id" \
+  '"expectedTurnId"' "$(cat "$SANDBOX/codex-gate.log")"
+bash "$AGENTCTL" steer b_cxg -m "abandon this" --interrupt >/dev/null 2>&1
+chk_eq "C8 BEHAVIOUR codex.interruptTurn: the interrupt half of the route is on the wire" 1 \
+  "$(seen "$SANDBOX/codex-gate.log" "\"method\":\"turn/interrupt\"")"
+chk_eq "C8 BEHAVIOUR codex.interruptTurn: and the replacement half too" 1 \
+  "$(seen "$SANDBOX/codex-gate.log" "\"method\":\"turn/start\"")"
 : > "$FAKE_CODEX_GATE"
 bash "$AGENTCTL" stop b_cxg >/dev/null 2>&1
 unset FAKE_CODEX_GATE
@@ -544,7 +650,7 @@ bash "$AGENTCTL" stop b_cxr >/dev/null 2>&1
 export FAKE_CODEX_ASK=1
 export FAKE_PROVIDER_LOG="$SANDBOX/codex-ask.log"
 bash "$AGENTCTL" start codex b_cxa "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
-/bin/sleep 0.4
+await_contains "$WATCH_RUN_DIR/b_cxa.duplex.events.jsonl" '"method":"requestUserInput"'
 out="$(bash "$AGENTCTL" status b_cxa 2>&1)"; rc=$?
 chk_eq "C8 BEHAVIOUR codex.structuredAsk: a native ask projects as WAITING-INPUT (exit 4)" 4 "$rc"
 chk_contains "C8 BEHAVIOUR codex.structuredAsk: and names it as an engine ask" \
@@ -575,7 +681,8 @@ chk_contains "C8 PAIRED NEGATIVE: and says the config rides the protocol" \
   "engine config via protocol" "$out"
 
 sweep_fakes
-unset FAKE_TMUX_LAUNCH_LOG AGENTCTL_BIN_OMP AGENTCTL_BIN_CLAUDE AGENTCTL_BIN_CODEX FAKE_PROVIDER_LOG
+unset FAKE_TMUX_LAUNCH_LOG AGENTCTL_BIN_OMP AGENTCTL_BIN_CLAUDE AGENTCTL_BIN_CODEX \
+      FAKE_PROVIDER_LOG FAKE_OMP_STATE_FILE
 teardown
 
 echo "== C9: PATH-symlink invocation still resolves duplexctl.py beside the REAL script =="

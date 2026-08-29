@@ -1,6 +1,6 @@
 --- a/skills/cto-orchestration/references/agentctl/duplexctl.py
 +++ b/skills/cto-orchestration/references/agentctl/duplexctl.py
-@@ -1337,7 +1337,8 @@
+@@ -2534,7 +2534,8 @@
      for name, rec in PROVIDERS.items():
          argv = " ".join(shlex.quote(a) for a in rec["argv"])
          rows.append("|".join([
@@ -9,4 +9,4 @@
 +            rec["bin_env"], rec["bin"], argv,
              "1" if rec["extra_argv"] else "0",
              rec["capabilities"]["resume"]["start_flag"],
-         ]))
+             rec["sandbox"].get("review", ""),

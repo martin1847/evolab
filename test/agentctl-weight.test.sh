@@ -82,10 +82,89 @@ cd "$(dirname "$0")"
 # answered False both for "no BLOCKED.md" and for "could not stat it"; it is the twin of
 # `_git_porcelain`'s instrument-unavailable return that §4.2 already bought, with its 151 B
 # warn. The rest is the doctrine comments this file carries per counter-probe.
+# duplexctl.py 3972→4317 and agentctl 589→594 (2026-08-29, steer 语义收敛 + STALLED-PROGRESS):
+# +345 python / +5 bash, and the split is the point — every JUDGEMENT landed in python while the
+# shell only grew the flag surface (`--interrupt`, the `--now` removal refusal, one supervisor env
+# passthrough), so C10's share ratchet FELL 129→121/1000.
+# The python weight HAD to land here and is three named surfaces, not scattered churn:
+#  * ASAP steer routing (~90 lines): per-engine `*_turn_active` + `steer_delivery` + the
+#    alternation route split. It replaced three verbs with one, so the three-cell capability rows
+#    shrank to two and `_cap`'s `fallback` concept was DELETED — the router reads the live turn
+#    state instead of an operator flag. No second frame builder appeared: build_frame took a
+#    `route` argument and omp's get_state round trip was EXTRACTED (`omp_get_state`) so the
+#    projector and the router share one probe rather than growing a second one.
+#  * STALLED-PROGRESS (~150 lines): a new typed state needs its probe (git HEAD + porcelain +
+#    dirty-set/deliverable/BLOCKED mtimes), its persisted window, and its 宁钝勿敏 unjudgeable
+#    path. It could not reuse `stream_stalled`: that probe answers "the stream stopped" and is
+#    blind by construction to a streaming engine doing nothing, which is the field failure
+#    (2.5h unnoticed). The window state is a sidecar because classify is one-shot — a window
+#    cannot accumulate in memory across the processes that make it up.
+#  * steer delivery log (~60 lines): `queued=N` is the engine's whole answer, so the only place
+#    that CAN record what the queue holds is the single writer on the lane. It rides the existing
+#    commit point (same flock, same best-effort rule as the offset journal), adds no new writer.
+# agentctl's +5 is flag parsing and one env name in the supervisor pane command — the thin-entry
+# contract holds: nothing in bash reads a verdict, parses a frame or picks a route.
+# duplexctl.py 4317→4502 (2026-08-29, R1 cold-review fixes + owner's DELIVERED-NEXT-TURN ruling):
+# +185 python, ZERO bash — the thin-entry contract held through the whole batch (`agentctl`
+# stayed at 594: `cmd_steer` already `exec`s duplexctl, so a NEW TYPED EXIT CODE cost the shell
+# nothing at all). Five named surfaces, each the minimum the finding admits:
+#  * strict gauge reading (~35 lines): `json_bool` + `omp_stream_flags` + `codex_frames`. The
+#    router selected on Python TRUTHINESS, so a JSON string `"false"` bought the mid-turn route
+#    and a `0` bought a fabricated idle. Only `true`/`false` may decide, and the projector reads
+#    the SAME helper — one strictness, not two. `codex_frames` had to be new: the old reader
+#    folded an unreadable/corrupt stream into an empty frame list, which is a measurement.
+#  * DELIVERED-NEXT-TURN (~40 lines): one exit constant, one TYPED_STATES row, `steer_delivery`
+#    returning a reason word, and `delivered_rc` at the three delivery success points. It
+#    REPLACED a prose note, and the capability note SHRANK: the fact now rides the exit code a
+#    wrapper cannot drop instead of a sentence on stdout it routinely did.
+#  * porcelain -z parsing (~20 lines): `--untracked-files=all` needs a NUL-record parser,
+#    because the default folded nested untracked work into `?? dir/` and fired a false 14. The
+#    rename/copy origin record must be consumed, which is exactly why a splitlines() one-liner
+#    could not stay.
+#  * judgeable vs observed_change_at (~35 lines): the window sidecar gained `moved` + `judgeable`
+#    so an unjudgeable probe forbids the verdict WITHOUT publishing the gauge's own failure clock
+#    as `last_progress_at` or as `progress=changed`. Two facts cannot share one field.
+#  * queue-route filter (~30 lines): `queue_routes` on the steer cell + `print_steer_queue`
+#    filtering by it. The depth indexes QUEUED deliveries, and the log holds every delivery, so
+#    a mid-turn steer was listed as a queued item and hid the real one. The declaration lives in
+#    the capability table because only the cell knows which half is a queue (codex has none).
+# The remaining ~25 lines are the doctrine comments this file requires per counter-probe.
+# duplexctl.py 4502→4545 (2026-08-29, verify R2 fix round): +43 python, ZERO bash — the
+# thin-entry contract held again (`agentctl` stayed at 594; none of the three findings is a
+# flag). Three named surfaces, each the minimum the finding admits:
+#  * bounded-scan overflow (~18 lines): `_porcelain_paths` now returns `(paths, overflowed)`
+#    and `progress_fingerprint` returns `(fp, why)`. Keeping the first 500 dirty paths was a
+#    mtime measured over a PREFIX published as if it covered the tree — with 501 dirty files,
+#    work confined to the 501st fired a false 14. The scan stays bounded; the READING is
+#    refused, and the refusal reuses the unjudgeable path that already existed rather than
+#    growing a second verdict. The `why` string replaced a hardcoded sentence, so the
+#    undecidable admission now NAMES which of the four probes failed at no extra branch.
+#  * unattributed recovery baseline (~10 lines): one `recovered` test in `progress_verdict`
+#    plus the `moved`-is-0 reading in `cmd_sense_loop`'s tail word. The first judgeable read
+#    after a broken gauge rebuilt the window AND credited itself as movement, so
+#    `None → SAME → SAME` reported `progress=changed`. No new field: `moved` already carried
+#    exactly this fact and was simply being overwritten.
+#  * interrupt handshake on a broken gauge (~15 lines): `codex_active_turn` returns the
+#    diagnosis beside the id, and `codex_route_replace` sends `turn/interrupt` whenever the
+#    turn state is not a decided idle. Folding "no measurement" into "no turn" skipped the
+#    handshake, rotated the attempt, and then sent a `turn/start` the still-running turn
+#    rejects. The engine's own refusal is the idle answer, so the branch reuses the existing
+#    error path instead of adding a second probe.
+# duplexctl.py 4545→4549 (2026-08-29, verify R4): +4 python, ZERO bash (`agentctl` stayed at
+# 594 — not a flag). ONE surface, and it is a REVERSAL of R3's last surface above, not a new
+# one: `codex_route_replace` no longer sends a threadId-only `turn/interrupt` when the turn
+# state is undecidable. codex `TurnInterruptParams` makes `turnId` REQUIRED (app-server
+# v0.144.5/v0.147.0), so that frame is malformed on the wire — R3 bought an engine refusal
+# it then showed the operator as the engine's own verdict, hiding the operator's real problem
+# (their own events gauge). The undecidable case now refuses BEFORE the wire with the gauge
+# named, so the +4 is that refusal sentence; the handshake branch simultaneously LOST its
+# conditional `turnId` and its conditional terminal-id fence, because a non-empty `active`
+# now implies a readable gauge. A typed refusal costing 4 lines replaced a round trip that
+# could only ever be rejected.
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 3972
+skills/cto-orchestration/references/agentctl/duplexctl.py 4549
 skills/cto-orchestration/references/agentctl/identity.py 1509
-skills/cto-orchestration/references/agentctl/agentctl 589
+skills/cto-orchestration/references/agentctl/agentctl 594
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1326
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
@@ -176,25 +255,33 @@ EOF
 }
 
 DX=skills/cto-orchestration/references/agentctl/duplexctl.py
+# derived, never a second copy of the number: hardcoded fixture literals meant every baseline
+# move reds four self-tests that are not about that move at all (2026-08-29)
+DX_BASE="$(printf '%s\n' "$BASELINES" | awk -v p="$DX" '$1 == p { print $2 }')"
+chk_eq "W2 the fixtures read the baseline they are testing against" 1 \
+  "$([ -n "$DX_BASE" ] && echo 1 || echo 0)"
 sandbox_new
 
 # ── W2 growth reds ───────────────────────────────────────────────────────────
-mk_tree "$SANDBOX/grew" "$DX=3973"
+mk_tree "$SANDBOX/grew" "$DX=$((DX_BASE + 1))"
 run_gate "$SANDBOX/grew"
 chk_eq "W2 one line over baseline reds (rc)" 1 "$GRC"
-chk_contains "W2 breach names the file and the movement" "BREACH $DX grew 3972->3973" "$GOUT"
+chk_contains "W2 breach names the file and the movement" \
+  "BREACH $DX grew $DX_BASE->$((DX_BASE + 1))" "$GOUT"
 chk_contains "W2 breach names the obligation, not just the number" "commit message" "$GOUT"
 
 # ── W3 an unlocked new low reds; ordinary churn under it does not ────────────
-mk_tree "$SANDBOX/newlow" "$DX=3921"        # baseline - 51
+mk_tree "$SANDBOX/newlow" "$DX=$((DX_BASE - LOCK_SLACK - 1))"
 run_gate "$SANDBOX/newlow"
 chk_eq "W3 51 lines under baseline reds (rc)" 1 "$GRC"
 chk_contains "W3 breach tells the batch to lock the new low" "锁住新低" "$GOUT"
 
-mk_tree "$SANDBOX/slack" "$DX=3922"         # baseline - 50, the last tolerated value
+# baseline - LOCK_SLACK, the last tolerated value
+mk_tree "$SANDBOX/slack" "$DX=$((DX_BASE - LOCK_SLACK))"
 run_gate "$SANDBOX/slack"
 chk_eq "W3 the slack window itself stays green (rc)" 0 "$GRC"
-chk_contains "W3 slack window is reported as within" "within $DX 3922/3972" "$GOUT"
+chk_contains "W3 slack window is reported as within" \
+  "within $DX $((DX_BASE - LOCK_SLACK))/$DX_BASE" "$GOUT"
 
 # ── W4 exactly-at-baseline is the green case ─────────────────────────────────
 mk_tree "$SANDBOX/exact"

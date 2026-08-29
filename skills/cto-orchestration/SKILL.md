@@ -46,9 +46,10 @@ metadata:
    主干不复制其规则表）。理解门与 BLOCKED 协议由 runtime footer 固定追加（真源，本文不复制字面）：
    合同承诺了开工前核对 → worker 把复述写进 `<cwd>/BLOCKED.md` 等裁决，其余场景复述完即开工。
 4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；词表跑 `agentctl states`，处置见 agentctl README。
-5. **steering 走 `agentctl steer`**：默认排队/下一轮，`--now` 原生 mid-turn（omp/codex；claude 降级为排队）、`--replace` 弃当前重来；
-   引擎能力差异查 `agentctl capabilities`，不支持的组合由接口当场拒绝并指正路。投递成功 ≠ 模型照做，
-   验收仍看交付物。每个后续 turn 都重新挂 `agentctl watch`。
+5. **steering 走 `agentctl steer`**：默认**尽快送达**（turn 进行中原生 mid-turn：omp/codex；claude
+   降级 turn 边界并明说；空闲即刻开新 turn）、`--interrupt` 打断当前 turn 以本条重开；
+   引擎能力差异查 `agentctl capabilities`。投递成功 ≠ 模型照做，验收仍看交付物。
+   每个后续 turn 都重新挂 `agentctl watch`。
 6. **Implemented → Verified**：必须同时有 fresh 正向交付证据、不同 lineage 的独立评审、真实用户路径 E2E。先本机真路径，再部署，再部署环境 E2E，最后才关单；git 集成与 push 门禁归 Git workflow 标准。
 
 ## 2. 对抗式评审循环

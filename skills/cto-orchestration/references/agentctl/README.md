@@ -13,8 +13,22 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 命令面由 CLI 自述，此处不留副本（复述必漂）：裸跑 `agentctl` 出 usage、`agentctl capabilities` 出三引擎能力契约、`agentctl states` 出 typed 状态词表。
 下面只写 CLI 讲不了的部分——语义、失败形态、判断。
 
-- **steer 语义**（能力差异拒绝制，不分叉车道）：三引擎能力矩阵由 runtime 生成，`agentctl capabilities`
-  是唯一真源（同一张表既驱动路由、又出拒绝文案）。投递成功 ≠ 模型照做，验收仍看交付物。
+- **steer 语义 = 两个动词**（能力差异拒绝制，不分叉车道）：默认 `agentctl steer` **尽快送达**——
+  引擎有轮中路由且正在跑 turn 就进 turn（omp `steer` / codex `turn/steer`），空闲就立刻开下一轮
+  （omp `follow_up` / codex `turn/start` / claude `user`）；**选路只看活体 turn 态，没有 flag 可忘传**
+  （旧 `--now` 已删，传了报错指新语义；`--replace` 是 `--interrupt` 的静默别名）。
+  `--interrupt` = 弃当前 turn 以本条重开（omp `abort_and_prompt` / codex `turn/interrupt+turn/start`；
+  claude 无此帧 → 拒绝并指 stop+resume），并回收 supervisor、轮转 attempt。
+  **降级/判不出都是 typed 出口，不是 stdout 散文**：turn 运行中却进不去 turn 时，`steer` 出
+  **`DELIVERED-NEXT-TURN`**（词表见 `agentctl states`）并带 reason——`reason=capability`
+  = 引擎无轮中帧（claude degraded）、`reason=undecidable` = 活体 turn 态判不出（omp get_state
+  非布尔/失败、codex events 不可解析）。**真进 turn 或 idle 立刻开下一轮 = exit 0**。
+  判不出按「开下一轮」走（宁钝勿敏：晚一个边界 > 丢一条指令）。三引擎能力矩阵由 runtime 生成，
+  `agentctl capabilities` 是唯一真源（同一张表既驱动路由、又出拒绝文案）。投递成功 ≠ 模型照做，
+  验收仍看交付物。
+- **steer 队列可见**：`queued=N` 只是引擎报的深度，lane 自己记 `<s>.steer-log.jsonl`
+  （ts + mode + 首行 ≤80B，单写者 duplexctl，best-effort）；`status` 在 N>0 时按深度列出末 N 条
+  （时间 + 路由 + 首行），无队列面的引擎零输出。stop 随控制态一起清。
 - **typed exit 三引擎同词汇**（词表 `agentctl states`，处置见下节）；
   **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析；freshness
@@ -25,13 +39,13 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   `=== … ===` 行之后追加最后一行 `EXIT=<n>`——包装层（管道 / 后台 harness）吞掉进程退出码时仍可解析；
   文案与 exit code 均不变。`status` 读到 RUNNING 而**无存活 watcher**（pid 文件缺失、或进程已亡）追加
   一行 `note: no watcher armed — arm: agentctl watch <S>`：只提醒不代挂，typed 行与 exit code 不动。
-  **watch 不可用自造轮询顶替**：只认 DONE 的轮询会把 `RUNNING: idle but messages queued` 停成
+  **watch 不可用自造轮询顶替**：只认 DONE 的轮询会把 `RUNNING: idle but queued=<n>` 停成
   无人收割——typed 终态 / deliverable freshness / round 围栏全靠 sensing supervisor。
   `--deliverable` 声明与 brief 点名的输出文件必须同名：runtime 只看声明的 glob——worker 按 brief
   写到别名得 exit 6（misplaced hint 只扫 cwd 同名近失）；写了声明名却违背 brief 则 DONE 不拦。
 - **supervised watch（默认）**：感知环跑在独立 tmux 会话 `<session>-watchd`，宿主侧 `agentctl watch`
   只是**哑等待者**——只读围栏过的终态记录，自己不 classify。**被外部 TERM 后原地重挂即恢复同一
-  class + exit**，连本轮结论都不丢。生命周期绑 attempt：`start` / `stop` / `steer --replace` 回收
+  class + exit**，连本轮结论都不丢。生命周期绑 attempt：`start` / `stop` / `steer --interrupt` 回收
   守护环，普通 `steer` 保留。**降级只在守护结构性不可能时发生且响亮告警**（无 tmux / run 目录不可写 /
   自起的 pane 没发租约）——宁可失去抗杀性也不能拒绝观测，stderr 明说 "NOT kill-resilient"。
   **同名 `<s>-watchd` 在但没有本 identity 的租约 = 不可判，不是降级理由**：返回 `12 reason=unknown`
@@ -111,12 +125,14 @@ exit code、名字与语义是运行时事实 → `agentctl states`（`--json` �
 | WAITING-INPUT | 读题，`agentctl steer` 作答 |
 | STALLED-EXTERNAL | 修凭据/额度再重启；见引擎级注意 |
 | IDLE-NO-DELIVERABLE | poke（steer），别信幻影 DONE、别 stop |
-| WATCH-TIMEOUT | 重挂或人工核证，**绝不按 DONE 消费** |
+| WATCH-TIMEOUT | 重挂或人工核证，**绝不按 DONE 消费**。行尾 `progress=changed\|unchanged\|unknown` 是**进展痕迹的观察结论**，不是工作量判决：`unknown` = 探针关闭 / 未测 / 最后一次读不可判 / **整段窗口从未测到过一次可判的移动**（窗口由不可判的读开启或重建，中间那段没人量过），绝不读成「没进展」 |
 | ENGINE-SILENT | 查 stderr.log；必要时 stop+resume |
 | BUDGET-EXHAUSTED | 转人工裁决 |
 | RUNNING | 继续等 |
 | STALLED-STREAM | **先从 checkout/commits 抢救成果，再 stop**；探针任一不确定按 RUNNING 处理（宁钝勿敏）。窗口用 `AGENT_WATCH_STALL_MINS` 调、0 关 |
+| STALLED-PROGRESS | 流还活着，但整个窗口内**未观察到仓库进展痕迹**（HEAD / 脏树 hash（untracked 按文件全展开）/ 脏文件 mtime / deliverable mtime / BLOCKED.md 全未变）。这是启发式量具，**不等于「没干活」**——完全不落 Git / 交付物 / BLOCKED 痕迹的长推理会照样触发。所以**先读 events 尾**再决定：卡在无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认自己走死 → 抢救成果再 stop。窗口用 `AGENT_WATCH_PROGRESS_MINS` 调（默认 30min）、0 关；git 探针判不出时按「有进展」处理，且**只封杀本状态**——不刷新时间戳、不冒充 `changed`。判不出**也包含脏路径数超 500**：mtime 扫描有界，截断成前缀会把界外的真进展读成冻结，所以整次读数作废——脏树大到这个量级时本状态实际关闭，且每次读都把原因打出来。`status` 的 `last_progress_at=<ts>` 是**上次观察到痕迹变化**的时刻；量具坏后恢复的第一次可判读**只重建基线、不算移动**，故在此之前从未测到移动时不打该行，改打 `progress=unknown: <失败原因>` |
 | SUPERVISOR-LOST | `reason=dead` → 直接重挂。`reason=unknown` → **先读 detail**：只有它点名 rogue/wedged `<s>-watchd` 时才 `tmux kill-session -t <s>-watchd` 再重挂；其余 unknown（canonical 读超时 / `ps` 不可用 / 租约损坏 / pid 复用嫌疑）**只重挂，绝不杀**——那些情况下杀掉的是一个活着的守护环 |
+| DELIVERED-NEXT-TURN | **steer verb 的出口，不是会话状态**（watch/status 永不产它）：指令已送达但落在 turn 边界。`reason=capability` → 引擎无轮中帧，等边界即可，别重发；`reason=undecidable` → 量具坏（detail 点名哪个），**先修量具或读 events 尾**再决定要不要 `--interrupt`。两者都**已送达**，重发会得到两条指令 |
 
 新增 typed MESSAGE 行（**exit 码契约不变**，三类都映射到既有失败 / UNKNOWN 出口）：
 
@@ -153,7 +169,7 @@ job 会呈 idle 但没完成——`沉默 ≠ 交付`。
 - **裸 send-keys 坑**由 guard ④ 拦（长/CJK 文本在人工 attach 面必坏），控制一律走协议帧。
 - omp rpc 面无版本稳定性文档：launch 的 ready 握手即 preflight，握手失败 = fail-fast 清场重来，
   不带病跑。
-- **claude queued steer 的 turn 归属无引擎关联面**（诚实边界）：turn A 运行中排队 steer B，
+- **claude 边界送达的 turn 归属无引擎关联面**（诚实边界）：turn A 运行中送达 steer B（degraded 已明说），
   A 的 result 先落盘——`status` 单发可能把它读成终态；`watch` 的 2 连读稳定门 + deliverable
   gate 是真消费路径（A 完成后引擎立即起 B，下一读即 RUNNING）。turn 级关联等 P2
   （codex app-server 上车时统一按 id 解）。

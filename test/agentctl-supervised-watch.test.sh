@@ -520,7 +520,7 @@ chk_eq "M13 one publish, not two (single authority)" 1 \
 sw_clean
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
-echo "== M14: stop / --replace retire the supervisor; late conclusions are refused =="
+echo "== M14: stop / --interrupt retire the supervisor; late conclusions are refused =="
 sw_sandbox
 
 # stop mid-sensing: the loop is retired, and a conclusion it computes afterwards cannot land.
@@ -545,15 +545,15 @@ chk_eq "M14 a retired supervisor's late conclusion is refused" 2 "$prc"
 chk_eq "M14 and it resurrected nothing" 0 \
   "$([ -e "$WATCH_RUN_DIR/m14.terminal.json" ] && echo 1 || echo 0)"
 
-# --replace mid-sensing: new attempt, old supervisor retired, its late conclusion fenced out.
+# --interrupt mid-sensing: new attempt, old supervisor retired, late conclusion fenced out.
 seed m14r 70000; running m14r
 mkfifo "$WATCH_RUN_DIR/m14r.duplex.in" 2>/dev/null || true
 watch_bg m14r "$SANDBOX/m14r.w.log"
 await "[ -s '$WATCH_RUN_DIR/m14r.watch.super.json' ]" 100
 sup="$(lease_pid m14r)"
 armed="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity token m14r)"
-bash "$AGENTCTL" steer m14r -m "start over" --replace >/dev/null 2>&1
-chk_eq "M14 DAMAGE ORACLE: --replace reaped the supervisor armed under the old attempt" 0 \
+bash "$AGENTCTL" steer m14r -m "start over" --interrupt >/dev/null 2>&1
+chk_eq "M14 DAMAGE ORACLE: --interrupt reaped the supervisor armed under the old attempt" 0 \
   "$(await "! kill -0 $sup 2>/dev/null" 100 && echo 0 || echo 1)"
 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity replace m14r >/dev/null 2>&1
 pout="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity publish m14r --armed "$armed" \
@@ -562,13 +562,13 @@ chk_eq "M14 the old attempt's late conclusion is refused" 2 "$prc"
 chk_contains "M14 the refusal names the attempt fence" "STALE-ATTEMPT" "$pout"
 wait "$WPID_BG" 2>/dev/null; wrc=$?
 chk_eq "M14 the attached waiter is told, typed, that its supervisor is gone" 12 "$wrc"
-# `--replace` retires the loop BEFORE the attempt actually rotates, so the honest word on the
+# `--interrupt` retires the loop BEFORE the attempt actually rotates, so the honest word on the
 # host surface is the retirement, not a fence class that has not fired yet — the fence class is
 # asserted above, on the publish that really is refused. What must never happen is a silent or
 # mysterious death: the waiter says it lost its supervisor AND why.
 chk_contains "M14 the host surface names the lifecycle action that retired the loop" \
   "SUPERVISOR-RETIRED" "$(cat "$SANDBOX/m14r.w.log")"
-chk_contains "M14 and points at the verb responsible" "--replace" "$(cat "$SANDBOX/m14r.w.log")"
+chk_contains "M14 and points at the verb responsible" "--interrupt" "$(cat "$SANDBOX/m14r.w.log")"
 chk_contains "M14 and states no conclusion was published" "no terminal conclusion published" \
   "$(cat "$SANDBOX/m14r.w.log")"
 chk_not_contains "M14 a retired supervisor never yields a DONE" "=== [m14r] DONE" \
@@ -614,7 +614,7 @@ watch_bg m14o "$SANDBOX/m14o.w.log"
 await "[ -s '$WATCH_RUN_DIR/m14o.watch.super.json' ]" 100
 PROBE="$SANDBOX/m14o.probe.log"
 RETIRE_PROBE_LOG="$PROBE" RETIRE_PROBE_CTL="$DUPLEXCTL" \
-  bash "$AGENTCTL" steer m14o -m "start over" --replace >/dev/null 2>&1
+  bash "$AGENTCTL" steer m14o -m "start over" --interrupt >/dev/null 2>&1
 wait "$WPID_BG" 2>/dev/null
 probe="$(cat "$PROBE" 2>/dev/null)"
 chk_contains "M14b the last words are already on disk when the lease is unlinked" \
@@ -623,7 +623,7 @@ chk_not_contains "M14b DAMAGE ORACLE: the lease never vanishes ahead of the note
   "note-absent" "$probe"
 chk_contains "M14b and they name the lifecycle action that retired the loop" \
   "SUPERVISOR-RETIRED" "$probe"
-chk_contains "M14b and the verb responsible" "--replace" "$probe"
+chk_contains "M14b and the verb responsible" "--interrupt" "$probe"
 chk_contains "M14b and state that nothing was concluded" "no terminal conclusion published" \
   "$probe"
 chk_eq "M14b DAMAGE ORACLE: no SUPERVISOR-LOST read in that window is left without last words" \
@@ -1312,6 +1312,241 @@ cp "$SANDBOX/h3.lease.intact.json" "$H3L"
 rc="$(AGENT_WATCH_STATUS_TIMEOUT=300 python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" \
       watch-state h3 >/dev/null 2>&1; echo $?)"
 chk_eq "H-03 PAIRED GREEN: the intact lease reads alive again" 10 "$rc"
+sw_clean
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+echo "== M16 STALLED-PROGRESS: streaming is not progress =="
+# Field motive (2026-08-28, downstream seat): watch only called a human on a terminal state or
+# a question, so 2.5h of healthy STREAMING with zero commits, zero deliverable bytes and no
+# BLOCKED.md went unnoticed. STALLED-STREAM cannot see it — the stream is alive. The probe is
+# the WORK TRACE: HEAD, the dirty-tree hash, the deliverable mtime, BLOCKED.md's mtime.
+sw_sandbox
+export AGENT_WATCH_STALL_MINS=0          # isolate: the STREAM probe must not answer for this
+# a real repo with a real commit — `git rev-parse HEAD` on a commit-less repo is UNJUDGEABLE,
+# which is a different case (proven as the third fixture below)
+REPO="$SANDBOX/repo"; mkdir -p "$REPO"
+git -C "$REPO" init -q 2>/dev/null
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
+progress_seed() { # $1 session  $2 cwd
+  seed "$1" && running "$1"
+  printf 'engine=claude\ncwd=%s\nround=1\n' "$2" > "$WATCH_RUN_DIR/$1.duplex.meta"
+}
+# window in MINUTES; 0.01 = 0.6s, so two real polls straddle it without a slow test
+PW=0.01
+
+# ── 坏红: the trace is frozen for the whole window → typed STALLED-PROGRESS 14 ────────────
+progress_seed pgFROZEN "$REPO"
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgFROZEN >/dev/null 2>&1; echo $?)"
+chk_eq "M16 the first read only OPENS the window (still RUNNING 10)" 10 "$rc"
+/bin/sleep 1
+out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgFROZEN 2>&1)"; rc=$?
+chk_eq "M16 DAMAGE ORACLE: a frozen work trace past the window is typed 14" 14 "$rc"
+chk_contains "M16 the verdict names the frozen probes" "dirty-tree hash" "$out"
+chk_contains "M16 and never reads as done" "never read this as DONE" "$out"
+chk_contains "M16 and names the knob that tunes it" "AGENT_WATCH_PROGRESS_MINS" "$out"
+# the state must also be PUBLISHABLE — the terminal-class map gates that, and the supervisor
+# leg below proves the whole path end to end
+chk_contains "M16 the class is in the publishable terminal map" "STALLED-PROGRESS" \
+  "$(grep -A2 'TERMINAL_CLASSES = ' "$AW_DIR/identity.py")"
+
+# ── 好绿: the trace MOVES between reads → the window restarts, no verdict ─────────────────
+progress_seed pgMOVES "$REPO"
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgMOVES >/dev/null 2>&1; echo $?)"
+chk_eq "M16 PAIRED GREEN: window opened (RUNNING 10)" 10 "$rc"
+/bin/sleep 1
+printf 'real work\n' > "$REPO/work.txt"          # the dirty-tree hash moves: that IS progress
+out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgMOVES 2>&1)"; rc=$?
+chk_eq "M16 PAIRED GREEN: a moving work trace stays RUNNING 10 past the same window" 10 "$rc"
+chk_contains "M16 PAIRED GREEN: and publishes when it last moved" "last_progress_at=" "$out"
+/bin/sleep 1
+out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgMOVES 2>&1)"; rc=$?
+chk_eq "M16 PAIRED GREEN: the window really restarted from the movement, not from arm time" \
+  14 "$rc"
+
+# ── 坏样本 (SHIP-BLOCKING, cold review R1 §3): NESTED untracked content, edited every window ─
+# The DEFAULT `git status --porcelain` folds nested untracked content into ONE `?? nested/`
+# line. Appending to `nested/deep/notes.md` changes neither that porcelain set nor the listed
+# directory's mtime, so real uncommitted work read as a frozen trace and fired a false 14.
+# `--untracked-files=all` is what makes the nested FILE the dirty entry the mtime tracks.
+progress_seed pgNEST "$REPO"
+mkdir -p "$REPO/nested/deep"
+printf 'v1\n' > "$REPO/nested/deep/notes.md"
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgNEST >/dev/null 2>&1; echo $?)"
+chk_eq "M16 nested: the first read only OPENS the window (RUNNING 10)" 10 "$rc"
+/bin/sleep 1
+printf 'v2\n' >> "$REPO/nested/deep/notes.md"    # ONLY the nested untracked file moves
+out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgNEST 2>&1)"; rc=$?
+chk_eq "M16 PAIRED GREEN (坏样本): editing a NESTED untracked file IS progress, past the window" \
+  10 "$rc"
+chk_contains "M16 nested: and the window restarted from that movement" "last_progress_at=" "$out"
+/bin/sleep 1
+printf 'v3\n' >> "$REPO/nested/deep/notes.md"
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgNEST >/dev/null 2>&1; echo $?)"
+chk_eq "M16 nested: still no false verdict across a SECOND window of nested-only work" 10 "$rc"
+# DAMAGE ORACLE: the very same tree, with that file left ALONE, really does freeze — so the
+# green above is the fingerprint tracking the work, not the probe having been switched off
+/bin/sleep 1
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgNEST >/dev/null 2>&1; echo $?)"
+chk_eq "M16 nested DAMAGE ORACLE: stop editing it and the same window fires 14" 14 "$rc"
+rm -rf "$REPO/nested"
+
+# ── 坏样本 (SHIP-BLOCKING, verify R2 SB3): a dirty set PAST the bounded scan ──────────────
+# The scan stats at most PROGRESS_DIRTY_MAX paths. Silently keeping the first 500 published a
+# mtime measured over a PREFIX as if it covered the tree: with 501 dirty files, work that only
+# ever touched the 501st left the fingerprint bit-identical and fired a false 14 on a session
+# that was moving. The bound stays — the READING is refused instead of truncated.
+BIG="$SANDBOX/bigrepo"; mkdir -p "$BIG"
+git -C "$BIG" init -q 2>/dev/null
+git -C "$BIG" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
+python3 -c '
+import os, sys
+root = sys.argv[1]
+for n in range(1, 502):
+    with open(os.path.join(root, "f%03d.txt" % n), "w") as fh:
+        fh.write("v1\n")' "$BIG"
+chk_eq "M16 501 files: the fixture really is ONE past the bound" 501 \
+  "$(git -C "$BIG" status --porcelain --untracked-files=all | grep -c .)"
+progress_seed pgBIG "$BIG"
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBIG >/dev/null 2>&1; echo $?)"
+chk_eq "M16 501 files: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+printf 'v2\n' >> "$BIG/f501.txt"       # ONLY the file OUTSIDE the scanned prefix moves
+out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBIG 2>&1)"; rc=$?
+chk_eq "M16 DAMAGE ORACLE (SB3): work outside the scanned prefix NEVER fires 14" 10 "$rc"
+chk_contains "M16 501 files: the read is admitted unjudgeable" "progress=unknown" "$out"
+chk_contains "M16 501 files: and NAMES the bound it went past" \
+  "exceeds the bounded scan (>500 paths)" "$out"
+chk_not_contains "M16 501 files: no timestamp fabricated from a truncated measurement" \
+  "last_progress_at=" "$out"
+/bin/sleep 1
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBIG >/dev/null 2>&1; echo $?)"
+chk_eq "M16 501 files: still no verdict across a SECOND window" 10 "$rc"
+# PAIRED GREEN: the bound is not an off-switch. At exactly 500 dirty paths the same tree is
+# JUDGED again, and a frozen one still fires the state it must.
+rm -f "$BIG/f501.txt"
+progress_seed pgBIG2 "$BIG"
+out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBIG2 2>&1)"; rc=$?
+chk_eq "M16 PAIRED GREEN: 500 dirty paths opens a JUDGED window (RUNNING 10)" 10 "$rc"
+chk_not_contains "M16 PAIRED GREEN: nothing unjudgeable about the bound itself" \
+  "progress=unknown" "$out"
+/bin/sleep 1
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBIG2 >/dev/null 2>&1; echo $?)"
+chk_eq "M16 PAIRED GREEN: and a frozen 500-path tree still fires 14" 14 "$rc"
+rm -rf "$BIG"
+
+# ── 量具坏: a probe that cannot be JUDGED reads as progress, forever ──────────────────────
+# cwd is not a repo, so `git rev-parse HEAD` fails: 宁钝勿敏 — an unjudgeable gauge may never
+# manufacture a verdict, no matter how long it stays unjudgeable.
+progress_seed pgBLIND "$SANDBOX/not-a-repo"
+mkdir -p "$SANDBOX/not-a-repo"
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBLIND >/dev/null 2>&1; echo $?)"
+chk_eq "M16 量具坏: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBLIND 2>&1)"; rc=$?
+chk_eq "M16 量具坏: an unjudgeable git probe NEVER fires the state" 10 "$rc"
+# NB3.3: unjudgeable only FORBIDS the verdict. It may not refresh the progress timestamp —
+# a gauge failing at 14:03 is not the work moving at 14:03 (cold review R1 §3).
+chk_contains "M16 量具坏: and SAYS the probe could not be judged" "progress=unknown" "$out"
+chk_not_contains "M16 量具坏: publishing NO timestamp it never measured" \
+  "last_progress_at=" "$out"
+/bin/sleep 1
+rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBLIND >/dev/null 2>&1; echo $?)"
+chk_eq "M16 量具坏: still RUNNING after a third window" 10 "$rc"
+# and the knob's off switch is real: 0 disables the probe entirely, even on a frozen repo
+progress_seed pgOFF "$REPO"
+rc="$(AGENT_WATCH_PROGRESS_MINS=0 bash "$AGENTCTL" status pgOFF >/dev/null 2>&1; echo $?)"
+/bin/sleep 1
+out="$(AGENT_WATCH_PROGRESS_MINS=0 bash "$AGENTCTL" status pgOFF 2>&1)"; rc=$?
+chk_eq "M16 the 0 off-switch keeps the session RUNNING" 10 "$rc"
+chk_not_contains "M16 and publishes no progress timestamp at all" "last_progress_at=" "$out"
+
+# ── the SUPERVISOR must publish it like any other class, and a fresh waiter recover exit 14 ─
+progress_seed pgSUP "$REPO"
+export AGENT_WATCH_MAX_POLLS=1000 AGENT_WATCH_PROGRESS_MINS=$PW
+if kill_waiter_then pgSUP ':'; then
+  chk_eq "M16 the TERM'd waiter really died (143)" 143 "$W1RC"
+  chk_eq "M16 STALLED-PROGRESS persisted by the supervisor" "STALLED-PROGRESS" \
+    "$(record_class pgSUP)"
+  before="$(spawn_count pgSUP)"
+  out="$(bash "$AGENTCTL" watch pgSUP 2>&1)"; rc=$?
+  chk_eq "M16 a brand-new waiter recovers exit 14 from the record" 14 "$rc"
+  chk_contains "M16 and reproduces the class line" "STALLED-PROGRESS" "$out"
+  chk_eq "M16 recovery re-derived nothing (no second supervisor)" "$before" "$(spawn_count pgSUP)"
+else
+  _record "M16 the supervisor published a STALLED-PROGRESS record" 0 "no record appeared"
+fi
+unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_PROGRESS_MINS AGENT_WATCH_STALL_MINS
+
+# ── WATCH-TIMEOUT must say WHICH kind of budget exhaustion it was ─────────────────────────
+progress_seed pgTMO "$REPO"
+export AGENT_WATCH_MAX_POLLS=3
+out="$(AGENT_WATCH_PROGRESS_MINS=30 bash "$AGENTCTL" watch pgTMO 2>&1)"; rc=$?
+chk_eq "M16 budget exhaustion is still WATCH-TIMEOUT 7" 7 "$rc"
+chk_contains "M16 and the line ends with the progress verdict" "progress=unchanged" "$out"
+unset AGENT_WATCH_MAX_POLLS
+progress_seed pgTMO2 "$REPO"
+export AGENT_WATCH_MAX_POLLS=8 AGENT_WATCH_PROGRESS_MINS=30
+# ORDERING, not sleeping: the work must move AFTER the loop's first read established the
+# baseline window, otherwise the very first fingerprint already contains it and "unchanged"
+# would be the honest answer
+watch_bg pgTMO2 "$SANDBOX/pgTMO2.w.log"
+await "[ -s '$WATCH_RUN_DIR/pgTMO2.duplex.progress' ]" 300
+printf 'more work\n' >> "$REPO/work.txt"
+wait "$WPID_BG" 2>/dev/null; rc=$?
+out="$(cat "$SANDBOX/pgTMO2.w.log")"
+chk_eq "M16 PAIRED GREEN: a working session times out the same way" 7 "$rc"
+chk_contains "M16 PAIRED GREEN: but the tail says the work DID move" "progress=changed" "$out"
+unset AGENT_WATCH_PROGRESS_MINS
+# NB3.3: the THIRD tail word is the honest one. A cwd that is not a repo makes every read
+# unjudgeable, and `unchanged` there would be a measurement nobody took (cold review R1 §3).
+progress_seed pgTMO3 "$SANDBOX/not-a-repo"
+export AGENT_WATCH_MAX_POLLS=3 AGENT_WATCH_PROGRESS_MINS=30
+out="$(bash "$AGENTCTL" watch pgTMO3 2>&1)"; rc=$?
+chk_eq "M16 an unjudgeable probe still times out as WATCH-TIMEOUT 7" 7 "$rc"
+chk_contains "M16 NB3.3: and the tail word is unknown, not a fabricated unchanged" \
+  "progress=unknown" "$out"
+chk_not_contains "M16 NB3.3: never claiming the trace stood still" "progress=unchanged" "$out"
+# NB3.3 恢复面 (verify R2): the gauge comes BACK mid-watch, on a tree that never changed.
+# The first judgeable read only rebuilds a baseline — the window it replaces was opened by a
+# read nobody could judge, so the difference between the two fingerprints is unattributed.
+# Crediting it as movement moved the progress clock to the RECOVERY instant, and the
+# `None → SAME → SAME` sequence below then reported `progress=changed` on a session that
+# never demonstrably moved a byte.
+pg_field() { # $1 session  $2 field of the persisted progress window
+  python3 -c '
+import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get(sys.argv[2])
+except Exception:
+    v = None
+print("" if v is None else json.dumps(v))' "$WATCH_RUN_DIR/$1.duplex.progress" "$2"
+}
+RECO="$SANDBOX/recover"; mkdir -p "$RECO"
+progress_seed pgREC "$RECO"
+export AGENT_WATCH_MAX_POLLS=8 AGENT_WATCH_PROGRESS_MINS=30
+watch_bg pgREC "$SANDBOX/pgREC.w.log"
+await "[ -s '$WATCH_RUN_DIR/pgREC.duplex.progress' ]" 300
+chk_eq "M16 NB3.3 恢复: the window really was opened by an UNJUDGEABLE read" "false" \
+  "$(pg_field pgREC judgeable)"
+# ORDERING, not sleeping: the gauge must recover AFTER that first blind read, on an
+# UNCHANGED tree — the whole point is that nobody measured whether work moved before it
+git -C "$RECO" init -q 2>/dev/null
+git -C "$RECO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
+wait "$WPID_BG" 2>/dev/null; rc=$?
+out="$(cat "$SANDBOX/pgREC.w.log")"
+chk_eq "M16 NB3.3 恢复: budget exhaustion is still WATCH-TIMEOUT 7" 7 "$rc"
+chk_eq "M16 NB3.3 恢复: and the gauge REALLY recovered — this is not the blind case again" \
+  "true" "$(pg_field pgREC judgeable)"
+chk_eq "M16 NB3.3 恢复: the recovery rebuilt a baseline and credited NO movement" "0.0" \
+  "$(pg_field pgREC moved)"
+chk_contains "M16 NB3.3 恢复: so the tail word is unknown" "progress=unknown" "$out"
+chk_not_contains "M16 NB3.3 恢复 DAMAGE ORACLE: never the fabricated changed" \
+  "progress=changed" "$out"
+chk_not_contains "M16 NB3.3 恢复: and never a fabricated unchanged either" \
+  "progress=unchanged" "$out"
+unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_PROGRESS_MINS
+unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_PROGRESS_MINS
+unset AGENT_WATCH_MAX_POLLS
 sw_clean
 
 summary

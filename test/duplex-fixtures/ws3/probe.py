@@ -21,7 +21,9 @@ finding it prints.
   map <engine>               <capability>=<state> lines
   cell <engine> <cap> <f>    one field of one cell
   spec <engine> <field>      one field of the shell launch spec row
-  wire <engine> <verb>       "declared=<route> emitted=<what the branch really sends>"
+  wire <engine> <verb> [active|idle]
+                             "declared=<route> emitted=<what the branch really sends>";
+                             the turn state stubs the ONE input a steer routes on
   drift                      structural table<->registry gate (exit 1 = drift)
 """
 from __future__ import annotations
@@ -63,20 +65,35 @@ def spec_row(engine: str) -> dict:
     return {}
 
 
-def wire(engine: str, verb: str) -> str:
+def wire(engine: str, verb: str, state: str = "") -> str:
     """The declared route id vs the wire name the executable branch REALLY emits.
 
-    omp/claude go through the frame builder; codex is driven for real with the JSON-RPC
-    transport stubbed, so the recorded methods are the ones the branch would have sent. This
-    proves the route id is not a decoration — it does NOT prove the branch is wired into the
-    live lane, which is what the behaviour battery is for."""
-    route = (cell(engine, dx.VERB_CAPABILITY.get(verb, "")) or {}).get("route", "")
+    A steer's route is an ALTERNATION and which half reaches the wire is the LIVE TURN
+    STATE, so `state` (active|idle) stubs exactly that one input — dx.TURN_ACTIVE — and the
+    REAL selector (dx.steer_delivery) resolves the half. omp/claude then go through the real
+    frame builder; codex is driven for real with the JSON-RPC transport stubbed, so the
+    recorded methods are the ones the branch would have sent. This proves the route id is not
+    a decoration — it does NOT prove the branch is wired into the live lane, which is what
+    the behaviour battery is for."""
+    c = cell(engine, dx.VERB_CAPABILITY.get(verb, ""))
+    route = c.get("route", "")
     # a branch that cannot even be invoked is DAMAGE the suite must report as a wrong value,
     # never as a harness traceback (cold review R1, MAJOR): every failure mode below becomes
     # part of the `emitted=` string.
+    emit = route
+    if verb == "steer":
+        if state:
+            dx.TURN_ACTIVE[engine] = lambda _sess, _live=(state == "active"): (_live, "")
+        try:
+            emit, _reason, _detail = dx.steer_delivery(engine, None)
+        except SystemExit:
+            return f"declared={route} emitted=<refused>"
+        except Exception as exc:                      # noqa: BLE001 — reported, not raised
+            return f"declared={route} emitted=<selector-error:{type(exc).__name__}>"
     if engine in ("omp", "claude"):
         try:
-            emitted = json.loads(dx.build_frame(engine, verb, "hello", "req-1")).get("type")
+            emitted = json.loads(
+                dx.build_frame(engine, verb, "hello", "req-1", emit)).get("type")
         except SystemExit:
             emitted = "<refused>"
         except Exception as exc:                      # noqa: BLE001 — reported, not raised
@@ -93,8 +110,11 @@ def wire(engine: str, verb: str) -> str:
 
     dx.codex_request = fake_request
     dx.wait_for = lambda *a, **k: {"method": "turn/completed"}
-    ctx = {"thread": "T1", "text": "hello", "verb": verb, "route": route,
-           "active": None if verb == "steer" else "t1",
+    ctx = {"thread": "T1", "text": "hello", "verb": verb, "route": route, "wire": emit,
+           "active": None if (verb == "steer" and state != "active") else "t1",
+           # this probe stubs a DECIDED turn state, so the gauge diagnosis is empty; the
+           # broken-gauge branch of the replace route is a behaviour case, not a wire case
+           "active_why": "",
            "on_ready": lambda: None, "commit": lambda kind: None}
     try:
         handler(types.SimpleNamespace(events="/nonexistent/events"), ctx)
@@ -161,15 +181,19 @@ def drift() -> int:
             if c["start_flag"] and not route:
                 bad.append(f"{engine}.{name}: start flag '{c['start_flag']}' on a cell with "
                            "no wire route")
-            if c["fallback"]:
-                if state != dx.DEGRADED:
-                    bad.append(f"{engine}.{name}: fallback on a non-degraded state")
-                target = dx.VERB_CAPABILITY.get(c["fallback"])
-                if target is None:
-                    bad.append(f"{engine}.{name}: fallback verb '{c['fallback']}' is not a "
-                               "capability verb")
-                elif caps[target]["state"] == dx.UNSUPPORTED:
-                    bad.append(f"{engine}.{name}: falls back to unsupported '{target}'")
+            # every route half a composite declares must be a real wire name: an alternation
+            # whose halves are not both spelled out cannot be state-selected at send time
+            if dx.STEER_ROUTE_SEP in route and not all(
+                    half.strip() for half in route.split(dx.STEER_ROUTE_SEP)):
+                bad.append(f"{engine}.{name}: alternation route '{route}' has an empty half")
+            # a declared QUEUE route must be one of the cell's own halves: the steer-log
+            # listing filters on these names, so a queue route that is not on the wire would
+            # silently list nothing while a depth stayed non-zero
+            halves = {h.strip() for h in route.split(dx.STEER_ROUTE_SEP) if h.strip()}
+            stray = set(c.get("queue_routes") or ()) - halves
+            if stray:
+                bad.append(f"{engine}.{name}: queue route(s) {sorted(stray)} are not halves "
+                           f"of the declared route '{route}'")
         orphans = set(dx.ROUTES.get(engine) or {}) - used
         if orphans:
             bad.append(f"{engine}: routes with no declared capability {sorted(orphans)}")
@@ -202,11 +226,12 @@ def main() -> int:
         print("\n".join(f"{n}={cell(arg(0), n).get('state', '')}"
                         for n in dx.CAPABILITY_ORDER))
     elif op == "cell":
-        print(cell(arg(0), arg(1)).get(arg(2), ""))
+        field = cell(arg(0), arg(1)).get(arg(2), "")
+        print(" ".join(field) if isinstance(field, (tuple, list)) else field)
     elif op == "spec":
         print(spec_row(arg(0)).get(arg(1), ""))
     elif op == "wire":
-        print(wire(arg(0), arg(1)))
+        print(wire(arg(0), arg(1), arg(2)))
     elif op == "drift":
         return drift()
     else:
