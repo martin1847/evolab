@@ -51,6 +51,11 @@ chk_contains "行为内核 has 角色绑定" "角色绑定" "$ag"
 
 # ③ hooks wired, absolute paths (hooks don't expand ~)
 SJ="$WT/.claude/settings.json"
+# User level is a legitimate source: checklist 步骤 3 says a project must NOT re-wire an entry
+# the user-level settings already carries (same 判据 as the mail block ⑤). Only the "is it
+# wired at all" question spans levels — path hygiene below stays PROJECT-only, since the
+# maintainer's own ~/.claude is not under test.
+USJ="$HOME/.claude/settings.json"
 chk_eq "settings.json exists" 1 "$([ -f "$SJ" ] && echo 1 || echo 0)"
 hook_count() { # event matcher-or-empty command-basename
   [ -f "$SJ" ] || { echo 0; return; }
@@ -77,17 +82,28 @@ print(sum(os.path.basename(h.get("command", "")) == command
           for group in d.get("hooks", {}).get(event, []) for h in group.get("hooks", [])))
 PY
 }
+hook_cmds() { # settings-path -> every hook command string, one per line (silent if absent/corrupt)
+  [ -f "$1" ] || return 0
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+for arr in d.get("hooks", {}).values():
+    for group in arr:
+        for hook in group.get("hooks", []):
+            print(hook.get("command", ""))
+PY
+}
+wired_any_level() { # command-needle -> 1 if wired at project OR user level
+  case "$(hook_cmds "$SJ"; hook_cmds "$USJ")" in *"$1"*) echo 1 ;; *) echo 0 ;; esac
+}
 if [ -f "$SJ" ]; then
-  cmds="$(python3 -c '
-import json,sys
-d=json.load(open(sys.argv[1]))
-for arr in d.get("hooks",{}).values():
-    for m in arr:
-        for h in m.get("hooks",[]):
-            print(h.get("command",""))' "$SJ" 2>/dev/null)"
-  chk_contains "wired: cto-guard-bash" "cto-guard-bash.py" "$cmds"
-  chk_contains "wired: cto-guard-agent" "cto-guard-agent.py" "$cmds"
-  chk_contains "wired: memory-discipline" "memory-discipline-hook" "$cmds"
+  cmds="$(hook_cmds "$SJ")"   # project level only — feeds the path-hygiene assertions below
+  chk_eq "wired (project or user level): cto-guard-bash" 1 "$(wired_any_level cto-guard-bash.py)"
+  chk_eq "wired (project or user level): cto-guard-agent" 1 "$(wired_any_level cto-guard-agent.py)"
+  chk_eq "wired (project or user level): memory-discipline" 1 "$(wired_any_level memory-discipline-hook)"
   chk_eq "no tilde paths in hook commands" 0 "$(printf '%s' "$cmds" | grep -c '~' || true)"
   bad=0
   while IFS= read -r c; do
@@ -98,8 +114,10 @@ for arr in d.get("hooks",{}).values():
   done <<< "$cmds"
   chk_eq "all hook commands are bare absolute paths (no interpreter prefix)" 0 "$bad"
   # matcher must come from the shipped truth-source (guard-hooks.json), not from stale prose copies —
-  # KillShell only exists in the truth-source, so its presence proves the source was actually read
-  chk_contains "matcher taken from truth-source (has KillShell)" "KillShell" "$(cat "$SJ")"
+  # KillShell only exists in the truth-source, so its presence proves the source was actually read.
+  # Read at whichever level the guard entry landed: dedupe means it may legitimately be user-level only.
+  chk_contains "matcher taken from truth-source (has KillShell), project or user level" "KillShell" \
+    "$(cat "$SJ" "$USJ" 2>/dev/null)"
 
 fi
 
