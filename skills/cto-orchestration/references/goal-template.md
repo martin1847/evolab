@@ -97,6 +97,9 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
   对每个交付项打开真正的落地物（use site / SQL / Dockerfile / 注册表），列出闭集外但必改的文件；
   有漏 ⇒ 只把 delta（file:line + 为什么必改 + 最小改法）写进 BLOCKED.md 停等，不做整份取证；
   无漏 ⇒ 回执一行「闭集核对：无 delta」后开工。
+- [ ] 改动触及**状态机单一写者 / 命令面 / 巡检选取谓词**之一 → Done-when 必含场景矩阵交付物
+  （状态 × 触发 × 关键变量 + 命令 × 状态两张表；形态与 kill criterion 细则读
+  implementation-discipline §场景矩阵，本模板不复制）——单点用例各自绿挡不住组合格与语义表（下游席位 n=3）。
 - [ ] 本 goal 新造门/上限/仪式（合同硬门、行数上限、证据文档仪式）→ 先向主理人报，且同行附
   **kill criterion**（什么证据证明它是净负债）；无此行不进合同（复盘按 GATE-AUDIT 结账）。
 - [ ] goal 含合并/发布类终态动作 → 前置写成机械外部输入：「合并前置 = 编排位 steer 传回
