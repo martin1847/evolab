@@ -156,8 +156,13 @@ chk_contains "stale-meta stop path carries the fingerprint" 'meta_get "$S" pane_
 # must never kill a live "rev2" neighbor, and pane_pid must never be read from one.
 chk_eq "no prefix-matching tmux -t \$S target survives (bare OR colon form)" "" \
   "$(grep -nE 'tmux (has-session|kill-session|display-message|set-option)[^|]*-t "\$S:?"' "$AGENTCTL")"
-chk_contains "duplexctl tmux_alive probes exact name" 'f"={name}"' "$(cat "$AW_DIR/duplexctl.py")"
-chk_eq "duplexctl has no bare -t name target" "" "$(grep -n '"-t", name' "$AW_DIR/duplexctl.py")"
+# the python side of the lane is TWO files since the watch/supervisor split (duplexctl.py keeps
+# the engine + front door, watchctl.py the patrol verbs): both scan faces are the union, so a
+# rule cannot be satisfied by the file that happens to be looked at.
+PY_SRC="$(cat "$AW_DIR/duplexctl.py" "$AW_DIR/watchctl.py")"
+chk_contains "duplexctl tmux_alive probes exact name" 'f"={name}"' "$PY_SRC"
+chk_eq "the python lane has no bare -t name target" "" \
+  "$(grep -n '"-t", name' "$AW_DIR/duplexctl.py" "$AW_DIR/watchctl.py")"
 chk_contains "start pins remain-on-exit off (dead-pane pid trap, S1)" 'remain-on-exit off' "$src"
 
 # ═══ process hygiene: escaped-descendant advisory · inventory · reap negative controls ═══
@@ -417,8 +422,8 @@ chk_eq "BT4 the recorded fixture is still alive after the scan" "omp 97" \
        "$(ps -o args= -p "${orphan:-0}" 2>/dev/null)"
 chk_eq "BT4 the report holds candidates we did not create, alongside the fixture" 1 \
   "$([ "$(printf '%s\n' "$out" | grep -cE '^(orphan-candidate|unattributed|record-without-tmux|tmux-without-record) ')" -ge 2 ] && echo 1 || echo 0)"
-chk_eq "BT4 duplexctl's only os.kill is the signal-0 liveness probe" "1 1" \
-  "$(grep -c 'os\.kill(' "$AW_DIR/duplexctl.py") $(grep -c 'os\.kill(int(pid), 0)' "$AW_DIR/duplexctl.py")"
+chk_eq "BT4 the python lane's only os.kill is the signal-0 liveness probe" "1 1" \
+  "$(cat "$AW_DIR/duplexctl.py" "$AW_DIR/watchctl.py" | grep -c 'os\.kill(') $(cat "$AW_DIR/duplexctl.py" "$AW_DIR/watchctl.py" | grep -c 'os\.kill(int(pid), 0)')"
 
 # --- 15. [BT5] a broken ps makes ONLY the census [unknown] — never empty, never 0 -----------
 for mode in fail malformed; do

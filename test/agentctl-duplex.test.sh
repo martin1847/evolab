@@ -478,7 +478,7 @@ bash "$AGENTCTL" stop rvR >/dev/null 2>&1
 # checks above. Proven through the REAL entry instead: a fixture COPY of the lane with
 # divergent tiers must put tier-R on a --review frame and tier-D on a default frame.
 DIV="$SANDBOX/divergent-aw"; mkdir -p "$DIV"
-cp "$AW_DIR/agentctl" "$AW_DIR/duplexctl.py" "$AW_DIR/identity.py" "$DIV/"
+cp "$AW_DIR/agentctl" "$AW_DIR/duplexctl.py" "$AW_DIR/watchctl.py" "$AW_DIR/identity.py" "$DIV/"
 # portable in-place edit (BSD sed needs `-i ''`, GNU sed rejects it): suffix + rm
 sed -i.bak 's/^CODEX_SANDBOX = .*/CODEX_SANDBOX = {"default": "tier-D", "review": "tier-R"}/' "$DIV/duplexctl.py" && rm -f "$DIV/duplexctl.py.bak"
 # the fixture edit itself must be PROVEN (a silent no-op turned this suite red only in CI)
@@ -998,7 +998,7 @@ WATCH_RUN_DIR="$IMGONE"
 chk_eq "unpersistable episode reads fail-closed 1" 1 "$(imk_py count)"
 WATCH_RUN_DIR="$WATCH_RUN_DIR_SAVE"
 # stop teardown removes the sidecar so a reclaimed session name cannot inherit stale marks
-chk_contains "idle-marks is in the stop removal set" "duplex.idle-marks" "$(grep -A2 '_STOP_KEPT = ' "$AW_DIR/duplexctl.py")"
+chk_contains "idle-marks is in the stop removal set" "duplex.idle-marks" "$(grep -A2 '_STOP_KEPT = ' "$AW_DIR/watchctl.py")"
 # hint carries the path-first guidance (review M2: prefix pin alone let the new half vanish)
 chk_contains "idle hint keeps path-first guidance" "check the path first" "$(grep -B2 -A4 '2nd+ idle episode this session' "$AW_DIR/duplexctl.py")"
 

@@ -7,7 +7,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 > 本文只写 CLI 讲不了的：语义、失败形态、判断。能从 `agentctl` / `capabilities` / `states` 问出来的
 > 事实以 CLI 为准；本文偶有的复述（exit 码、resume 命令、env 覆盖）漂移时 CLI 赢。
-> 改 `duplexctl.py` 内部前读 `ARCHITECTURE.md`（分层符号表、白盒测试耦合、拆分裁决账）。
+> 改 `duplexctl.py` / `watchctl.py` 内部前读 `ARCHITECTURE.md`（分层符号表、白盒测试耦合、拆分裁决账）。
 
 ## agentctl —— 当前命令面
 

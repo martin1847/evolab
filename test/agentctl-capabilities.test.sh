@@ -707,15 +707,22 @@ teardown
 # (fixed budgets were already refuted once: they go stale and get declared around). Share is what
 # the property actually means — bash may grow when the runtime grows, it may not grow ALONE.
 # Baseline 12.5% measured 2026-08-12; 1.0-point headroom absorbs ordinary plumbing.
+# DENOMINATOR = every shipped *.py beside the entry, not duplexctl.py alone (2026-08-30, the
+# watch/supervisor split): counting one file made the ratchet a hostage of that file's identity —
+# moving 1385 lines from duplexctl.py into watchctl.py, with not one line of bash added and not
+# one judgement returning to the shell, drove the measured share 106→135/1000 and would have
+# breached a gate about bash growth on a python-only refactor. Same rule, re-derived on the real
+# denominator: measured 66/1000 (bash 594 / python 8377) + the same 1.0-point headroom = 76.
+# That is TIGHTER than the old 135, which had silently accumulated 29 points of unused room.
 BASH_LINES="$(wc -l < "$AGENTCTL")"
-PY_LINES="$(wc -l < "$(dirname "$AGENTCTL")/duplexctl.py")"
+PY_LINES="$(cat "$(dirname "$AGENTCTL")"/*.py | wc -l | tr -d ' ')"
 # cross-multiply, do not floor a percentage then compare (floor turned the stated 13.5% into
 # an effective <13.6% ratchet — review m1 2026-08-12)
 SHARE_X10="$(( BASH_LINES * 1000 / (BASH_LINES + PY_LINES) ))"
-OVER=$(( BASH_LINES * 1000 > 135 * (BASH_LINES + PY_LINES) ? 1 : 0 ))
+OVER=$(( BASH_LINES * 1000 > 76 * (BASH_LINES + PY_LINES) ? 1 : 0 ))
 # breach message names the fix, not just the number (a bare number teaches nobody)
 [ "$OVER" -eq 0 ] && VERDICT="within" \
-  || VERDICT="BREACH(${SHARE_X10}/1000): bash 占比回升 = 判定正在回流 shell — 下沉 duplexctl，或在 goal 声明理由并更新基线"
-chk_eq "C10 thin entry: bash share ${SHARE_X10}/1000 stays under the 135 ratchet" "within" "$VERDICT"
+  || VERDICT="BREACH(${SHARE_X10}/1000): bash 占比回升 = 判定正在回流 shell — 下沉 duplexctl/watchctl，或在 goal 声明理由并更新基线"
+chk_eq "C10 thin entry: bash share ${SHARE_X10}/1000 stays under the 76 ratchet" "within" "$VERDICT"
 
 summary

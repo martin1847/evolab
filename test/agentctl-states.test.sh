@@ -73,12 +73,17 @@ table=no; case "$bogus" in *SUPERVISOR-LOST*) table=yes ;; esac
 chk_eq "unknown option refused, no table printed" "rc=1 table=no" "rc=$rc table=$table"
 
 echo "== S4: source consistency — the published set IS the code's typed vocabulary =="
+# SCAN FACE = both python files of the lane. `EXIT_*` is defined in duplexctl.py alone, but the
+# typed exits that RETURN those constants are split across duplexctl.py (engine + front door) and
+# watchctl.py (patrol verbs) since 2026-08-30 — scanning one file would leave every `_watch_exit`
+# and every watch verdict outside the bare-literal rule, which is most of the emission sites.
 violations="$(states --json | python3 -c '
 import ast, json, os, sys
-path = sys.argv[1]
-tree = ast.parse(open(path, encoding="utf-8").read())
+paths = sys.argv[1:]
+trees = [ast.parse(open(p, encoding="utf-8").read()) for p in paths]
 published = {s["code"] for s in json.load(sys.stdin)["states"]}
 defined = {n.value.value
+           for tree in trees
            for a in tree.body if isinstance(a, ast.Assign)
            for n in [a] if isinstance(a.value, ast.Constant) and isinstance(a.value.value, int)
            for t in a.targets if isinstance(t, ast.Name) and t.id.startswith("EXIT_")}
@@ -99,14 +104,15 @@ def rc_args(node):
             yield node.args[1]
         elif name in ("exit", "_watch_exit") and node.args:
             yield node.args[0]
-base = os.path.basename(path)
-for n in ast.walk(tree):
-    for a in rc_args(n):
-        if isinstance(a, ast.Constant) and isinstance(a.value, int) \
-                and a.value in published and a.value not in (0, 1):
-            bad.append("bare-literal-verdict:%s:%d:%d" % (base, a.lineno, a.value))
+for path, tree in zip(paths, trees):
+    base = os.path.basename(path)
+    for n in ast.walk(tree):
+        for a in rc_args(n):
+            if isinstance(a, ast.Constant) and isinstance(a.value, int) \
+                    and a.value in published and a.value not in (0, 1):
+                bad.append("bare-literal-verdict:%s:%d:%d" % (base, a.lineno, a.value))
 print(" ".join(bad) if bad else "CONSISTENT %d" % len(published))
-' "$CTL")"
+' "$CTL" "$(dirname "$CTL")/watchctl.py")"
 chk_eq "no unpublished typed code and no bare-literal verdict" "CONSISTENT 13" "$violations"
 
 # S4b — the SECOND production definition. duplexctl's table is the claimed single source, but
@@ -173,17 +179,24 @@ echo "== S6: static consistency — a sub-reason may not exist outside the table
 sandbox_new
 GATE="$SANDBOX/subgate.py"
 cat > "$GATE" <<'GATEPY'
-# (source file, published-json file) -> "CONSISTENT n" or the violations, statically. Same
+# (source file..., published-json file) -> "CONSISTENT n" or the violations, statically. Same
 # stance as S4: ast.parse of the file TEXT, never a dynamic import of the module under test.
-import ast, json, re, sys
+# N SOURCE FILES, one closure: the lane's python is duplexctl.py (engine + front door) +
+# watchctl.py (patrol verbs) since 2026-08-30. The rules are file-BLIND on purpose — a decider,
+# an exemption or an emission site counts wherever it sits, so moving code between the two files
+# can neither hide a violation nor invalidate an exemption. Line-keyed state is keyed by
+# (file, line): two files share line numbers, and a shared `table_lines` would exempt an
+# arbitrary literal in one file because the OTHER file has its table there.
+import ast, json, os, re, sys
 
-path, pub_path = sys.argv[1], sys.argv[2]
-tree = ast.parse(open(path, encoding="utf-8").read())
+*paths, pub_path = sys.argv[1:]
+trees = [(os.path.basename(p), ast.parse(open(p, encoding="utf-8").read())) for p in paths]
 published = {(r["code"], r["reason"]) for r in json.load(open(pub_path))["subReasons"]}
 pub_words = {word for _code, word in published}
+ALL_NODES = [(base, node) for base, tree in trees for node in ast.walk(tree)]
 
 ints, strs, table_lines, rows, state_words = {}, {}, set(), [], {}
-for node in tree.body:
+for base, node in [(b, n) for b, tree in trees for n in tree.body]:
     # BOTH assignment forms: the constants are plain `X = "…"` while the table itself is an
     # ANNOTATED assign (`SUB_REASONS: tuple[...] = (…)`), which ast models as a different node —
     # scanning only ast.Assign found no table at all and would have reported drift forever
@@ -201,9 +214,9 @@ for node in tree.body:
     if isinstance(value, ast.Constant) and isinstance(value.value, str):
         strs.update({n: value.value for n in names})
         if any(n.startswith("SUB_REASON_") for n in names):
-            table_lines.update(span)
+            table_lines.update((base, ln) for ln in span)
     if "SUB_REASONS" in names and isinstance(value, ast.Tuple):
-        table_lines.update(span)
+        table_lines.update((base, ln) for ln in span)
         for elt in value.elts:
             if not isinstance(elt, ast.Tuple) or len(elt.elts) != 3:
                 rows.append((None, None))
@@ -219,7 +232,7 @@ for node in tree.body:
         # words that are NOT sub-reasons are published — the waiter handshake's `dead`/`unknown`
         # (SUPERVISOR-LOST's own four-state machine, deliberately not folded into SUB_REASONS).
         # DERIVED, never hand-listed here: an exemption nobody publishes is a hole.
-        table_lines.update(span)
+        table_lines.update((base, ln) for ln in span)
         for elt in value.elts:
             if not isinstance(elt, ast.Tuple) or len(elt.elts) != 3:
                 continue
@@ -242,7 +255,7 @@ if published - defined:
 # as an argument of sub_reason() — the one gate that refuses a word outside the closed set.
 DECIDERS = ("progress_verdict", "_withheld_reason", "steer_delivery", "cmd_sense_loop")
 found = set()
-for node in ast.walk(tree):
+for _base, node in ALL_NODES:
     if not isinstance(node, ast.FunctionDef) or node.name not in DECIDERS:
         continue
     found.add(node.name)
@@ -281,8 +294,8 @@ FOREIGN = {
         "a column WIDTH measured off the prefix: arithmetic, no word is emitted here",
 }
 used = set()
-PARENT = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
-FUNCS = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+PARENT = {child: node for _base, node in ALL_NODES for child in ast.iter_child_nodes(node)}
+FUNCS = [n for _base, n in ALL_NODES if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
 
 def enclosing_func(node):
@@ -358,7 +371,7 @@ for _round in range(4):         # fixpoint: name taint and safe returns feed eac
                 if all(safe_expr(r.elts[i], func) for r in rets):
                     SAFE_SLOT.add((func.name, i))
 
-DOCSTRINGS = {id(n.body[0].value) for n in ast.walk(tree)
+DOCSTRINGS = {id(n.body[0].value) for _base, n in ALL_NODES
               if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
               and n.body and isinstance(n.body[0], ast.Expr)
               and isinstance(n.body[0].value, ast.Constant)
@@ -406,7 +419,7 @@ def check(node, joined, hit, expr, func):
                                                     ast.unparse(expr))
 
 
-for node in ast.walk(tree):
+for base, node in ALL_NODES:
     func = enclosing_func(node)
     if isinstance(node, ast.JoinedStr):
         parts = node.values
@@ -421,7 +434,7 @@ for node in ast.walk(tree):
                         and isinstance(nxt, ast.FormattedValue) else None)
                 bad += [v for v in [check(node, joined, hit, expr, func)] if v]
     elif isinstance(node, ast.Constant) and isinstance(node.value, str) \
-            and id(node) not in DOCSTRINGS and node.lineno not in table_lines \
+            and id(node) not in DOCSTRINGS and (base, node.lineno) not in table_lines \
             and not isinstance(PARENT.get(node), ast.JoinedStr):
         parent = PARENT.get(node)
         for hit in gated_hits(node.value):
@@ -438,15 +451,18 @@ bad += ["unused-exemption:" + ":".join(key) for key in FOREIGN if key not in use
 # the supervisor liveness tri-state, the capability column header). These may not appear as a
 # string literal ANYWHERE but the table, decider or not.
 distinct = {w for w in pub_words if w.startswith("repo-silent") or w == "unknown-source"}
-for lit in ast.walk(tree):
+for base, lit in ALL_NODES:
     if isinstance(lit, ast.Constant) and isinstance(lit.value, str) \
-            and lit.value in distinct and lit.lineno not in table_lines:
+            and lit.value in distinct and (base, lit.lineno) not in table_lines:
         bad.append("distinctive-word-outside-table:%d:%s" % (lit.lineno, lit.value))
 print(" ".join(bad) if bad else "CONSISTENT %d" % len(published))
 GATEPY
 states --json > "$SANDBOX/pub.json"
+# the scan face is a shell function so no call site can forget the second file — the failure mode
+# of a per-call-site path list is a green gate that stopped looking at half the lane
+subgate() { python3 "$GATE" "$1/duplexctl.py" "$1/watchctl.py" "$SANDBOX/pub.json"; }
 chk_eq "S6 the real module passes the sub-reason gate" "CONSISTENT 8" \
-  "$(python3 "$GATE" "$CTL" "$SANDBOX/pub.json")"
+  "$(subgate "$(dirname "$CTL")")"
 
 # ── S6b the gate BITES: the same checker against mutated copies ──────────────────────────
 # A gate never calibrated against a known positive is a green surface, not a gate (this suite's
@@ -494,21 +510,27 @@ else:
 open(path, "w", encoding="utf-8").write(src)
 print("MUTATED" if src != before else "NO-OP")
 MUTPY
+# `cmd_sense_loop` lives in watchctl.py and the SUB_REASONS table in duplexctl.py, so the mutation
+# target is per MODE: an anchor applied to the wrong file is a NO-OP, which the chk below catches.
 mutant() { # $1 mode -> copy of the shipped agentctl dir at $SANDBOX/$1, mutated
   rm -rf "$SANDBOX/$1"
   cp -R "$(dirname "$CTL")" "$SANDBOX/$1"
+  local target=watchctl.py                     # the SENSE-anchored (decider) mutations
+  case "$1" in
+    drop-row|unpublished-code|orphan-constant) target=duplexctl.py ;;   # the TABLE-anchored ones
+  esac
   chk_eq "S6b the '$1' mutation really changed the copy" "MUTATED" \
-    "$(python3 "$SANDBOX/mutate.py" "$SANDBOX/$1/duplexctl.py" "$1")"
+    "$(python3 "$SANDBOX/mutate.py" "$SANDBOX/$1/$target" "$1")"
 }
 
 mutant bare-literal
-out="$(python3 "$GATE" "$SANDBOX/bare-literal/duplexctl.py" "$SANDBOX/pub.json")"
+out="$(subgate "$SANDBOX/bare-literal")"
 chk_contains "S6b a bare word inside a decision function reds" "bare-literal-in-decider" "$out"
 chk_contains "S6b and the collision-free word is caught outside the table too" \
   "distinctive-word-outside-table" "$out"
 
 mutant drop-row
-out="$(python3 "$GATE" "$SANDBOX/drop-row/duplexctl.py" "$SANDBOX/pub.json")"
+out="$(subgate "$SANDBOX/drop-row")"
 chk_contains "S6b a word dropped from the table but still published reds" \
   "published-but-undefined" "$out"
 
@@ -516,7 +538,7 @@ chk_contains "S6b a word dropped from the table but still published reds" \
 # the form — a gate that reds for the wrong reason is not calibrated either.
 for form in fstring-word concat-var getattr-word new-helper split-prefix; do
   mutant "$form"
-  out="$(python3 "$GATE" "$SANDBOX/$form/duplexctl.py" "$SANDBOX/pub.json")"
+  out="$(subgate "$SANDBOX/$form")"
   case "$form" in
     fstring-word) want="hardcoded-word" ;;
     split-prefix) want="prefix-literal-not-gated" ;;
@@ -531,7 +553,7 @@ done
 rm -rf "$SANDBOX/closure-clean"
 cp -R "$(dirname "$CTL")" "$SANDBOX/closure-clean"
 chk_eq "S6b an unmutated copy still passes the closure scan" "CONSISTENT 8" \
-  "$(python3 "$GATE" "$SANDBOX/closure-clean/duplexctl.py" "$SANDBOX/pub.json")"
+  "$(subgate "$SANDBOX/closure-clean")"
 
 echo "== S7: the closed set is ENFORCED at import, not merely published =="
 # A row naming an exit the typed vocabulary does not publish, or a SUB_REASON_* constant absent

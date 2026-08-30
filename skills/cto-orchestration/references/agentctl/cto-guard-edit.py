@@ -18,7 +18,7 @@
 # A worker seat's worktree is the `cwd=` line of its `<session>.duplex.meta` in the run dir, and a
 # LIVE seat licenses every write inside its own WORK TREE — compared by ROOT, so a seat launched
 # in a subdirectory still covers its repo root (R1 denied that legal worker: review §1.4). Reading
-# the meta ALONE is wrong: `duplexctl.py:_STOP_KEPT` keeps `duplex.meta` after `agentctl stop`, so
+# the meta ALONE is wrong: `watchctl.py:_STOP_KEPT` keeps `duplex.meta` after `agentctl stop`, so
 # a worktree that finished days ago would hold write rights forever. Liveness must be proved
 # separately — the engine's rc file ABSENT (the pane writes it on engine exit; stop keeps it for
 # post-mortem) AND the tmux session present. Either half undecidable => treated as LIVE:

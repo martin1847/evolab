@@ -231,8 +231,20 @@ cd "$(dirname "$0")"
 #    sub-reasons now say what was OBSERVED AT SAMPLING POINTS, and say outright that a source
 #    which moved and returned between two samples is invisible to these instruments. The old
 #    text asserted no source moved for the whole window — more than the gauge can prove.
+# duplexctl.py 5009→3637 and watchctl.py 1428 is a NEW ROW (2026-08-30, watch/supervisor 块平移):
+# a SPLIT, not deletion and not growth — the shrinking row is rewritten and the new module gets a
+# row in the same commit, exactly as the governance note above requires. 1385 contiguous lines
+# (`cmd_classify` … `cmd_inventory`, 70 top-level items) moved with the function bodies verbatim;
+# the only edited lines are the import face and `_CTL`, which still resolves to duplexctl.py
+# because that file remains the sole argv front door. The arithmetic, both directions: duplexctl
+# 5009 − 1387 (the 1385-line span plus the two blank separators that belonged to it) + 15 (the
+# self-alias that lets `from duplexctl import …` bind to the RUNNING module, the `import watchctl`
+# inside main(), and their doctrine) − 3 (`math`/`shutil`/`stat`: the move orphaned them, ruff
+# F401 caught it) = 3634; watchctl 1385 moved + 43 header/import face = 1428. Net product lines
+# +53, and every one of them is import wiring — no judgement was added anywhere.
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 5009
+skills/cto-orchestration/references/agentctl/duplexctl.py 3634
+skills/cto-orchestration/references/agentctl/watchctl.py 1428
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 594
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1326

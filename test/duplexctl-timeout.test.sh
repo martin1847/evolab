@@ -235,17 +235,18 @@ echo "== the stop-path ps probe is bounded: no answer is UNKNOWN, never an empty
 sandbox_new
 # stop re-runs `ps_start_times` AFTER the reap, so a `ps` that never answers used to hang the
 # stop itself. Driven directly (a pure function of one ps snapshot): first a ps on PATH that
-# never returns, then the real one. The in-python alarm is the TEST's own bound.
+# never returns, then the real one. The in-python alarm is the TEST's own bound. The function
+# lives in watchctl.py since the 2026-08-30 watch/supervisor split — same function, same bound.
 PSBIN="$SANDBOX/psbin"; mkdir -p "$PSBIN"
 printf '#!/usr/bin/env bash\nexec /bin/sleep 300\n' > "$PSBIN/ps"; chmod +x "$PSBIN/ps"
 out="$(python3 - "$AW_DIR" "$PSBIN" <<'EOF'
 import os, signal, sys
-sys.path.insert(0, sys.argv[1]); import duplexctl
+sys.path.insert(0, sys.argv[1]); import watchctl
 signal.alarm(40)
 os.environ["PATH"] = sys.argv[2] + os.pathsep + os.environ["PATH"]
-print("UNKNOWN" if duplexctl.ps_start_times(["1"]) is None else "MAP")
+print("UNKNOWN" if watchctl.ps_start_times(["1"]) is None else "MAP")
 os.environ["PATH"] = os.environ["PATH"].split(os.pathsep, 1)[1]
-mine = str(os.getpid()); got = duplexctl.ps_start_times([mine])
+mine = str(os.getpid()); got = watchctl.ps_start_times([mine])
 print("MAPPED" if isinstance(got, dict) and (got.get(mine) or "").strip() else f"BAD:{got!r}")
 EOF
 )"

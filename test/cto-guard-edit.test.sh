@@ -7,7 +7,7 @@
 # exit code and stderr/stdout — not a python-level call into a helper. The two cases the forensic
 # report singled out as the whole difficulty of this gate are pinned as named assertions:
 #   * a LIVE seat writing source inside its own worktree must pass;
-#   * a STOPPED seat's surviving duplex.meta (duplexctl `_STOP_KEPT` keeps it) must NOT grant
+#   * a STOPPED seat's surviving duplex.meta (watchctl `_STOP_KEPT` keeps it) must NOT grant
 #     write rights — otherwise a worktree that finished days ago holds them forever.
 set -u
 cd "$(dirname "$0")"
