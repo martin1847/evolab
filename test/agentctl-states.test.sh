@@ -253,35 +253,98 @@ if published - defined:
 
 NODE_BASE = {id(node): base for base, node in ALL_NODES}
 
-# ── MODULE-QUALIFIED IDENTITY for every cross-function fact (R2 B1) ───────────────────────
+# ── MODULE-QUALIFIED IDENTITY for every cross-function fact (R2 B1, hardened R3 F1) ───────
 # A bare call name is not an identity once the scan face is two files. Keyed by name alone, a
 # SAFE helper in one module whitelisted a same-named UNSAFE helper in the other, and an
 # out-of-table `reason=rogue` emission passed with all 38 assertions green. Every summary below
-# is keyed by (file, function), and a bare call is resolved the way python resolves it: the
-# CALLER's own top-level definition wins, else the name it explicitly `from`-imports from the
-# other scanned module, else UNRESOLVED — which is never safe. Fail-closed: an unresolvable call
-# can only ever make this gate red, never green.
+# is keyed by (file, function), and a bare call is resolved by what PYTHON actually binds, never
+# by spelling: the CALLER's own top-level definition, else the ORIGINAL symbol behind the name it
+# `from`-imports from the other scanned module, else UNRESOLVED — which is never safe.
+#
+# Two ways the first version of this resolver still reached the wrong function (R3 F1, both
+# independently reproduced), and both are now UNRESOLVED rather than "proven":
+#   * `from duplexctl import _unsafe as _safe_name` — the alias table dropped `alias.name`, so the
+#     checker proved the source module's SAFE `_safe_name` while python calls `_unsafe`. The table
+#     now carries (source file, ORIGINAL symbol) and the lookup uses the original.
+#   * lexical shadowing — a nested `def`/parameter/local rebinding of the same name inside the
+#     emitter means the top-level definition is NOT what the call reaches. Any non-top-level
+#     binding of a name anywhere in a file therefore poisons that name for the whole file.
+# Coarse on purpose: this can only ever turn a "proven safe" into a red, never the other way.
 DEFS = {}                                     # (file, name) -> the FunctionDef that name reaches
 for base, node in ALL_NODES:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         DEFS.setdefault((base, node.name), node)
 SCANNED = {base for base, _tree in trees}
-FROM_IMPORT = {}                              # (file, local name) -> file that defines it
+TOPLEVEL = {id(node) for _base, tree in trees for node in tree.body}
+FROM_IMPORT = {}                     # (file, local name) -> (defining file, ORIGINAL symbol)
 for base, node in ALL_NODES:
-    if isinstance(node, ast.ImportFrom) and node.module:
+    if isinstance(node, ast.ImportFrom) and node.module and not node.level:
         src = node.module.split(".")[-1] + ".py"
         if src in SCANNED:
             for alias in node.names:
-                FROM_IMPORT[(base, alias.asname or alias.name)] = src
+                FROM_IMPORT[(base, alias.asname or alias.name)] = (src, alias.name)
+
+# every name a file binds ANYWHERE except as one of its own top-level def/class statements: a
+# nested def, a parameter, a local/loop/with/except/comprehension/walrus target, a function-local
+# import, a global/nonlocal declaration, or a module-level assignment over the name.
+SHADOWED = {base: set() for base in SCANNED}
+for base, node in ALL_NODES:
+    add = SHADOWED[base].add
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if id(node) not in TOPLEVEL:
+            add(node.name)
+        args = getattr(node, "args", None)
+        if args is not None:
+            for a in (args.posonlyargs + args.args + args.kwonlyargs
+                      + [x for x in (args.vararg, args.kwarg) if x is not None]):
+                add(a.arg)
+    elif isinstance(node, ast.Lambda):
+        a = node.args
+        for x in (a.posonlyargs + a.args + a.kwonlyargs
+                  + [y for y in (a.vararg, a.kwarg) if y is not None]):
+            add(x.arg)
+    elif isinstance(node, (ast.Global, ast.Nonlocal)):
+        for n in node.names:
+            add(n)
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        if id(node) not in TOPLEVEL:
+            for alias in node.names:
+                add((alias.asname or alias.name).split(".")[0])
+    elif isinstance(node, ast.Assign):          # module-level rebinding counts as well
+        for tgt in node.targets:
+            for n in ast.walk(tgt):
+                if isinstance(n, ast.Name):
+                    add(n.id)
+    elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+        for n in ast.walk(node.target):
+            if isinstance(n, ast.Name):
+                add(n.id)
+    elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+        for n in ast.walk(node.target):
+            if isinstance(n, ast.Name):
+                add(n.id)
+    elif isinstance(node, ast.withitem):
+        if node.optional_vars is not None:
+            for n in ast.walk(node.optional_vars):
+                if isinstance(n, ast.Name):
+                    add(n.id)
+    elif isinstance(node, ast.ExceptHandler):
+        if node.name:
+            add(node.name)
 
 
 def resolve(base, name):
-    """the (file, name) key a BARE call to `name` inside `base` reaches, or None"""
-    if (base, name) in DEFS:
+    """the (file, name) key a BARE call to `name` inside `base` reaches, or None if this scan
+    cannot prove WHICH function that is"""
+    if name in SHADOWED.get(base, ()):          # something other than the top-level def binds it
+        return None
+    own, imported = (base, name) in DEFS, FROM_IMPORT.get((base, name))
+    if own and imported is not None:            # two module-level bindings, order decides: unknown
+        return None
+    if own:
         return (base, name)
-    src = FROM_IMPORT.get((base, name))
-    if src is not None and (src, name) in DEFS:
-        return (src, name)
+    if imported is not None and imported in DEFS:
+        return imported                         # (source file, ORIGINAL symbol), never the alias
     return None
 
 
@@ -320,6 +383,9 @@ for _base, node in ALL_NODES:
                 and lit.value in pub_words and id(lit) not in wrapped:
             bad.append("bare-literal-in-decider:%s:%s:%d:%s"
                        % (NODE_BASE[id(node)], node.name, lit.lineno, lit.value))
+missing = sorted(set(DECIDERS) - found)
+if missing:
+    bad.append("decider-not-found:" + ",".join(missing))
 # ── EVERY emission of the three published fields takes its word from sub_reason() ─────────
 # The rule the S6 scan above could not carry (cold review R1 S1: four out-of-set emission forms
 # — an f-string word, a concatenated variable, a getattr-mediated read, a NEW emission helper
