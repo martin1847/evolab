@@ -115,8 +115,17 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 ## typed 状态：处置（词表由 `agentctl states` 自述）
 
-exit code、名字与语义是运行时事实 → `agentctl states`（`--json` 机器读），此处不留第二份。
-**本节只写 verb 故意不发布的那一列：处置**——它是判断，不是事实。
+exit code、名字、语义、以及**二级子原因词（`reason=<word>`）**都是运行时事实 →
+`agentctl states`（`--json` 机器读；`schemaVersion 2` 起多一份 `subReasons`），此处不留第二份。
+**本节只写 verb 故意不发布的那一列：处置**——它是判断，不是事实。子原因词是闭集，源码里判定 /
+输出只许引用表成员（`duplexctl.py` 的 `SUB_REASONS`）。把守的两道门，能力如实：import 期自检
+（表内每行必须落在已发布 typed state 上、每个 `SUB_REASON_*` 常量必须在表里）+ 静态门 **AST 扫
+全文件**——任何产出 `reason=` / `progress=` / `progress_reason=` 的字面量或 f-string，其词必须来自
+`sub_reason()`（直接调用，或经赋值 / 元组解包 / return 传递且全程只绑定过 `sub_reason()` 结果的名字），
+否则红；f-string 硬写词、拼接、`getattr` 绕读、新写一个发射 helper 四种形态各有变异用例转红。
+另外三套**已发布的**词表按站点点名豁免（SUPERVISOR-LOST 的 `dead`/`unknown` 由该 state 自己的
+`meaning` 句发布并被门反查、DONE 收据回显 marker 自带字段、IDENTITY-UNKNOWN 用 identity.py 词表），
+豁免表里每条都必须被用到——多一条即红。
 
 | 状态 | 编排者要做什么 |
 |---|---|
@@ -125,12 +134,12 @@ exit code、名字与语义是运行时事实 → `agentctl states`（`--json` �
 | WAITING-INPUT | 读题，`agentctl steer` 作答 |
 | STALLED-EXTERNAL | 修凭据/额度再重启；见引擎级注意 |
 | IDLE-NO-DELIVERABLE | poke（steer），别信幻影 DONE、别 stop |
-| WATCH-TIMEOUT | 重挂或人工核证，**绝不按 DONE 消费**。行尾 `progress=changed\|unchanged\|unknown` 是**进展痕迹的观察结论**，不是工作量判决：`unknown` = 探针关闭 / 未测 / 最后一次读不可判 / **整段窗口从未测到过一次可判的移动**（窗口由不可判的读开启或重建，中间那段没人量过），绝不读成「没进展」 |
+| WATCH-TIMEOUT | 重挂或人工核证，**绝不按 DONE 消费**。行尾 `progress=changed\|unchanged\|unknown`（三词由 `agentctl states` 发布）是**进展源的观察结论**，不是工作量判决：`unknown` = 探针关闭 / 未测 / 最后一次读**一个可判源都没有** / **整段窗口从未测到过一次可判的移动**（窗口由不可判的读开启或重建，中间那段没人量过），绝不读成「没进展」 |
 | ENGINE-SILENT | 查 stderr.log；必要时 stop+resume |
 | BUDGET-EXHAUSTED | 转人工裁决 |
 | RUNNING | 继续等 |
 | STALLED-STREAM | **先从 checkout/commits 抢救成果，再 stop**；探针任一不确定按 RUNNING 处理（宁钝勿敏）。窗口用 `AGENT_WATCH_STALL_MINS` 调、0 关 |
-| STALLED-PROGRESS | 流还活着，但整个窗口内**未观察到仓库进展痕迹**（HEAD / 脏树 hash（untracked 按文件全展开）/ 脏文件 mtime / deliverable mtime / BLOCKED.md 全未变）。这是启发式量具，**不等于「没干活」**——完全不落 Git / 交付物 / BLOCKED 痕迹的长推理会照样触发。所以**先读 events 尾**再决定：卡在无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认自己走死 → 抢救成果再 stop。窗口用 `AGENT_WATCH_PROGRESS_MINS` 调（默认 30min）、0 关；git 探针判不出时按「有进展」处理，且**只封杀本状态**——不刷新时间戳、不冒充 `changed`。判不出**也包含脏路径数超 500**：mtime 扫描有界，截断成前缀会把界外的真进展读成冻结，所以整次读数作废——脏树大到这个量级时本状态实际关闭，且每次读都把原因打出来。`status` 的 `last_progress_at=<ts>` 是**上次观察到痕迹变化**的时刻；量具坏后恢复的第一次可判读**只重建基线、不算移动**，故在此之前从未测到移动时不打该行，改打 `progress=unknown: <失败原因>` |
+| STALLED-PROGRESS | 流还活着，但整个窗口内**可判的进展源在每个采样点都没动**：① 仓库痕迹（HEAD / 脏树 hash（untracked 按文件全展开）/ 脏文件 mtime / deliverable mtime / BLOCKED.md）；② 引擎自己的工具 / 命令帧计数（纯 token 流不算，那是 STALLED-STREAM 的题；尾部半行帧＝正在落帧，该源本次不可判，且那些字节算移动）；③ pane 进程组内的进程集合（`pgrep -g <pane_pid>`，**采样点未观测到进程出生/收割**即算静——两次采样之间生灭的短命子进程这源看不见，别把它读成「没起过进程」；`pane_lstart` 指纹不符＝pid 复用，该源不可判）。窗口用 `AGENT_WATCH_PROGRESS_MINS` 调（默认 30min）、0 关；三源共用一份测量预算（classify 死线的 40%，默认 12s），超预算的探针按不可判计、绝不让慢量具变成 ENGINE-SILENT。**处置按 `reason=` 分支**：<br>· `reason=repo-silent+tools-silent` → 可判源全静且**没有源不可判**：**先读 events 尾**再决定——卡在无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认走死 → 抢救成果再 stop。<br>· `reason=unknown-source` → 可判的源全静，但**有源量具坏**（detail 点名哪个：git 探针失败 / 脏路径超 500 / 测量预算用尽 / events 有解不开的行或半行 / `pgrep` 组里一个进程都没有 / pane 身份不符）。**按量具坏处置**：先修那个源或人工核证，别当「席位停滞」直接 steer/stop——运行时那行只说 `REPAIR THE GAUGE FIRST`，不叫你 steer。<br>· `progress_reason=repo-silent+tools-active`（**这条不出 14**，打在 RUNNING 行上）→ 仓库不落痕但引擎在动（跑长测试 / docker / 读码取证 / 正在落帧）：**继续等**，`last_progress_at` 已按该源刷新。<br>结构性缺位的源不算量具坏（没记 pane_pid、omp 流里根本没有工具帧词表 → `[n/a]`，不污染 `reason=`）；**一个可判源就够出判决**（合同：任一源不可判 + 其余可判源全静 ⇒ 14 `unknown-source`），只有**零可判源**才整个关闭本状态，每次读打 `progress=unknown: <原因>` 且不刷时间戳。`status` 的 `last_progress_at=<ts>` 是**上次观察到某个源变化**的时刻；量具坏后恢复的第一次可判读**只重建基线、不算移动** |
 | SUPERVISOR-LOST | `reason=dead` → 直接重挂。`reason=unknown` → **先读 detail**：只有它点名 rogue/wedged `<s>-watchd` 时才 `tmux kill-session -t <s>-watchd` 再重挂；其余 unknown（canonical 读超时 / `ps` 不可用 / 租约损坏 / pid 复用嫌疑）**只重挂，绝不杀**——那些情况下杀掉的是一个活着的守护环 |
 | DELIVERED-NEXT-TURN | **steer verb 的出口，不是会话状态**（watch/status 永不产它）：指令已送达但落在 turn 边界。`reason=capability` → 引擎无轮中帧，等边界即可，别重发；`reason=undecidable` → 量具坏（detail 点名哪个），**先修量具或读 events 尾**再决定要不要 `--interrupt`。两者都**已送达**，重发会得到两条指令 |
 

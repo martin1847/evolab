@@ -56,10 +56,16 @@ import json, subprocess, sys
 run = lambda *a: subprocess.run(["bash", sys.argv[1], "states", *a],
                                 capture_output=True, text=True).stdout
 doc = json.loads(run("--json"))
-rows = [ln for ln in run().splitlines() if ln[:4].strip().isdigit()]
-print("json=%d human=%d" % (len(doc["states"]), len(rows)))
+lines = [ln for ln in run().splitlines() if ln[:4].strip().isdigit()]
+# the two vocabularies share the exit-code column; a sub-reason row is the one that spells the
+# word the way the runtime prints it (`reason=<word>`)
+states = [ln for ln in lines if "  reason=" not in ln]
+subs = [ln for ln in lines if "  reason=" in ln]
+print("json=%d human=%d subjson=%d subhuman=%d"
+      % (len(doc["states"]), len(states), len(doc["subReasons"]), len(subs)))
 ' "$AGENTCTL")"
-chk_eq "json entries == human rows" "json=13 human=13" "$counts"
+chk_eq "json entries == human rows, in BOTH vocabularies" \
+  "json=13 human=13 subjson=8 subhuman=8" "$counts"
 
 echo "== S3: only two spellings exist; anything else is refused =="
 bogus="$(states --bogus 2>&1)"; rc=$?
@@ -122,5 +128,433 @@ bad += [f"name-disagrees:{c}:{tc[c]}!={pub[c]}" for c in sorted(tc)
 print(" ".join(bad) if bad else "AGREES %d" % len(tc))
 ' "$(dirname "$CTL")/identity.py")"
 chk_eq "S4b identity.py terminal map agrees with the published vocabulary" "AGREES 9" "$id_drift"
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# S5..S8 — the SECOND published vocabulary: sub-reasons. Same contract, same threat: the words
+# an orchestrator branches its disposition on (`reason=unknown-source`, `progress=unchanged`)
+# were bare literals at their print sites, so the set existed only in prose and no consumer
+# could enumerate it. S5 carries the suite's own oracle, S6 is the static anti-drift body with
+# its own mutation calibration, and S7/S8 prove the closed set is ENFORCED at import, not
+# merely documented.
+SUB_ORACLE="14 repo-silent+tools-active
+14 repo-silent+tools-silent
+14 unknown-source
+15 capability
+15 undecidable
+7 changed
+7 unchanged
+7 unknown"
+
+echo "== S5: the published sub-reason set is exactly the suite's oracle =="
+pub_subs="$(states --json | python3 -c '
+import json, sys
+for row in json.load(sys.stdin)["subReasons"]:
+    print(row["code"], row["reason"])')"
+chk_eq "S5 published sub-reasons == oracle" "$(printf '%s\n' "$SUB_ORACLE" | sort)" \
+  "$(printf '%s\n' "$pub_subs" | sort)"
+# every row must carry a MEANING: a word with an empty meaning publishes nothing an
+# orchestrator can act on, and would make the human table lie by omission
+empty="$(states --json | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["subReasons"]
+print(sum(1 for r in rows if not r["meaning"].strip()))')"
+chk_eq "S5 no sub-reason row ships an empty meaning" 0 "$empty"
+# the human table spells each word EXACTLY as the runtime prints it on the state's line
+human_subs="$(states)"
+miss=""
+while read -r code word; do
+  case "$human_subs" in *"reason=$word"*) continue ;; esac
+  miss="$miss $code/$word"
+done <<< "$SUB_ORACLE"
+chk_eq "S5 the human table prints every word as reason=<word>" "ALL-PUBLISHED 8" \
+  "$([ -z "$miss" ] && echo "ALL-PUBLISHED 8" || echo "MISSING$miss")"
+
+echo "== S6: static consistency — a sub-reason may not exist outside the table =="
+sandbox_new
+GATE="$SANDBOX/subgate.py"
+cat > "$GATE" <<'GATEPY'
+# (source file, published-json file) -> "CONSISTENT n" or the violations, statically. Same
+# stance as S4: ast.parse of the file TEXT, never a dynamic import of the module under test.
+import ast, json, re, sys
+
+path, pub_path = sys.argv[1], sys.argv[2]
+tree = ast.parse(open(path, encoding="utf-8").read())
+published = {(r["code"], r["reason"]) for r in json.load(open(pub_path))["subReasons"]}
+pub_words = {word for _code, word in published}
+
+ints, strs, table_lines, rows, state_words = {}, {}, set(), [], {}
+for node in tree.body:
+    # BOTH assignment forms: the constants are plain `X = "…"` while the table itself is an
+    # ANNOTATED assign (`SUB_REASONS: tuple[...] = (…)`), which ast models as a different node —
+    # scanning only ast.Assign found no table at all and would have reported drift forever
+    if isinstance(node, ast.Assign):
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
+            and node.value is not None:
+        names = [node.target.id]
+    else:
+        continue
+    span = range(node.lineno, (node.end_lineno or node.lineno) + 1)
+    value = node.value
+    if isinstance(value, ast.Constant) and isinstance(value.value, int):
+        ints.update({n: value.value for n in names})
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        strs.update({n: value.value for n in names})
+        if any(n.startswith("SUB_REASON_") for n in names):
+            table_lines.update(span)
+    if "SUB_REASONS" in names and isinstance(value, ast.Tuple):
+        table_lines.update(span)
+        for elt in value.elts:
+            if not isinstance(elt, ast.Tuple) or len(elt.elts) != 3:
+                rows.append((None, None))
+                continue
+            code, word = elt.elts[0], elt.elts[1]
+            rows.append((
+                ints.get(code.id) if isinstance(code, ast.Name)
+                else code.value if isinstance(code, ast.Constant) else None,
+                strs.get(word.id) if isinstance(word, ast.Name)
+                else word.value if isinstance(word, ast.Constant) else None))
+    if "TYPED_STATES" in names and isinstance(value, ast.Tuple):
+        # the OTHER published vocabularies. A typed state's own `meaning` sentence is where the
+        # words that are NOT sub-reasons are published — the waiter handshake's `dead`/`unknown`
+        # (SUPERVISOR-LOST's own four-state machine, deliberately not folded into SUB_REASONS).
+        # DERIVED, never hand-listed here: an exemption nobody publishes is a hole.
+        table_lines.update(span)
+        for elt in value.elts:
+            if not isinstance(elt, ast.Tuple) or len(elt.elts) != 3:
+                continue
+            name, meaning = elt.elts[1], elt.elts[2]
+            if isinstance(name, ast.Constant) and isinstance(meaning, ast.Constant):
+                state_words[name.value] = set(re.findall(r"reason=(\w[\w-]*)", meaning.value))
+
+bad = []
+defined = {(c, w) for c, w in rows if isinstance(c, int) and isinstance(w, str)}
+if not rows:
+    bad.append("SUB_REASONS-table-not-found")
+if len(defined) != len(rows):
+    bad.append("unreadable-row-in-SUB_REASONS")
+if defined - published:
+    bad.append("defined-but-unpublished:" + repr(sorted(defined - published)))
+if published - defined:
+    bad.append("published-but-undefined:" + repr(sorted(published - defined)))
+
+# The functions that DECIDE or PRINT a sub-reason. Inside them a published word may appear only
+# as an argument of sub_reason() — the one gate that refuses a word outside the closed set.
+DECIDERS = ("progress_verdict", "_withheld_reason", "steer_delivery", "cmd_sense_loop")
+found = set()
+for node in ast.walk(tree):
+    if not isinstance(node, ast.FunctionDef) or node.name not in DECIDERS:
+        continue
+    found.add(node.name)
+    wrapped = {id(arg) for call in ast.walk(node)
+               if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "sub_reason"
+               for arg in call.args}
+    for lit in ast.walk(node):
+        if isinstance(lit, ast.Constant) and isinstance(lit.value, str) \
+                and lit.value in pub_words and id(lit) not in wrapped:
+            bad.append("bare-literal-in-decider:%s:%d:%s" % (node.name, lit.lineno, lit.value))
+missing = sorted(set(DECIDERS) - found)
+if missing:
+    bad.append("decider-not-found:" + ",".join(missing))
+
+# ── EVERY emission of the three published fields takes its word from sub_reason() ─────────
+# The rule the S6 scan above could not carry (cold review R1 S1: four out-of-set emission forms
+# — an f-string word, a concatenated variable, a getattr-mediated read, a NEW emission helper
+# outside the four deciders — all passed a checker that only compared string constants inside
+# four named functions). This one scans the WHOLE file: any literal producing `reason=`,
+# `progress=` or `progress_reason=` must take the word from `sub_reason()`, directly or through
+# a name this scan PROVED is only ever bound to one (a fixpoint over assignments, tuple-unpack
+# slots and returns, so `frozen, why, at, undecided, reason = progress_verdict(sess)` counts).
+FIELDS = ("progress_reason=", "progress=", "reason=")
+# Pinned per site: (function, the exact expression the word comes from) → why that site is not
+# a verdict word. The three OTHER vocabularies, plus the one use of a field prefix that emits
+# no word at all. Every entry must be USED — a stale exemption is drift — and a new emission
+# site anywhere in the file reds until a human lands it here with what it belongs to named.
+FOREIGN = {
+    ("receipt_note", "marker.get('reason')"):
+        "the DELIVERED marker's own field, echoed out of a foreign record, never a verdict word",
+    ("cmd_states", "'reason=' + row['reason']"):
+        "the renderer OF the published table: these words come from the table itself",
+    ("cmd_identity", "identity.PUBLISH_INTERRUPTED"):
+        "identity.py's published refusal vocabulary, on an IDENTITY-UNKNOWN message line",
+    ("cmd_states", "len('reason=')"):
+        "a column WIDTH measured off the prefix: arithmetic, no word is emitted here",
+}
+used = set()
+PARENT = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+FUNCS = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def enclosing_func(node):
+    cur = PARENT.get(node)
+    while cur is not None:
+        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return cur
+        cur = PARENT.get(cur)
+    return None
+
+
+def own_body(func):     # every node of func EXCEPT nested defs: those are their own scope
+    out, stack = [], list(func.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        out.append(node)
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def ancestors(func):    # a closure reads the enclosing scope's names (delivered_rc/nxt_reason)
+    out, cur = [], enclosing_func(func) if func is not None else None
+    while cur is not None:
+        out.append(cur)
+        cur = enclosing_func(cur)
+    return out
+
+
+SAFE_SCALAR, SAFE_SLOT, TAINTED = set(), set(), {}
+
+
+def safe_expr(node, func):
+    """True = this expression can only ever be a word sub_reason() returned (or empty)"""
+    if isinstance(node, ast.Constant):
+        return node.value == "" or node.value is None
+    if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "sub_reason":
+        return True
+    if isinstance(node, ast.Name):
+        return any(node.id in TAINTED.get(f, set()) for f in [func] + ancestors(func))
+    if isinstance(node, ast.IfExp):
+        return safe_expr(node.body, func) and safe_expr(node.orelse, func)
+    if isinstance(node, ast.Call) and getattr(node.func, "id", "") in SAFE_SCALAR:
+        return True
+    return False
+
+
+for _round in range(4):         # fixpoint: name taint and safe returns feed each other
+    for func in FUNCS:
+        body = own_body(func)
+        binds = {}
+        for node in body:
+            if not isinstance(node, ast.Assign):
+                continue
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    binds.setdefault(tgt.id, []).append(safe_expr(node.value, func))
+                elif isinstance(tgt, ast.Tuple):
+                    for i, elt in enumerate(tgt.elts):
+                        if isinstance(elt, ast.Name):
+                            binds.setdefault(elt.id, []).append(
+                                isinstance(node.value, ast.Call)
+                                and (getattr(node.value.func, "id", ""), i) in SAFE_SLOT)
+        # ALL bindings must be safe: one unsafe assignment poisons the name for the whole scope
+        TAINTED[func] = {n for n, oks in binds.items() if oks and all(oks)}
+        rets = [n.value for n in body if isinstance(n, ast.Return) and n.value is not None]
+        if rets and all(safe_expr(r, func) for r in rets):
+            SAFE_SCALAR.add(func.name)
+        if rets and all(isinstance(r, ast.Tuple) for r in rets) \
+                and len({len(r.elts) for r in rets}) == 1:
+            for i in range(len(rets[0].elts)):
+                if all(safe_expr(r.elts[i], func) for r in rets):
+                    SAFE_SLOT.add((func.name, i))
+
+DOCSTRINGS = {id(n.body[0].value) for n in ast.walk(tree)
+              if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+              and n.body and isinstance(n.body[0], ast.Expr)
+              and isinstance(n.body[0].value, ast.Constant)
+              and isinstance(n.body[0].value.value, str)}
+
+
+def gated_hits(text):   # (field, word spelled inline or "") for every field this text emits
+    return [(m.group(0), (re.match(r"[\w-]+", text[m.end():]) or re.match("", "")).group(0))
+            for m in re.finditer(r"(?:progress_reason|progress|reason)=", text)]
+
+
+def check(node, joined, hit, expr, func):
+    field, inline = hit
+    fname = func.name if func is not None else "<module>"
+    if inline:                                  # the word is spelled in the literal itself
+        if any(state in joined and inline in words for state, words in state_words.items()):
+            return None                         # that state's OWN published vocabulary
+        return "hardcoded-word:%s:%d:%s%s" % (fname, node.lineno, field, inline)
+    # No word inside the literal: then the PREFIX ITSELF is the taint, and it must carry a word
+    # this scan can PROVE came from sub_reason(). Cold review R2 S1: `field = "progress_reason="`
+    # followed by `print(field + word)` splits the emission across two statements, so no single
+    # expression holds prefix and word — and the old `expr is None ⇒ pass` free ride made every
+    # such split invisible. A prefix with nothing provable attached to it reds, wherever it sits.
+    if expr is None:
+        parent = PARENT.get(node)
+        key = (fname, ast.unparse(parent if parent is not None else node))
+        if key in FOREIGN:
+            used.add(key)
+            return None
+        return "prefix-literal-not-gated:%s:%d:%s" % (fname, node.lineno, field)
+    if safe_expr(expr, func):
+        return None                             # proven: sub_reason(), or a name only it binds
+    for state, words in state_words.items():
+        if state not in joined:
+            continue
+        lits = ([expr] if isinstance(expr, ast.Constant)
+                else [expr.body, expr.orelse] if isinstance(expr, ast.IfExp) else [])
+        if lits and all(isinstance(x, ast.Constant) and x.value in words for x in lits):
+            return None
+    key = (fname, ast.unparse(expr))
+    if key in FOREIGN:
+        used.add(key)
+        return None
+    return "word-not-from-sub_reason:%s:%d:%s%s" % (fname, node.lineno, field,
+                                                    ast.unparse(expr))
+
+
+for node in ast.walk(tree):
+    func = enclosing_func(node)
+    if isinstance(node, ast.JoinedStr):
+        parts = node.values
+        joined = "".join(p.value for p in parts
+                         if isinstance(p, ast.Constant) and isinstance(p.value, str))
+        for i, part in enumerate(parts):
+            if not (isinstance(part, ast.Constant) and isinstance(part.value, str)):
+                continue
+            for hit in gated_hits(part.value):
+                nxt = parts[i + 1] if i + 1 < len(parts) else None
+                expr = (nxt.value if not hit[1] and part.value.endswith(hit[0])
+                        and isinstance(nxt, ast.FormattedValue) else None)
+                bad += [v for v in [check(node, joined, hit, expr, func)] if v]
+    elif isinstance(node, ast.Constant) and isinstance(node.value, str) \
+            and id(node) not in DOCSTRINGS and node.lineno not in table_lines \
+            and not isinstance(PARENT.get(node), ast.JoinedStr):
+        parent = PARENT.get(node)
+        for hit in gated_hits(node.value):
+            # a CONCATENATION is the bypass form: the word rides the BinOp, not the literal
+            expr = (parent if not hit[1] and isinstance(parent, ast.BinOp)
+                    and isinstance(parent.op, ast.Add) else None)
+            bad += [v for v in [check(node, node.value, hit, expr, func)] if v]
+
+bad += ["unused-exemption:" + ":".join(key) for key in FOREIGN if key not in used]
+
+
+# The words that are collision-free by construction (the other five — capability, undecidable,
+# changed, unchanged, unknown — are ordinary English this module uses for other vocabularies:
+# the supervisor liveness tri-state, the capability column header). These may not appear as a
+# string literal ANYWHERE but the table, decider or not.
+distinct = {w for w in pub_words if w.startswith("repo-silent") or w == "unknown-source"}
+for lit in ast.walk(tree):
+    if isinstance(lit, ast.Constant) and isinstance(lit.value, str) \
+            and lit.value in distinct and lit.lineno not in table_lines:
+        bad.append("distinctive-word-outside-table:%d:%s" % (lit.lineno, lit.value))
+print(" ".join(bad) if bad else "CONSISTENT %d" % len(published))
+GATEPY
+states --json > "$SANDBOX/pub.json"
+chk_eq "S6 the real module passes the sub-reason gate" "CONSISTENT 8" \
+  "$(python3 "$GATE" "$CTL" "$SANDBOX/pub.json")"
+
+# ── S6b the gate BITES: the same checker against mutated copies ──────────────────────────
+# A gate never calibrated against a known positive is a green surface, not a gate (this suite's
+# own S4 history). Each mutation is proven to have really changed the file first.
+cat > "$SANDBOX/mutate.py" <<'MUTPY'
+import re, sys
+path, mode = sys.argv[1], sys.argv[2]
+src = before = open(path, encoding="utf-8").read()
+TABLE = "SUB_REASONS: tuple[tuple[int, str, str], ...] = (\n"
+SENSE = "def cmd_sense_loop(args: argparse.Namespace) -> int:\n"
+if mode == "bare-literal":       # a decision function spelling the word itself
+    src = src.replace(SENSE, SENSE + '    _smuggled = "unknown-source"\n', 1)
+elif mode == "drop-row":         # the code loses a word the published contract still carries
+    src = re.sub(r"    \(EXIT_STALLED_PROGRESS, SUB_REASON_UNKNOWN_SOURCE,\n(?:     [^\n]*\n)+",
+                 "", src, count=1)
+elif mode == "unpublished-code":  # a sub-reason qualifying an exit the vocabulary never had
+    src = src.replace(TABLE, TABLE + '    (3, "smuggled-word", "a sub-reason on exit 3"),\n', 1)
+elif mode == "orphan-constant":   # a SUB_REASON_* constant nothing publishes
+    src = src.replace(TABLE, 'SUB_REASON_ORPHAN = "orphan-word"\n\n' + TABLE, 1)
+# ── the BYPASS forms cold review R1 S1 / R2 S1 walked through the old checkers ─────────────
+# Each one emits a word outside the closed set WITHOUT a bare constant inside a named decider,
+# which is exactly what the old scan could not see. All of them land on the same anchor so the
+# fixture proves the FORM, not the location.
+elif mode == "fstring-word":      # the word spelled straight into the format string
+    src = src.replace(SENSE, SENSE + '    print(f"progress_reason=rogue-word smuggled")\n', 1)
+elif mode == "concat-var":        # the word arrives by concatenation, never as one literal
+    src = src.replace(SENSE, SENSE + '    _w = "rogue"\n'
+                      '    print("progress_reason=" + _w + " smuggled")\n', 1)
+elif mode == "getattr-word":      # a published constant read dynamically, bypassing the gate
+    src = src.replace(SENSE, SENSE +
+                      '    _g = getattr(sys.modules[__name__], "SUB_REASON_UNKNOWN")\n'
+                      '    print(f"progress_reason={_g} smuggled")\n', 1)
+elif mode == "new-helper":        # a NEW emission helper, outside every named decider
+    src = src.replace("def cmd_sense_loop",
+                      'def _emit_reason(word: str) -> None:\n'
+                      '    print(f"progress_reason={word} smuggled")\n\n\n'
+                      'def cmd_sense_loop', 1)
+elif mode == "split-prefix":      # cold review R2 S1: the PREFIX is hoisted into its own
+    # statement, so no single expression ever holds both the field and the word — the form that
+    # walked straight through the `expr is None ⇒ pass` free ride
+    src = src.replace(SENSE, SENSE + '    _field = "progress_reason="\n'
+                      '    print(_field + "rogue" + " smuggled")\n', 1)
+else:
+    raise SystemExit("unknown mutation mode " + mode)
+open(path, "w", encoding="utf-8").write(src)
+print("MUTATED" if src != before else "NO-OP")
+MUTPY
+mutant() { # $1 mode -> copy of the shipped agentctl dir at $SANDBOX/$1, mutated
+  rm -rf "$SANDBOX/$1"
+  cp -R "$(dirname "$CTL")" "$SANDBOX/$1"
+  chk_eq "S6b the '$1' mutation really changed the copy" "MUTATED" \
+    "$(python3 "$SANDBOX/mutate.py" "$SANDBOX/$1/duplexctl.py" "$1")"
+}
+
+mutant bare-literal
+out="$(python3 "$GATE" "$SANDBOX/bare-literal/duplexctl.py" "$SANDBOX/pub.json")"
+chk_contains "S6b a bare word inside a decision function reds" "bare-literal-in-decider" "$out"
+chk_contains "S6b and the collision-free word is caught outside the table too" \
+  "distinctive-word-outside-table" "$out"
+
+mutant drop-row
+out="$(python3 "$GATE" "$SANDBOX/drop-row/duplexctl.py" "$SANDBOX/pub.json")"
+chk_contains "S6b a word dropped from the table but still published reds" \
+  "published-but-undefined" "$out"
+
+# the out-of-set emission FORMS: each must red on the closure scan, and the message must name
+# the form — a gate that reds for the wrong reason is not calibrated either.
+for form in fstring-word concat-var getattr-word new-helper split-prefix; do
+  mutant "$form"
+  out="$(python3 "$GATE" "$SANDBOX/$form/duplexctl.py" "$SANDBOX/pub.json")"
+  case "$form" in
+    fstring-word) want="hardcoded-word" ;;
+    split-prefix) want="prefix-literal-not-gated" ;;
+    *)            want="word-not-from-sub_reason" ;;
+  esac
+  chk_contains "S6b the '$form' bypass reds on the closure scan" "$want" "$out"
+  chk_contains "S6b and the '$form' violation names the emitting function" \
+    "progress_reason=" "$out"
+done
+
+# PAIRED GREEN for the closure scan itself: the copy mechanism is not what reds the four above.
+rm -rf "$SANDBOX/closure-clean"
+cp -R "$(dirname "$CTL")" "$SANDBOX/closure-clean"
+chk_eq "S6b an unmutated copy still passes the closure scan" "CONSISTENT 8" \
+  "$(python3 "$GATE" "$SANDBOX/closure-clean/duplexctl.py" "$SANDBOX/pub.json")"
+
+echo "== S7: the closed set is ENFORCED at import, not merely published =="
+# A row naming an exit the typed vocabulary does not publish, or a SUB_REASON_* constant absent
+# from the table, must take EVERY verb down — a half-broken table that still serves `states` is
+# how a word reaches an operator that no consumer can enumerate.
+mutant unpublished-code
+out="$(python3 "$SANDBOX/unpublished-code/duplexctl.py" states --json 2>&1)"; rc=$?
+chk_eq "S7 a sub-reason on an unpublished exit refuses the whole module (rc)" 1 "$rc"
+chk_contains "S7 and says the closed set is broken" "closed set is broken" "$out"
+
+mutant orphan-constant
+out="$(python3 "$SANDBOX/orphan-constant/duplexctl.py" states --json 2>&1)"; rc=$?
+chk_eq "S7 an orphan SUB_REASON_* constant refuses the whole module (rc)" 1 "$rc"
+chk_contains "S7 and names the constant that is not in the table" \
+  "absent from the SUB_REASONS table" "$out"
+
+echo "== S8: PAIRED GREEN — an unmutated copy still publishes and still passes =="
+rm -rf "$SANDBOX/clean"
+cp -R "$(dirname "$CTL")" "$SANDBOX/clean"
+out="$(python3 "$SANDBOX/clean/duplexctl.py" states --json 2>&1)"; rc=$?
+chk_eq "S8 the copy mechanism itself is not what reds S7 (rc)" 0 "$rc"
+chk_eq "S8 and the unmutated copy carries the same 8 sub-reasons" 8 \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["subReasons"]))')"
+sandbox_clean
 
 summary

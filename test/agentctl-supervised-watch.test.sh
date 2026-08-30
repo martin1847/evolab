@@ -1412,15 +1412,26 @@ chk_eq "M16 501 files: first read RUNNING" 10 "$rc"
 /bin/sleep 1
 printf 'v2\n' >> "$BIG/f501.txt"       # ONLY the file OUTSIDE the scanned prefix moves
 out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBIG 2>&1)"; rc=$?
-chk_eq "M16 DAMAGE ORACLE (SB3): work outside the scanned prefix NEVER fires 14" 10 "$rc"
-chk_contains "M16 501 files: the read is admitted unjudgeable" "progress=unknown" "$out"
+# THE CONTRACT (cold review R1 Q1): one judged source concludes, so this cell is a typed 14 —
+# but the WORD is `unknown-source` and the disposition is the gauge, never the seat. What SB3
+# forbids is intact and is what the two assertions after the rc pin: the verdict may not claim
+# the repo trace was measured, and it may not send the operator to steer on a gauge fault.
+chk_eq "M16 (SB3, Q1): work outside the scanned prefix is 14 — as a GAUGE fault" 14 "$rc"
+chk_contains "M16 501 files: the word says a source could not be judged" \
+  "reason=unknown-source" "$out"
 chk_contains "M16 501 files: and NAMES the bound it went past" \
   "exceeds the bounded scan (>500 paths)" "$out"
+chk_contains "M16 501 files DAMAGE ORACLE (SB3): the repo source is named as UNJUDGED" \
+  "and unjudged: repo" "$out"
+chk_not_contains "M16 501 files DAMAGE ORACLE (SB3): never claiming the truncated trace was still" \
+  "dirty-tree hash" "$out"
+chk_contains "M16 501 files: and the disposition is the gauge, not the seat" \
+  "REPAIR THE GAUGE FIRST" "$out"
 chk_not_contains "M16 501 files: no timestamp fabricated from a truncated measurement" \
   "last_progress_at=" "$out"
 /bin/sleep 1
 rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBIG >/dev/null 2>&1; echo $?)"
-chk_eq "M16 501 files: still no verdict across a SECOND window" 10 "$rc"
+chk_eq "M16 501 files: and the same gauge fault reads the same across a SECOND window" 14 "$rc"
 # PAIRED GREEN: the bound is not an off-switch. At exactly 500 dirty paths the same tree is
 # JUDGED again, and a frozen one still fires the state it must.
 rm -f "$BIG/f501.txt"
@@ -1434,24 +1445,33 @@ rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBIG2 >/dev/null 2>
 chk_eq "M16 PAIRED GREEN: and a frozen 500-path tree still fires 14" 14 "$rc"
 rm -rf "$BIG"
 
-# ── 量具坏: a probe that cannot be JUDGED reads as progress, forever ──────────────────────
-# cwd is not a repo, so `git rev-parse HEAD` fails: 宁钝勿敏 — an unjudgeable gauge may never
-# manufacture a verdict, no matter how long it stays unjudgeable.
+# ── 量具坏: a probe that cannot be JUDGED may never be read as stillness ──────────────────
+# cwd is not a repo, so `git rev-parse HEAD` fails. 宁钝勿敏 still holds where it can: the source
+# never votes silent, the frozen-probe list never names it, and the disposition is the gauge.
+# What CHANGED (cold review R1 Q1): a blind repo beside ONE judged source is no longer permanent
+# RUNNING — that cell is the named real-stall shape and now concludes as `unknown-source`. The
+# floor is zero judged sources (M17 quorum floor), not two.
 progress_seed pgBLIND "$SANDBOX/not-a-repo"
 mkdir -p "$SANDBOX/not-a-repo"
 rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBLIND >/dev/null 2>&1; echo $?)"
 chk_eq "M16 量具坏: first read RUNNING" 10 "$rc"
 /bin/sleep 1
 out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBLIND 2>&1)"; rc=$?
-chk_eq "M16 量具坏: an unjudgeable git probe NEVER fires the state" 10 "$rc"
-# NB3.3: unjudgeable only FORBIDS the verdict. It may not refresh the progress timestamp —
-# a gauge failing at 14:03 is not the work moving at 14:03 (cold review R1 §3).
-chk_contains "M16 量具坏: and SAYS the probe could not be judged" "progress=unknown" "$out"
-chk_not_contains "M16 量具坏: publishing NO timestamp it never measured" \
-  "last_progress_at=" "$out"
+chk_eq "M16 量具坏 (Q1): an unjudgeable git probe beside a judged source concludes" 14 "$rc"
+# NB3.3: unjudgeable may not refresh the progress timestamp either — a gauge failing at 14:03
+# is not the work moving at 14:03 (cold review R1 §3).
+chk_contains "M16 量具坏: and SAYS which probe could not be judged" \
+  "and unjudged: repo — no git, cwd not a repo" "$out"
+chk_contains "M16 量具坏: with the word that refuses to call it stillness" \
+  "reason=unknown-source" "$out"
+chk_not_contains "M16 量具坏: the frozen list never names the repo trace it never read" \
+  "dirty-tree hash" "$out"
+chk_contains "M16 量具坏: and the operator is sent to the gauge, not to the seat" \
+  "REPAIR THE GAUGE FIRST" "$out"
 /bin/sleep 1
-rc="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBLIND >/dev/null 2>&1; echo $?)"
-chk_eq "M16 量具坏: still RUNNING after a third window" 10 "$rc"
+out="$(AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status pgBLIND 2>&1)"; rc=$?
+chk_eq "M16 量具坏: a third window reads the same, never converting into silence" 14 "$rc"
+chk_contains "M16 量具坏: still unknown-source, never tools-silent" "reason=unknown-source" "$out"
 # and the knob's off switch is real: 0 disables the probe entirely, even on a frozen repo
 progress_seed pgOFF "$REPO"
 rc="$(AGENT_WATCH_PROGRESS_MINS=0 bash "$AGENTCTL" status pgOFF >/dev/null 2>&1; echo $?)"
@@ -1500,6 +1520,10 @@ unset AGENT_WATCH_PROGRESS_MINS
 # NB3.3: the THIRD tail word is the honest one. A cwd that is not a repo makes every read
 # unjudgeable, and `unchanged` there would be a measurement nobody took (cold review R1 §3).
 progress_seed pgTMO3 "$SANDBOX/not-a-repo"
+# ALL blind, which is what makes the tail word a real question (Q1: one judged source is enough
+# to conclude, so a blind REPO alone no longer leaves the union unmeasured — the events stream
+# has to be unreadable too for nobody to have measured anything at all).
+printf '{not json either\n' >> "$WATCH_RUN_DIR/pgTMO3.duplex.events.jsonl"
 export AGENT_WATCH_MAX_POLLS=3 AGENT_WATCH_PROGRESS_MINS=30
 out="$(bash "$AGENTCTL" watch pgTMO3 2>&1)"; rc=$?
 chk_eq "M16 an unjudgeable probe still times out as WATCH-TIMEOUT 7" 7 "$rc"
@@ -1523,6 +1547,8 @@ print("" if v is None else json.dumps(v))' "$WATCH_RUN_DIR/$1.duplex.progress" "
 }
 RECO="$SANDBOX/recover"; mkdir -p "$RECO"
 progress_seed pgREC "$RECO"
+# same reason as pgTMO3: the window must be opened by a read where NOTHING could be judged
+printf '{not json either\n' >> "$WATCH_RUN_DIR/pgREC.duplex.events.jsonl"
 export AGENT_WATCH_MAX_POLLS=8 AGENT_WATCH_PROGRESS_MINS=30
 watch_bg pgREC "$SANDBOX/pgREC.w.log"
 await "[ -s '$WATCH_RUN_DIR/pgREC.duplex.progress' ]" 300
@@ -1547,6 +1573,399 @@ chk_not_contains "M16 NB3.3 恢复: and never a fabricated unchanged either" \
 unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_PROGRESS_MINS
 unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_PROGRESS_MINS
 unset AGENT_WATCH_MAX_POLLS
+sw_clean
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+echo "== M17 progress SOURCE UNION: three sources, and the reason= word that names which =="
+# Field motive (2026-08-29, downstream seat): the repo trace is the only progress source that
+# leaves an artifact, so a seat that really works and does not write — a long test suite, a
+# docker build, reading code for evidence, sending probes — read as frozen. That seat's own
+# audit script retired at hits=0 / false=2. The verdict now reads the UNION of three sources
+# (repo trace, the engine's own tool/command frames, the process set in the pane's group) and
+# fires only when none of them moved. Each source gets the same three fixtures the repo trace
+# already has: 坏红 (it stands still → the state must fire), 好绿 (it moves → the state must be
+# withheld) and 量具坏 (it cannot be judged → it may not vote either way), and each of the three
+# published sub-reason words gets a live case.
+sw_sandbox
+export AGENT_WATCH_STALL_MINS=0          # isolate: the STREAM probe must not answer for this
+UREPO="$SANDBOX/urepo"; mkdir -p "$UREPO"
+git -C "$UREPO" init -q 2>/dev/null
+git -C "$UREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
+mkdir -p "$SANDBOX/blind"                # a cwd that is NOT a repo: the repo source is unjudged
+PW=0.01                                  # window in MINUTES; 0.01 = 0.6s
+
+u_seed() { # $1 session  $2 cwd  [$3 pane_pid]
+  seed "$1" && running "$1"
+  { printf 'engine=claude\ncwd=%s\nround=1\n' "$2"
+    [ -n "${3:-}" ] && printf 'pane_pid=%s\n' "$3"; } > "$WATCH_RUN_DIR/$1.duplex.meta"
+}
+u_status() { AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status "$1" 2>&1; }
+# ONE tool_use item — engine tool activity, in claude's own frame vocabulary
+tool_ev() { ev "$1" "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t$2\",\"name\":\"Bash\",\"input\":{}}]}}"; }
+# pure token output: the stream GROWS and no tool ran — this must NOT count as progress
+token_ev() { ev "$1" "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"thinking $2\"}]}}"; }
+
+# A REAL process group we own, standing in for a tmux pane: `pane_pid` IS the pgid, and the
+# leader forks a child when its trigger file appears — a subprocess BORN mid-window, which is
+# the only thing this source claims to see.
+cat > "$SANDBOX/pane_leader.py" <<'PY'
+import os, subprocess, sys, time
+try:
+    os.setsid()          # already a group leader when bash backgrounds us: both are fine
+except OSError:
+    pass
+assert os.getpgrp() == os.getpid(), "pane_pid must BE the pgid, like a real pane leader"
+with open(sys.argv[1], "w") as fh:
+    fh.write(str(os.getpid()))
+spawned = False
+deadline = time.time() + 180
+while time.time() < deadline:
+    if not spawned and os.path.exists(sys.argv[2]):
+        subprocess.Popen(["/bin/sleep", "120"])      # inherits our pgid
+        spawned = True
+    time.sleep(0.1)
+PY
+# NEVER call this inside a command substitution: the leader is a background child of the
+# substitution's own subshell and dies with it (probed — every pane source then read [unknown]
+# and three assertions passed for the wrong reason). It publishes into PGID instead.
+pane_group() { # $1 tag -> sets PGID to a live pgid, or reds via a non-zero return
+  local ready="$SANDBOX/$1.pgid"
+  PGID=""
+  rm -f "$ready" "$SANDBOX/$1.spawn"
+  python3 "$SANDBOX/pane_leader.py" "$ready" "$SANDBOX/$1.spawn" >/dev/null 2>&1 &
+  SLEEPERS="$SLEEPERS $!"
+  disown "$!" 2>/dev/null || true
+  await "[ -s '$ready' ]" 100 || return 1
+  PGID="$(cat "$ready")"
+  # the fixture's own oracle: a pane source that reads [unknown] would make every case below
+  # pass or fail for a reason that has nothing to do with the union
+  [ "$(pgrep -g "$PGID" | grep -c .)" -ge 1 ]
+}
+pane_kill() { [ -n "${1:-}" ] && kill -- -"$1" 2>/dev/null; return 0; }
+
+# ── tools 坏红 + tools 好绿 + the two sub-reasons they produce ────────────────────────────
+u_seed uTOOLS "$UREPO"
+rc="$(u_status uTOOLS >/dev/null 2>&1; echo $?)"
+chk_eq "M17 tools: the first read only OPENS the window (RUNNING 10)" 10 "$rc"
+/bin/sleep 1
+tool_ev uTOOLS 1                                  # the seat ran a tool and wrote NOTHING
+out="$(u_status uTOOLS)"; rc=$?
+chk_eq "M17 tools 好绿: a tool ran, the repo trace is frozen — the verdict is WITHHELD" 10 "$rc"
+chk_contains "M17 tools 好绿: and the WITHHELD observation is published by name" \
+  "progress_reason=repo-silent+tools-active" "$out"
+chk_contains "M17 tools 好绿: the clock was refreshed from that source" "last_progress_at=" "$out"
+/bin/sleep 1
+out="$(u_status uTOOLS)"; rc=$?
+chk_eq "M17 tools 坏红 (DAMAGE ORACLE): stop running tools and the same window fires 14" \
+  14 "$rc"
+chk_contains "M17 tools 坏红: with the sub-reason that says both sources are still" \
+  "reason=repo-silent+tools-silent" "$out"
+chk_contains "M17 tools 坏红: and the verdict names the tool-frame source it read" \
+  "the engine's own tool/command frames" "$out"
+
+# ── tools 坏样本: a pure TOKEN stream is not activity ─────────────────────────────────────
+# The whole point of a second source is that STREAMING was never the question: STALLED-STREAM
+# already answers "the stream stopped". A thinking model that emits text forever and runs
+# nothing must still reach 14, or the union has re-introduced the blind spot it was built for.
+u_seed uTOKEN "$UREPO"
+rc="$(u_status uTOKEN >/dev/null 2>&1; echo $?)"
+chk_eq "M17 token stream: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+token_ev uTOKEN 1; token_ev uTOKEN 2
+out="$(u_status uTOKEN)"; rc=$?
+chk_eq "M17 tools DAMAGE ORACLE: a growing token stream with no tool call still fires 14" \
+  14 "$rc"
+chk_contains "M17 token stream: and it is the tools-silent sub-reason, not unknown-source" \
+  "reason=repo-silent+tools-silent" "$out"
+
+# ── tools 量具坏 + THE QUORUM CONTRACT: one judged source is enough to conclude ────────────
+# `repo = judged and still, tools = unknown, pane = n/a` is the real-stall shape the goal names
+# explicitly. A fixed quorum of 2 turned it into permanent RUNNING — every read restarted the
+# window at `below the judged quorum (1/2)` and the stall was never reported at all (cold review
+# R1 Q1). One judged source concludes, and the WORD carries what called the operator: a gauge
+# nobody could read, never a proof of stillness.
+u_seed uTJUNK "$UREPO"
+printf '{not json at all\n' >> "$WATCH_RUN_DIR/uTJUNK.duplex.events.jsonl"
+rc="$(u_status uTJUNK >/dev/null 2>&1; echo $?)"
+chk_eq "M17 tools 量具坏: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+out="$(u_status uTJUNK)"; rc=$?
+chk_eq "M17 tools 量具坏: one judged source + one broken gauge — typed 14, not silence" \
+  14 "$rc"
+chk_contains "M17 tools 量具坏: as unknown-source, never claiming the counter was read" \
+  "reason=unknown-source" "$out"
+chk_contains "M17 tools 量具坏: and naming the undecodable stream" "undecodable" "$out"
+chk_contains "M17 tools 量具坏: the disposition is the gauge, not the seat" \
+  "REPAIR THE GAUGE FIRST" "$out"
+chk_not_contains "M17 tools 量具坏: so it never tells the operator to steer on this line" \
+  "then steer a concrete next step" "$out"
+
+# ── tools 半行帧: a `tool_use` line caught MID-WRITE may not publish a terminal verdict ────
+# `complete_frames_integrity` dropped a non-empty trailing fragment and still returned clean, so
+# the bytes BEFORE a landing frame read as a settled counter and 14/tools-silent shipped while
+# the tool was arriving (cold review R1 T1). The fragment makes the tools source unknown, and
+# because those bytes arrived inside the window it credits movement — so no verdict at all.
+u_seed uHALF "$UREPO"
+tool_ev uHALF 1                                   # one COMPLETE frame: the counter's baseline
+rc="$(u_status uHALF >/dev/null 2>&1; echo $?)"
+chk_eq "M17 半行帧: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+# NO trailing newline: this is exactly what a concurrent writer leaves at a window boundary
+printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2"' \
+  >> "$WATCH_RUN_DIR/uHALF.duplex.events.jsonl"
+out="$(u_status uHALF)"; rc=$?
+chk_eq "M17 半行帧 (DAMAGE ORACLE): a tool frame still landing NEVER fires 14" 10 "$rc"
+chk_contains "M17 半行帧: the arriving bytes are published as engine activity" \
+  "progress_reason=repo-silent+tools-active" "$out"
+printf '}]}}\n' >> "$WATCH_RUN_DIR/uHALF.duplex.events.jsonl"   # the frame lands for real
+/bin/sleep 1
+out="$(u_status uHALF)"; rc=$?
+chk_eq "M17 半行帧: and the COMPLETED frame keeps the verdict withheld" 10 "$rc"
+chk_contains "M17 半行帧: now on a countable frame" \
+  "progress_reason=repo-silent+tools-active" "$out"
+# 坏红 pair: a fragment that never changes is a TRUNCATED stream, not a landing frame — the
+# window must still conclude, or half a line would disable this state forever.
+u_seed uHALF2 "$UREPO"
+printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t9"' \
+  >> "$WATCH_RUN_DIR/uHALF2.duplex.events.jsonl"
+rc="$(u_status uHALF2 >/dev/null 2>&1; echo $?)"
+chk_eq "M17 半行帧 坏红: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+out="$(u_status uHALF2)"; rc=$?
+chk_eq "M17 半行帧 坏红: a fragment static for the whole window still concludes" 14 "$rc"
+chk_contains "M17 半行帧 坏红: as unknown-source — no frame was ever countable" \
+  "reason=unknown-source" "$out"
+chk_contains "M17 半行帧 坏红: naming the incomplete line" "incomplete line" "$out"
+
+# ── pane 坏红: all three sources judged and still ─────────────────────────────────────────
+pane_group pg1 && PG1="$PGID" || PG1=""
+if [ -n "$PG1" ]; then
+  u_seed uPANE "$UREPO" "$PG1"
+  rc="$(u_status uPANE >/dev/null 2>&1; echo $?)"
+  chk_eq "M17 pane 坏红: first read RUNNING" 10 "$rc"
+  /bin/sleep 1
+  out="$(u_status uPANE)"; rc=$?
+  chk_eq "M17 pane 坏红: three judged sources, none moved — typed 14" 14 "$rc"
+  chk_contains "M17 pane 坏红: with nothing left unjudged" \
+    "reason=repo-silent+tools-silent" "$out"
+  chk_contains "M17 pane 坏红: and the pane source named in the evidence" \
+    "the process set in the pane's group" "$out"
+  pane_kill "$PG1"
+else
+  _record "M17 pane 坏红 fixture came up" 0 "the pane-group leader never published a pgid"
+fi
+
+# ── pane 好绿: a subprocess born mid-window IS progress ───────────────────────────────────
+pane_group pg2 && PG2="$PGID" || PG2=""
+if [ -n "$PG2" ]; then
+  u_seed uPANE2 "$UREPO" "$PG2"
+  rc="$(u_status uPANE2 >/dev/null 2>&1; echo $?)"
+  chk_eq "M17 pane 好绿: first read RUNNING" 10 "$rc"
+  /bin/sleep 1
+  : > "$SANDBOX/pg2.spawn"                        # the pane forks a child: work with no trace
+  await "[ \"\$(pgrep -g $PG2 | grep -c .)\" -ge 2 ]" 100
+  out="$(u_status uPANE2)"; rc=$?
+  chk_eq "M17 pane 好绿: the birth is progress — the verdict is WITHHELD past the window" \
+    10 "$rc"
+  chk_contains "M17 pane 好绿: published as the same WITHHELD observation" \
+    "progress_reason=repo-silent+tools-active" "$out"
+  /bin/sleep 1
+  rc="$(u_status uPANE2 >/dev/null 2>&1; echo $?)"
+  chk_eq "M17 pane 好绿 DAMAGE ORACLE: no further births and the same window fires 14" \
+    14 "$rc"
+  pane_kill "$PG2"
+else
+  _record "M17 pane 好绿 fixture came up" 0 "the pane-group leader never published a pgid"
+fi
+
+# ── pane 量具坏 + the third sub-reason: unknown-source ────────────────────────────────────
+# A pgid with no process left cannot answer, while the repo trace and the tool frames both can
+# and both stand still. The union has its quorum, so the operator IS called — and the word says
+# what called them: a source nobody could read, not a proof of stillness.
+u_seed uPGONE "$UREPO" 999999
+rc="$(u_status uPGONE >/dev/null 2>&1; echo $?)"
+chk_eq "M17 pane 量具坏: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+out="$(u_status uPGONE)"; rc=$?
+chk_eq "M17 pane 量具坏: quorum met and still — typed 14" 14 "$rc"
+chk_contains "M17 pane 量具坏: reported as unknown-source, never as tools-silent" \
+  "reason=unknown-source" "$out"
+chk_contains "M17 pane 量具坏: and the blind source is named in the evidence" \
+  "no process left in the pane's group 999999" "$out"
+
+# ── repo 量具坏, union still judgeable: the honest three-valued case ──────────────────────
+pane_group pg3 && PG3="$PGID" || PG3=""
+if [ -n "$PG3" ]; then
+  u_seed uRBLIND "$SANDBOX/blind" "$PG3"
+  rc="$(u_status uRBLIND >/dev/null 2>&1; echo $?)"
+  chk_eq "M17 repo 量具坏: first read RUNNING" 10 "$rc"
+  /bin/sleep 1
+  out="$(u_status uRBLIND)"; rc=$?
+  chk_eq "M17 repo 量具坏: the other two sources carry the quorum — typed 14" 14 "$rc"
+  chk_contains "M17 repo 量具坏: as unknown-source, never claiming the repo was measured" \
+    "reason=unknown-source" "$out"
+  chk_contains "M17 repo 量具坏: and the git probe named as the blind one" \
+    "cwd not a repo" "$out"
+  chk_not_contains "M17 repo 量具坏: the frozen-probe list never claims HEAD stood still" \
+    "dirty-tree hash" "$out"
+  # PAIRED GREEN: same blind repo, and now the pane moves — the union must withhold again
+  u_seed uRBLIND2 "$SANDBOX/blind" "$PG3"
+  rc="$(u_status uRBLIND2 >/dev/null 2>&1; echo $?)"
+  chk_eq "M17 repo 量具坏 PAIRED GREEN: first read RUNNING" 10 "$rc"
+  /bin/sleep 1
+  : > "$SANDBOX/pg3.spawn"
+  await "[ \"\$(pgrep -g $PG3 | grep -c .)\" -ge 2 ]" 100
+  out="$(u_status uRBLIND2)"; rc=$?
+  chk_eq "M17 repo 量具坏 PAIRED GREEN: a moving pane withholds the verdict" 10 "$rc"
+  chk_not_contains "M17 repo 量具坏 PAIRED GREEN: and never fires unknown-source" \
+    "STALLED-PROGRESS" "$out"
+  pane_kill "$PG3"
+else
+  _record "M17 repo 量具坏 fixture came up" 0 "the pane-group leader never published a pgid"
+fi
+
+# ── pane 身份不符: a REAL group whose recorded leader start-time does not match ────────────
+# start persists `pane_pid + pane_lstart` precisely because a pgid is REUSABLE, but this source
+# validated only that the pgid was numeric: an unrelated group's stability could vote silent and
+# its churn could refresh the progress clock forever, on a source that claims to be watching
+# THIS session (cold review R1 P2). The recorded identity is now the fence.
+pane_group pg5 && PG5="$PGID" || PG5=""
+if [ -n "$PG5" ]; then
+  u_seed uPSTALE "$UREPO" "$PG5"
+  printf 'pane_lstart=Mon Jan  1 00:00:00 2001\n' >> "$WATCH_RUN_DIR/uPSTALE.duplex.meta"
+  rc="$(u_status uPSTALE >/dev/null 2>&1; echo $?)"
+  chk_eq "M17 pane 身份不符: first read RUNNING" 10 "$rc"
+  /bin/sleep 1
+  out="$(u_status uPSTALE)"; rc=$?
+  chk_eq "M17 pane 身份不符: the sources that CAN be judged conclude — typed 14" 14 "$rc"
+  chk_contains "M17 pane 身份不符: the pane source is unknown, never judged silent" \
+    "reason=unknown-source" "$out"
+  chk_contains "M17 pane 身份不符: and the drift is named as pid reuse" \
+    "pid reuse, so this group is not this session's" "$out"
+  # PAIRED GREEN: the same LIVE group with its real recorded start-time is judged, and a birth
+  # inside it is progress — the fence rejects impostors, not the session's own pane.
+  u_seed uPFENCE "$UREPO" "$PG5"
+  printf 'pane_lstart=%s\n' "$(ps -p "$PG5" -o lstart= | sed 's/ *$//')" \
+    >> "$WATCH_RUN_DIR/uPFENCE.duplex.meta"
+  rc="$(u_status uPFENCE >/dev/null 2>&1; echo $?)"
+  chk_eq "M17 pane 身份相符 PAIRED GREEN: first read RUNNING" 10 "$rc"
+  /bin/sleep 1
+  : > "$SANDBOX/pg5.spawn"
+  await "[ \"\$(pgrep -g $PG5 | grep -c .)\" -ge 2 ]" 100
+  out="$(u_status uPFENCE)"; rc=$?
+  chk_eq "M17 pane 身份相符 PAIRED GREEN: a birth in the fenced group is progress" 10 "$rc"
+  chk_contains "M17 pane 身份相符 PAIRED GREEN: judged, and the birth refreshed the clock" \
+    "progress_reason=repo-silent+tools-active" "$out"
+  pane_kill "$PG5"
+else
+  _record "M17 pane 身份 fixture came up" 0 "the pane-group leader never published a pgid"
+fi
+
+# ── repo 好绿 under the union: the repo trace moving needs no sub-reason word ─────────────
+pane_group pg4 && PG4="$PGID" || PG4=""
+if [ -n "$PG4" ]; then
+  u_seed uREPOMOVE "$UREPO" "$PG4"
+  rc="$(u_status uREPOMOVE >/dev/null 2>&1; echo $?)"
+  chk_eq "M17 repo 好绿: first read RUNNING" 10 "$rc"
+  /bin/sleep 1
+  printf 'real work\n' >> "$UREPO/work.txt"
+  out="$(u_status uREPOMOVE)"; rc=$?
+  chk_eq "M17 repo 好绿: a moving repo trace still withholds the verdict" 10 "$rc"
+  chk_contains "M17 repo 好绿: and publishes when it last moved" "last_progress_at=" "$out"
+  chk_not_contains "M17 repo 好绿: no WITHHELD word — the repo trace itself is what moved" \
+    "progress_reason=" "$out"
+  pane_kill "$PG4"
+else
+  _record "M17 repo 好绿 fixture came up" 0 "the pane-group leader never published a pgid"
+fi
+
+# ── the quorum FLOOR: every source blind is not a verdict, it is an admission ─────────────
+u_seed uBLIND3 "$SANDBOX/blind"                   # no pane_pid, not a repo, junk stream
+printf '{still not json\n' >> "$WATCH_RUN_DIR/uBLIND3.duplex.events.jsonl"
+rc="$(u_status uBLIND3 >/dev/null 2>&1; echo $?)"
+chk_eq "M17 quorum floor: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+out="$(u_status uBLIND3)"; rc=$?
+chk_eq "M17 quorum floor: zero judged sources NEVER fires 14" 10 "$rc"
+chk_contains "M17 quorum floor: and says so" "below the judged quorum (0/1)" "$out"
+chk_contains "M17 quorum floor: naming every blind source — repo" "cwd not a repo" "$out"
+chk_contains "M17 quorum floor: naming every blind source — tools" "undecodable" "$out"
+chk_contains "M17 quorum floor: naming every blind source — pane" \
+  "no pane_pid in session meta" "$out"
+/bin/sleep 1
+rc="$(u_status uBLIND3 >/dev/null 2>&1; echo $?)"
+chk_eq "M17 quorum floor: still no verdict across a SECOND window" 10 "$rc"
+
+# ── the SHARED measurement budget: a slow gauge is not a control-plane failure ─────────────
+# Three git reads at 20s each plus `pgrep` summed to 70s of local timeout under a 30s classify
+# watchdog, so a slow repo probe published ENGINE-SILENT — the control plane accusing itself for
+# a gauge problem (cold review R1 P3). One budget for the whole union, and a probe with none
+# left answers unknown, which this state already knows how to carry.
+SLOWBIN="$SANDBOX/slowbin"; mkdir -p "$SLOWBIN"
+printf '#!/bin/sh\nsleep 3\nexec %s "$@"\n' "$(command -v git)" > "$SLOWBIN/git"
+chmod +x "$SLOWBIN/git"
+slow_status() { PATH="$SLOWBIN:$PATH" AGENT_WATCH_STATUS_TIMEOUT=10 \
+  AGENT_WATCH_PROGRESS_MINS=$PW bash "$AGENTCTL" status "$1" 2>&1; }
+u_seed uSLOW "$UREPO"
+rc="$(slow_status uSLOW >/dev/null 2>&1; echo $?)"
+chk_eq "M17 预算: a slow git leaves the first read RUNNING, never ENGINE-SILENT" 10 "$rc"
+T0=$(date +%s)
+out="$(slow_status uSLOW)"; rc=$?
+T1=$(date +%s)
+chk_eq "M17 预算: the second read concludes on the source that COULD be measured" 14 "$rc"
+chk_contains "M17 预算: as unknown-source" "reason=unknown-source" "$out"
+chk_contains "M17 预算: naming the spent shared budget" "budget ran out mid-probe" "$out"
+chk_not_contains "M17 预算: and never as a control-plane verdict" "ENGINE-SILENT" "$out"
+chk_eq "M17 预算: the whole classify stayed inside its own 10s deadline" 1 \
+  "$([ $((T1 - T0)) -lt 10 ] && echo 1 || echo 0)"
+
+# ── the budget must be under the deadline for EVERY value the knob can take ────────────────
+# The share alone was not that guarantee: `max(1.0, timeout*0.4)` gave AGENT_WATCH_STATUS_TIMEOUT=1
+# a 1.0s budget — the whole classify watchdog — and =2 a 1.0s/50% one, so the two smallest
+# supported knob values kept the ENGINE-SILENT-for-a-slow-gauge race this budget exists to
+# remove (cold review R2 P3). A 1s deadline cannot be probed through a fixture honestly (the
+# fixture's own tmux round trips are the same order), so the grid is checked STATICALLY, in
+# this suite's S4 stance: the shipped `progress_budget` body and its constants are read out of
+# the file TEXT and run verbatim over the knob grid — never a dynamic import of the module
+# (white-box coupling ban), never a re-implementation of the arithmetic here.
+GRID="$SANDBOX/budgetgrid.py"
+cat > "$GRID" <<'GRIDPY'
+import ast, sys
+tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+wanted = [n for n in tree.body
+          if (isinstance(n, ast.Assign)
+              and any(getattr(t, "id", "").startswith("PROGRESS_BUDGET_") for t in n.targets))
+          or (isinstance(n, ast.FunctionDef) and n.name == "progress_budget")]
+if len(wanted) != 4:                    # 3 constants + the function: a rename must be seen
+    sys.exit("budget-source-not-found:%d" % len(wanted))
+bad = []
+for knob in (1, 2, 10, 30):
+    # ProbeBudget is stubbed to hand back the total it was sized with, and status_timeout() to
+    # the knob value the CLI would have parsed: the expression under test stays the shipped one
+    ns = {"ProbeBudget": lambda total: total, "status_timeout": lambda: knob}
+    exec(compile(ast.Module(body=wanted, type_ignores=[]), "<budget>", "exec"), ns)
+    budget = ns["progress_budget"]()
+    if not 0 < budget < knob:
+        bad.append("timeout=%s budget=%.3f" % (knob, budget))
+print(" ".join(bad) if bad else "ALL-UNDER-DEADLINE 4")
+GRIDPY
+chk_eq "M17 预算 knob grid: the shared budget is a positive slice strictly under the classify deadline" \
+  "ALL-UNDER-DEADLINE 4" "$(python3 "$GRID" "$DUPLEXCTL")"
+# PAIRED RED: the RETIRED R1 arithmetic, fed to the SAME script — it must name the knob value it
+# broke on, or this grid is a green surface rather than a gate. The green side above reads the
+# shipped source; only this red side is a reconstruction, and it is the code that was replaced.
+cat > "$SANDBOX/r1-budget.py" <<'R1PY'
+PROGRESS_BUDGET_SHARE = 0.4
+PROGRESS_BUDGET_HEADROOM = 1.0
+PROGRESS_BUDGET_FLOOR = 0.2
+
+
+def progress_budget():
+    return ProbeBudget(max(1.0, status_timeout() * PROGRESS_BUDGET_SHARE))
+R1PY
+chk_eq "M17 预算 knob grid PAIRED RED: the R1 arithmetic reds on the smallest knob" \
+  "timeout=1 budget=1.000" "$(python3 "$GRID" "$SANDBOX/r1-budget.py")"
+unset AGENT_WATCH_STALL_MINS
 sw_clean
 
 summary

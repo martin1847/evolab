@@ -84,7 +84,11 @@ EXIT_SUPERVISOR_LOST = 12
 EXIT_STALLED_PROGRESS = 14
 EXIT_DELIVERED_NEXT_TURN = 15
 
-TYPED_STATE_SCHEMA_VERSION = 1
+# BUMPED 1 -> 2 by the progress-source batch: the document gained a SECOND published
+# vocabulary (`subReasons`). A consumer that read `{schemaVersion, states}` as the whole
+# contract would silently miss the dimension that now qualifies three of those states, so it
+# must be able to REFUSE this document instead of concluding "this state has no sub-reason".
+TYPED_STATE_SCHEMA_VERSION = 2
 TYPED_STATES: tuple[tuple[int, str, str], ...] = (
     (EXIT_DONE, "DONE",
      "engine idle or exited rc=0, and any declared deliverable is fresh for this round"),
@@ -113,14 +117,103 @@ TYPED_STATES: tuple[tuple[int, str, str], ...] = (
      "no fenced terminal record for this attempt+round, and the sensing supervisor cannot "
      "be shown to be running (reason=dead) or cannot be judged at all (reason=unknown)"),
     (EXIT_STALLED_PROGRESS, "STALLED-PROGRESS",
-     "the engine keeps streaming but the work left no trace for a whole window: HEAD, the "
-     "dirty-tree hash, the deliverable's mtime and BLOCKED.md all stood still"),
+     "the engine keeps streaming, but at no sampling point of a whole window was any progress "
+     "source observed to have moved: the repo trace (HEAD, the dirty-tree hash and its file "
+     "mtimes, the deliverable's mtime, BLOCKED.md), the engine's own tool/command frames, and "
+     "the process set in the pane's group — see the reason= word for which of them were judged"),
     (EXIT_DELIVERED_NEXT_TURN, "DELIVERED-NEXT-TURN",
      "a steer was DELIVERED, but by the next-turn route while a turn was running — so it "
      "lands at the turn boundary, not inside that turn: the engine declares no mid-turn "
      "route (reason=capability), or the live turn state could not be judged "
      "(reason=undecidable)"),
 )
+
+
+# ── typed sub-reason vocabulary ───────────────────────────────────────────────
+# The SECOND dimension of the same contract. A typed state says WHAT the runtime observed; a
+# sub-reason says WHICH observation inside that state — and that word is what an orchestrator
+# branches its disposition on. Every one of them used to be a bare literal at its print site
+# (`reason=capability`, `progress=unchanged`), so the set existed only in prose and no consumer
+# could enumerate it. Same rule as TYPED_STATES: ONE table, generated into `agentctl states`,
+# and no word may leave this module without a row here (`sub_reason()` is the only gate).
+#
+# Grouped by the FIRST-LEVEL exit whose line carries the word. A row is NOT a promise that the
+# exit fires: `repo-silent+tools-active` is exactly the observation under which 14 is WITHHELD,
+# and the RUNNING line carries the word instead.
+#
+# Not in here: the SUPERVISOR-LOST reason words (`dead`/`unknown`). They are the four-state
+# waiter handshake's own vocabulary, published in that state's own `meaning` sentence, and
+# folding them in would make this table the second definition of a machine nobody asked to
+# reshape.
+SUB_REASON_TOOLS_ACTIVE = "repo-silent+tools-active"
+SUB_REASON_TOOLS_SILENT = "repo-silent+tools-silent"
+SUB_REASON_UNKNOWN_SOURCE = "unknown-source"
+SUB_REASON_CAPABILITY = "capability"
+SUB_REASON_UNDECIDABLE = "undecidable"
+SUB_REASON_CHANGED = "changed"
+SUB_REASON_UNCHANGED = "unchanged"
+SUB_REASON_UNKNOWN = "unknown"
+
+SUB_REASONS: tuple[tuple[int, str, str], ...] = (
+    (EXIT_STALLED_PROGRESS, SUB_REASON_TOOLS_ACTIVE,
+     "no repo-trace sample changed while an engine-activity source did move — new tool/command "
+     "frames, or a changed process set in the pane's group: the verdict is WITHHELD, the "
+     "progress clock is refreshed from that source, and the RUNNING line carries this word"),
+    (EXIT_STALLED_PROGRESS, SUB_REASON_TOOLS_SILENT,
+     "no judged progress source was observed to move at any sampling point of the window, and "
+     "there was nothing left unjudged: the repo trace, the engine's own tool/command frames "
+     "and the process set in the pane's group — a source that moved and returned between two "
+     "samples is not visible to these instruments"),
+    (EXIT_STALLED_PROGRESS, SUB_REASON_UNKNOWN_SOURCE,
+     "the judged sources were not observed to move at any sampling point while at least one "
+     "source could not be judged at all — nothing proves work, and nothing proves stillness"),
+    (EXIT_DELIVERED_NEXT_TURN, SUB_REASON_CAPABILITY,
+     "the engine declares no mid-turn steer route, so the frame lands at the turn boundary"),
+    (EXIT_DELIVERED_NEXT_TURN, SUB_REASON_UNDECIDABLE,
+     "the live turn state could not be judged, so the always-landing next-turn route was taken"),
+    (EXIT_WATCH_TIMEOUT, SUB_REASON_CHANGED,
+     "the poll budget ran out on a session whose progress sources were observed to move"),
+    (EXIT_WATCH_TIMEOUT, SUB_REASON_UNCHANGED,
+     "the poll budget ran out and no judged movement was observed after the first sensing read"),
+    (EXIT_WATCH_TIMEOUT, SUB_REASON_UNKNOWN,
+     "the poll budget ran out and the progress gauge never measured a judgeable movement — "
+     "disabled, never persisted, or the union stayed below its judged quorum"),
+)
+
+
+def _sub_reason_index() -> dict[tuple[int, str], str]:
+    """(code, word) → meaning, built ONCE at import so a drifted table cannot serve even one
+    verb. Two integrity rules: a sub-reason may only qualify a PUBLISHED typed state, and every
+    SUB_REASON_* constant must appear in the table (a constant nothing publishes is a bare
+    literal wearing a name). SystemExit, not die(): die() is defined further down the file and
+    this runs at import — the message and the rc are identical."""
+    codes = {code for code, _name, _meaning in TYPED_STATES}
+    words = {word for _code, word, _meaning in SUB_REASONS}
+    index: dict[tuple[int, str], str] = {}
+    for code, word, meaning in SUB_REASONS:
+        if code not in codes:
+            raise SystemExit(f"ERR: sub-reason '{word}' qualifies exit {code}, which "
+                             "TYPED_STATES does not publish — the closed set is broken")
+        index[(code, word)] = meaning
+    orphans = sorted(name for name, value in list(globals().items())
+                     if name.startswith("SUB_REASON_") and isinstance(value, str)
+                     and value not in words)
+    if orphans:
+        raise SystemExit("ERR: SUB_REASON constant(s) absent from the SUB_REASONS table: "
+                         + ", ".join(orphans))
+    return index
+
+
+SUB_REASON_INDEX = _sub_reason_index()
+
+
+def sub_reason(code: int, word: str) -> str:
+    """The published sub-reason word, or a typed death. EVERY emission goes through here, so a
+    word outside the closed set cannot reach an operator or a machine consumer at all."""
+    if (code, word) not in SUB_REASON_INDEX:
+        die(f"sub-reason '{word}' is not published for exit {code} — refusing to emit a "
+            "verdict word no consumer can enumerate")
+    return word
 
 
 # ── session file layout ───────────────────────────────────────────────────────
@@ -1068,8 +1161,10 @@ TURN_ACTIVE = {"omp": omp_turn_active, "claude": claude_turn_active,
                "codex": codex_turn_active}
 
 
-# the reason words of a DELIVERED-NEXT-TURN verdict, in the order the selector can produce them
-STEER_NEXT_TURN_REASONS = ("capability", "undecidable")
+# the reason words of a DELIVERED-NEXT-TURN verdict, in the order the selector can produce
+# them — DERIVED from the published table, never a second list beside it
+STEER_NEXT_TURN_REASONS = tuple(word for code, word, _meaning in SUB_REASONS
+                                if code == EXIT_DELIVERED_NEXT_TURN)
 
 
 def steer_delivery(engine: str, sess: Session) -> tuple[str, str, str]:
@@ -1094,11 +1189,12 @@ def steer_delivery(engine: str, sess: Session) -> tuple[str, str, str]:
     if active is None:
         # NAME the broken gauge: "undecidable" without the measurement that failed is how a
         # gauge fault gets read back as a known-idle engine (cold review R1).
-        return nxt, "undecidable", why
+        return nxt, sub_reason(EXIT_DELIVERED_NEXT_TURN, SUB_REASON_UNDECIDABLE), why
     if not active:
         return nxt, "", ""
     if cell["state"] == DEGRADED:
-        return nxt, "capability", f"{engine} declares no mid-turn steer route"
+        return nxt, sub_reason(EXIT_DELIVERED_NEXT_TURN, SUB_REASON_CAPABILITY), \
+            f"{engine} declares no mid-turn steer route"
     return mid, "", ""
 
 
@@ -1294,29 +1390,66 @@ def escaped_descendants(root_pid: int) -> tuple[list[dict] | None, str]:
     return out, ""
 
 
-def complete_frames_integrity(sess: Session) -> tuple[list[dict], bool]:
-    """All frames from COMPLETE lines from the stream START, plus a clean flag —
-    False when any complete non-empty line failed to decode. Junk the stall path
-    cannot read must count as ambiguity (alive), never as silence."""
+# ONE read of the stream per classify. Both the stall probe and the tools counter need every
+# frame from the stream START — the stall probe PAIRS lifecycle frames across the whole stream,
+# so an offset-incremental view would change its meaning, not just its cost — and reading the
+# same bytes twice in one process is pure cost. The memo key is (size, mtime_ns) on an
+# append-only stream: a stream that really grew between the two callers is read again.
+_EVENTS_MEMO: dict[str, tuple[tuple[int, int], tuple[list[dict], bool, bool, str]]] = {}
+
+
+def _events_snapshot(sess: Session) -> tuple[list[dict], bool, bool, str]:
+    """(frames, clean, partial, tail mark) — the whole stream, read once.
+
+    `clean` is False when any complete non-empty line failed to decode: junk the stall path
+    cannot read must count as ambiguity (alive), never as silence. `partial` is True when the
+    file ends in a NON-EMPTY fragment with no newline yet — a frame is landing RIGHT NOW — and
+    `tail mark` identifies those exact bytes so a LATER read can tell the fragment grew. They
+    are separate facts because the readers differ: the stall probe reads a fragment as the
+    stream MOVING (which it is, and its own mtime gate already saw those bytes), while a source
+    that votes "nothing happened" may not read a half-written frame at all — a `tool_use` line
+    caught mid-write published a terminal 14/tools-silent while the tool was arriving (cold
+    review R1 T1)."""
     try:
+        stat = os.stat(sess.events)
+        stamp = (stat.st_size, stat.st_mtime_ns)
+        hit = _EVENTS_MEMO.get(sess.events)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
         with open(sess.events, "rb") as fh:
             blob = fh.read()
     except OSError:
-        return [], False
-    body, nl, _tail = blob.rpartition(b"\n")
-    if not nl:
-        return [], True
+        return [], False, False, ""
+    body, nl, tail = blob.rpartition(b"\n")
+    partial = bool(tail.strip())
+    mark = f"{len(blob)}:{_digest(tail.decode('utf-8', 'replace'))}" if partial else ""
     frames: list[dict] = []
     clean = True
-    for line in body.decode("utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            frames.append(json.loads(line))
-        except json.JSONDecodeError:
-            clean = False
-    return frames, clean
+    if nl:
+        for line in body.decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                frames.append(json.loads(line))
+            except json.JSONDecodeError:
+                clean = False
+    snap = (frames, clean, partial, mark)
+    _EVENTS_MEMO[sess.events] = (stamp, snap)
+    return snap
+
+
+def complete_frames_integrity(sess: Session) -> tuple[list[dict], bool, bool]:
+    """The frame view of the stream snapshot: (frames, clean, partial)."""
+    frames, clean, partial, _mark = _events_snapshot(sess)
+    return frames, clean, partial
+
+
+def events_tail_mark(sess: Session) -> str:
+    """The fragment view of the same snapshot: `<size>:<digest>` of the INCOMPLETE trailing
+    fragment, or "" when the stream ends on a frame boundary. It is not a frame count and never
+    a verdict — the ONE thing it can do is prove bytes arrived between two reads."""
+    return _events_snapshot(sess)[3]
 
 
 def claude_inflight(sess: Session, frames: list[dict]) -> bool:
@@ -1436,7 +1569,7 @@ def stream_stalled(sess: Session, engine: str) -> tuple[bool, str]:
     # lifecycle pairs across the WHOLE stream, never the sent-offset window: the
     # offset rotates on every steer and can cut across an operation opened before
     # it (review round 3 — the forgotten open tool_use re-enabled the false 11).
-    frames, clean = complete_frames_integrity(sess)
+    frames, clean, _partial = complete_frames_integrity(sess)
     if not clean or inflight(sess, frames):
         return False, ""
     pane = str(sess.meta.get("pane_pid", ""))
@@ -1487,12 +1620,56 @@ def _stamp(ts: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts))
 
 
-def _git_out(cwd: str, *argv: str) -> str | None:
-    """A bounded git read. None = UNJUDGEABLE (no git, not a repo, error, timeout), which
+# ── ONE shared measurement budget for the whole union ─────────────────────────────────────
+# Three git reads at 20s each plus a 5s `pgrep` and a 5s `ps` sum to 70s of local timeout under
+# a 30s classify watchdog. The watchdog does stop the hang — by publishing ENGINE-SILENT, a
+# CONTROL-PLANE verdict, for a slow MEASUREMENT (cold review R1 P3). So the sources share one
+# deadline, sized as a fraction of the very classify deadline they run under, and a probe with
+# no budget left answers UNKNOWN: the honest word for a measurement nobody took, and one that
+# this state's own rules already handle (it forbids a clean verdict word, never fabricates one).
+PROGRESS_BUDGET_SHARE = 0.4     # of status_timeout() → 12s of the default 30s classify deadline
+PROGRESS_BUDGET_HEADROOM = 1.0  # …and it must END this far before that deadline, always
+PROGRESS_BUDGET_FLOOR = 0.2     # the smallest budget worth starting a probe with
+PROGRESS_GIT_TIMEOUT = 20.0     # per-call ceilings, unchanged: the SUM is what needed a bound
+PROGRESS_PROC_TIMEOUT = 5.0
+
+
+class ProbeBudget:
+    """The union's remaining measurement time. `take(cap)` is the timeout one probe may ask
+    for; 0 means the budget is spent and the caller must return UNKNOWN rather than start a
+    read whose only possible outcome is the classify watchdog firing on top of it."""
+
+    def __init__(self, total: float):
+        self.deadline = time.monotonic() + max(0.0, total)
+
+    def take(self, cap: float) -> float:
+        return min(cap, max(0.0, self.deadline - time.monotonic()))
+
+
+def progress_budget() -> ProbeBudget:
+    """Derived from the classify deadline, never a second knob: whoever tunes
+    AGENT_WATCH_STATUS_TIMEOUT is tuning exactly the bound this share is carved out of. The
+    share ALONE was not the bound: with a `max(1.0, …)` floor, the supported small knob values
+    (1s, 2s) gave the measurement a budget that met or exceeded the whole classify watchdog,
+    which is exactly the ENGINE-SILENT-for-a-slow-gauge race this budget exists to remove (cold
+    review R2 P3). So the budget also ends one full second before that deadline, and the floor
+    is small enough to stay under the smallest legal timeout — strictly below it, for any knob."""
+    deadline = float(status_timeout())
+    return ProbeBudget(max(PROGRESS_BUDGET_FLOOR,
+                           min(deadline * PROGRESS_BUDGET_SHARE,
+                               deadline - PROGRESS_BUDGET_HEADROOM)))
+
+
+def _git_out(cwd: str, budget: ProbeBudget, *argv: str) -> str | None:
+    """A bounded git read, bounded TWICE: its own per-call ceiling and the union's shared
+    budget. None = UNJUDGEABLE (no git, not a repo, error, timeout, no budget left), which
     every caller must read as progress rather than as 'nothing changed'."""
+    window = budget.take(PROGRESS_GIT_TIMEOUT)
+    if window <= 0:
+        return None
     try:
         proc = subprocess.run(["git", "-C", cwd, *argv], stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL, timeout=20)
+                              stderr=subprocess.DEVNULL, timeout=window)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
@@ -1543,21 +1720,24 @@ def _porcelain_paths(porcelain: str) -> tuple[list[str], bool]:
     return paths, False
 
 
-def progress_fingerprint(sess: Session) -> tuple[str | None, str]:
-    """(work-trace fingerprint, "") — or (None, why) when ANY probe could not be judged."""
+def progress_fingerprint(sess: Session, budget: ProbeBudget) -> tuple[str | None, str]:
+    """(work-trace fingerprint, "") — or (None, why) when ANY probe could not be judged. The
+    three git reads spend the union's SHARED budget (see ProbeBudget), so a slow repo cannot
+    push the whole classify into its watchdog."""
     cwd = sess.meta.get("cwd", "")
     if not cwd or not os.path.isdir(cwd):
         return None, f"session cwd is not a directory ({cwd or 'unset'})"
-    head = _git_out(cwd, "rev-parse", "HEAD")
+    head = _git_out(cwd, budget, "rev-parse", "HEAD")
     # `--untracked-files=all` is not a nicety. The DEFAULT folds a whole untracked directory
     # into one `?? dir/` line, so continuous edits to `dir/file` left both the porcelain set
     # and the listed directory's mtime bit-identical: real uncommitted work read as frozen and
     # fired a false STALLED-PROGRESS (cold review R1). Expanding to every untracked FILE is
     # what makes the dirty set track the work instead of its container.
-    porcelain = _git_out(cwd, "status", "--porcelain", "--untracked-files=all", "-z")
-    top = _git_out(cwd, "rev-parse", "--show-toplevel")
+    porcelain = _git_out(cwd, budget, "status", "--porcelain", "--untracked-files=all", "-z")
+    top = _git_out(cwd, budget, "rev-parse", "--show-toplevel")
     if head is None or porcelain is None or top is None:
-        return None, "no git, cwd not a repo, or the command failed"
+        return None, ("no git, cwd not a repo, the command failed, or the union's measurement "
+                      "budget ran out mid-probe")
     # porcelain paths are repo-root relative, so they are resolved against the top level the
     # same command tree reported — never against the session cwd, which may be a subdir
     root = top.strip() or cwd
@@ -1583,9 +1763,195 @@ def progress_fingerprint(sess: Session) -> tuple[str | None, str]:
     return "|".join(parts), ""
 
 
+# ── the other two progress sources ────────────────────────────────────────────────────
+# The repo trace above is the only source that leaves a durable artifact, and it is blind to a
+# seat that really works and does not write: a long test suite, a docker build, reading code for
+# evidence, sending probes. A downstream seat's own audit script retired at hits=0/false=2 for
+# exactly that (2026-08-29), so the verdict now reads the UNION of three independent sources and
+# fires only when none of them moved. The other two:
+#
+#   tools — the engine's OWN tool/command frames, counted from the events stream through the
+#           per-engine vocabulary this file already pairs for the stall probe. A pure token /
+#           thinking stream is NOT counted: streaming was never the question.
+#   pane  — the process set in the pane's own group, AS SEEN AT THE SAMPLING POINTS. `pane_pid`
+#           IS the pgid (the pane is started as its own session+group leader), so one `pgrep -g`
+#           is the whole probe: a subprocess that appears, or is gone by the next poll, is work
+#           the repo trace cannot see. What two snapshots CANNOT see is a child both born and
+#           reaped between them (probed, cold review R1 P1), so this source only ever reports
+#           "no process birth was OBSERVED at a sampling point" — never "no process was born".
+#
+# Both answer None = UNKNOWN, never a confident zero: a probe that could not look must not vote
+# "nothing happened". Which is not the same as "the verdict is dead" — see progress_verdict.
+def claude_tool_events(sess: Session, frames: list[dict]) -> int | None:
+    """Count of claude's own tool/command frames — the SAME vocabulary claude_inflight pairs
+    (tool_use / tool_result items, command_lifecycle transitions), counted instead of paired:
+    a tool that opened and closed between two polls left no unmatched pair but IS activity."""
+    count = 0
+    for frame in frames:
+        ftype = frame.get("type")
+        if ftype == "command_lifecycle":
+            count += 1
+        elif ftype in ("assistant", "user"):
+            for item in (frame.get("message") or {}).get("content") or []:
+                if isinstance(item, dict) and item.get("type") in ("tool_use", "tool_result"):
+                    count += 1
+    return count
+
+
+def codex_tool_events(sess: Session, frames: list[dict]) -> int | None:
+    """Count of codex item lifecycle frames on our thread. An UNSCOPED frame is counted, the
+    one place this differs from codex_inflight's pairing: over-counting can only refresh the
+    progress clock (no verdict), while dropping a frame could manufacture a STALLED-PROGRESS."""
+    ours = sess.meta.get("thread")
+    count = 0
+    for frame in frames:
+        if frame.get("method") not in ("item/started", "item/completed"):
+            continue
+        tid = (frame.get("params") or {}).get("threadId")
+        if ours and tid is not None and tid != ours:
+            continue
+        count += 1
+    return count
+
+
+def omp_tool_events(sess: Session, frames: list[dict]) -> int | None:
+    """UNKNOWN, always. The omp duplex stream carries lane protocol only — ready, correlated
+    command responses, agent_start/agent_end, extension UI requests — and not one tool or
+    command frame to count. A zero here would be a source voting "no tool ran" on evidence it
+    never had; omp sessions are judged by the other two sources."""
+    return None
+
+
+ENGINE_TOOL_EVENTS = {"claude": claude_tool_events, "codex": codex_tool_events,
+                      "omp": omp_tool_events}
+
+
+def tools_activity(sess: Session, engine: str) -> tuple[str | None, str, bool]:
+    """(fingerprint, "", False) of engine tool activity, or (None, why, structural) when this
+    source has no answer. `structural` is the m-1 distinction this file already draws between
+    [n/a] and [unknown]: an engine whose lane carries no tool frames at all is nothing to look
+    at, while an events file nobody can read is a BROKEN GAUGE — and only a broken gauge may
+    taint a verdict's reason word. Junk the counter cannot read never reads as silence, the same
+    rule complete_frames_integrity serves the stall probe."""
+    counter = ENGINE_TOOL_EVENTS.get(engine)
+    if counter is None:
+        return None, f"engine '{engine or 'unset'}' declares no tool-frame vocabulary", True
+    frames, clean, partial = complete_frames_integrity(sess)
+    if not clean:
+        return None, "the events stream is unreadable or carries an undecodable line", False
+    if partial:
+        # the counter would read the bytes BEFORE a landing frame as a settled total and vote
+        # silent on a tool that is arriving right now (cold review R1 T1)
+        return None, ("the events stream ends in an incomplete line — a frame is being written "
+                      "as this read happens"), False
+    count = counter(sess, frames)
+    if count is None:
+        return None, f"the {engine} lane's stream carries no tool/command frame vocabulary", True
+    return f"tools={count}", "", False
+
+
+def pane_identity_drift(sess: Session, pane: str, budget: ProbeBudget) -> str:
+    """Empty when the pane group may be judged at all, else why it may not. The fence is the one
+    `stop` already uses: the leader's START TIME, persisted at start precisely because a pgid
+    is reusable. A leader `ps` cannot see is NOT drift — an unused pid cannot be some other
+    group's leader, so live members under that pgid are still ours (`reap_tree`'s own
+    reasoning). No recorded `pane_lstart` (a session started before the fence) is nothing to
+    verify, and a `ps` that could not answer is not an identity claim either."""
+    want = " ".join(str(sess.meta.get("pane_lstart", "")).split())
+    if not want:
+        return ""
+    window = budget.take(PROGRESS_PROC_TIMEOUT)
+    if window <= 0:
+        return "the union's measurement budget ran out before the pane identity check"
+    try:
+        probe = subprocess.run(["ps", "-p", pane, "-o", "lstart="], stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, timeout=window)
+    except (OSError, subprocess.SubprocessError):
+        return "the pane leader's start-time probe failed or timed out"
+    have = " ".join(probe.stdout.decode("utf-8", "replace").split())
+    if not have or have == want:
+        return ""
+    return (f"the pane group {pane}'s leader started '{have}' ≠ the recorded '{want}' — pid "
+            "reuse, so this group is not this session's")
+
+
+def pane_pgroup(sess: Session, budget: ProbeBudget) -> tuple[str | None, str, bool]:
+    """(fingerprint of the pane group's process set AT THIS SAMPLING POINT, "", False) or
+    (None, why, structural). A member that appeared and one that is gone both count as
+    movement: either way something under the pane is being started or finished. A still
+    fingerprint means no change was OBSERVED at the sampling points, never that no process ran
+    (R1 P1). No pane_pid recorded is [n/a] — there is nothing to look at. An EMPTY group is
+    [unknown]: meta claims a pane, the leader itself must be a member, and a group with nothing
+    in it means this probe cannot be trusted about that session. A pane whose recorded
+    start-time fingerprint does not match the live leader is [unknown] too: without that check
+    an UNRELATED reused group's stability voted silent and its churn refreshed the progress
+    clock forever, on a source that claims to be watching THIS session (R1 P2)."""
+    pane = str(sess.meta.get("pane_pid", "")).strip()
+    if not pane.isdigit():
+        return None, "no pane_pid in session meta", True
+    drift = pane_identity_drift(sess, pane, budget)
+    if drift:
+        return None, drift, False
+    window = budget.take(PROGRESS_PROC_TIMEOUT)
+    if window <= 0:
+        return None, "the union's measurement budget ran out before the pgrep probe", False
+    try:
+        probe = subprocess.run(["pgrep", "-g", pane], stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, timeout=window)
+    except (OSError, subprocess.SubprocessError):
+        return None, "the pgrep probe failed or timed out", False
+    if probe.returncode not in (0, 1):          # 1 = no match, a real answer; >1 = broken probe
+        return None, f"pgrep exited {probe.returncode}", False
+    pids = sorted(line for line in probe.stdout.decode("utf-8", "replace").split()
+                  if line.isdigit())
+    if not pids:
+        return None, f"no process left in the pane's group {pane}", False
+    return f"pane={_digest(' '.join(pids))}:{len(pids)}", "", False
+
+
+# name → (persisted fingerprint key, persisted judged-flag key). The repo source keeps the two
+# key names it shipped with (`fp` / `judgeable`): a window persisted by the previous version
+# must keep its meaning across an upgrade, and its judged flag is the one the recovery rule
+# reads. Order IS publication order, repo first — the repo trace is what an operator checks.
+PROGRESS_KEYS = (("repo", "fp", "judgeable"), ("tools", "tools", "tools_j"),
+                 ("pane", "pane", "pane_j"))
+# What each source is, in the words the verdict prints.
+PROGRESS_TRACE = {
+    "repo": "HEAD, the dirty-tree hash and its file mtimes, the deliverable mtime and BLOCKED.md",
+    "tools": "the engine's own tool/command frames",
+    "pane": "the process set in the pane's group",
+}
+# How many sources must be JUDGED before the union may conclude anything. ONE — and that floor
+# is the contract, not a taste call: "any source unknown while every source that COULD be judged
+# stood still" is exactly the real-stall shape this state exists to report, and it must fire 14
+# carrying `unknown-source` — the word that tells the operator a broken gauge called them, not
+# proven stillness. A fixed 2 turned the named cell `repo=unknown + tools=silent + pane=n/a`
+# into permanent RUNNING: every read restarted the window and the stall was never reported at
+# all (cold review R1 Q1). Only ZERO judged sources withholds, because there the union has no
+# observation of any kind to publish — that session's honest fallback is the poll budget running
+# out as WATCH-TIMEOUT `progress=unknown`, never a fabricated verdict.
+PROGRESS_QUORUM = 1
+
+
+def progress_sources(sess: Session) -> list[tuple[str, str | None, str, bool]]:
+    """[(name, fingerprint or None, why, structural)] for every progress source, in publication
+    order, measured under ONE shared budget (see ProbeBudget — an over-budget probe reads
+    [unknown], which is what this union is built to survive). None is never "nothing moved": it
+    is [unknown] (a gauge that tried and failed) or [n/a] (`structural` — nothing to look at). A
+    repo probe nobody can judge is ALWAYS a broken gauge: an unset cwd, a missing git, a dirty
+    set past the bounded scan — every one of them is a session whose most important source is
+    unreadable, and that must reach the operator."""
+    budget = progress_budget()
+    fp, fp_why = progress_fingerprint(sess, budget)
+    return [("repo", fp, fp_why, False),
+            ("tools", *tools_activity(sess, sess.meta.get("engine", ""))),
+            ("pane", *pane_pgroup(sess, budget))]
+
+
 def progress_state(run_dir: str, name: str) -> dict:
-    """The persisted window: {round, fp, since}. Unreadable/garbage reads as EMPTY, which
-    restarts the window — never as a frozen one."""
+    """The persisted window: {round, since, moved, judged} plus one fingerprint + judged flag
+    per source (PROGRESS_KEYS). Unreadable/garbage reads as EMPTY, which restarts the window —
+    never as a frozen one."""
     try:
         with open(os.path.join(run_dir, f"{name}.duplex.progress"), encoding="utf-8") as fh:
             record = json.load(fh)
@@ -1609,70 +1975,131 @@ def _progress_write(sess: Session, record: dict) -> bool:
         return False
 
 
-def progress_verdict(sess: Session) -> tuple[bool, str, str, str]:
-    """(frozen, why, observed_change_at, undecidable) — FOUR facts, deliberately not folded
-    into one (cold review R1).
+def progress_verdict(sess: Session) -> tuple[bool, str, str, str, str]:
+    """(frozen, why, observed_change_at, undecidable, sub_reason) — FIVE facts, deliberately not
+    folded into one (cold review R1; the sub-reason added by the progress-source batch).
 
-    `frozen` is the STALLED-PROGRESS verdict. `observed_change_at` is the last observation at
-    which the trace was JUDGED to move (or at which this round / this window opened); a probe
-    nobody could judge never becomes one, because a gauge failing at 14:03 is not the work
-    moving at 14:03. `undecidable` is the sentence naming that state, empty when the probe
-    answered — an unjudgeable read only FORBIDS the verdict, it never manufactures a progress
-    timestamp or a `changed` conclusion. A new round restarts the window: new instructions
-    deserve their own clock. State we cannot persist yields no verdict at all — a window
-    cannot accumulate in memory across the one-shot classifies that make it up."""
+    `frozen` is the STALLED-PROGRESS verdict, and it is now a verdict about the UNION of the
+    sources progress_sources() samples: movement in ANY of them is progress, so
+    `observed_change_at` is the LAST observation at which any source was JUDGED to move.
+    A source nobody could judge never becomes one, because a gauge failing at 14:03 is not the
+    work moving at 14:03. `undecidable` is the sentence naming that state, empty when the union
+    answered. `sub_reason` is the published word for WHICH observation this is — the word the
+    orchestrator branches its disposition on, empty when there is nothing to name.
+
+    THE UNION RULE, in one place:
+      * any judged source moved            → no verdict, clock refreshed. The word names it when
+                                             the repo trace was the silent one.
+      * NO source judged at all            → no verdict, window RESTARTED, `undecidable` says
+                                             which sources are blind. A permanently blind gauge
+                                             can never be followed by one lucky read that fires.
+      * quorum judged, all of them still   → the verdict, once the window is full. The word is
+                                             `unknown-source` while any source stays unjudged:
+                                             the operator is called, and told that what called
+                                             them is a gauge nobody could read, not a proof of
+                                             stillness. ONE judged source is enough for that —
+                                             see PROGRESS_QUORUM.
+    A new round restarts the window: new instructions deserve their own clock. A baseline built
+    where there was none — a new round, a source seen judged for the first time, a gauge that
+    just recovered — is NOT movement: the stretch it replaces was never measured, so crediting
+    it moved the progress clock to the recovery instant and made `None → SAME → SAME` report
+    `progress=changed` (verify R2 NB3.3). A rebuild we cannot persist yields no verdict at all —
+    a window cannot accumulate in memory across the one-shot classifies that make it up."""
     mins = progress_window_mins()
     if mins <= 0:
-        return False, "", "", ""
+        return False, "", "", "", ""
     now = time.time()
     rnd = sess.meta.get("round", "0")
-    fp, fp_why = progress_fingerprint(sess)
+    sampled = {name: (value, why, structural)
+               for name, value, why, structural in progress_sources(sess)}
     prev = progress_state(sess.run, sess.name)
     try:
         moved = float(prev["moved"])
     except (KeyError, TypeError, ValueError):
         moved = 0.0
-    if fp is None:
-        # unjudgeable probe = progress. Rewriting the WINDOW here (not just skipping) means a
-        # permanently broken probe can never be followed by one lucky read that fires. The
-        # fingerprint is CARRIED OVER, so the next good read of an unchanged tree is not
-        # mistaken for movement either, and `moved` is left exactly where it was.
-        _progress_write(sess, {"round": rnd, "fp": prev.get("fp", ""), "since": now,
-                               "moved": moved, "judgeable": False})
-        return False, "", (_stamp(moved) if moved else ""), (
-            f"work-trace probe unjudgeable ({fp_why}) — this read proves nothing about "
-            "progress and may never fire STALLED-PROGRESS")
-    if prev.get("fp") != fp or prev.get("round") != rnd or not prev.get("since"):
-        # A baseline rebuilt on the FIRST judgeable read after a broken gauge is NOT a
-        # movement: the window it replaces was opened by a read nobody could judge, so the
-        # difference between the two fingerprints is unattributed — crediting it moved the
-        # progress clock to the recovery instant and made `None → SAME → SAME` report
-        # `progress=changed` (verify R2 NB3.3). Rebuild the window, carry `moved` untouched,
-        # and let the next read that measures a REAL change move it.
-        recovered = prev.get("judgeable") is False
-        moved = moved if recovered else now
-        if not _progress_write(sess, {"round": rnd, "fp": fp, "since": now,
-                                      "moved": moved, "judgeable": True}):
-            return False, "", "", ""
-        return False, "", (_stamp(moved) if moved else ""), ""
-    if not prev.get("judgeable"):
-        # the window was last rewritten by a BROKEN read; this one measured the same trace, so
-        # the record becomes judged again without inventing a movement that never happened
-        _progress_write(sess, {**prev, "judgeable": True})
+    # THREE buckets, not two: `judged` votes, `blind` is a gauge that tried and failed (it
+    # forbids a clean verdict word), `absent` is a source there is nothing to look at for (it
+    # votes on nothing and accuses nobody). Collapsing the last two made a session with no
+    # recorded pane_pid — or any omp session, whose stream has no tool vocabulary at all —
+    # report `unknown-source` forever, i.e. "fix your gauge" for a gauge that was never there.
+    judged, blind, absent, active = [], [], [], []
+    record: dict = {"round": rnd}
+    for name, fp_key, judged_key in PROGRESS_KEYS:
+        value, why, structural = sampled[name]
+        if value is None:
+            (absent if structural else blind).append((name, why))
+            # the fingerprint is CARRIED OVER, so the next good read of an unchanged source is
+            # not mistaken for movement either
+            record[fp_key], record[judged_key] = prev.get(fp_key, ""), False
+            continue
+        judged.append(name)
+        if prev.get(judged_key) and prev.get(fp_key) != value:
+            active.append(name)
+        record[fp_key], record[judged_key] = value, True
+    fresh = prev.get("round") != rnd or not prev.get("since")
+    # THE ARRIVING FRAGMENT. A half-written line makes the tools source unknown (it is not a
+    # countable frame and must never vote silent) — but a fragment that CHANGED since the last
+    # read is bytes the engine wrote inside this window, which is movement, and a terminal 14
+    # over a landing `tool_use` is the exact false positive T1 reported. Movement only: a
+    # fragment that sits unchanged for a whole window is a TRUNCATED stream, not a landing
+    # frame, so it never blocks the (unknown-source) verdict either.
+    record["tail"] = tail = events_tail_mark(sess)
+    if not fresh and tail != prev.get("tail", ""):
+        active.append("tools")
+    union = len(judged) >= PROGRESS_QUORUM
+    record["judged"] = union
+    at = _stamp(moved) if moved else ""
+    if not union:
+        # BELOW QUORUM, first: the window RESTARTS on every such read, so a permanently blind
+        # union can never be followed by one lucky read that fires — and `moved` stays exactly
+        # where it was, because a gauge that could not look did not measure a movement either.
+        record["since"], record["moved"] = now, moved
+        _progress_write(sess, record)
+        return False, "", at, (
+            f"progress sources below the judged quorum ({len(judged)}/{PROGRESS_QUORUM}): "
+            + "; ".join(f"{name} — {why}" for name, why in blind + absent)
+            + " — this read proves nothing about progress and may never fire STALLED-PROGRESS"
+        ), ""
+    if fresh or active:
+        # a fresh window (a new round, or no window at all) or a MEASURED movement in one of the
+        # judged sources: either way the clock starts now.
+        record["since"] = record["moved"] = moved = now
+        if not _progress_write(sess, record):
+            return False, "", "", "", ""
+        return False, "", _stamp(moved), "", _withheld_reason(active, judged)
     try:
         since = float(prev["since"])
     except (TypeError, ValueError):
-        return False, "", "", ""
+        return False, "", "", "", ""
+    record["since"], record["moved"] = since, moved
+    _progress_write(sess, record)
     # `moved` is 0 exactly when no JUDGED movement was ever recorded (the window was opened or
-    # rebuilt by an unjudgeable read). Publish NO timestamp there: `since` is the window's own
-    # opening moment — the gauge's clock, not the work's.
-    at = _stamp(moved) if moved else ""
+    # rebuilt below quorum). Publish NO timestamp there: `since` is the window's own opening
+    # moment — the gauge's clock, not the work's.
     frozen_for = now - since
     if frozen_for < mins * 60:
-        return False, "", at, ""
-    return True, (f"still streaming, but nothing moved for {int(frozen_for // 60)}min: HEAD, "
-                  f"the dirty-tree hash and its file mtimes, the deliverable mtime and "
-                  f"BLOCKED.md are all unchanged since {_stamp(since)}"), at, ""
+        return False, "", at, "", ""
+    still = "; ".join(PROGRESS_TRACE[name] for name in judged)
+    why = (f"still streaming, but no progress source was OBSERVED to move for "
+           f"{int(frozen_for // 60)}min — {still}: unchanged at every sampling point since "
+           f"{_stamp(since)}")
+    if blind:
+        why += (" (and unjudged: "
+                + "; ".join(f"{name} — {reason}" for name, reason in blind) + ")")
+    return True, why, at, "", sub_reason(
+        EXIT_STALLED_PROGRESS,
+        SUB_REASON_UNKNOWN_SOURCE if blind else SUB_REASON_TOOLS_SILENT)
+
+
+def _withheld_reason(active: list[str], judged: list[str]) -> str:
+    """The published word for a WITHHELD verdict: the repo trace was judged and still, and an
+    engine-activity source is what moved. That is the false 14 this batch exists to kill — a
+    seat running a long suite / a docker build / reading code writes nothing, and the repo
+    source alone called it stalled — so the observation is NAMED rather than merely silent.
+    Movement in the repo trace itself needs no word: the state's own sentence covers it."""
+    if "repo" in judged and "repo" not in active and active:
+        return sub_reason(EXIT_STALLED_PROGRESS, SUB_REASON_TOOLS_ACTIVE)
+    return ""
 
 
 # ── steer delivery log: what `queued=N` is actually holding ──────────────────────────
@@ -1943,17 +2370,33 @@ def classify(sess: Session) -> int:
                   "work from the checkout/commits first, then agentctl stop "
                   "(AGENT_WATCH_STALL_MINS tunes the window; 0 disables)")
             return EXIT_STALLED_STREAM
-        frozen, why, at, undecided = progress_verdict(sess)
+        frozen, why, at, undecided, reason = progress_verdict(sess)
         if frozen:
-            print(f"STALLED-PROGRESS: {why} — read the events tail FIRST, then steer a "
-                  "concrete next step or interrupt the turn; never read this as DONE "
+            # `reason=` is the branch an orchestrator's disposition hangs on, so it leads: the
+            # published word (`agentctl states`) says whether this is a stalled seat or a gauge
+            # nobody could read, and the sentence after it is the evidence. The DISPOSITION
+            # branches on the SAME word: "read the events tail and steer" is the wrong move
+            # when what fired was an unreadable gauge, and one sentence for both cases
+            # contradicted this repo's own published disposition table (cold review R1 D1).
+            act = ("REPAIR THE GAUGE FIRST — the detail above names the source that could not "
+                   "be judged: fix it or verify this seat by hand, and do NOT dispose of this "
+                   "as seat stagnation (nothing here proves the seat stood still)"
+                   if reason == SUB_REASON_UNKNOWN_SOURCE else
+                   "read the events tail FIRST, then steer a concrete next step or interrupt "
+                   "the turn")
+            print(f"STALLED-PROGRESS: reason={reason} {why} — {act}; never read this as DONE "
                   "(AGENT_WATCH_PROGRESS_MINS tunes the window; 0 disables)")
             print_steer_queue(sess, engine)
             return EXIT_STALLED_PROGRESS
         print(f"RUNNING: {detail}")
-        # the two are independent: a broken gauge publishes the ADMISSION, never a timestamp
+        # all three are independent: a blind union publishes the ADMISSION and never a
+        # timestamp, and a WITHHELD verdict publishes the word that says why it was withheld —
+        # "the repo trace is still, and the engine is not" is the fact an operator would
+        # otherwise have to reconstruct from the events tail by hand.
         if undecided:
-            print(f"progress=unknown: {undecided}")
+            print(f"progress={sub_reason(EXIT_WATCH_TIMEOUT, SUB_REASON_UNKNOWN)}: {undecided}")
+        if reason:
+            print(f"progress_reason={reason}")
         if at:
             print(f"last_progress_at={at}")
         print_steer_queue(sess, engine)
@@ -2721,13 +3164,15 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
 
 
 def typed_state_document() -> dict:
-    """The published machine contract for the typed state vocabulary. code / name / meaning
-    only: disposition is judgement that moves with the workflow, not a runtime fact, so it is
-    not published here."""
+    """The published machine contract for the typed state vocabulary: code / name / meaning,
+    plus the sub-reason word that qualifies a state where one exists. Disposition is judgement
+    that moves with the workflow, not a runtime fact, so it is not published here."""
     return {
         "schemaVersion": TYPED_STATE_SCHEMA_VERSION,
         "states": [{"code": code, "name": name, "meaning": meaning}
                    for code, name, meaning in TYPED_STATES],
+        "subReasons": [{"code": code, "reason": word, "meaning": meaning}
+                       for code, word, meaning in SUB_REASONS],
     }
 
 
@@ -2745,6 +3190,20 @@ def cmd_states(args: argparse.Namespace) -> int:
     print("exit  " + "name".ljust(width) + "meaning (what the runtime observed)")
     for state in doc["states"]:
         print(f"{str(state['code']).rjust(4)}  {state['name'].ljust(width)}{state['meaning']}")
+    names = {code: name for code, name, _meaning in TYPED_STATES}
+    # `reason=<word>` is printed VERBATIM as the runtime prints it on the state's own line, so a
+    # row and the line it explains are searchable with the same string.
+    rwidth = max(len(s["reason"]) for s in doc["subReasons"]) + len("reason=") + 2
+    print("\nsub-reasons — the second dimension of the same contract, generated from the "
+          "SUB_REASONS table. A row is NOT a promise the exit fires: a sub-reason may name\n"
+          "exactly the observation under which its own state is WITHHELD.")
+    print("exit  " + "reason".ljust(rwidth) + "meaning (which observation inside the state)")
+    for row in doc["subReasons"]:
+        print(f"{str(row['code']).rjust(4)}  "
+              f"{('reason=' + row['reason']).ljust(rwidth)}{row['meaning']}")
+    print("\nstates without a row above carry no sub-reason word at all: "
+          + ", ".join(names[code] for code, _n, _m in TYPED_STATES
+                      if code not in {c for c, _w, _m in SUB_REASONS}))
     print("\ndisposition — what an orchestrator should DO about a state — is judgement, not a "
           "runtime fact, and is deliberately not published here.")
     return 0
@@ -3928,15 +4387,16 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
         _sleep(poll)
     record = progress_state(run, name)
     moved = record.get("moved")
-    if not record.get("judgeable") or not moved:
-        # the probe is disabled (window <=0), never got to persist a window, its LAST read
-        # could not be judged, or NO judged movement was ever recorded (`moved` is 0/absent
-        # exactly when the window was opened or rebuilt by an unjudgeable read, so the blind
+    if not record.get("judged") or not moved:
+        # the probe is disabled (window <=0), never got to persist a window, its LAST read left
+        # the union below its judged quorum, or NO judged movement was ever recorded (`moved` is
+        # 0/absent exactly when the window was opened or restarted below quorum, so the blind
         # stretch is unattributed): say UNKNOWN rather than claim a measurement nobody made.
-        # An unjudgeable gauge is not evidence of movement and not evidence of stillness.
-        word = "unknown"
+        # A union nobody could judge is not evidence of movement and not evidence of stillness.
+        word = sub_reason(EXIT_WATCH_TIMEOUT, SUB_REASON_UNKNOWN)
     else:
-        word = "changed" if moved != armed_progress else "unchanged"
+        word = sub_reason(EXIT_WATCH_TIMEOUT, SUB_REASON_CHANGED if moved != armed_progress
+                          else SUB_REASON_UNCHANGED)
     _sense_conclude(args, rnd, EXIT_WATCH_TIMEOUT,
                     "WATCH TIMEOUT — engine still active; re-run watch or investigate "
                     f"progress={word}")

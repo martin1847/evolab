@@ -161,8 +161,78 @@ cd "$(dirname "$0")"
 # conditional `turnId` and its conditional terminal-id fence, because a non-empty `active`
 # now implies a readable gauge. A typed refusal costing 4 lines replaced a round trip that
 # could only ever be rejected.
+# duplexctl.py 4549→4855 (2026-08-30, STALLED-PROGRESS 进展源并集 + typed 子原因闭集): +306
+# python, ZERO bash (`agentctl` stayed at 594 — `states` already `exec`s duplexctl, so a second
+# published vocabulary cost the shell nothing). The weight HAD to land here: both surfaces are
+# the classify path's own truth, and a second module would have to hold a copy of the progress
+# window, the per-engine frame vocabulary and the exit-code table to say anything at all.
+# What the lines buy, and why none of it could be cut instead:
+#  * two new progress sources (~95 lines): the engine's own tool/command frame COUNT per engine
+#    (built on the vocabulary `claude_inflight`/`codex_inflight` already declare — counted
+#    instead of paired, because a tool that opened and closed between polls left no unmatched
+#    pair) and one `pgrep -g <pane_pid>` over the pane's process group. The old single-source
+#    verdict fired on a seat that really worked and did not write (long suite / docker build /
+#    reading code), which is the false positive that retired a downstream seat's own audit
+#    script at hits=0 false=2.
+#  * the union verdict itself (~65 lines net): three buckets (judged / blind gauge / structurally
+#    absent), a judged QUORUM, and per-source movement crediting. It REPLACED the single-probe
+#    branch chain, so the arithmetic is smaller than it looks — the old three-branch body is gone.
+#  * the SUB_REASONS closed set + `sub_reason()` + the import-time integrity check (~90 lines):
+#    the words an orchestrator branches on (`reason=unknown-source`, `progress=unchanged`) were
+#    bare literals at their print sites. `STEER_NEXT_TURN_REASONS` and the WATCH-TIMEOUT tail
+#    words are now DERIVED from that table, so this is one table replacing three scattered
+#    literal sites, not a new parallel vocabulary.
+#  * the published document (~35 lines): `states` grew the `subReasons` block (json + human) and
+#    the schemaVersion bump. Publishing it in a prose file was the alternative and is exactly
+#    what this repo's states verb exists to forbid.
+#  * doctrine comments the file carries per decision (~20 lines): the quorum's two calibrations,
+#    the [n/a] vs [unknown] distinction, and why omp's tools source is permanently [n/a].
+# duplexctl.py 4855→4998 (2026-08-30, R1 cold-review fixes on that same batch): +143 python,
+# ZERO bash (`agentctl` stayed at 594 — not one finding is a flag). SIX named surfaces, each the
+# minimum the finding admits, and two of them REMOVED cost rather than adding it:
+#  * the quorum floor (~10 lines, mostly doctrine): `PROGRESS_QUORUM` 2→1. A fixed 2 turned the
+#    contract's own named cell (`repo=unknown + tools=silent + pane=n/a`) into permanent RUNNING
+#    — the stall was never reported at all (Q1). The arithmetic did not grow; the comment
+#    carrying WHY the floor is one, and why zero still withholds, did.
+#  * the landing frame (~35 lines): `complete_frames_integrity` returns a third fact (a
+#    non-empty trailing fragment), `events_tail_mark` bounds a tail read, and the union credits
+#    a CHANGED fragment as movement. A `tool_use` caught mid-write was read as a settled counter
+#    and published terminal 14/tools-silent while the tool was arriving (T1). Two facts (unknown
+#    vs arriving) cannot share one flag, and the arriving half is what keeps a landing frame from
+#    firing the state at all.
+#  * the shared probe budget (~35 lines): `ProbeBudget` + `progress_budget()` + both process
+#    probes taking a slice. Three git reads at 20s plus `pgrep` and `ps` summed to 70s of local
+#    timeout under a 30s classify watchdog, so a slow gauge published ENGINE-SILENT — the control
+#    plane accusing itself for a measurement problem (P3). Derived from `status_timeout()`, so it
+#    is not a second knob.
+#  * the pane identity fence (~25 lines): `pane_identity_drift`. start persists `pane_lstart`
+#    precisely because a pgid is reusable, and the source validated only that the pgid was
+#    numeric — an unrelated reused group could vote silent and refresh the clock forever (P2).
+#    It reuses `reap_tree`'s existing rule (a leader ps cannot see is not drift), not a new one.
+#  * the branching disposition (~13 lines): the exit-14 line picks its instruction from the
+#    published word. "Read the events tail, then steer" is the wrong move for an unreadable
+#    gauge, and shipping one sentence for both contradicted this repo's own published table (D1).
+#  * one read per classify (~10 lines net): `_events_snapshot` memoises the stream read on
+#    (size, mtime_ns) and both `complete_frames_integrity` and `events_tail_mark` became views
+#    over it. The batch had TWO full reads per classify (stall probe + tools counter) plus a
+#    tail seek; the stall probe pairs lifecycle frames across the WHOLE stream, so an
+#    offset-incremental reader would change ITS meaning, not just its cost — the memo removes
+#    the duplicate read at zero semantic cost (R1 measurement).
+#  The rest is the P1 wording correction — this source reports what it OBSERVED at a sampling
+#  point, never what happened between two of them.
+# duplexctl.py 4998→5009 (2026-08-30, R2 cold-review fixes on the same batch): +11 python, ZERO
+# bash. Both surfaces are wording or arithmetic on lines that already existed:
+#  * the probe budget's real bound (~10 lines): `PROGRESS_BUDGET_HEADROOM`/`_FLOOR` plus the
+#    `min(share, deadline - 1s)` form and the docstring carrying WHY. The share alone left
+#    AGENT_WATCH_STATUS_TIMEOUT=1 a budget equal to the whole classify watchdog, i.e. the
+#    ENGINE-SILENT-for-a-slow-gauge race the budget exists to remove, still live for two
+#    supported knob values (R2 P3). A knob-value guard cannot be a fixture: it is arithmetic.
+#  * one line of published wording (P1): the STALLED-PROGRESS state and its two silence
+#    sub-reasons now say what was OBSERVED AT SAMPLING POINTS, and say outright that a source
+#    which moved and returned between two samples is invisible to these instruments. The old
+#    text asserted no source moved for the whole window — more than the gauge can prove.
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 4549
+skills/cto-orchestration/references/agentctl/duplexctl.py 5009
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 594
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1326
