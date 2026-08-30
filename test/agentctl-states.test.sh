@@ -261,19 +261,27 @@ NODE_BASE = {id(node): base for base, node in ALL_NODES}
 # by spelling: the CALLER's own top-level definition, else the ORIGINAL symbol behind the name it
 # `from`-imports from the other scanned module, else UNRESOLVED — which is never safe.
 #
-# Two ways the first version of this resolver still reached the wrong function (R3 F1, both
-# independently reproduced), and both are now UNRESOLVED rather than "proven":
+# Three ways earlier versions of this resolver still reached the wrong function (R3 F1 / R4, each
+# independently reproduced), all UNRESOLVED now rather than "proven":
 #   * `from duplexctl import _unsafe as _safe_name` — the alias table dropped `alias.name`, so the
 #     checker proved the source module's SAFE `_safe_name` while python calls `_unsafe`. The table
 #     now carries (source file, ORIGINAL symbol) and the lookup uses the original.
 #   * lexical shadowing — a nested `def`/parameter/local rebinding of the same name inside the
 #     emitter means the top-level definition is NOT what the call reaches. Any non-top-level
 #     binding of a name anywhere in a file therefore poisons that name for the whole file.
+#   * TWO definitions of the same name in one file — `setdefault` kept the FIRST, so safe-first /
+#     unsafe-last proved the safe one while python binds the last. Both write the same summary key,
+#     so nothing ever removed it. Such a name is now AMBIGUOUS: this scan does not order-solve
+#     python's rebinding, it refuses to answer.
 # Coarse on purpose: this can only ever turn a "proven safe" into a red, never the other way.
 DEFS = {}                                     # (file, name) -> the FunctionDef that name reaches
+DUP = set()                                   # (file, name) defined more than once: ambiguous
 for base, node in ALL_NODES:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        DEFS.setdefault((base, node.name), node)
+        key = (base, node.name)
+        if key in DEFS:
+            DUP.add(key)
+        DEFS.setdefault(key, node)
 SCANNED = {base for base, _tree in trees}
 TOPLEVEL = {id(node) for _base, tree in trees for node in tree.body}
 FROM_IMPORT = {}                     # (file, local name) -> (defining file, ORIGINAL symbol)
@@ -342,9 +350,10 @@ def resolve(base, name):
     if own and imported is not None:            # two module-level bindings, order decides: unknown
         return None
     if own:
-        return (base, name)
+        return None if (base, name) in DUP else (base, name)
     if imported is not None and imported in DEFS:
-        return imported                         # (source file, ORIGINAL symbol), never the alias
+        # (source file, ORIGINAL symbol), never the alias — and never an ambiguous one
+        return None if imported in DUP else imported
     return None
 
 
