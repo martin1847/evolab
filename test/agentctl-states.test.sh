@@ -251,6 +251,58 @@ if defined - published:
 if published - defined:
     bad.append("published-but-undefined:" + repr(sorted(published - defined)))
 
+NODE_BASE = {id(node): base for base, node in ALL_NODES}
+
+# ── MODULE-QUALIFIED IDENTITY for every cross-function fact (R2 B1) ───────────────────────
+# A bare call name is not an identity once the scan face is two files. Keyed by name alone, a
+# SAFE helper in one module whitelisted a same-named UNSAFE helper in the other, and an
+# out-of-table `reason=rogue` emission passed with all 38 assertions green. Every summary below
+# is keyed by (file, function), and a bare call is resolved the way python resolves it: the
+# CALLER's own top-level definition wins, else the name it explicitly `from`-imports from the
+# other scanned module, else UNRESOLVED — which is never safe. Fail-closed: an unresolvable call
+# can only ever make this gate red, never green.
+DEFS = {}                                     # (file, name) -> the FunctionDef that name reaches
+for base, node in ALL_NODES:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        DEFS.setdefault((base, node.name), node)
+SCANNED = {base for base, _tree in trees}
+FROM_IMPORT = {}                              # (file, local name) -> file that defines it
+for base, node in ALL_NODES:
+    if isinstance(node, ast.ImportFrom) and node.module:
+        src = node.module.split(".")[-1] + ".py"
+        if src in SCANNED:
+            for alias in node.names:
+                FROM_IMPORT[(base, alias.asname or alias.name)] = src
+
+
+def resolve(base, name):
+    """the (file, name) key a BARE call to `name` inside `base` reaches, or None"""
+    if (base, name) in DEFS:
+        return (base, name)
+    src = FROM_IMPORT.get((base, name))
+    if src is not None and (src, name) in DEFS:
+        return (src, name)
+    return None
+
+
+def callee(node):
+    """(file, name) of the function this Call reaches, for a bare-name call; else None"""
+    name = getattr(node.func, "id", "")
+    return resolve(NODE_BASE[id(node)], name) if name else None
+
+
+def func_key(func):
+    return (NODE_BASE[id(func)], func.name)
+
+
+# the ONE definition of the gate's axiom, resolved not spelled: a call is `sub_reason()` only if
+# it reaches THIS function. A rogue same-named shadow in the other module is the same collision
+# B1 named, one line different.
+SUB_REASON = [k for k in DEFS if k[1] == "sub_reason"]
+SUB_REASON_KEY = SUB_REASON[0] if len(SUB_REASON) == 1 else None
+if SUB_REASON_KEY is None:
+    bad.append("sub_reason-not-uniquely-defined:" + repr(sorted(SUB_REASON)))
+
 # The functions that DECIDE or PRINT a sub-reason. Inside them a published word may appear only
 # as an argument of sub_reason() — the one gate that refuses a word outside the closed set.
 DECIDERS = ("progress_verdict", "_withheld_reason", "steer_delivery", "cmd_sense_loop")
@@ -260,16 +312,14 @@ for _base, node in ALL_NODES:
         continue
     found.add(node.name)
     wrapped = {id(arg) for call in ast.walk(node)
-               if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "sub_reason"
+               if isinstance(call, ast.Call) and callee(call) == SUB_REASON_KEY
+               and SUB_REASON_KEY is not None
                for arg in call.args}
     for lit in ast.walk(node):
         if isinstance(lit, ast.Constant) and isinstance(lit.value, str) \
                 and lit.value in pub_words and id(lit) not in wrapped:
-            bad.append("bare-literal-in-decider:%s:%d:%s" % (node.name, lit.lineno, lit.value))
-missing = sorted(set(DECIDERS) - found)
-if missing:
-    bad.append("decider-not-found:" + ",".join(missing))
-
+            bad.append("bare-literal-in-decider:%s:%s:%d:%s"
+                       % (NODE_BASE[id(node)], node.name, lit.lineno, lit.value))
 # ── EVERY emission of the three published fields takes its word from sub_reason() ─────────
 # The rule the S6 scan above could not carry (cold review R1 S1: four out-of-set emission forms
 # — an f-string word, a concatenated variable, a getattr-mediated read, a NEW emission helper
@@ -279,18 +329,21 @@ if missing:
 # a name this scan PROVED is only ever bound to one (a fixpoint over assignments, tuple-unpack
 # slots and returns, so `frozen, why, at, undecided, reason = progress_verdict(sess)` counts).
 FIELDS = ("progress_reason=", "progress=", "reason=")
-# Pinned per site: (function, the exact expression the word comes from) → why that site is not
-# a verdict word. The three OTHER vocabularies, plus the one use of a field prefix that emits
-# no word at all. Every entry must be USED — a stale exemption is drift — and a new emission
-# site anywhere in the file reds until a human lands it here with what it belongs to named.
+# Pinned per site: (FILE, function, the exact expression the word comes from) → why that site is
+# not a verdict word. The three OTHER vocabularies, plus the one use of a field prefix that emits
+# no word at all. The FILE is part of the key on purpose (R2 B1): a two-file scan face keyed by
+# function name alone would let one module's exemption silently cover a same-named function in
+# the other. Every entry must be USED — a stale exemption is drift, and a moved function whose
+# exemption still names the old file reds here — and a new emission site anywhere reds until a
+# human lands it here with what it belongs to named.
 FOREIGN = {
-    ("receipt_note", "marker.get('reason')"):
+    ("duplexctl.py", "receipt_note", "marker.get('reason')"):
         "the DELIVERED marker's own field, echoed out of a foreign record, never a verdict word",
-    ("cmd_states", "'reason=' + row['reason']"):
+    ("duplexctl.py", "cmd_states", "'reason=' + row['reason']"):
         "the renderer OF the published table: these words come from the table itself",
-    ("cmd_identity", "identity.PUBLISH_INTERRUPTED"):
+    ("watchctl.py", "cmd_identity", "identity.PUBLISH_INTERRUPTED"):
         "identity.py's published refusal vocabulary, on an IDENTITY-UNKNOWN message line",
-    ("cmd_states", "len('reason=')"):
+    ("duplexctl.py", "cmd_states", "len('reason=')"):
         "a column WIDTH measured off the prefix: arithmetic, no word is emitted here",
 }
 used = set()
@@ -326,20 +379,21 @@ def ancestors(func):    # a closure reads the enclosing scope's names (delivered
     return out
 
 
-SAFE_SCALAR, SAFE_SLOT, TAINTED = set(), set(), {}
+SAFE_SCALAR, SAFE_SLOT, TAINTED = set(), set(), {}   # SCALAR/SLOT keyed by (file, function)
 
 
 def safe_expr(node, func):
     """True = this expression can only ever be a word sub_reason() returned (or empty)"""
     if isinstance(node, ast.Constant):
         return node.value == "" or node.value is None
-    if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "sub_reason":
+    if isinstance(node, ast.Call) and SUB_REASON_KEY is not None \
+            and callee(node) == SUB_REASON_KEY:
         return True
     if isinstance(node, ast.Name):
         return any(node.id in TAINTED.get(f, set()) for f in [func] + ancestors(func))
     if isinstance(node, ast.IfExp):
         return safe_expr(node.body, func) and safe_expr(node.orelse, func)
-    if isinstance(node, ast.Call) and getattr(node.func, "id", "") in SAFE_SCALAR:
+    if isinstance(node, ast.Call) and callee(node) in SAFE_SCALAR:
         return True
     return False
 
@@ -359,17 +413,17 @@ for _round in range(4):         # fixpoint: name taint and safe returns feed eac
                         if isinstance(elt, ast.Name):
                             binds.setdefault(elt.id, []).append(
                                 isinstance(node.value, ast.Call)
-                                and (getattr(node.value.func, "id", ""), i) in SAFE_SLOT)
+                                and (callee(node.value), i) in SAFE_SLOT)
         # ALL bindings must be safe: one unsafe assignment poisons the name for the whole scope
         TAINTED[func] = {n for n, oks in binds.items() if oks and all(oks)}
         rets = [n.value for n in body if isinstance(n, ast.Return) and n.value is not None]
         if rets and all(safe_expr(r, func) for r in rets):
-            SAFE_SCALAR.add(func.name)
+            SAFE_SCALAR.add(func_key(func))
         if rets and all(isinstance(r, ast.Tuple) for r in rets) \
                 and len({len(r.elts) for r in rets}) == 1:
             for i in range(len(rets[0].elts)):
                 if all(safe_expr(r.elts[i], func) for r in rets):
-                    SAFE_SLOT.add((func.name, i))
+                    SAFE_SLOT.add((func_key(func), i))
 
 DOCSTRINGS = {id(n.body[0].value) for _base, n in ALL_NODES
               if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
@@ -385,11 +439,12 @@ def gated_hits(text):   # (field, word spelled inline or "") for every field thi
 
 def check(node, joined, hit, expr, func):
     field, inline = hit
+    base = NODE_BASE[id(node)]
     fname = func.name if func is not None else "<module>"
     if inline:                                  # the word is spelled in the literal itself
         if any(state in joined and inline in words for state, words in state_words.items()):
             return None                         # that state's OWN published vocabulary
-        return "hardcoded-word:%s:%d:%s%s" % (fname, node.lineno, field, inline)
+        return "hardcoded-word:%s:%s:%d:%s%s" % (base, fname, node.lineno, field, inline)
     # No word inside the literal: then the PREFIX ITSELF is the taint, and it must carry a word
     # this scan can PROVE came from sub_reason(). Cold review R2 S1: `field = "progress_reason="`
     # followed by `print(field + word)` splits the emission across two statements, so no single
@@ -397,11 +452,11 @@ def check(node, joined, hit, expr, func):
     # such split invisible. A prefix with nothing provable attached to it reds, wherever it sits.
     if expr is None:
         parent = PARENT.get(node)
-        key = (fname, ast.unparse(parent if parent is not None else node))
+        key = (base, fname, ast.unparse(parent if parent is not None else node))
         if key in FOREIGN:
             used.add(key)
             return None
-        return "prefix-literal-not-gated:%s:%d:%s" % (fname, node.lineno, field)
+        return "prefix-literal-not-gated:%s:%s:%d:%s" % (base, fname, node.lineno, field)
     if safe_expr(expr, func):
         return None                             # proven: sub_reason(), or a name only it binds
     for state, words in state_words.items():
@@ -411,12 +466,12 @@ def check(node, joined, hit, expr, func):
                 else [expr.body, expr.orelse] if isinstance(expr, ast.IfExp) else [])
         if lits and all(isinstance(x, ast.Constant) and x.value in words for x in lits):
             return None
-    key = (fname, ast.unparse(expr))
+    key = (base, fname, ast.unparse(expr))
     if key in FOREIGN:
         used.add(key)
         return None
-    return "word-not-from-sub_reason:%s:%d:%s%s" % (fname, node.lineno, field,
-                                                    ast.unparse(expr))
+    return "word-not-from-sub_reason:%s:%s:%d:%s%s" % (base, fname, node.lineno, field,
+                                                       ast.unparse(expr))
 
 
 for base, node in ALL_NODES:
@@ -454,7 +509,7 @@ distinct = {w for w in pub_words if w.startswith("repo-silent") or w == "unknown
 for base, lit in ALL_NODES:
     if isinstance(lit, ast.Constant) and isinstance(lit.value, str) \
             and lit.value in distinct and (base, lit.lineno) not in table_lines:
-        bad.append("distinctive-word-outside-table:%d:%s" % (lit.lineno, lit.value))
+        bad.append("distinctive-word-outside-table:%s:%d:%s" % (base, lit.lineno, lit.value))
 print(" ".join(bad) if bad else "CONSISTENT %d" % len(published))
 GATEPY
 states --json > "$SANDBOX/pub.json"

@@ -710,7 +710,7 @@ teardown
 # DENOMINATOR = every shipped *.py beside the entry, not duplexctl.py alone (2026-08-30, the
 # watch/supervisor split): counting one file made the ratchet a hostage of that file's identity —
 # moving 1385 lines from duplexctl.py into watchctl.py, with not one line of bash added and not
-# one judgement returning to the shell, drove the measured share 106→135/1000 and would have
+# one judgement returning to the shell, drove the measured share 106→140/1000 and would have
 # breached a gate about bash growth on a python-only refactor. Same rule, re-derived on the real
 # denominator: measured 66/1000 (bash 594 / python 8377) + the same 1.0-point headroom = 76.
 # That is TIGHTER than the old 135, which had silently accumulated 29 points of unused room.

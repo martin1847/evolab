@@ -28,11 +28,15 @@
   `PROJECTORS` / `PROVIDERS` / `TURN_ACTIVE`（monkeypatch）/ `steer_delivery` / `build_frame` /
   `codex_request` / `wait_for` 等——`agentctl-capabilities.test.sh` 57 个断言的底座。
 - `agentctl-states.test.sh`：`ast.parse` 静态扫 `EXIT_*` / `TYPED_STATES` / `SUB_REASONS` 与四个 decider
-  （`progress_verdict` / `_withheld_reason` / `steer_delivery` / `cmd_sense_loop`），FOREIGN 豁免表按
-  (函数名, 表达式) 键入——**未用到的豁免项也变红**，函数搬家双向触发。S4/S6 扫描面 = duplexctl.py ∪
-  watchctl.py（`subgate()` 一个入口喂两个文件），规则按函数名判、与文件无关，所以在两文件间搬代码既
-  藏不住违规也不作废豁免；line-keyed 的 `table_lines` 按 (文件, 行) 键入。S6b 的变异锚按 mode 分文件：
-  decider 类（`cmd_sense_loop`）打 watchctl.py，表类（`SUB_REASONS`）打 duplexctl.py。
+  （`progress_verdict` / `_withheld_reason` / `steer_delivery` / `cmd_sense_loop`）。S4/S6 扫描面 =
+  duplexctl.py ∪ watchctl.py（`subgate()` 一个入口喂两个文件）。**跨函数事实一律模块限定身份**
+  （R2 评审 B1）：`SAFE_SCALAR` / `SAFE_SLOT` 按 (文件, 函数) 键入，FOREIGN 豁免表按
+  (文件, 函数, 表达式) 键入，`table_lines` 按 (文件, 行) 键入；裸调用名按 python 的解析顺序落地
+  ——调用方本文件的顶层定义优先，其次是它 `from` 导入的那个被扫模块，都不中即 UNRESOLVED 而
+  UNRESOLVED 永不算安全（fail-closed）。`sub_reason` 这条公理也走同一解析：全局唯一定义之外的
+  同名影子会让整个门喊 `sub_reason-not-uniquely-defined` 并把所有发射点判为不安全。
+  **未用到的豁免项也变红**，函数搬家双向触发（豁免项里的文件名写错也红）。S6b 的变异锚按 mode 分
+  文件：decider 类（`cmd_sense_loop`）打 watchctl.py，表类（`SUB_REASONS`）打 duplexctl.py。
 - `agentctl-duplex.test.sh`：`_idle_mark_and_count` / `_idle_marks_reset` / `CODEX_SANDBOX`（sed 变异，
   divergent fixture 的 `cp` 清单含 watchctl.py）/ `_STOP_KEPT`（已随块搬到 watchctl.py，grep 面同步）。
 - `agentctl-supervised-watch.test.sh`：`PROGRESS_BUDGET_*` 四赋值 + `progress_budget`（选中数硬编码 4）。
@@ -47,7 +51,7 @@
 | 日期 | 提案 | 读数 | 判 |
 |---|---|---|---|
 | 2026-08-30 | 接口 + omp/claude/codex 三实现模块 | movable=454（宽计 702）new-indirection=2；耦合点 25、共享助手绑定 29、白盒 case 86 | abandon（`movable<800`） |
-| 2026-08-30 | watch/supervisor 块（`cmd_classify`…`cmd_inventory`）平移出独立模块 | movable=1208 stay=0 mutable-globals-crossing=0 whitebox-cases=9（断言执行 22）new-indirection=1；`_CTL` 须仍指前门；C10 占比 106→135/1000 撞线、weight 棘轮须同 commit 改；states S4/S6 与 reap 缺席断言只扫 duplexctl.py（搬出即盲） | **已执行**（`feat/watch-module`）：1385 行搬入 `watchctl.py`，函数体逐字不改；`_CTL = os.path.abspath(duplexctl.__file__)` 仍指前门；三道门扩面（S4/S6 双文件、reap 三条 grep 并集、C10 分母改全 `*.py`）+ weight 基线 5009→3637 并加 watchctl 1428 行 |
+| 2026-08-30 | watch/supervisor 块（`cmd_classify`…`cmd_inventory`）平移出独立模块 | movable=1208 stay=0 mutable-globals-crossing=0 whitebox-cases=9（断言执行 22）new-indirection=1；`_CTL` 须仍指前门；C10 占比 106→135/1000 撞线（预扫按 move=1208 的读数；实际搬 1385 行并删 3 个孤儿 import 后是 140/1000）、weight 棘轮须同 commit 改；states S4/S6 与 reap 缺席断言只扫 duplexctl.py（搬出即盲） | **已执行**（`feat/watch-module`）：1385 行搬入 `watchctl.py`，函数体逐字不改；`_CTL = os.path.abspath(duplexctl.__file__)` 仍指前门；三道门扩面（S4/S6 双文件、reap 三条 grep 并集、C10 分母改全 `*.py`）+ weight 基线 5009→3634 并加 watchctl 1428 行；R2 评审 B1 收口：S6 的跨函数摘要与调用解析改模块限定身份（见白盒耦合面） |
 
 重扫：`python3 -c 'import ast…'` 顶层项分类脚本与各项取数命令归档在编排位本地
 `docs/orchestration/archive/PSPLIT_SCAN_RESULT_omp.md`（不入库）；再评时派只读席复跑同一判据。

@@ -231,7 +231,7 @@ cd "$(dirname "$0")"
 #    sub-reasons now say what was OBSERVED AT SAMPLING POINTS, and say outright that a source
 #    which moved and returned between two samples is invisible to these instruments. The old
 #    text asserted no source moved for the whole window — more than the gauge can prove.
-# duplexctl.py 5009→3637 and watchctl.py 1428 is a NEW ROW (2026-08-30, watch/supervisor 块平移):
+# duplexctl.py 5009→3634 and watchctl.py 1428 is a NEW ROW (2026-08-30, watch/supervisor 块平移):
 # a SPLIT, not deletion and not growth — the shrinking row is rewritten and the new module gets a
 # row in the same commit, exactly as the governance note above requires. 1385 contiguous lines
 # (`cmd_classify` … `cmd_inventory`, 70 top-level items) moved with the function bodies verbatim;
