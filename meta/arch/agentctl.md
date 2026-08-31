@@ -52,6 +52,8 @@
   两文件并集（缺席断言两文件都空，唯一断言两文件合计 `1 1`）。
 - 文件身份门：`agentctl-weight.test.sh` 行数棘轮（拆文件须同 commit 改基线并为新模块加行）；
   `agentctl-capabilities.test.sh` C10 bash/python 占比分母 = 同目录**全部 `*.py`**（棘轮 76/1000）。
+- 产品面门（`skill-face.test.sh`，两颗牙各自结账）：`skill-face-filename` 判 `skills/` 全树 basename 前缀（ARCHITECTURE/DESIGN/CONTRIBUTING/MAINTAINER/HACKING，大小写与扩展名无关）——维护者文档下沉本目录。
+- `skill-face-prose-ratchet` 判 `skills/cto-orchestration/**/*.md` 的 per-file 行数（基线 fb09bfb 实测；lock-new-low slack = `max(5, baseline/10)` 逐文件算，无死臂；表外新增 md 未登记即红）——bump 基线须同 commit 写理由。
 - 直连 CLI 子命令的 134 个调用点与内部符号无关，只要 argv 前门不动就不动。
 
 ## 拆分裁决账（kill criterion 读数）
