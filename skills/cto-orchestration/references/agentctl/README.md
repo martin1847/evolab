@@ -7,7 +7,6 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 > 本文只写 CLI 讲不了的：语义、失败形态、判断。能从 `agentctl` / `capabilities` / `states` 问出来的
 > 事实以 CLI 为准；本文偶有的复述（exit 码、resume 命令、env 覆盖）漂移时 CLI 赢。
-> 改 `duplexctl.py` / `watchctl.py` 内部前读 `ARCHITECTURE.md`（分层符号表、白盒测试耦合、拆分裁决账）。
 
 ## agentctl —— 当前命令面
 
@@ -116,17 +115,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 ## typed 状态：处置（词表由 `agentctl states` 自述）
 
-exit code、名字、语义、以及**二级子原因词（`reason=<word>`）**都是运行时事实 →
-`agentctl states`（`--json` 机器读；`schemaVersion 2` 起多一份 `subReasons`），此处不留第二份。
-**本节只写 verb 故意不发布的那一列：处置**——它是判断，不是事实。子原因词是闭集，源码里判定 /
-输出只许引用表成员（`duplexctl.py` 的 `SUB_REASONS`）。把守的两道门，能力如实：import 期自检
-（表内每行必须落在已发布 typed state 上、每个 `SUB_REASON_*` 常量必须在表里）+ 静态门 **AST 扫
-全文件**——任何产出 `reason=` / `progress=` / `progress_reason=` 的字面量或 f-string，其词必须来自
-`sub_reason()`（直接调用，或经赋值 / 元组解包 / return 传递且全程只绑定过 `sub_reason()` 结果的名字），
-否则红；f-string 硬写词、拼接、`getattr` 绕读、新写一个发射 helper 四种形态各有变异用例转红。
-另外三套**已发布的**词表按站点点名豁免（SUPERVISOR-LOST 的 `dead`/`unknown` 由该 state 自己的
-`meaning` 句发布并被门反查、DONE 收据回显 marker 自带字段、IDENTITY-UNKNOWN 用 identity.py 词表），
-豁免表里每条都必须被用到——多一条即红。
+exit code、名字、语义、二级子原因词（`reason=<word>`，闭集）都是运行时事实 →
+`agentctl states`（`--json` 机器读），此处不留第二份。**本节只写 verb 故意不发布的那一列：
+处置**——它是判断，不是事实。
 
 | 状态 | 编排者要做什么 |
 |---|---|

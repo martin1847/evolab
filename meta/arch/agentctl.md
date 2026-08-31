@@ -1,5 +1,6 @@
-# agentctl 代码架构（维护者视角；使用语义见 README.md）
+# agentctl 代码架构（维护者视角；使用语义见 `skills/cto-orchestration/references/agentctl/README.md`）
 
+维护者内容不进 skill 本体（skill = 产品面；制造过程与白盒细节收敛在本仓 meta/arch）。
 两个 python 文件 `duplexctl.py`（引擎侧 + argv 前门）与 `watchctl.py`（巡检侧），bash 前门 `agentctl`，
 三个 guard 脚本。本文按**符号**描述分层，不写行号（行号漂）；数字来自只读预扫，重扫命令见文末。
 
@@ -27,6 +28,13 @@
 - `test/duplex-fixtures/ws3/probe.py` `exec_module` 加载 duplexctl，绑定 `CAPABILITIES` / `ROUTES` /
   `PROJECTORS` / `PROVIDERS` / `TURN_ACTIVE`（monkeypatch）/ `steer_delivery` / `build_frame` /
   `codex_request` / `wait_for` 等——`agentctl-capabilities.test.sh` 57 个断言的底座。
+- 子原因闭集的两道门：import 期自检（`SUB_REASONS` 每行必须落在已发布 typed state 上、每个
+  `SUB_REASON_*` 常量必须在表里）+ S6 静态门——任何产出 `reason=` / `progress=` /
+  `progress_reason=` 的字面量或 f-string，其词必须来自 `sub_reason()`（直接调用，或经赋值 /
+  元组解包 / return 传递且全程只绑定过其结果的名字），否则红；f-string 硬写词 / 拼接 / `getattr`
+  绕读 / 新写发射 helper 四种形态各有变异用例转红。三套已发布词表按站点点名豁免
+  （SUPERVISOR-LOST 的 `dead`/`unknown` 由该 state 的 `meaning` 句发布并被门反查、DONE 收据回显
+  marker 自带字段、IDENTITY-UNKNOWN 用 identity.py 词表），豁免表每条必须被用到——多一条即红。
 - `agentctl-states.test.sh`：`ast.parse` 静态扫 `EXIT_*` / `TYPED_STATES` / `SUB_REASONS` 与四个 decider
   （`progress_verdict` / `_withheld_reason` / `steer_delivery` / `cmd_sense_loop`）。S4/S6 扫描面 =
   duplexctl.py ∪ watchctl.py（`subgate()` 一个入口喂两个文件）。**跨函数事实一律模块限定身份**
