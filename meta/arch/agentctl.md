@@ -61,5 +61,29 @@
 | 2026-08-30 | 接口 + omp/claude/codex 三实现模块 | movable=454（宽计 702）new-indirection=2；耦合点 25、共享助手绑定 29、白盒 case 86 | abandon（`movable<800`） |
 | 2026-08-30 | watch/supervisor 块（`cmd_classify`…`cmd_inventory`）平移出独立模块 | movable=1208 stay=0 mutable-globals-crossing=0 whitebox-cases=9（断言执行 22）new-indirection=1；`_CTL` 须仍指前门；C10 占比 106→135/1000 撞线（预扫按 move=1208 的读数；实际搬 1385 行并删 3 个孤儿 import 后是 140/1000）、weight 棘轮须同 commit 改；states S4/S6 与 reap 缺席断言只扫 duplexctl.py（搬出即盲） | **已执行**（`feat/watch-module`）：1385 行搬入 `watchctl.py`，函数体逐字不改；`_CTL = os.path.abspath(duplexctl.__file__)` 仍指前门；三道门扩面（S4/S6 双文件、reap 三条 grep 并集、C10 分母改全 `*.py`）+ weight 基线 5009→3634 并加 watchctl 1428 行；R2 评审 B1 收口：S6 的跨函数摘要与调用解析改模块限定身份（见白盒耦合面） |
 
+## 实现细节（自产品 README 剥离；改这些行为时同步这里，不回流 README）
+
+- **check-params glob 判定全枚举**：绝对与相对 glob 一律判——含 `..` 分量即拒；最深已存在祖先目录
+  物理解析后不在 cwd 内即拒（含 symlink 外逃）；无已存在祖先按歧义拒；basename 为空 = 目录非交付物、拒。
+  进 meta 的参数面值一律拒含换行（否则注入 meta key 可无声改档），写点 `meta_update` 兜底引擎回传值。
+- **fifo 单写者**：所有 fifo 写经 duplexctl `write_frame`（flock `acquire_writer_lock`）；并发 steer 由锁串行。
+- **steer-log sidecar**：ts + mode + 首行 ≤80B，单写者 duplexctl，best-effort。
+- **stop 收割序列**：pane 起在自有 session+group（pane_pid == pgid）；TERM → 宽限
+  `AGENTCTL_REAP_GRACE`（默认 5s）→ KILL → pgrep 复核零残留；陈旧 meta 走 leader lstart 指纹防
+  pid 复用误杀。
+- **worktree 门（guard ⑦）benign 快路**：整条命令是单一 `git [-C <path>] worktree prune` 且
+  porcelain 证明所有 prunable 目录已消失 → 放行；任何链式 / env 前缀 / 多 `-C` / 解析歧义 /
+  `lexists` 命中都落回 DENY；mixed 命令不 auto-allow、落回分类器。
+- **progress 三源细节**：仓库指纹的脏树 hash 按 untracked 逐文件展开；events 尾部半行帧 = 正在落帧，
+  该源本次不可判且那些字节算移动；pane 源 `pgrep -g <pane_pid>` + `pane_lstart` 指纹（不符 = pid
+  复用，该源不可判）；三探针共用 classify 死线 40% 的预算（默认 12s），超预算按不可判计、绝不让慢
+  量具变成 ENGINE-SILENT；合同：任一源不可判 + 其余可判源全静 ⇒ 14 `reason=unknown-source`。
+  unknown-source 的 detail 候选：git 探针失败 / 脏路径超 500 / 预算用尽 / events 坏行或半行 /
+  pgrep 空组 / pane 身份不符。
+- **guard 解析器注意**：bash 规则①用剥引号视图，④用原始 cmd，⑤⑥⑧⑩只认命令位（路径当参数不拦）；
+  ⑨判归一化后的 shell 执行面（剥引号 span + 去反斜杠，转义写法照拦；字面量进 shell 命令即拒 =
+  已接受的假阳性）；⑬ cyberPolicy 误拦实证 n=4 故降 WARN。
+- **steer 语义迁移史**：旧 `--now` 已删（传了报错指新语义）；`--replace` 为 `--interrupt` 的静默别名。
+
 重扫：`python3 -c 'import ast…'` 顶层项分类脚本与各项取数命令归档在编排位本地
 `docs/orchestration/archive/PSPLIT_SCAN_RESULT_omp.md`（不入库）；再评时派只读席复跑同一判据。

@@ -16,7 +16,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 - **steer 语义 = 两个动词**（能力差异拒绝制，不分叉车道）：默认 `agentctl steer` **尽快送达**——
   引擎有轮中路由且正在跑 turn 就进 turn（omp `steer` / codex `turn/steer`），空闲就立刻开下一轮
   （omp `follow_up` / codex `turn/start` / claude `user`）；**选路只看活体 turn 态，没有 flag 可忘传**
-  （旧 `--now` 已删，传了报错指新语义；`--replace` 是 `--interrupt` 的静默别名）。
+  （`--replace` = `--interrupt` 别名）。
   `--interrupt` = 弃当前 turn 以本条重开（omp `abort_and_prompt` / codex `turn/interrupt+turn/start`；
   claude 无此帧 → 拒绝并指 stop+resume），并回收 supervisor、轮转 attempt。
   **降级/判不出都是 typed 出口，不是 stdout 散文**：turn 运行中却进不去 turn 时，`steer` 出
@@ -26,9 +26,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   判不出按「开下一轮」走（宁钝勿敏：晚一个边界 > 丢一条指令）。三引擎能力矩阵由 runtime 生成，
   `agentctl capabilities` 是唯一真源（同一张表既驱动路由、又出拒绝文案）。投递成功 ≠ 模型照做，
   验收仍看交付物。
-- **steer 队列可见**：`queued=N` 只是引擎报的深度，lane 自己记 `<s>.steer-log.jsonl`
-  （ts + mode + 首行 ≤80B，单写者 duplexctl，best-effort）；`status` 在 N>0 时按深度列出末 N 条
-  （时间 + 路由 + 首行），无队列面的引擎零输出。stop 随控制态一起清。
+- **steer 队列可见**：`queued=N` 只是引擎报的深度，lane 自己记 sidecar `<s>.steer-log.jsonl`；
+  `status` 在 N>0 时按深度列出末 N 条，无队列面的引擎零输出。stop 随控制态一起清。
 - **typed exit 三引擎同词汇**（词表 `agentctl states`，处置见下节）；
   **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析；freshness
@@ -36,8 +35,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   **`steer -d` 只移动 watcher 的 freshness 目标，不重发 footer**——worker 不会自动得知新目标，
   你的 steer 文本必须自己点名交付文件（runtime 在 `-d` 成功时会当场提醒这一条）。
 - **尾行机器可读**：`watch` 四类出口（终态 / 非终态 / ENGINE-SILENT / TIMEOUT）都在 typed
-  `=== … ===` 行之后追加最后一行 `EXIT=<n>`——包装层（管道 / 后台 harness）吞掉进程退出码时仍可解析；
-  文案与 exit code 均不变。`status` 读到 RUNNING 而**无存活 watcher**（pid 文件缺失、或进程已亡）追加
+  `=== … ===` 行之后追加最后一行 `EXIT=<n>`——包装层（管道 / 后台 harness）吞掉进程退出码时仍可解析。
+  `status` 读到 RUNNING 而**无存活 watcher**（pid 文件缺失、或进程已亡）追加
   一行 `note: no watcher armed — arm: agentctl watch <S>`：只提醒不代挂，typed 行与 exit code 不动。
   **watch 不可用自造轮询顶替**：只认 DONE 的轮询会把 `RUNNING: idle but queued=<n>` 停成
   无人收割——typed 终态 / deliverable freshness / round 围栏全靠 sensing supervisor。
@@ -61,9 +60,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 - **后台任务 cwd 语义**：宿主后台机制跑 `agentctl watch` 时，命令继承**发起时刻
   编排者的 cwd**，与 worker 会话 cwd 无关；判断后台任务归属认 `$RUN/<session>.*` 文件名，别认 cwd。
 - **watch 等的是 worker，不是外部作业**：worker 在等长外部作业（部署列车 / CI / 远端队列）时
-  别拿 watch 反复重挂硬扛——宿主事件会成批收割后台 waiter（见下 tombstone 节），长等待期内
-  每次收割都触发一次重挂，全是空转轮（下游席位 40min 列车 5 次重挂实证）；改用宿主长间隔
-  wakeup / 定时器对齐外部作业的真实时长，到点再回 `status` 一发判态。
+  别拿 watch 反复重挂硬扛——宿主事件会成批收割后台 waiter（见下 tombstone 节），每次收割触发
+  一次重挂、全是空转轮；改用宿主长间隔 wakeup / 定时器对齐外部作业的真实时长，到点再回
+  `status` 一发判态。
 - 需要人工现场 = `tmux attach -t <session>` 旁观 / `tmux capture-pane -p`
   手动尸检；worker 控制始终走协议。
 
@@ -76,13 +75,11 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   engine args 由 start 原样转发）正路在各自 note 里；codex 唯一 supported，握手内续 thread：
   `agentctl start codex <s> <cwd> --goal <f> --resume-thread <threadId>`（supported 不带 note，故写这）。
 - **评审档 `--review`**（codex 专属；非 codex、或与 `--resume-thread` 并存，参数面即拒——thread/resume 只带
-  threadId 不重发 tier，放行即上报一个引擎从未钉过的席位）。沙箱两档统一 `danger-full-access`
-  （workspace-write 网络封锁致评审席无法独立复算，n=3 假阻塞；写边界零战果）。
+  threadId 不重发 tier）。沙箱两档统一 `danger-full-access`（评审席需网络独立复算）。
   **交付物仍必须在 session cwd 内**——车道纪律非沙箱事实：写进无关树的评审产物会在 worktree
-  清理后变孤儿，且 exit-6 近失扫描只走 cwd。绝对与相对 glob 一律判：含 `..` 分量即拒，最深已存在祖先目录物理解析后不在
-  cwd 内即拒（含 symlink 外逃），无已存在祖先按歧义拒，basename 为空 = 目录非交付物、拒；
-  判定归 `duplexctl check-params`，`start` 与 `steer -d` 同门。另：进 meta 的参数面值一律拒含换行（否则注入 meta key，可无声改档），写点 `meta_update` 兜底引擎回传值。
-- 单写者纪律：所有 fifo 写经 `duplexctl.py`（flock）；并发 steer 由锁串行。
+  清理后变孤儿，且 exit-6 近失扫描只走 cwd。越界（`..` 分量、symlink 外逃、歧义祖先、空 basename）
+  即参数面拒——判定归 `duplexctl check-params`，`start` 与 `steer -d` 同门。
+- 并发 steer 串行（lane 单写者锁）。
 
 `--workflow review-loop --max-rounds N` 预算与 SHIP-BLOCKING 续轮租约在 duplex meta，三引擎通用
 （每次 goal/steer 投递计一轮，超限 `BUDGET-EXHAUSTED` exit 9）。
@@ -107,11 +104,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 - exit 6 `IDLE-NO-DELIVERABLE` 用 `agentctl steer` 补一刀，**不要 stop**；`stop` 只用于收工或明确放弃。
   verdict 行后可能跟 `possible misplaced deliverable: "<abs path>"`（有界扫 cwd 找同名错位产物，
   json 编码防伪造 typed 行；只提示、不改 rc，无命中/扫描退化都零输出）——先看这行再决定 steer 措辞。
-- **stop = 进程组收割**（tmux kill 只碰 pane leader，引擎子孙会被 PID 1 收养泄漏）：
-  pane 起在自有 session+group（pane_pid == pgid），stop 对该组
-  TERM → 有界宽限（`AGENTCTL_REAP_GRACE`，默认 5s）→ KILL → pgrep 复核零残留；陈旧 meta 走
-  leader lstart 指纹防 pid 复用误杀，永不按名字/全局杀。终态后**立即 stop 是编排者纪律**，
-  retro-check 第 6 检对"本仓终态未清会话"blocking FAIL 兜底。
+- **stop = 进程组收割**（tmux kill 只碰 pane leader，引擎子孙会被 PID 1 收养泄漏）：有界宽限后
+  强杀并复核零残留（宽限由 `AGENTCTL_REAP_GRACE` 调）；防 pid 复用误杀，永不按名字/全局杀。
+  终态后**立即 stop 是编排者纪律**，retro-check 第 6 检对"本仓终态未清会话"blocking FAIL 兜底。
 
 ## typed 状态：处置（词表由 `agentctl states` 自述）
 
@@ -131,7 +126,7 @@ exit code、名字、语义、二级子原因词（`reason=<word>`，闭集）�
 | BUDGET-EXHAUSTED | 转人工裁决 |
 | RUNNING | 继续等 |
 | STALLED-STREAM | **先从 checkout/commits 抢救成果，再 stop**；探针任一不确定按 RUNNING 处理（宁钝勿敏）。窗口用 `AGENT_WATCH_STALL_MINS` 调、0 关 |
-| STALLED-PROGRESS | 流还活着，但整个窗口内**可判的进展源在每个采样点都没动**：① 仓库痕迹（HEAD / 脏树 hash（untracked 按文件全展开）/ 脏文件 mtime / deliverable mtime / BLOCKED.md）；② 引擎自己的工具 / 命令帧计数（纯 token 流不算，那是 STALLED-STREAM 的题；尾部半行帧＝正在落帧，该源本次不可判，且那些字节算移动）；③ pane 进程组内的进程集合（`pgrep -g <pane_pid>`，**采样点未观测到进程出生/收割**即算静——两次采样之间生灭的短命子进程这源看不见，别把它读成「没起过进程」；`pane_lstart` 指纹不符＝pid 复用，该源不可判）。窗口用 `AGENT_WATCH_PROGRESS_MINS` 调（默认 30min）、0 关；三源共用一份测量预算（classify 死线的 40%，默认 12s），超预算的探针按不可判计、绝不让慢量具变成 ENGINE-SILENT。**处置按 `reason=` 分支**：<br>· `reason=repo-silent+tools-silent` → 可判源全静且**没有源不可判**：**先读 events 尾**再决定——卡在无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认走死 → 抢救成果再 stop。<br>· `reason=unknown-source` → 可判的源全静，但**有源量具坏**（detail 点名哪个：git 探针失败 / 脏路径超 500 / 测量预算用尽 / events 有解不开的行或半行 / `pgrep` 组里一个进程都没有 / pane 身份不符）。**按量具坏处置**：先修那个源或人工核证，别当「席位停滞」直接 steer/stop——运行时那行只说 `REPAIR THE GAUGE FIRST`，不叫你 steer。<br>· `progress_reason=repo-silent+tools-active`（**这条不出 14**，打在 RUNNING 行上）→ 仓库不落痕但引擎在动（跑长测试 / docker / 读码取证 / 正在落帧）：**继续等**，`last_progress_at` 已按该源刷新。<br>结构性缺位的源不算量具坏（没记 pane_pid、omp 流里根本没有工具帧词表 → `[n/a]`，不污染 `reason=`）；**一个可判源就够出判决**（合同：任一源不可判 + 其余可判源全静 ⇒ 14 `unknown-source`），只有**零可判源**才整个关闭本状态，每次读打 `progress=unknown: <原因>` 且不刷时间戳。`status` 的 `last_progress_at=<ts>` 是**上次观察到某个源变化**的时刻；量具坏后恢复的第一次可判读**只重建基线、不算移动** |
+| STALLED-PROGRESS | 流还活着，但整个窗口内**可判的进展源在每个采样点都没动**（三源：①仓库痕迹〔HEAD/脏树/交付物/BLOCKED.md〕②引擎工具/命令帧计数〔纯 token 流不算，那是 STALLED-STREAM 的题〕③pane 进程组集合〔采样点间生灭的短命子进程看不见，别读成「没起过进程」〕）。窗口用 `AGENT_WATCH_PROGRESS_MINS` 调（默认 30min）、0 关；探针预算有界，超预算按不可判计。**处置按 `reason=` 分支**：<br>· `reason=repo-silent+tools-silent` → 可判源全静且没有源不可判：**先读 events 尾**再决定——卡在无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认走死 → 抢救成果再 stop。<br>· `reason=unknown-source` → 可判源全静但**有源量具坏**（detail 点名哪个）。**按量具坏处置**：先修那个源或人工核证，别当「席位停滞」直接 steer/stop。<br>· `progress_reason=repo-silent+tools-active`（**不出 14**，打在 RUNNING 行上）→ 仓库不落痕但引擎在动（长测试 / docker / 取证）：**继续等**。<br>结构性缺位的源不算量具坏（`[n/a]`，不污染 `reason=`）；只有**零可判源**才整个关闭本状态（每次读打 `progress=unknown: <原因>` 且不刷时间戳）。`last_progress_at` = 上次观察到某源变化的时刻；量具坏后恢复的第一次可判读**只重建基线、不算移动** |
 | SUPERVISOR-LOST | `reason=dead` → 直接重挂。`reason=unknown` → **先读 detail**：只有它点名 rogue/wedged `<s>-watchd` 时才 `tmux kill-session -t <s>-watchd` 再重挂；其余 unknown（canonical 读超时 / `ps` 不可用 / 租约损坏 / pid 复用嫌疑）**只重挂，绝不杀**——那些情况下杀掉的是一个活着的守护环 |
 | DELIVERED-NEXT-TURN | **steer verb 的出口，不是会话状态**（watch/status 永不产它）：指令已送达但落在 turn 边界。`reason=capability` → 引擎无轮中帧，等边界即可，别重发；`reason=undecidable` → 量具坏（detail 点名哪个），**先修量具或读 events 尾**再决定要不要 `--interrupt`。两者都**已送达**，重发会得到两条指令 |
 
@@ -199,15 +194,11 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   常设放行（git 自拒脏树、可逆）；`--force`/`-f`/`prune` DENY（force 碾 untracked、prune 按
   staleness 猜删）——正路 = 先 `git -C <wt> status --porcelain` 独立命令抢救核证再请示，
   验证与销毁绝不同一命令行；已批销毁走一次性 override `touch /tmp/cto-allow-worktree-destroy`
-  （消费即授权、用后即焚）；mixed 命令不 auto-allow、落回分类器。**benign 快路**：整条命令是单一
-  `git [-C <path>] worktree prune` 且 porcelain 证明所有 prunable 目录都已消失 → 放行（纯元数据、
-  零文件伤害），任何链式/env 前缀/多 `-C`/解析歧义/`lexists` 命中都落回 DENY。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
+  （消费即授权、用后即焚）；纯元数据且 porcelain 证明零文件伤害的单命令 prune 放行。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
   判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）；⑨ 浏览器归属：`playwright-cli attach`
   带接管旗标（CDP / 浏览器扩展）→ 默认 DENY，主理人批后 `touch /tmp/cto-allow-browser-attach` 一次性放行；正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
-  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）位于管道**非末端** → DENY（末端放行；rc 被末命令吞、帧被截）；⑫ 门命令段以 `;` 结束且其后接 `git commit` → DENY（commit 不再依赖门 rc；`&&` 链放行）；⑬ 直接派 `agentctl start codex --goal <brief>` 时扫该 brief 的六个字面攻击词 → WARN（brief 读不到也 WARN；cyberPolicy 误拦 n=4）；⑭ `agentctl start … <cwd>` 且 `git -C <cwd> status --porcelain` 非空 → DENY（先 seed commit）；⑮ `<cwd>/BLOCKED.md` 存在 → DENY（先收割）。
-  ①用剥引号视图，④用原始 cmd，⑤⑥⑧⑩只认命令位（路径当参数
-  不拦）；⑨判归一化后的 shell 执行面（与⑧同一套：剥引号 span + 去反斜杠，故转义写法照拦；
-  代价是字面量进 shell 命令即拒，已接受的假阳性）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
+  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）位于管道**非末端** → DENY（末端放行；rc 被末命令吞、帧被截）；⑫ 门命令段以 `;` 结束且其后接 `git commit` → DENY（commit 不再依赖门 rc；`&&` 链放行）；⑬ 直接派 `agentctl start codex --goal <brief>` 时扫该 brief 的六个字面攻击词 → WARN（brief 读不到也 WARN）；⑭ `agentctl start … <cwd>` 且 `git -C <cwd> status --porcelain` 非空 → DENY（先 seed commit）；⑮ `<cwd>/BLOCKED.md` 存在 → DENY（先收割）。
+  git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：编排位对源码/测试文件的写入 → DENY
   （活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir 不可读 → ALLOW+WARN）。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：
