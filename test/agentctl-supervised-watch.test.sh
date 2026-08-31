@@ -289,6 +289,38 @@ chk_eq "M01 DAMAGE ORACLE: it did NOT restart classification (no new supervisor)
 chk_eq "M01 and produced no new engine traffic" "$evsize" \
   "$(wc -c < "$WATCH_RUN_DIR/m1.duplex.events.jsonl" | tr -d ' ')"
 
+# M01b — the reaped waiter must leave NO LIVE READER behind, and the oracle is a process
+# census rather than a race: the M01 kill above lands while the waiter is still ARMING, so it
+# never covered the state the production reaper actually hits — a waiter parked in its polling
+# read. `on_sig` kills `$CHILD`, and until this fix `$CHILD` named a wrapper subshell (bash
+# forks one when a shell FUNCTION is backgrounded), so the canonical READER survived the TERM,
+# re-parented to init, and went on to DELIVER this round's conclusion — rotating
+# `<s>.terminal.json` to `.consumed.json` — for a waiter that was already dead. The next
+# `agentctl watch` then correctly refuses to replay a spent record, re-establishes a SECOND
+# supervisor and re-derives the class it already had: seen on Linux CI as M09 swSILENT
+# "recovery re-derived nothing" expected[1] got[2], and reproduced locally by delaying the
+# recovery by one reader poll.
+reader_alive() { # $1 session — a canonical reader (watch-wait) still polling for it
+  ps -A -o args= 2>/dev/null | grep -q -- "[w]atch-wait $1 "
+}
+seed m1b 70000; running m1b
+watch_bg m1b "$SANDBOX/m1b.w1.log"
+# the waiter announces the supervisor it will read FROM immediately before it enters that
+# polling read, so this line — not the lease — is the proof it reached the reaped state
+chk_eq "M01b arrange: the waiter really reached its polling read" 1 \
+  "$(seen "$SANDBOX/m1b.w1.log" "m1b-watchd" 150)"
+await "reader_alive m1b" 100
+chk_eq "M01b arrange: and the canonical reader was observably running" 1 \
+  "$(reader_alive m1b && echo 1 || echo 0)"
+kill -TERM "$WPID_BG"; wait "$WPID_BG" 2>/dev/null; m1brc=$?
+chk_eq "M01b the reaped waiter exited on TERM (143)" 143 "$m1brc"
+chk_eq "M01b DAMAGE ORACLE: it left no live reader that could consume the conclusion" 0 \
+  "$(await '! reader_alive m1b' 100 && echo 0 || echo 1)"
+# m1b's supervisor is the only one in this block left SENSING (nothing made it terminal), and a
+# spare classify-per-second for the rest of the block is load this suite never had: retire it
+# here rather than at sw_clean, the same way M03 kills a supervisor it is done with.
+tmux kill-session -t "=m1b-watchd" 2>/dev/null
+
 # M02 — the conclusion exists but no waiter has reported it yet: kill and re-invoke repeatedly.
 # One record, one publish sequence, same answer every time.
 seq_of() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["identity"]["seq"])' \

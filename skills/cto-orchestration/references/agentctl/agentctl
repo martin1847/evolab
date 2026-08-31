@@ -465,8 +465,13 @@ on_sig() { # $1 signal-name  $2 exit-code
 
 # `wait` on a backgrounded child: a foreground command defers a trapped TERM until it finishes
 # (probed: 14s) and the tombstone would lose its TERM→KILL grace window.
+# The interpreter is spawned DIRECTLY, never through `ctl`: backgrounding a shell FUNCTION forks
+# a wrapper subshell, so `$!` named the wrapper and on_sig's kill missed the READER — which then
+# survived, re-parented to init, and DELIVERED this round's conclusion (rotating terminal.json to
+# .consumed.json) for a waiter already dead, so the next `agentctl watch` rightly refused the
+# spent record and re-derived the class under a SECOND supervisor (Linux CI: M09 swSILENT got[2]).
 run_child() { # $@ — duplexctl subcommand + args; rc = the child process's
-  ctl "$@" & CHILD=$!
+  "$PY" "$CTL" --run-dir "$DIR" "$@" & CHILD=$!
   wait "$CHILD"
 }
 sense_inline() { # $1 session — the in-process fallback loop (no supervisor, not kill-resilient)

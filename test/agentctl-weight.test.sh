@@ -242,11 +242,20 @@ cd "$(dirname "$0")"
 # inside main(), and their doctrine) − 3 (`math`/`shutil`/`stat`: the move orphaned them, ruff
 # F401 caught it) = 3634; watchctl 1385 moved + 43 header/import face = 1428. Net product lines
 # +53, and every one of them is import wiring — no judgement was added anywhere.
+# agentctl 594→599 (2026-09-01, M09 Linux 回归 hotfix): +5 bash, ZERO python. One line of
+# behaviour (`run_child` spawns the interpreter directly instead of backgrounding the `ctl`
+# FUNCTION, so `$!` is the reader the TERM trap must kill) plus the four-line doctrine comment
+# that keeps it from being "cleaned up" back into `ctl "$@" &`. The weight HAD to land here:
+# both the trap that kills `$CHILD` and the launch that names it are lines of this entry script,
+# and the failure they caused is invisible by inspection — a reaped waiter left a live reader
+# that consumed the round's conclusion, so the next watch re-derived it under a second
+# supervisor (CI M09 swSILENT expected[1] got[2]). The paired oracle is a test, not prose:
+# M01b in agentctl-supervised-watch.test.sh censuses processes after the TERM.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3634
 skills/cto-orchestration/references/agentctl/watchctl.py 1428
 skills/cto-orchestration/references/agentctl/identity.py 1509
-skills/cto-orchestration/references/agentctl/agentctl 594
+skills/cto-orchestration/references/agentctl/agentctl 599
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1326
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
