@@ -60,7 +60,12 @@ filename_gate() { # $1 root -> findings on stdout; rc 0 clean / 1 breach / 2 mea
   # drops .pyc files INSIDE the skill tree, so an unpruned census counted 82 on a clean checkout
   # and 85 after one suite run. Those bytes are a byproduct, not product, and no .pyc basename can
   # match a maintainer-doc prefix — pruning removes noise from the reported count, not coverage.
-  list="$(find "$tree" -type f -not -path '*/__pycache__/*' -print 2>&1)"; frc=$?
+  # SYMLINKS ARE ENTRIES (R2/B1): `-type f` alone missed them, so a `skills/**/ARCHITECTURE.md`
+  # that was a link to a maintainer doc outside the tree scanned clean at rc=0 — the exact
+  # bypass of a name judgement this gate exists to make. T1 judges the BASENAME a customer's
+  # file tree shows, so the link's target is irrelevant: a broken link named DESIGN.md is still
+  # a DESIGN.md on the product face, and a link is never followed here.
+  list="$(find "$tree" \( -type f -o -type l \) -not -path '*/__pycache__/*' -print 2>&1)"; frc=$?
   if [ "$frc" -ne 0 ]; then
     printf 'GATE_ERROR find %s/ rc=%s — 量具坏：%s\n' "$SKILL_TREE" "$frc" "$list"
     return $GATE_ERROR
@@ -149,7 +154,13 @@ prose_gate() { # $1 root -> per-file verdicts on stdout; rc 0 within / 1 breach 
     printf 'GATE_ERROR %s — 量不到散文树（不存在/不可读）：门不会因为看不见而绿\n' "$PROSE_SUBTREE"
     return $GATE_ERROR
   fi
-  list="$(find "$sub" -type f -name '*.md' -print 2>&1)"; frc=$?
+  # SYMLINKS ARE ENTRIES (R2/B2): `-type f` alone missed them, so an unregistered
+  # `references/unregistered-link.md` symlink escaped the per-file table entirely at rc=0. The
+  # registered rows already read THROUGH a link (`-f`/`wc -l` follow), so a row may legitimately
+  # BE a link as long as its target measures within baseline; what may not happen is an entry
+  # nobody weighs. A link whose target is broken or unreadable is a MEASUREMENT failure, not a
+  # pass: arm (a) reds it via `-f`, arm (b) below reds it explicitly.
+  list="$(find "$sub" \( -type f -o -type l \) -name '*.md' -print 2>&1)"; frc=$?
   if [ "$frc" -ne 0 ]; then
     printf 'GATE_ERROR find %s rc=%s — 量具坏：%s\n' "$PROSE_SUBTREE" "$frc" "$list"
     return $GATE_ERROR
@@ -193,11 +204,16 @@ EOF
     [ -z "$path" ] && continue
     rel="${path#"$root"/}"
     case "$registry" in
-      *" $rel "*) ;;
-      *) printf 'BREACH %s 未登记 — 新增 shipped md 必须同 commit 登记一行基线（%s 行）\n' \
-           "$rel" "$(wc -l < "$path" | tr -d ' ')"
-         [ "$rc" -eq $GATE_ERROR ] || rc=$GATE_BREACH ;;
+      *" $rel "*) continue ;;   # registered rows are judged in (a); no second verdict here
     esac
+    if [ ! -f "$path" ] || [ ! -r "$path" ]; then
+      printf 'GATE_ERROR %s 未登记且量不到（断链/不可读 symlink，或指向目录）：先修这个 entry，再登记基线\n' "$rel"
+      rc=$GATE_ERROR
+      continue
+    fi
+    printf 'BREACH %s 未登记 — 新增 shipped md 必须同 commit 登记一行基线（%s 行）\n' \
+      "$rel" "$(wc -l < "$path" | tr -d ' ')"
+    [ "$rc" -eq $GATE_ERROR ] || rc=$GATE_BREACH
   done <<EOF
 $list
 EOF
@@ -234,8 +250,8 @@ chk_not_contains "F1 no breach line for the real tree" "BREACH" "$GOUT"
 chk_not_contains "F1 no measurement error on the real tree" "GATE_ERROR" "$GOUT"
 chk_contains "F1 the scan reports what it weighed" "clean skills/" "$GOUT"
 # a census that silently saw nothing would make this arm green by doing nothing at all. Same
-# prune as the gate (__pycache__ is a suite byproduct inside the tree, see filename_gate).
-real_files="$(find "$REPO_ROOT/skills" -type f -not -path '*/__pycache__/*' | grep -c '[^[:space:]]')"
+# census as the gate: __pycache__ pruned (suite byproduct), symlinks counted as entries (R2/B1).
+real_files="$(find "$REPO_ROOT/skills" \( -type f -o -type l \) -not -path '*/__pycache__/*' | grep -c '[^[:space:]]')"
 chk_contains "F1 the scanned count is the real file count" "skills/ $real_files files scanned" "$GOUT"
 
 # ── the T1 fixture: a skills/ tree shaped like the real one, no maintainer doc ─
@@ -309,6 +325,44 @@ run_gate --gate-filename "$SANDBOX/emptyskills"
 chk_eq "F7 an empty scan is a measurement error, not a pass (rc)" 2 "$GRC"
 chk_contains "F7 the empty scan is named as a broken gauge" "0 个文件" "$GOUT"
 
+# ── F8 a symlink is an ENTRY, not a hole (R2/B1) ─────────────────────────────
+# The reviewer's repro: a `skills/**/ARCHITECTURE.md` that is a LINK to a maintainer doc outside
+# the tree. `find -type f` never listed it, so the gate reported `clean` at rc=0 — the name
+# judgement bypassed by one `ln -s`. T1 judges the basename a customer's tree shows and never
+# follows the link, so all three shapes below red: link to a real file, link to a directory,
+# and a dangling link.
+mk_fnfix "$SANDBOX/symlink"
+mk_lines "$SANDBOX/symlink/outside-maintainer-doc.md" 40
+ln -s "$SANDBOX/symlink/outside-maintainer-doc.md" \
+  "$SANDBOX/symlink/skills/cto-orchestration/references/ARCHITECTURE.md"
+run_gate --gate-filename "$SANDBOX/symlink"
+chk_eq "F8 a symlinked ARCHITECTURE.md reds (rc)" 1 "$GRC"
+chk_contains "F8 breach names the symlinked path" \
+  "BREACH skills/cto-orchestration/references/ARCHITECTURE.md" "$GOUT"
+
+mk_fnfix "$SANDBOX/symdangling"
+ln -s "$SANDBOX/symdangling/no-such-target.md" \
+  "$SANDBOX/symdangling/skills/agent-mail/DESIGN.md"
+run_gate --gate-filename "$SANDBOX/symdangling"
+chk_eq "F8 a DANGLING symlink named DESIGN.md still reds (rc)" 1 "$GRC"
+chk_contains "F8 breach names the dangling link" "BREACH skills/agent-mail/DESIGN.md" "$GOUT"
+
+mk_fnfix "$SANDBOX/symdir"
+mkdir -p "$SANDBOX/symdir/some-dir"
+ln -s "$SANDBOX/symdir/some-dir" "$SANDBOX/symdir/skills/agent-mail/HACKING.md"
+run_gate --gate-filename "$SANDBOX/symdir"
+chk_eq "F8 a symlink-to-directory named HACKING.md reds (rc)" 1 "$GRC"
+chk_contains "F8 breach names the directory link" "BREACH skills/agent-mail/HACKING.md" "$GOUT"
+
+# still not over-broad: an innocent link name stays green, and the census GREW by it
+mk_fnfix "$SANDBOX/syminnocent"
+mk_lines "$SANDBOX/syminnocent/shared-readme.md" 10
+ln -s "$SANDBOX/syminnocent/shared-readme.md" "$SANDBOX/syminnocent/skills/agent-mail/README.md"
+run_gate --gate-filename "$SANDBOX/syminnocent"
+chk_eq "F8 an innocent symlink name stays green (rc)" 0 "$GRC"
+chk_contains "F8 the innocent link was still COUNTED (6 entries, not 5)" \
+  "skills/ 6 files scanned" "$GOUT"
+
 # ═══ T3 skill-face-prose-ratchet ═════════════════════════════════════════════
 
 SK=skills/cto-orchestration/SKILL.md
@@ -327,8 +381,9 @@ rows="$(printf '%s\n' "$PROSE_BASELINES" | grep -c '[^[:space:]]')"
 weighed="$(printf '%s\n' "$GOUT" | grep -c '^within ')"
 chk_eq "P1 every baseline row was weighed" "$rows" "$weighed"
 # and the table covers the whole subtree — a row missing from the table must red, so the count
-# of shipped md files and the count of rows have to agree on the real tree
-real_md="$(find "$REPO_ROOT/$PROSE_SUBTREE" -type f -name '*.md' | grep -c '[^[:space:]]')"
+# of shipped md entries and the count of rows have to agree on the real tree. Same census as the
+# gate: symlinks are entries (R2/B2 — this assertion shared the blind `-type f` census).
+real_md="$(find "$REPO_ROOT/$PROSE_SUBTREE" \( -type f -o -type l \) -name '*.md' | grep -c '[^[:space:]]')"
 chk_eq "P1 the table registers every shipped md in the subtree" "$real_md" "$rows"
 
 # ── the T3 fixture: every registered path at exactly its baseline ───────────
@@ -422,6 +477,53 @@ mk_prosefix "$SANDBOX/newpy"
 mk_lines "$SANDBOX/newpy/skills/cto-orchestration/references/agentctl/newtool.py" 500
 run_gate --gate-prose "$SANDBOX/newpy"
 chk_eq "P5 a new .py is not this ratchet's business (rc)" 0 "$GRC"
+
+# ── P5b a *.md symlink is an ENTRY, not a hole (R2/B2) ───────────────────────
+# The reviewer's repro: an unregistered `references/unregistered-link.md` symlink. `find -type f`
+# never listed it, so all 17 rows reported within and the gate exited 0 — a whole shipped page
+# outside the per-file table, invisible.
+mk_prosefix "$SANDBOX/symnew"
+mk_lines "$SANDBOX/symnew/outside-page.md" 88
+ln -s "$SANDBOX/symnew/outside-page.md" \
+  "$SANDBOX/symnew/skills/cto-orchestration/references/unregistered-link.md"
+run_gate --gate-prose "$SANDBOX/symnew"
+chk_eq "P5b an unregistered *.md symlink reds (rc)" 1 "$GRC"
+chk_contains "P5b breach names the link and weighs it THROUGH the link" \
+  "BREACH skills/cto-orchestration/references/unregistered-link.md 未登记 — 新增 shipped md 必须同 commit 登记一行基线（88 行）" "$GOUT"
+
+# a REGISTERED row may legitimately be a link: the ratchet reads through it (`wc -l` follows), so
+# what it judges is the target's line count against that row's baseline — within stays within...
+mk_prosefix "$SANDBOX/symrow" "$SK=-"
+mk_lines "$SANDBOX/symrow/linked-skill.md" "$SK_BASE"
+ln -s "$SANDBOX/symrow/linked-skill.md" "$SANDBOX/symrow/$SK"
+run_gate --gate-prose "$SANDBOX/symrow"
+chk_eq "P5b a registered row that IS a link measures through it (rc)" 0 "$GRC"
+chk_contains "P5b the linked row is weighed at its target's size" \
+  "within $SK $SK_BASE/$SK_BASE" "$GOUT"
+
+# ...and growth through the link still reds, so the link is no laundering path either
+mk_prosefix "$SANDBOX/symgrew" "$SK=-"
+mk_lines "$SANDBOX/symgrew/linked-skill.md" "$((SK_BASE + 1))"
+ln -s "$SANDBOX/symgrew/linked-skill.md" "$SANDBOX/symgrew/$SK"
+run_gate --gate-prose "$SANDBOX/symgrew"
+chk_eq "P5b growth behind a link still reds (rc)" 1 "$GRC"
+chk_contains "P5b the breach names the movement through the link" \
+  "BREACH $SK grew $SK_BASE->$((SK_BASE + 1))" "$GOUT"
+
+# a broken link is a MEASUREMENT failure, both as a registered row and as an unregistered entry
+mk_prosefix "$SANDBOX/symbrokenrow" "$SK=-"
+ln -s "$SANDBOX/symbrokenrow/no-such-target.md" "$SANDBOX/symbrokenrow/$SK"
+run_gate --gate-prose "$SANDBOX/symbrokenrow"
+chk_eq "P5b a registered row that is a DANGLING link exits GATE_ERROR (rc)" 2 "$GRC"
+chk_contains "P5b the dangling registered row is named" "GATE_ERROR $SK" "$GOUT"
+
+mk_prosefix "$SANDBOX/symbrokennew"
+ln -s "$SANDBOX/symbrokennew/no-such-target.md" \
+  "$SANDBOX/symbrokennew/skills/cto-orchestration/references/dangling-link.md"
+run_gate --gate-prose "$SANDBOX/symbrokennew"
+chk_eq "P5b an unregistered DANGLING *.md link exits GATE_ERROR, never green (rc)" 2 "$GRC"
+chk_contains "P5b the dangling unregistered entry is named as unmeasurable" \
+  "GATE_ERROR skills/cto-orchestration/references/dangling-link.md 未登记且量不到" "$GOUT"
 
 # ── P6 a row the ratchet cannot measure is an ERROR, never a pass ───────────
 mk_prosefix "$SANDBOX/gone" "$SK=-"
