@@ -300,8 +300,16 @@ chk_eq "M01 and produced no new engine traffic" "$evsize" \
 # supervisor and re-derives the class it already had: seen on Linux CI as M09 swSILENT
 # "recovery re-derived nothing" expected[1] got[2], and reproduced locally by delaying the
 # recovery by one reader poll.
-reader_alive() { # $1 session — a canonical reader (watch-wait) still polling for it
-  ps -A -o args= 2>/dev/null | grep -q -- "[w]atch-wait $1 "
+# The census is fenced to THIS run: the reader's argv carries `--run-dir <run> watch-wait <s>`
+# adjacently, and a global `ps` sees every worktree, every parallel suite and any unrelated
+# process that happens to share the verb — matching the bare verb made a decoy elsewhere on the
+# box a false red (review NB1, reproduced). The match is a literal substring test (`case`, not
+# `grep`) so the probe cannot find ITSELF in the snapshot it is reading, and the trailing space
+# keeps a session name from matching a longer one.
+reader_alive() { # $1 session — a canonical reader (watch-wait) of THIS run still polling for it
+  local snap; snap="$(ps -A -o args= 2>/dev/null)"
+  case "$snap" in *"--run-dir $WATCH_RUN_DIR watch-wait $1 "*) return 0;; esac
+  return 1
 }
 seed m1b 70000; running m1b
 watch_bg m1b "$SANDBOX/m1b.w1.log"
