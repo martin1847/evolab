@@ -117,6 +117,12 @@ EOF
 # ERROR outranks BREACH: the file nobody can measure is the one nobody is watching.
 #
 # UPDATING A ROW IS A GOVERNED ACT. Same commit, and the reason in the commit message.
+# goal-template.md 129→133 (2026-09-01, 效率强制层): +4 lines for the evidence-depth budget
+# field (`Evidence: … <决策行|单套件|全量> …`) and the two-line note that fixes its default and
+# declares it machine-unjudged (n=1: a template field, not a gate). The words had to go into
+# THIS shipped file: it is the goal contract's own OUTPUT-side counterpart to the Value gate
+# line — a depth nobody declares is re-run as "全量, 保险起见" by the seat (3x11min of pure
+# re-run in one batch), and a pointer to another page is read after the proof has been run.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
@@ -126,7 +132,7 @@ skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42
 skills/cto-orchestration/references/frontend-verify.md 104
-skills/cto-orchestration/references/goal-template.md 129
+skills/cto-orchestration/references/goal-template.md 133
 skills/cto-orchestration/references/implementation-discipline.md 94
 skills/cto-orchestration/references/measurement-protocol.md 43
 skills/cto-orchestration/references/onboarding-checklist.md 20

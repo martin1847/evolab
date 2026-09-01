@@ -48,7 +48,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=12016   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=12842   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -107,7 +107,21 @@ BUDGET_GUARD_TOTAL=12016   # all injected text across the three guards (raised 7
                            #    cutting elsewhere: it must name the PATH it failed on (the
                            #    orchestrator has to go look at that one) and say the
                            #    precondition went unchecked, or it reads as a passed check.
-BUDGET_GUARD_SINGLE=893    # the longest single message a worker can be handed at once. Raised
+                           # Raised 12016→12842 on 2026-09-01 (效率强制层批), TWO items weighed:
+                           #  +547 B rule (17)'s unbudgeted-review DENY. Bought: `--max-rounds`
+                           #    is the ONLY round ceiling the runtime enforces, so a review seat
+                           #    started without it has none anywhere and the round count becomes
+                           #    a negotiation (downstream DEV-tier batch ran 3). The text must
+                           #    carry the flag PAIR (`--workflow review-loop --max-rounds N` is
+                           #    refused half-spelled), the default N, AND the two pass-throughs,
+                           #    or the denied seat's next attempt is refused by the lane instead.
+                           #  +279 B rule (16)'s babysit-round WARN, joining (3)/(13)/(14)/(15)
+                           #    in the SAME assembled response. It is the only branch that ever
+                           #    pays: under four re-hangs a day it emits nothing at all. Could
+                           #    not come from cutting elsewhere — it has to name the session,
+                           #    the count, and the ONE alternative (read the gauge / go to a
+                           #    long-interval wakeup), or it is a nag without a next action.
+BUDGET_GUARD_SINGLE=1172   # the longest single message a worker can be handed at once. Raised
                            # 754→893 on 2026-08-28: the worst case is now the (3)+(13)+(14)+(15)
                            # assembled response, i.e. every instrument in this dispatch failing
                            # at once, and it is +151 B — exactly (15)'s new warn, nothing else.
@@ -116,7 +130,12 @@ BUDGET_GUARD_SINGLE=893    # the longest single message a worker can be handed a
                            # (which errno / which git failure) is one `ls -ld` or `git status`
                            # away, and that assembly is only reachable when the seat is already
                            # standing in a broken environment.
-BUDGET_GUARD_COUNT=30      # sink count: a drop means extraction broke or a sink moved out of
+                           # Raised 893→1172 on 2026-09-01: the worst case is the same assembled
+                           # response with rule (16)'s counter joined to it, and it is +279 B —
+                           # exactly that warn, nothing else. Reachable only when every dispatch
+                           # instrument fails at once AND the same session is on its fourth
+                           # re-hang today; the counter alone (its normal shape) is 279 B.
+BUDGET_GUARD_COUNT=31      # sink count: a drop means extraction broke or a sink moved out of
                            # view. 21→23 on 2026-08-20: +1 real sink (rule 12) and +1 the meter
                            # had been blind to (see `resolve` below). 23→30 on 2026-08-28:
                            # +2 (rules 14/15) and +5 (the whole new guard). Pinned to the

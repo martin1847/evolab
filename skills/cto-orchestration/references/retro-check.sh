@@ -20,6 +20,11 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; done
 
 TODAY="$(date +%F)"
+# THE CYCLE WINDOW, single-sourced: today or yesterday. A retro session routinely crosses
+# midnight, so a one-day window is what "本复盘周期" means to every date-judging check here
+# (2 = ACTIVE_CONTEXT freshness, 9 = 批 time accounting). An empty YDAY (no BSD and no GNU
+# date) narrows the window to today rather than widening it silently.
+YDAY="$(date -v-1d +%F 2>/dev/null || date -d 'yesterday' +%F 2>/dev/null)"
 fails=0; warns=0
 ok(){ echo "  [ok]   $*"; }
 fail(){ echo "  [FAIL] $*"; fails=$((fails+1)); }
@@ -95,7 +100,6 @@ echo "2) ACTIVE_CONTEXT 整篇重写 (今日):"
 AC="$DOCS/ACTIVE_CONTEXT.md"
 if [ -f "$AC" ]; then
   lr="$(grep -m1 -iE 'Last rewritten' "$AC" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
-  YDAY="$(date -v-1d +%F 2>/dev/null || date -d 'yesterday' +%F 2>/dev/null)"
   if [ "$lr" = "$TODAY" ] || [ -n "$YDAY" -a "$lr" = "$YDAY" ]; then ok "Last rewritten: $lr (today/yesterday — session may cross midnight)"; else fail "ACTIVE_CONTEXT 'Last rewritten'=${lr:-none}, stale (>1d vs $TODAY) — rewrite the snapshot"; fi
 else fail "$AC not found (pass --docs)"; fi
 
@@ -300,6 +304,45 @@ elif [ "$gfail" -gt 0 ]; then
   fail "$gfail zero-catch gate(s) kept without reason — 删门或 keep(理由) 后再收口"
 else
   ok "$gaudits gate-audit line(s), no unjustified zero-catch gate"
+fi
+
+# 9) 批时间记账 — SKILL §2「提效是显式目标」的收口半边: 批 overhead 计入杠杆账，收口在台账
+# 记 wall/avoidable 两个数。没有这两个数，"越搞越慢" 只能靠主理人发火才被发现（本周实证 n=2）。
+# 台账 = 该仓 AGENTS.md（`--repo` 定位，不新增入参）；判据只看本复盘周期（TODAY/YDAY）的「批」行。
+# 量具坏 = FAIL：台账读不到时这一面根本没检查，而一个看不见的记账面不是一个干净的记账面
+# （与 check 2 的 "$AC not found" 同判、与 guard (14)/(15) 的 instrument 面同源）。
+# KILL CRITERION (slug `retro-time-ledger`, 复盘按 GATE-AUDIT 结账): hits=0 ∧ false>=2 ⇒ kill,
+# 外加一条本检独有的——**记数从未改变过任何决策**（连续两个周期两个数都记了、没有一次因此
+# 改派发/砍轮数/换车道）⇒ kill：一个只被填写、从不被读的字段是仪式，不是门。
+echo "9) 批时间记账 (本周期「批」行须记 wall= / avoidable=):"
+LEDGER="$REPO/AGENTS.md"
+if [ ! -f "$LEDGER" ] || [ ! -r "$LEDGER" ]; then
+  fail "台账 $LEDGER 不可读 — 批 overhead 记账面未检查（量具坏 ≠ 绿）；建台账或用 --repo 指对仓"
+else
+  unbilled=0; billed=0
+  # one pass, two verdicts: `B` = a billed entry, `U<line>` = an entry with no accounting.
+  # The loop runs in THIS shell (process substitution, as check 1 does) so both counters survive.
+  while IFS= read -r ln; do
+    case "$ln" in
+      B) billed=$((billed+1));;
+      U*) echo "  [FAIL] 批条目缺时间记账: ${ln#U}"; unbilled=$((unbilled+1));;
+    esac
+  done < <(awk -v today="$TODAY" -v yday="$YDAY" '
+    FNR==1 { fence=0 }
+    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+    fence { next }
+    index($0, "批") == 0 { next }
+    index($0, today) == 0 && (yday == "" || index($0, yday) == 0) { next }
+    index($0, "wall=") && index($0, "avoidable=") { print "B"; next }
+    { print "U" $0 }
+  ' "$LEDGER")
+  if [ "$unbilled" -gt 0 ]; then
+    fail "$unbilled 条本周期批条目没记 wall/avoidable — 记账格式一行示例：'批 $TODAY <名> … wall=95m avoidable=30m'（avoidable = 本可避免的返工/空转分钟）"
+  elif [ "${billed:-0}" -gt 0 ]; then
+    ok "$billed 条本周期批条目均记了 wall/avoidable"
+  else
+    echo "  [skip] $LEDGER 本周期无「批」条目 — 无 overhead 可核（形态见 SKILL.md §2 提效条）"
+  fi
 fi
 
 echo "== result: $fails FAIL, $warns warn =="

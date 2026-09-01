@@ -22,7 +22,7 @@
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
 # extraction would be fragile in a guard.
-import sys, json, re, os, shlex, stat, subprocess
+import sys, json, re, os, shlex, stat, subprocess, time
 
 
 def checker_error(message):
@@ -482,6 +482,115 @@ def _brief_review(raw, vpipe, cwd):
     except Exception:
         return "unreadable", None, None
     return None, sorted({h.lower() for h in _R13_RE.findall(body)}), path
+
+
+# ── rule (16): babysit-round counter (WARN, never DENY) ───────────────────────────────────
+# KILL CRITERION (slug `g16-babysit-counter`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill.
+# FIELD: a session whose classify said 14 with the gauge blind was re-hung SIX times in a row
+# (2026-08/09) — each re-hang cost a round and none of them looked at the instrument. Re-hanging
+# a watcher is LEGAL (that is why this can never be a DENY); doing it a fourth time on the same
+# session in one day is the signal that the orchestrator is babysitting instead of diagnosing.
+# COUNTED: command-position `agentctl watch <s>` and `agentctl steer <s>`. An `--interrupt`
+# steer (and its silent alias `--replace`) is a deliberate intervention, not a re-hang, so it is
+# NOT counted. A session is counted ONCE per command: the standard `steer …; watch …` pair is
+# one babysit round, not two.
+# METER: `<AGENT_WATCH_DIR|/tmp/agent-watch-run>/babysit-<YYYYMMDD>.json`, a day-stamped
+# `{session: count}` map — the DATE IS THE ROLL (yesterday's file is simply never read) and the
+# uid keeps two users on one host out of each other's tally. Every read and write is wrapped:
+# an exception escaping here is CHECKER-ERROR (exit 2) at the __main__ wrapper, i.e. a broken
+# tally would take the orchestrator's whole Bash tool with it. A meter that cannot count is
+# SILENT (no warn, no deny); a count that could not be persisted still warns and says the
+# number is a floor — 不可判, never dressed as a measurement.
+_R16_WARN_AT = 4
+_SEG_BABYSIT = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
+                          + _AGENTCTL + r"\s+(?P<verb>watch|steer)(?:\s+(?P<sess>\S+))?")
+_R16_INTERRUPT = re.compile(r"(?:^|\s)--(?:interrupt|replace)(?=\s|$)")
+
+
+def _babysit_sessions(raw):
+    """Sessions this command re-hangs, in order, deduped. Same segmenter + command-position
+    head as rules (14)/(15) — a quoted mention (`echo 'agentctl watch s1'`) is DATA and is
+    never counted. A session token that is a flag, or the blanked `ARG` of a quoted span with
+    spaces, is UNREADABLE and dropped rather than counted under a made-up name."""
+    out = []
+    for seg in _cmd_segments(raw):
+        view = _pipe_view(seg)
+        m = _SEG_BABYSIT.match(view)
+        if not m:
+            continue
+        sess = m.group("sess")
+        if not sess or sess == "ARG" or sess.startswith("-"):
+            continue
+        # the flag sits AFTER the session, so the exclusion reads the whole segment, never the
+        # matched head (`m.group(0)` stops at the session and every steer looked mechanical)
+        if m.group("verb") == "steer" and _R16_INTERRUPT.search(view):
+            continue
+        if sess not in out:
+            out.append(sess)
+    return out
+
+
+def _babysit_bump(session):
+    """(count, degraded) for today's tally of one session, INCLUDING this call.
+    `count` None = the meter could not answer at all -> the caller stays silent. `degraded`
+    True = the number is a FLOOR (a corrupt ledger was reset, or the bump could not be
+    persisted), which the warn says out loud instead of publishing a floor as a count."""
+    run_dir = os.environ.get("AGENT_WATCH_DIR") or "/tmp/agent-watch-run"
+    path = os.path.join(run_dir, "babysit-%d-%s.json" % (os.getuid(), time.strftime("%Y%m%d")))
+    soft = False
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            tally = json.load(fh)
+        if not isinstance(tally, dict):
+            tally, soft = {}, True
+    except FileNotFoundError:
+        tally = {}
+    except (ValueError, UnicodeDecodeError):
+        tally, soft = {}, True   # corrupt ledger: rebuild it, and admit the count is a floor
+    except Exception:
+        return None, True
+    n = tally.get(session)
+    n = (n if isinstance(n, int) and n >= 0 else 0) + 1
+    tally[session] = n
+    try:
+        os.makedirs(run_dir, exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(tally, fh)
+        os.replace(tmp, path)   # one rename: a concurrent guard never reads a half-written map
+    except Exception:
+        return n, True
+    return n, soft
+
+
+# ── rule (17): review dispatch without a round budget (DENY) ──────────────────────────────
+# KILL CRITERION (slug `g17-review-budget`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill.
+# FIELD: a review loop with no declared ceiling is an arms race — the reviewer keeps finding,
+# the seat keeps fixing, and nobody owns the round count (downstream DEV-tier batch ran 3
+# rounds on advisory findings, 2026-08/09). The budget must be stated at DISPATCH time, where
+# it is cheap; `--max-rounds` is the only thing the runtime enforces (SKILL §2), so a review
+# seat started without it has no ceiling anywhere.
+# SHAPE: command-position `agentctl start codex … --review` with no `--max-rounds` token.
+# The lane itself refuses `--review` with `--resume-thread`, so that pair is not judged twice
+# here. Judged on the segment VIEW as an exact TOKEN, so `--goal /tmp/--review.md` (a path that
+# merely contains the flag text) is not a review dispatch and `--max-rounds=2` is not the
+# lane's spelling of a budget — agentctl parses only `--max-rounds N`.
+_SEG_REVIEW = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
+                         + _AGENTCTL + r"\s+start\s+codex(?![\w-])")
+
+
+def _review_without_budget(raw):
+    """True when any command-position codex dispatch asks for a review seat with no budget."""
+    for seg in _cmd_segments(raw):
+        view = _pipe_view(seg)
+        if not _SEG_REVIEW.match(view):
+            continue
+        toks = view.split()
+        if "--review" not in toks or "--resume-thread" in toks:
+            continue
+        if "--max-rounds" not in toks:
+            return True
+    return False
 
 
 def main():
@@ -1043,6 +1152,24 @@ def main():
         )
         return 2
 
+    # (17) review dispatch with no round budget — placed HERE, immediately after (11): that
+    #      rule's fix line hands the seat `agentctl start codex … --review`, and this one is
+    #      the other half of the same prescription (a review seat states its ceiling at
+    #      dispatch time). Above (3), whose branch ends in an unconditional `return 0`, and
+    #      above (13)/(14)/(15) because a defect in the COMMAND TEXT is cheaper to fix than
+    #      one in the worktree the command points at. Doctrine and shape: `_review_without_budget`.
+    if _review_without_budget(raw):
+        sys.stderr.write(
+            "DENY: 评审无预算 — `agentctl start codex … --review` with no `--max-rounds`: an "
+            "unbudgeted review loop is an arms race, the reviewer keeps finding and nobody owns "
+            "the round count (downstream DEV-tier batch: 3 rounds on advisory findings). Fix: "
+            "state the ceiling at dispatch — `--workflow review-loop --max-rounds N` (the pair "
+            "is required together; non-deep batches N=2, a deep batch declares its own N in the "
+            "goal). Non-review dispatches and `--resume-thread` pass. "
+            "Read: cto-orchestration/references/review-dispatch.md §轮数预算.\n"
+        )
+        return 2
+
     # (13) codex brief wording — a BOUNDED, best-effort advisory, WARN-only and never a DENY.
     #      Field n=4: review dispatches whose brief narrated the attack (`forged` stamp,
     #      `bypass` the guard) were refused by the provider's cyber filter, and the seat burned
@@ -1140,6 +1267,25 @@ def main():
             )
             return 2
 
+    # (16) babysit-round counter: the tally is bumped HERE, below every DENY above it, so a
+    #      command that never runs is never counted (rule (5) kills a foreground watch, and a
+    #      denied re-hang is not a re-hang). Doctrine, meter and its failure modes:
+    #      `_babysit_bump`. WARN only — re-arming a watcher is legal, and this rule exists to
+    #      make the FOURTH one on the same session visible, not to stop it.
+    note16 = ""
+    for sess in _babysit_sessions(raw):
+        n16, degraded = _babysit_bump(sess)
+        if n16 is None or n16 < _R16_WARN_AT or note16:
+            continue   # a meter that cannot count stays silent; one warn per command is enough
+        note16 = (
+            # Held near (14)/(15)'s warn length on purpose: it joins them in ONE assembled
+            # response, and that assembly is what `BUDGET_GUARD_SINGLE` weighs.
+            "WARN (cto-guard 16): 保姆轮 ≥%d — session '%s' re-hung %d times today "
+            "(watch/steer). Read the INSTRUMENT before the next one (a 14 with all three "
+            "progress sources blind is a gauge fault), or go to one long-interval wakeup.%s"
+            % (_R16_WARN_AT, sess, n16, "计数未落盘，读数是下限、不可判。" if degraded else "")
+        )
+
     reminder = ""
     if m:
         session = m.group(2)
@@ -1157,16 +1303,16 @@ def main():
                 f"signal now: `agentctl watch {session}` via Bash run_in_background:true (NOT "
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
-    # (13) and (14)/(15)'s instrument warnings ride (3)'s channel: on exit 0 only
-    # additionalContext reaches the agent, and two JSON documents on stdout would be one
-    # malformed hook response. All four strings stay LOCAL to this frame so the injected-text
+    # (13), (14)/(15)'s instrument warnings and (16)'s counter ride (3)'s channel: on exit 0
+    # only additionalContext reaches the agent, and two JSON documents on stdout would be one
+    # malformed hook response. All five strings stay LOCAL to this frame so the injected-text
     # ratchet can weigh what a worker is actually handed.
-    if reminder or note13 or note14 or note15:
+    if reminder or note13 or note14 or note15 or note16:
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
-                    t for t in (reminder, note13, note14, note15) if t),
+                    t for t in (reminder, note13, note14, note15, note16) if t),
             }
         }))
     if m:

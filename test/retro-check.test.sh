@@ -22,6 +22,10 @@ mkrepo(){
     mkdir -p docs/roadmap
     printf 'Last rewritten: %s\n' "$TODAY" > docs/ACTIVE_CONTEXT.md
     printf '# active roadmap\n' > docs/roadmap/active-roadmap.md
+    # check 9's ledger: the repo's AGENTS.md. The green fixture carries ONE billed 批 entry of
+    # this cycle, so every case that does not touch it exercises check 9's pass path rather
+    # than its absence path (an absent ledger is a FAIL — see case TL3).
+    printf '# agents\n- 批 %s hermetic-fixture：绿基线 wall=10m avoidable=0m\n' "$TODAY" > AGENTS.md
     printf 'a\nb\nc\n' > MEMORY.md
     git add -A; git commit -qm init
     git clone -q --bare "$work" "$d/origin.git"
@@ -345,6 +349,69 @@ r="$(mkrepo)"; printf 'LESSON: trailing-prose n=2 gate=none because reasons\n' >
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "Z5/trailing-prose rc"
 assert_has "$out" "trailing text after gate=none" "Z5/trailing prose rejected"
+
+# --- 9) 批时间记账 (台账 = <repo>/AGENTS.md; 本周期「批」行须带 wall= / avoidable=) --------
+# 提效没有强制层时，退化只能靠主理人发火才被发现（本周实证 n=2）；这一检把 wall/avoidable
+# 两个数从"记得写"变成收口条件。
+
+# Case TL1 — a 批 entry of THIS cycle with no accounting → blocking FAIL, the line is named
+r="$(mkrepo)"; printf '# agents\n- 批 %s effgate：效率强制层四件\n' "$TODAY" > "$r/AGENTS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "TL1/unbilled batch rc"
+assert_has "$out" "批条目缺时间记账" "TL1/the offending line is listed"
+assert_has "$out" "effgate" "TL1/and quoted verbatim"
+assert_has "$out" "wall=95m avoidable=30m" "TL1/the accounting format is shown"
+
+# Case TL2 — the same entry, billed → green
+r="$(mkrepo)"
+printf '# agents\n- 批 %s effgate：效率强制层四件 wall=95m avoidable=30m\n' "$TODAY" > "$r/AGENTS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "TL2/billed batch rc"
+assert_has "$out" "均记了 wall/avoidable" "TL2/counted clean"
+assert_no  "$out" "批条目缺时间记账" "TL2/nothing flagged"
+
+# Case TL3 — no ledger at all → 量具坏 = FAIL, never a silent green (a ledger nobody can read
+# is not a clean accounting surface; same reading check 2 gives a missing ACTIVE_CONTEXT)
+r="$(mkrepo)"; rm "$r/AGENTS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "TL3/missing ledger rc"
+assert_has "$out" "不可读" "TL3/instrument failure is named"
+assert_has "$out" "量具坏" "TL3/and called what it is"
+assert_no  "$out" "均记了" "TL3/no clean-accounting line is printed"
+
+# Case TL4 — an unreadable (mode 000) ledger reads the same as an absent one, never as clean
+if [ "$(id -u)" != "0" ]; then
+  r="$(mkrepo)"; chmod 000 "$r/AGENTS.md"
+  out="$(run "$r")"; rc=$?
+  chmod 644 "$r/AGENTS.md"
+  assert_rc "$rc" 1 "TL4/unreadable ledger rc"
+  assert_has "$out" "不可读" "TL4/instrument failure is named"
+else
+  echo "  [skip] running as root — the unreadable-ledger case cannot be built"
+fi
+
+# Case TL5 — a 批 entry from an EARLIER cycle is out of the window: not judged, and with no
+# in-window entry left the check says so instead of reporting a green it did not measure
+r="$(mkrepo)"; printf '# agents\n- 批 2020-01-01 old-batch：上个纪元\n' > "$r/AGENTS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "TL5/out-of-window entry rc"
+assert_no  "$out" "批条目缺时间记账" "TL5/an old entry is not re-judged"
+assert_has "$out" "本周期无「批」条目" "TL5/absence is named, not silently green"
+
+# Case TL6 — a fenced format example is documentation, not a ledger record (same boundary
+# checks 7 and 8 hold; kills: fence skip dropped from check 9's awk)
+r="$(mkrepo)"
+printf '# agents\n```text\n- 批 %s example-only：格式示例\n```\n' "$TODAY" > "$r/AGENTS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "TL6/fenced-example rc"
+assert_no  "$out" "example-only" "TL6/fenced example not consumed"
+assert_has "$out" "本周期无「批」条目" "TL6/reads as no in-window entry"
+
+# Case TL7 — half the accounting is not accounting: wall= without avoidable= still FAILs
+r="$(mkrepo)"; printf '# agents\n- 批 %s half：只记了墙钟 wall=95m\n' "$TODAY" > "$r/AGENTS.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "TL7/half-billed rc"
+assert_has "$out" "批条目缺时间记账" "TL7/half accounting is unbilled"
 
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

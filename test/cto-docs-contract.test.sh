@@ -141,6 +141,17 @@ chk_not_contains "goal has no fixed Existing coverage field" "Existing coverage:
 chk_not_contains "goal has no fixed Incremental value field" "Incremental value:" "$goal_body"
 chk_not_contains "goal has no fixed Cheapest falsification field" "Cheapest falsification" "$goal_body"
 chk_not_contains "goal has no fixed Stop-loss field" "Stop-loss:" "$goal_body"
+# evidence-depth budget line (2026-09-01): the counterpart of the value-gate line on the OUTPUT
+# side — a goal that does not declare how deep its proofs go gets "再跑一遍全量" by default
+# (3x11min of pure re-run in one batch). Pinned byte-exact and unique, same shape as the
+# value-gate line above. Deliberately NOT a `- [ ]` row: it is a template FIELD the goal author
+# fills, not an acceptance item, and preflight machine-judges neither (n=1, no gate yet) —
+# which is also why the checkbox census below does not move.
+evidence_line='Evidence: 各证明证到 <决策行|单套件|全量> 为止（缺省 = 单套件；全量仅当运行本身是验收对象）'
+chk_eq "goal has exactly one evidence-depth line" 1 "$(grep -cF "$evidence_line" "$GOAL")"
+chk_contains "evidence depth defaults to a single suite" "缺省 = 单套件" "$goal_body"
+chk_contains "full runs need the run itself to be the acceptance object" "全量仅当运行本身是验收对象" "$goal_body"
+chk_contains "the evidence line is declared machine-unjudged" "preflight 不机判它" "$goal_body"
 # measurement protocol: one canonical file, consumed by goal-template row + goal-review face.
 MEAS="../skills/cto-orchestration/references/measurement-protocol.md"
 meas_body="$(cat "$MEAS")"

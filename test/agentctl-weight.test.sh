@@ -271,12 +271,21 @@ cd "$(dirname "$0")"
 #    fact leaves as its own code so the continuation decision reads an exit status instead of
 #    sniffing the human line for the word the same function printed. The printed verdict, and
 #    every other caller's 12, are byte-identical — asserted in FL3.
+# cto-guard-bash.py 1326→1472 (2026-09-01, 效率强制层: rules 16+17): +146, and the weight HAD to
+# land here for the same reason every other rule did — both are PreToolUse·Bash judgements and a
+# hook matcher has no second home. Neither grew a parse face: (17) reads `_cmd_segments` +
+# `_pipe_view` + the `_ENV_ASSIGN`/`_WRAPPER` head (14)/(15) already built, then compares whole
+# TOKENS; (16) reuses the same three and adds the only thing a counter cannot borrow — a
+# day-stamped, uid-scoped tally file with its read/write failure taxonomy (silent on a meter that
+# cannot answer, floor-and-say-so on one that cannot persist), which is ~45 of the 146. The rest
+# is the two message bodies and the per-rule doctrine comments this file carries, including both
+# kill criteria (`g16-babysit-counter` / `g17-review-budget`) the retro GATE-AUDIT reads.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1326
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1472
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

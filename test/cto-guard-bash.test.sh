@@ -24,6 +24,13 @@ mkdir -p "$G8ROOT/iso/l1/l2/l3/l4/repo/.git" "$G8ROOT/umb/a/.git" "$G8ROOT/umb/b
 ISO_REPO="$G8ROOT/iso/l1/l2/l3/l4/repo"
 UMB_ROOT="$G8ROOT/umb"
 GUARD_CWD="$ISO_REPO"; export GUARD_CWD
+# Rule (16) keeps a per-session tally under AGENT_WATCH_DIR. Point the whole suite at a REGULAR
+# FILE: every read/write there fails, so the counter is deterministically silent and cannot
+# inject a warn into another rule's expected payload (this file re-hangs `s1`/`mysess` 15 times
+# each). That is not a workaround — it IS rule (16)'s contracted broken-meter face, asserted as
+# such in the (16) battery, which drives its own real run dirs.
+BABYSIT_OFF="$G8ROOT/babysit-meter-is-a-file"; : > "$BABYSIT_OFF"
+AGENT_WATCH_DIR="$BABYSIT_OFF"; export AGENT_WATCH_DIR
 
 mkcmd() { # $1 command, $2 run_in_background (optional "1")
   python3 -c 'import json,os,sys
@@ -238,7 +245,7 @@ chk_eq "legal chain ending in app-server allowed" 0 "$RC"
 run 'bash references/agentctl/agentctl start codex s1 /wt --goal /tmp/g.md; codex exec "review"'
 chk_eq "bare codex chained after a legal dispatch denied (early-return bypass)" 2 "$RC"
 # ALLOW: the lane itself, and every codex spelling that is not a headless dispatch
-run 'bash references/agentctl/agentctl start codex s1 /wt --goal /tmp/g.md --review'
+run 'bash references/agentctl/agentctl start codex s1 /wt --goal /tmp/g.md --review --workflow review-loop --max-rounds 2'
 chk_eq "the lane review dispatch is allowed" 0 "$RC"
 chk_contains "and still gets the watcher reminder" "watcher" "$(ctx "$OUT")"
 run 'codex --version'
@@ -630,7 +637,10 @@ B13="$G8ROOT/briefs"; mkdir -p "$B13"
 printf '%s\n' '目标：核对 rc 直读。注意评审席不要拿 forged 身份去 bypass 门禁。' > "$B13/dirty.md"
 printf '%s\n' 'Goal: verify rc is read directly; report findings as file:line.' > "$B13/clean.md"
 D13="agentctl start codex s1 /wt --goal"
-W13="&& agentctl watch s1"
+# the `--review` tail of every fixture below carries the round budget rule (17) requires: these
+# cases are about the BRIEF, and an unbudgeted review dispatch would be denied before rule (13)
+# ever reads one (asserted in the (17) battery at the end of this file).
+W13="--workflow review-loop --max-rounds 2 && agentctl watch s1"
 run "$D13 $B13/dirty.md --review $W13" 1
 chk_eq "dirty brief still exits 0 (advisory, never a DENY)" 0 "$RC"
 chk_eq "advisory writes nothing to stderr" "" "$ERR"
@@ -688,7 +698,7 @@ cp "$B13/dirty.md" "$ISO_REPO/brief.md"
 run "$D13 brief.md --review $W13" 1
 chk_contains "relative path resolves against the payload cwd" "forged" "$(ctx "$OUT")"
 # declared boundary: only the FIRST start-codex form in a command is inspected
-run "$D13 $B13/clean.md --review $W13; agentctl start codex s2 /wt --goal $B13/dirty.md --review && agentctl watch s2" 1
+run "$D13 $B13/clean.md --review $W13; agentctl start codex s2 /wt --goal $B13/dirty.md --review --workflow review-loop --max-rounds 2 && agentctl watch s2" 1
 chk_eq "only the FIRST start codex is inspected (declared boundary)" "" "$OUT"
 # scope: not a codex dispatch, and not a dispatch at all
 run "agentctl start omp s1 /wt --goal $B13/dirty.md $W13" 1
@@ -696,7 +706,7 @@ chk_eq "rule 13 is codex-only (an omp brief is not read)" "" "$OUT"
 run "cat $B13/dirty.md"
 chk_eq "reading the brief is not a dispatch" "" "$OUT"
 # the WARN rides rule (3)'s channel: ONE hook response carrying both notes
-run "$D13 $B13/dirty.md --review"
+run "$D13 $B13/dirty.md --review --workflow review-loop --max-rounds 2"
 chk_eq "unwatched dirty dispatch exits 0" 0 "$RC"
 chk_contains "watcher reminder still delivered" "watcher" "$(ctx "$OUT")"
 chk_contains "and the wording WARN rides the same channel" "WARN (cto-guard 13)" "$(ctx "$OUT")"
@@ -1150,6 +1160,116 @@ chk_eq "R3-2.2 a quoted cwd behind a spaced env value is still extracted" 2 "$RC
 chk_contains "R3-2.2 and names that cwd" "$SD/wt" "$ERR"
 rm -f "$SD/wt/loose.txt"
 GUARD_CWD="$ISO_REPO"
+
+# ── (17) review dispatch with no round budget ──────────────────────────────────────────────
+# An unbudgeted review loop is the arms-race shape: `--max-rounds` is the only ceiling the
+# runtime enforces, so a review seat started without it has none anywhere. DENY.
+REV="bash references/agentctl/agentctl start codex rev $CLEANWT --goal /tmp/g.md"
+run "$REV --review"
+chk_eq "17 a --review dispatch with no budget is denied" 2 "$RC"
+chk_contains "17 the denial names the missing budget" "评审无预算" "$ERR"
+chk_contains "17 and hands over the exact replacement" "--workflow review-loop --max-rounds N" "$ERR"
+chk_eq "17 no hook response rides alongside the deny" "" "$OUT"
+# GREEN: the budgeted spelling is the one the lane accepts (the flag PAIR is required together)
+run "$REV --review --workflow review-loop --max-rounds 2"
+chk_eq "17 a budgeted review dispatch passes" 0 "$RC"
+chk_not_contains "17 and says nothing about the budget" "评审无预算" "$ERR"
+# non-review dispatches are none of this rule's business
+run "$REV"
+chk_eq "17 a non-review codex dispatch passes" 0 "$RC"
+run "bash references/agentctl/agentctl start omp rev $CLEANWT --goal /tmp/g.md --review"
+chk_eq "17 --review on another engine is not judged here (the lane refuses it itself)" 0 "$RC"
+# `--resume-thread` keeps its creation-time tier; the lane refuses the pair, this rule does not
+# double-judge it
+run "$REV --review --resume-thread th_123"
+chk_eq "17 a resumed thread is not judged" 0 "$RC"
+# argv DATA is not a dispatch — same command-position discipline as (14)/(15)
+run "echo '$REV --review'"
+chk_eq "17 a quoted mention is DATA (exit 0)" 0 "$RC"
+chk_eq "17 and no DENY reaches stderr" "" "$ERR"
+# a path that merely CONTAINS the flag text is not the flag: the scan compares whole tokens
+run "bash references/agentctl/agentctl start codex rev $CLEANWT --goal /tmp/--review.md"
+chk_eq "17 a --review-shaped path token is not a review dispatch" 0 "$RC"
+# the SECOND dispatch of a chain is a dispatch (the rule reads every command-position segment)
+run "$REV --review --workflow review-loop --max-rounds 2; bash references/agentctl/agentctl start codex rev2 $CLEANWT --goal /tmp/g.md --review"
+chk_eq "17 a LATER unbudgeted review dispatch is judged" 2 "$RC"
+# ORDER: a command-text defect is answered before the worktree preconditions (14)/(15)
+printf 'loose\n' > "$CLEANWT/loose.txt"
+run "$REV --review"
+chk_eq "17 a dirty seat plus a missing budget is still denied" 2 "$RC"
+chk_contains "17 and the command-text defect answers first" "评审无预算" "$ERR"
+chk_not_contains "17 not 14's verdict" "播种未 seed commit" "$ERR"
+rm -f "$CLEANWT/loose.txt"
+
+# ── (16) babysit-round counter ─────────────────────────────────────────────────────────────
+# Re-hanging a watcher is LEGAL, so this can never be a DENY; the fourth re-hang of the same
+# session in one day is what the orchestrator must see (field: one session re-hung 6 times
+# while the gauge, not the agent, was the problem). Each case drives its own run dir.
+runbs() { # $1 run-dir  $2 command  [$3 "1" = run_in_background]
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(mkcmd "$2" "${3:-}" | AGENT_WATCH_DIR="$1" python3 "$GUARD" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+BS1="$G8ROOT/bs1"; mkdir -p "$BS1"
+for i in 1 2 3; do runbs "$BS1" 'agentctl watch g16s' 1; done
+chk_eq "16 the third re-hang exits 0" 0 "$RC"
+chk_eq "16 and is SILENT (under the threshold)" "" "$OUT"
+runbs "$BS1" 'agentctl watch g16s' 1
+chk_eq "16 the FOURTH re-hang still exits 0 (never a DENY)" 0 "$RC"
+chk_eq "16 and writes nothing to stderr" "" "$ERR"
+chk_contains "16 the fourth is announced" "WARN (cto-guard 16)" "$(ctx "$OUT")"
+chk_contains "16 the warn names the session" "g16s" "$(ctx "$OUT")"
+chk_contains "16 and the count it reached" "4 times today" "$(ctx "$OUT")"
+chk_contains "16 and points at the instrument before the re-hang" "INSTRUMENT" "$(ctx "$OUT")"
+chk_not_contains "16 the reading is not dressed as undecidable" "不可判" "$(ctx "$OUT")"
+# a steer counts the same way, and it keeps counting past the threshold — never escalating
+runbs "$BS1" 'agentctl steer g16s -m x' 1
+chk_eq "16 a steer on the same session counts too" 0 "$RC"
+chk_contains "16 and the tally advanced" "5 times today" "$(ctx "$OUT")"
+# an --interrupt steer is a deliberate intervention, not a mechanical re-hang: NOT counted.
+# Proved by exhaustion — three of them plus three re-hangs must still read as three.
+BS2="$G8ROOT/bs2"; mkdir -p "$BS2"
+for i in 1 2 3; do runbs "$BS2" 'agentctl steer g16i -m x --interrupt' 1; done
+for i in 1 2; do runbs "$BS2" 'agentctl watch g16i' 1; done
+chk_eq "16 interrupt steers are not re-hangs" "" "$OUT"
+runbs "$BS2" 'agentctl steer g16i -m x --replace' 1
+chk_eq "16 --replace is the same verb under its silent alias" "" "$OUT"
+runbs "$BS2" 'agentctl watch g16i' 1
+chk_eq "16 the third real re-hang stays silent — interrupts never entered the tally" "" "$OUT"
+runbs "$BS2" 'agentctl watch g16i' 1
+chk_contains "16 the fourth REAL re-hang is the one that warns" "4 times today" "$(ctx "$OUT")"
+# one command, one round: the standard `steer …; watch …` pair is a single babysit round
+BS3="$G8ROOT/bs3"; mkdir -p "$BS3"
+for i in 1 2 3; do runbs "$BS3" 'agentctl steer g16p -m x > /tmp/o.log; agentctl watch g16p' 1; done
+chk_eq "16 three steer+watch pairs are three rounds, not six" "" "$OUT"
+runbs "$BS3" 'agentctl steer g16p -m x > /tmp/o.log; agentctl watch g16p' 1
+chk_contains "16 the fourth pair warns exactly once" "4 times today" "$(ctx "$OUT")"
+chk_eq "16 and the response is a single JSON document" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c hookSpecificOutput)"
+# argv DATA is not a re-hang
+BS4="$G8ROOT/bs4"; mkdir -p "$BS4"
+for i in 1 2 3 4 5; do runbs "$BS4" "echo 'agentctl watch g16q'" 1; done
+chk_eq "16 a quoted mention never enters the tally" "" "$OUT"
+# BROKEN METER: a run dir that cannot be read or written stays SILENT — no warn, no deny.
+# This is the fixture the rest of this suite runs on, asserted here so the choice is load-bearing.
+for i in 1 2 3 4 5 6; do runbs "$BABYSIT_OFF" 'agentctl watch g16s' 1; done
+chk_eq "16 an unreadable meter never accuses (exit 0)" 0 "$RC"
+chk_eq "16 and injects nothing at all" "" "$OUT"
+chk_eq "16 and writes nothing to stderr" "" "$ERR"
+# DEGRADED METER: the tally can be READ but not persisted -> the count is a FLOOR and the warn
+# says so, instead of publishing a floor as a measurement.
+if [ "$(id -u)" != "0" ]; then
+  BS5="$G8ROOT/bs5"; mkdir -p "$BS5"
+  printf '{"g16d": 3}' > "$BS5/babysit-$(id -u)-$(date +%Y%m%d).json"
+  chmod 500 "$BS5"
+  runbs "$BS5" 'agentctl watch g16d' 1
+  chk_eq "16 an unpersistable bump is not a DENY" 0 "$RC"
+  chk_contains "16 the seen count is still reported" "4 times today" "$(ctx "$OUT")"
+  chk_contains "16 and is admitted as a floor" "不可判" "$(ctx "$OUT")"
+  chmod 700 "$BS5"
+else
+  echo "  [skip] running as root — the unwritable-run-dir case cannot be built"
+fi
 
 
 summary
