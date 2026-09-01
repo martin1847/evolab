@@ -2148,4 +2148,66 @@ chk_eq "FL5 one supervisor only" 1 "$(spawn_count fl6)"
 chk_eq "FL5 the machine tail is the verdict" "EXIT=7" "$(printf '%s\n' "$out" | tail -1)"
 sw_clean
 
+echo "== FL6: the waiter-internal continuation codes are ONE vocabulary across two languages =="
+# The codes are declared TWICE — python decides whether a round ends the waiter, bash loops on the
+# numbers — and the numbers are the whole contract. A one-sided edit that lands on an ACTION code
+# makes the shell consume that action exit as a re-arm, and the seat then waits forever on a
+# verdict that already happened (review NB1). Static, because that is a property of the SOURCE:
+# no fixture can be trusted to drive whichever code a future collision picks, and the failure is
+# invisible by inspection — both files read correct on their own.
+fl_codes="$(python3 - "$AW_DIR" <<'FLPY'
+import ast, os, re, sys
+
+d = sys.argv[1]
+
+
+def ints(path, pred):                       # module-level `NAME = <int literal>`, nothing else
+    out = {}
+    for node in ast.parse(open(path, encoding="utf-8").read()).body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+            continue
+        val = node.value.value
+        if isinstance(val, bool) or not isinstance(val, int):
+            continue
+        for tgt in node.targets:
+            if isinstance(tgt, ast.Name) and pred(tgt.id):
+                out[tgt.id] = val
+    return out
+
+
+watchctl = os.path.join(d, "watchctl.py")
+py = ints(watchctl, lambda n: n.startswith("FOLLOW_"))
+arm = ints(watchctl, lambda n: n == "PROCEED_TO_ARM")   # the sibling internal code on these verbs
+published = ints(os.path.join(d, "duplexctl.py"), lambda n: n.startswith("EXIT_"))
+sh_src = open(os.path.join(d, "agentctl"), encoding="utf-8").read()
+sh = {m.group(1): int(m.group(2))
+      for m in re.finditer(r"(?m)^(FOLLOW_[A-Z_]+)=([0-9]+)\b", sh_src)}
+taken = {**published, **arm}
+bad = []
+if not py or not sh or not published or not arm:
+    bad.append("source-not-found:py=%d bash=%d published=%d arm=%d"
+               % (len(py), len(sh), len(published), len(arm)))
+# named, so a rename on either side cannot silently empty this gate instead of reddening it
+for name in ("FOLLOW_ROTATED", "FOLLOW_REARM"):
+    if name not in py or name not in sh:
+        bad.append("cross-language-code-missing:%s" % name)
+for name, val in sorted(sh.items()):
+    if name not in py:
+        bad.append("bash-only-code:%s=%d" % (name, val))
+    elif py[name] != val:
+        bad.append("disagree:%s py=%d bash=%d" % (name, py[name], val))
+    # declared and then branched on as a bare number = an equality gate that proves nothing
+    if not re.search(r'"\$%s"\)' % name, sh_src):
+        bad.append("bash-code-not-consumed-by-name:%s" % name)
+for lang, name, val in ([("py",) + kv for kv in sorted(py.items())]
+                        + [("bash",) + kv for kv in sorted(sh.items())]):
+    clash = sorted(n for n, v in taken.items() if v == val)
+    if clash:
+        bad.append("collides:%s %s=%d with %s" % (lang, name, val, ",".join(clash)))
+print(" ".join(bad) if bad else "DISJOINT py=%d bash=%d" % (len(py), len(sh)))
+FLPY
+)"
+chk_eq "FL6 internal codes agree across languages and collide with no published exit" \
+  "DISJOINT py=3 bash=2" "$fl_codes"
+
 summary
