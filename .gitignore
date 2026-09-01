@@ -24,3 +24,6 @@ docs/orchestration/
 # real-stream replay corpus — REAL events may carry sensitive content; local-only, never pushed
 test/corpus/
 BLOCKED.md
+
+# codegraph index — machine-local, auto-built by post-checkout hook
+.codegraph/
