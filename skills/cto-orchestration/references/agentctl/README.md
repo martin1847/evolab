@@ -49,7 +49,12 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   自起的 pane 没发租约）——宁可失去抗杀性也不能拒绝观测，stderr 明说 "NOT kill-resilient"。
   **同名 `<s>-watchd` 在但没有本 identity 的租约 = 不可判，不是降级理由**：返回 `12 reason=unknown`
   并点名清理指引（`tmux kill-session -t <s>-watchd` 后重挂），绝不静默 inline。`--inline` 是显式
-  兼容旗标（进程内轮询，被杀即丢本轮结论）。
+  兼容旗标（进程内轮询，被杀即丢本轮结论；不跟随）。
+- **waiter 默认跟随会话**（block until an ACTION verdict）：steer 轮转对等待中的 waiter 透明——自动
+  瞄新轮不退出；`WATCH-TIMEOUT` 与 `SUPERVISOR-LOST reason=dead` 打完整 typed 行 + `EXIT=` 标记后
+  **有界**自动重挂（`AGENT_WATCH_FOLLOW_MAX`，默认 8；0 = 单轮 waiter）；动作类判决
+  （0/2/4/5/6/8/9/11/14、12 unknown）立即以该码退出唤醒编排位。跟随中每个被报告轮各有一行
+  `EXIT=<n>`，进程**最后一行**才是退出码——计数 `EXIT=` 的消费面要改读末行。
 - **输出有界**：`status` 回 typed 一行 + 摘要，另可跟至多 4 行错位产物提示（见下 exit 6）；
   terminal record 里落盘的 detail 硬上界 ≤600 字符且**按整行截**——放不下的行整行丢弃并追加
   `…[detail truncated; …]` 标记行为末行，绝不半截 JSON。`watch` 回放 = 该 detail（≤600），
