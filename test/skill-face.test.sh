@@ -135,7 +135,7 @@ skills/cto-orchestration/references/frontend-verify.md 104
 skills/cto-orchestration/references/goal-template.md 136
 skills/cto-orchestration/references/implementation-discipline.md 102
 skills/cto-orchestration/references/measurement-protocol.md 43
-skills/cto-orchestration/references/onboarding-checklist.md 20
+skills/cto-orchestration/references/onboarding-checklist.md 23
 skills/cto-orchestration/references/ops-prompt-template.md 43
 skills/cto-orchestration/references/retrospective.md 81
 skills/cto-orchestration/references/review-brief-preamble.md 28

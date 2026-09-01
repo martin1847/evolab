@@ -14,6 +14,9 @@
    command 换安装根绝对路径后 merge，别抄散文；细节 README §Wiring）；接完各喂一条合成 payload **验真触发**（尾随 `&` 应 deny、browser 派发应出提醒），别只信"配了"。
    （多编排者场景装了 `agent-mail` 的，其席位注册 + 收信 hook 由该 skill 自己的「接入」节自包含，不在本清单。）
 4. 建 `docs/orchestration/` + `docs/orchestration/archive/` 目录（生命周期见 SKILL §5）。
+   装了 codegraph 的仓可选：`ln -s <安装根>/references/agentctl/post-checkout-codegraph.sh
+   <repo>/.git/hooks/post-checkout`（派工 worktree 创建即后台建索引；`.codegraph/` 须进
+   .gitignore，否则新 worktree 立即脏、撞派工门；接线细节见脚本头）。
 5. 第一个任务走一遍 SKILL §1 全流程，校准该项目的忙碌标记/工具链差异。
 6. 在项目 memory 里建 working-style 条目（含本 skill 引用 + 项目特有的差异）。
 7. 建主理人的 `docs/DECISION_QUEUE.md`（架构+模板见同目录 `decision-queue.md`）——第一个 T2 决定就进
