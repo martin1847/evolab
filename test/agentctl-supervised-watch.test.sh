@@ -124,6 +124,18 @@ lease_pid() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["pi
 spawn_count() { grep -c "^$1-watchd\$" "$FAKE_TMUX_STATE/new-session.log" 2>/dev/null || echo 0; }
 record_class() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("class",""))' \
                    "$WATCH_RUN_DIR/$1.terminal.json" 2>/dev/null; }
+record_round() { # the live record, else the one a waiter already DELIVERED (rotated to consumed)
+  local f="$WATCH_RUN_DIR/$1.terminal.json"
+  [ -s "$f" ] || f="$WATCH_RUN_DIR/$1.terminal.consumed.json"
+  python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("round",""))' "$f" 2>/dev/null; }
+# FOLLOW MIGRATION (2026-09-01): `agentctl watch` follows its session by default — a reported
+# WATCH-TIMEOUT 7, or a 12 whose supervisor provably died, re-arms instead of ending the waiter.
+# Every arm below that asserts the SINGLE-ROUND exit for one of those two outcomes pins
+# AGENT_WATCH_FOLLOW_MAX=0 (the ceiling of automatic re-arms), which reproduces the pre-follow
+# waiter verdict for verdict — no expected code and no assertion changed. Following itself is
+# asserted in its own FL section at the end of this file. Arms that end on an ACTION verdict, on
+# a 12 whose liveness fact is `unknown` (retired, rogue, wedged, unreadable), or on `--inline`
+# are untouched: none of them can follow, and leaving them bare is the evidence of that.
 
 # Drive one class to a published record with NO waiter attached at publish time: arm a waiter on a
 # RUNNING fixture, TERM it (the production failure mode), and only then make classify terminal.
@@ -216,7 +228,7 @@ chk_eq "M09 swTMO: budget exhaustion is persisted, not lost with the waiter" 1 \
   "$(await "[ -s '$WATCH_RUN_DIR/swTMO.terminal.json' ]" 200 && echo 1 || echo 0)"
 chk_eq "M09 swTMO: class recorded" "WATCH-TIMEOUT" "$(record_class swTMO)"
 before="$(spawn_count swTMO)"
-out="$(bash "$AGENTCTL" watch swTMO 2>&1)"; rc=$?
+out="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch swTMO 2>&1)"; rc=$?
 chk_eq "M09 swTMO: a brand-new waiter recovers exit 7" 7 "$rc"
 chk_contains "M09 swTMO: and reproduces the class line" "WATCH TIMEOUT" "$out"
 chk_eq "M09 swTMO: recovery re-derived nothing" "$before" "$(spawn_count swTMO)"
@@ -354,7 +366,7 @@ sw_sandbox
 
 # M03 — the worker is fine, the SUPERVISOR is killed, and there is no conclusion.
 seed m3 70000; running m3
-export AGENT_WATCH_MAX_POLLS=1000
+export AGENT_WATCH_MAX_POLLS=1000 AGENT_WATCH_FOLLOW_MAX=0   # follow migration: single-round 12
 watch_bg m3 "$SANDBOX/m3.w.log"
 await "[ -s '$WATCH_RUN_DIR/m3.watch.super.json' ]" 100
 kill -9 "$(lease_pid m3)" 2>/dev/null
@@ -369,6 +381,7 @@ chk_not_contains "M03 a lost supervisor is never DONE" "=== [m3] DONE" "$out"
 chk_eq "M03 and it returned bounded (< 60s), never silently waited" 1 "$([ "$el" -lt 60 ] && echo 1 || echo 0)"
 chk_eq "M03 the worker session was never touched" 1 \
   "$(tmux has-session -t "=m3" 2>/dev/null && echo 1 || echo 0)"
+unset AGENT_WATCH_FOLLOW_MAX
 
 # M04 PAIRED GREEN — supervisor alive, classify honestly RUNNING, waiter across several cycles.
 seed m4 70000; running m4
@@ -418,7 +431,7 @@ inc_b="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["process
 chk_eq "M07 arrange: the attempt is unchanged but the incarnation rotated" 1 \
   "$([ "$inc_a" != "$inc_b" ] && echo 1 || echo 0)"
 export AGENT_WATCH_MAX_POLLS=1 AGENTCTL_SUPERVISOR_ARM_TRIES=5
-out="$(bash "$AGENTCTL" watch m7 2>&1)"; rc=$?
+out="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch m7 2>&1)"; rc=$?
 chk_eq "M07 DAMAGE ORACLE: the old incarnation's DONE is not adopted after resume" 1 \
   "$([ "$rc" != 0 ] && echo 1 || echo 0)"
 chk_not_contains "M07 no false DONE across the incarnation boundary" "=== [m7] DONE" "$out"
@@ -476,7 +489,7 @@ sw_sandbox
 seed m11 70000
 printf '0\n' > "$WATCH_RUN_DIR/m11.duplex.rc"
 export AGENT_WATCH_MAX_POLLS=1000 AGENTCTL_PUBLISH_BARRIER="$SANDBOX/barrier"
-out="$(bash "$AGENTCTL" watch m11 2>&1)"; rc=$?
+out="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch m11 2>&1)"; rc=$?
 unset AGENTCTL_PUBLISH_BARRIER
 chk_eq "M11 arrange: the interruption window was really reached" 1 \
   "$([ -s "$SANDBOX/barrier" ] && echo 1 || echo 0)"
@@ -510,7 +523,7 @@ printf '0\n' > "$WATCH_RUN_DIR/m12.duplex.rc"
 export AGENT_WATCH_MAX_POLLS=1000
 bash "$AGENTCTL" watch m12 >/dev/null 2>&1
 cp "$WATCH_RUN_DIR/m12.terminal.json" "$SANDBOX/m12.good.json"
-export AGENT_WATCH_MAX_POLLS=1 AGENTCTL_SUPERVISOR_ARM_TRIES=5
+export AGENT_WATCH_MAX_POLLS=1 AGENTCTL_SUPERVISOR_ARM_TRIES=5 AGENT_WATCH_FOLLOW_MAX=0
 damage() { # $1 label  $2 shell that installs the damaged record
   rm -f "$WATCH_RUN_DIR/m12.terminal.json"
   eval "$2"
@@ -534,7 +547,7 @@ cp "$SANDBOX/m12.good.json" "$WATCH_RUN_DIR/m12.terminal.json"
 out="$(bash "$AGENTCTL" watch m12 2>&1)"; rc=$?
 chk_eq "M12 PAIRED GREEN: the intact record still reports DONE 0" 0 "$rc"
 chk_contains "M12 PAIRED GREEN: with its own verdict line" "DONE" "$out"
-unset AGENTCTL_SUPERVISOR_ARM_TRIES
+unset AGENTCTL_SUPERVISOR_ARM_TRIES AGENT_WATCH_FOLLOW_MAX
 sw_clean
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -565,7 +578,10 @@ sw_sandbox
 
 # stop mid-sensing: the loop is retired, and a conclusion it computes afterwards cannot land.
 seed m14 70000; running m14
-export AGENT_WATCH_MAX_POLLS=1000
+# follow migration: this section asserts the two lifecycle actions that RETIRE a waiter's
+# supervisor. A re-arm racing a teardown would be a second claim in the same arm (and would
+# publish a fresh lease for a session `stop` just cleaned), so both arms stay single-round.
+export AGENT_WATCH_MAX_POLLS=1000 AGENT_WATCH_FOLLOW_MAX=0
 watch_bg m14 "$SANDBOX/m14.w.log"
 await "[ -s '$WATCH_RUN_DIR/m14.watch.super.json' ]" 100
 sup="$(lease_pid m14)"
@@ -613,6 +629,7 @@ chk_contains "M14 and states no conclusion was published" "no terminal conclusio
   "$(cat "$SANDBOX/m14r.w.log")"
 chk_not_contains "M14 a retired supervisor never yields a DONE" "=== [m14r] DONE" \
   "$(cat "$SANDBOX/m14r.w.log")"
+unset AGENT_WATCH_FOLLOW_MAX
 sw_clean
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -649,7 +666,7 @@ EOF
 chmod +x "$BIN/rm"
 seed m14o 70000; running m14o
 mkfifo "$WATCH_RUN_DIR/m14o.duplex.in" 2>/dev/null || true
-export AGENT_WATCH_MAX_POLLS=1000
+export AGENT_WATCH_MAX_POLLS=1000 AGENT_WATCH_FOLLOW_MAX=0   # follow migration: see M14
 watch_bg m14o "$SANDBOX/m14o.w.log"
 await "[ -s '$WATCH_RUN_DIR/m14o.watch.super.json' ]" 100
 PROBE="$SANDBOX/m14o.probe.log"
@@ -669,6 +686,7 @@ chk_contains "M14b and state that nothing was concluded" "no terminal conclusion
 chk_eq "M14b DAMAGE ORACLE: no SUPERVISOR-LOST read in that window is left without last words" \
   "$(printf '%s\n' "$probe" | grep -c 'SUPERVISOR-LOST')" \
   "$(printf '%s\n' "$probe" | grep -c "supervisor's last words")"
+unset AGENT_WATCH_FOLLOW_MAX
 sw_clean
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -823,12 +841,12 @@ chk_eq "F-03 DAMAGE ORACLE: two unestablishable incarnations do NOT compare equa
 out="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" watch-state f3 --arm 2>&1)"; rc=$?
 chk_eq "F-03 the canonical reader refuses the pre-resume DONE (13 = nothing adoptable)" 13 "$rc"
 chk_contains "F-03 and says why it is not adoptable" "STALE-INCARNATION" "$out"
-export AGENT_WATCH_MAX_POLLS=1 AGENTCTL_SUPERVISOR_ARM_TRIES=5
+export AGENT_WATCH_MAX_POLLS=1 AGENTCTL_SUPERVISOR_ARM_TRIES=5 AGENT_WATCH_FOLLOW_MAX=0
 out="$(bash "$AGENTCTL" watch f3 2>&1)"; rc=$?
 chk_eq "F-03 the public waiter never reports the old life's DONE" 1 \
   "$([ "$rc" != 0 ] && echo 1 || echo 0)"
 chk_not_contains "F-03 no false DONE across the null/null boundary" "=== [f3] DONE" "$out"
-unset AGENTCTL_SUPERVISOR_ARM_TRIES
+unset AGENTCTL_SUPERVISOR_ARM_TRIES AGENT_WATCH_FOLLOW_MAX
 sw_clean
 
 echo "== F-04: the canonical reader's OWN timeout is typed 12, never business 8 =="
@@ -1539,7 +1557,9 @@ unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_PROGRESS_MINS AGENT_WATCH_STALL_MINS
 
 # ── WATCH-TIMEOUT must say WHICH kind of budget exhaustion it was ─────────────────────────
 progress_seed pgTMO "$REPO"
-export AGENT_WATCH_MAX_POLLS=3
+# follow migration: every WATCH-TIMEOUT arm from here to the end of this block asserts the
+# single-round 7 and the tail word it carries, so the ceiling is pinned for the whole block.
+export AGENT_WATCH_MAX_POLLS=3 AGENT_WATCH_FOLLOW_MAX=0
 out="$(AGENT_WATCH_PROGRESS_MINS=30 bash "$AGENTCTL" watch pgTMO 2>&1)"; rc=$?
 chk_eq "M16 budget exhaustion is still WATCH-TIMEOUT 7" 7 "$rc"
 chk_contains "M16 and the line ends with the progress verdict" "progress=unchanged" "$out"
@@ -1612,7 +1632,7 @@ chk_not_contains "M16 NB3.3 恢复: and never a fabricated unchanged either" \
   "progress=unchanged" "$out"
 unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_PROGRESS_MINS
 unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_PROGRESS_MINS
-unset AGENT_WATCH_MAX_POLLS
+unset AGENT_WATCH_MAX_POLLS AGENT_WATCH_FOLLOW_MAX
 sw_clean
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -2006,6 +2026,126 @@ R1PY
 chk_eq "M17 预算 knob grid PAIRED RED: the R1 arithmetic reds on the smallest knob" \
   "timeout=1 budget=1.000" "$(python3 "$GRID" "$SANDBOX/r1-budget.py")"
 unset AGENT_WATCH_STALL_MINS
+sw_clean
+
+# ═════════════════════════════════════════════════════════════════════════════════════════
+# FL — FOLLOW MODE (2026-09-01). `agentctl watch` is the seat's attachment to a SESSION, not to
+# one round of it: re-arming after a rotation, after a WATCH-TIMEOUT or after the host reaped the
+# supervisor was a purely mechanical orchestrator round (two seats, ~27/day). Following is the
+# default, so the arms below assert the LIFETIME rule from both sides — what must keep the
+# waiter, and what must still end it — while the pinned arms above assert that the ceiling of 0
+# still reproduces the single-round waiter. Same rules as the rest of this file: public CLI, a
+# real classify, real signals; nothing here hand-writes a terminal record.
+# ═════════════════════════════════════════════════════════════════════════════════════════
+
+echo "== FL1: a steer that opens the next round is followed, not reported =="
+sw_sandbox
+seed fl1 70000; running fl1
+# NOT a race: the round rotates under a LIVE supervisor and with no terminal record anywhere, so
+# there is no window in which this waiter could have adopted anything else. The rotation is the
+# only fact its next read can find, and the oracle is that it re-fenced its episode on the new
+# round (a second arm) instead of staying attached to the closed one. The rotate-after-a-DEAD-
+# supervisor flavour is FL3's: there the liveness fact, not the round, is what licenses the
+# re-arm, and mixing the two into one arm would let either half pass for the other.
+export AGENT_WATCH_MAX_POLLS=1000
+AGENT_WATCH_POLL_SECS=2 bash "$AGENTCTL" watch fl1 > "$SANDBOX/fl1.log" 2>&1 &
+FL1W=$!
+await "[ -s '$WATCH_RUN_DIR/fl1.watch.super.json' ]" 200
+/bin/sleep 1                                           # both loops are polling a RUNNING session
+sed -i.bak 's/^round=1$/round=2/' "$WATCH_RUN_DIR/fl1.duplex.meta"   # what a steer commits
+rm -f "$WATCH_RUN_DIR/fl1.duplex.meta.bak"
+chk_eq "FL1 the waiter saw the rotation and aimed at the new round" 1 \
+  "$(await "grep -q 'round rotated 1 → 2' '$SANDBOX/fl1.log'" 400 && echo 1 || echo 0)"
+chk_eq "FL1 DAMAGE ORACLE: it re-armed for the new round instead of riding the closed one" 1 \
+  "$(await "[ \"\$(grep -c 'DUPLEX-WATCH ARMED' '$SANDBOX/fl1.log')\" -ge 2 ]" 400 && echo 1 || echo 0)"
+printf '3\n' > "$WATCH_RUN_DIR/fl1.duplex.rc"          # round 2 classifies FAILED 2
+wait "$FL1W" 2>/dev/null; rc=$?
+fl1log="$(cat "$SANDBOX/fl1.log")"
+chk_eq "FL1 and it reports the class the NEW round concluded with" 2 "$rc"
+chk_eq "FL1 the record it read is the new round's" "2" "$(record_round fl1)"
+chk_eq "FL1 the live supervisor was re-attached, never duplicated" 1 "$(spawn_count fl1)"
+chk_eq "FL1 DAMAGE ORACLE: a rotation is never reported as a lost supervisor" 0 \
+  "$(printf '%s\n' "$fl1log" | grep -c 'SUPERVISOR-LOST')"
+chk_eq "FL1 DAMAGE ORACLE: and it spends none of the bounded re-arm budget" 0 \
+  "$(printf '%s\n' "$fl1log" | grep -c 'following: re-arm')"
+chk_eq "FL1 exactly ONE verdict left the waiter, the one it exited on" 1 \
+  "$(printf '%s\n' "$fl1log" | grep -c '^EXIT=')"
+sw_clean
+
+echo "== FL2: a reported WATCH-TIMEOUT re-arms, and the ceiling really ends it =="
+sw_sandbox
+seed fl2 70000; running fl2
+export AGENT_WATCH_MAX_POLLS=1            # the supervisor's own budget: one poll, then 7
+out="$(AGENT_WATCH_FOLLOW_MAX=2 bash "$AGENTCTL" watch fl2 2>&1)"; rc=$?
+chk_eq "FL2 the exhausted follower exits with the LAST verdict, really 7" 7 "$rc"
+chk_eq "FL2 three rounds were reported, not one" 3 \
+  "$(printf '%s\n' "$out" | grep -c 'WATCH TIMEOUT')"
+chk_eq "FL2 every reported round carries its own machine marker" 3 \
+  "$(printf '%s\n' "$out" | grep -c '^EXIT=7$')"
+chk_contains "FL2 the first re-arm names its bound" "re-arm 1/2" "$out"
+chk_contains "FL2 and the last one exhausts it" "re-arm 2/2" "$out"
+chk_not_contains "FL2 DAMAGE ORACLE: never one re-arm past the ceiling" "re-arm 3/2" "$out"
+chk_eq "FL2 DAMAGE ORACLE: each re-arm re-established a REAL sensing loop" 3 "$(spawn_count fl2)"
+chk_eq "FL2 the machine tail is still the verdict this process exited on" "EXIT=7" \
+  "$(printf '%s\n' "$out" | tail -1)"
+sw_clean
+
+echo "== FL3: a supervisor the host reaped is re-established; the session's answer still lands =="
+sw_sandbox
+seed fl3 70000; running fl3
+export AGENT_WATCH_MAX_POLLS=1000
+AGENT_WATCH_FOLLOW_MAX=1 bash "$AGENTCTL" watch fl3 > "$SANDBOX/fl3.log" 2>&1 &
+FL3=$!
+await "[ -s '$WATCH_RUN_DIR/fl3.watch.super.json' ]" 200
+kill -9 "$(lease_pid fl3)" 2>/dev/null    # the reaper's shape: no note, no conclusion, no lease change
+chk_eq "FL3 the reaped supervisor is reported AND re-armed" 1 \
+  "$(await "grep -q 'following: re-arm 1/1' '$SANDBOX/fl3.log'" 400 && echo 1 || echo 0)"
+chk_eq "FL3 a second sensing loop really came up" 1 \
+  "$(await '[ "$(spawn_count fl3)" -ge 2 ]' 400 && echo 1 || echo 0)"
+printf '0\n' > "$WATCH_RUN_DIR/fl3.duplex.rc"
+wait "$FL3" 2>/dev/null; rc=$?
+fl3log="$(cat "$SANDBOX/fl3.log")"
+chk_eq "FL3 and the session's real conclusion still reaches the seat" 0 "$rc"
+chk_contains "FL3 the followed loss was reported as the published 12" "EXIT=12" "$fl3log"
+chk_contains "FL3 with the liveness fact that licensed the re-arm" "reason=dead" "$fl3log"
+chk_not_contains "FL3 DAMAGE ORACLE: no waiter-internal code ever reached the surface" \
+  "EXIT=18" "$fl3log"
+sw_clean
+
+echo "== FL4: an ACTION verdict ends the waiter even with budget left =="
+sw_sandbox
+seed fl4 70000
+printf '0\n' > "$WATCH_RUN_DIR/fl4.duplex.rc"
+export AGENT_WATCH_MAX_POLLS=1000
+out="$(AGENT_WATCH_FOLLOW_MAX=5 bash "$AGENTCTL" watch fl4 2>&1)"; rc=$?
+chk_eq "FL4 DONE 0 ends it: the seat is woken by the exit, so 0 may never be swallowed" 0 "$rc"
+chk_eq "FL4 exactly one verdict marker" 1 "$(printf '%s\n' "$out" | grep -c '^EXIT=')"
+chk_not_contains "FL4 and no re-arm" "following: re-arm" "$out"
+chk_eq "FL4 one episode, one supervisor" 1 "$(spawn_count fl4)"
+# 14 STALLED-PROGRESS is the deliberate NON-follow: a false 14 is a three-source blind spot to
+# fix, and following one would hide exactly the case the progress work exists to surface.
+FLREPO="$SANDBOX/flrepo"; mkdir -p "$FLREPO"
+git -C "$FLREPO" init -q 2>/dev/null
+git -C "$FLREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
+seed fl5; running fl5
+printf 'engine=claude\ncwd=%s\nround=1\n' "$FLREPO" > "$WATCH_RUN_DIR/fl5.duplex.meta"
+out="$(AGENT_WATCH_PROGRESS_MINS=0.01 AGENT_WATCH_FOLLOW_MAX=5 bash "$AGENTCTL" watch fl5 2>&1)"
+rc=$?
+chk_eq "FL4 STALLED-PROGRESS 14 ends it too" 14 "$rc"
+chk_eq "FL4 (14) exactly one verdict marker" 1 "$(printf '%s\n' "$out" | grep -c '^EXIT=')"
+chk_not_contains "FL4 (14) and no re-arm" "following: re-arm" "$out"
+sw_clean
+
+echo "== FL5: the 0 ceiling IS the single-round waiter (the compatibility arm) =="
+sw_sandbox
+seed fl6 70000; running fl6
+export AGENT_WATCH_MAX_POLLS=1
+out="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch fl6 2>&1)"; rc=$?
+chk_eq "FL5 with the ceiling at 0 a WATCH-TIMEOUT exits, exactly as before follow" 7 "$rc"
+chk_eq "FL5 one verdict, one marker" 1 "$(printf '%s\n' "$out" | grep -c '^EXIT=7$')"
+chk_not_contains "FL5 and it never re-armed" "following: re-arm" "$out"
+chk_eq "FL5 one supervisor only" 1 "$(spawn_count fl6)"
+chk_eq "FL5 the machine tail is the verdict" "EXIT=7" "$(printf '%s\n' "$out" | tail -1)"
 sw_clean
 
 summary
