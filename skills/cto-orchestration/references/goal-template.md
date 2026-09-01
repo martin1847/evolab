@@ -113,6 +113,9 @@ Evidence: 各证明证到 <决策行|单套件|全量> 为止（缺省 = 单套�
   席位自判必被穿，不绑 head 的收据会被评审后追加提交沿用（下游席位各 n=2）。
 - [ ] 普通非 review-loop 长跑且有明确时长/成本上限 → 写明该预算；耗尽仍未达成 = 保持任务
   active + STOP and report。review-loop 轮数预算只由 runtime `--max-rounds` 强制，本 GOAL 不复制轮数。
+- [ ] Done-when 含**编排者自造量具**（非仓内既有套件/CLI 的证明命令）→ 附四臂自跑记录（正绿/
+  坏红/量具故障红/阈值边界红）且 rc 逐值写死；细则 implementation-discipline §编排者自造量具
+  （下游席位 n=5 合同期 fail-open 实证）。
 
 ## Guardrails
 
