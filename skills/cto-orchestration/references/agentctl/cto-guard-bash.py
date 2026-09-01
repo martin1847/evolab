@@ -533,16 +533,31 @@ def _babysit_sessions(raw):
 def _babysit_bump(session):
     """(count, degraded) for today's tally of one session, INCLUDING this call.
     `count` None = the meter could not answer at all -> the caller stays silent. `degraded`
-    True = the number is a FLOOR (a corrupt ledger was reset, or the bump could not be
-    persisted), which the warn says out loud instead of publishing a floor as a count."""
+    True = the number is a FLOOR, which the warn says out loud instead of publishing a floor
+    as a count.
+
+    THE FLOOR FLAG IS PERSISTED, not per-process (cold review F2): a corrupt ledger loses the
+    day's history, and the process that resets it knows that — but the NEXT process reads a
+    perfectly well-formed file and would publish `4 times today` as an exact reading of a day
+    it never saw the start of. So the day's record carries the fact: `{"floor": <bool>,
+    "n": {session: count}}`, and `floor` is STICKY for the rest of that day (it is read back
+    in and written back out). One shape consequence, deliberate: any file that is not this
+    shape — including the pre-flag flat map — is UNKNOWN HISTORY, so it resets AND raises the
+    flag rather than being adopted as a count. The file is day-stamped, so the cost is bounded
+    to one day's tally on the machine that upgrades mid-day.
+    The unwritable-meter path cannot persist anything BY DEFINITION; it returns the floor
+    verdict for its own call, and the next call re-reads whatever the file still says."""
     run_dir = os.environ.get("AGENT_WATCH_DIR") or "/tmp/agent-watch-run"
     path = os.path.join(run_dir, "babysit-%d-%s.json" % (os.getuid(), time.strftime("%Y%m%d")))
     soft = False
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            tally = json.load(fh)
-        if not isinstance(tally, dict):
-            tally, soft = {}, True
+            record = json.load(fh)
+        counts = record.get("n") if isinstance(record, dict) else None
+        if isinstance(counts, dict):
+            tally, soft = counts, bool(record.get("floor"))
+        else:
+            tally, soft = {}, True   # unknown shape = unknown history
     except FileNotFoundError:
         tally = {}
     except (ValueError, UnicodeDecodeError):
@@ -556,7 +571,7 @@ def _babysit_bump(session):
         os.makedirs(run_dir, exist_ok=True)
         tmp = "%s.%d.tmp" % (path, os.getpid())
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(tally, fh)
+            json.dump({"floor": soft, "n": tally}, fh)
         os.replace(tmp, path)   # one rename: a concurrent guard never reads a half-written map
     except Exception:
         return n, True
@@ -570,25 +585,58 @@ def _babysit_bump(session):
 # rounds on advisory findings, 2026-08/09). The budget must be stated at DISPATCH time, where
 # it is cheap; `--max-rounds` is the only thing the runtime enforces (SKILL §2), so a review
 # seat started without it has no ceiling anywhere.
-# SHAPE: command-position `agentctl start codex … --review` with no `--max-rounds` token.
-# The lane itself refuses `--review` with `--resume-thread`, so that pair is not judged twice
-# here. Judged on the segment VIEW as an exact TOKEN, so `--goal /tmp/--review.md` (a path that
-# merely contains the flag text) is not a review dispatch and `--max-rounds=2` is not the
-# lane's spelling of a budget — agentctl parses only `--max-rounds N`.
+# SHAPE: command-position `agentctl start codex … --review` with no `--max-rounds` IN OPTION
+# POSITION. The lane itself refuses `--review` with `--resume-thread`, so that pair is not
+# judged twice here.
+# OPTION ARITY IS LOAD-BEARING (cold review F1, three counter-probes): a flat membership test
+# over `view.split()` reads a valued option's ARGUMENT as if it were a flag, and that one root
+# cause faces both ways — `--goal '--review'` was DENIED (a legal dispatch, argv data promoted
+# to a flag) while `--goal '--max-rounds' --review` and `--goal '--resume-thread' --review`
+# PASSED (a real unbudgeted review loop bought its way out with a filename). So the scan
+# mirrors `agentctl start`'s own argv rules (agentctl:183-198): these six options consume the
+# NEXT token, which is therefore DATA and can never be a flag; every other token — the
+# valueless `--no-preflight` / `--require-preflight` / `--review`, any `--x=y` joined form, and
+# each unrecognized token the lane forwards as EXTRA — advances by one, exactly as its `*)` arm
+# does. `--max-rounds=2` still reads as no budget, which is correct: agentctl parses only the
+# separated spelling and would refuse the joined one (accept-documented false positive whose
+# fix line is the spelling the lane accepts).
+_START_VALUED = {"--goal", "--deliverable", "--workflow", "--max-rounds",
+                 "--resume-thread", "--model"}
 _SEG_REVIEW = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
                          + _AGENTCTL + r"\s+start\s+codex(?![\w-])")
+
+
+def _start_option_flags(rest):
+    """Options in OPTION POSITION for one `agentctl start …` tail (`rest` = the text after the
+    engine). The positionals are skipped by the CLI's own shape — `<session> <cwd>` come BEFORE
+    every flag, the property `_start_cwd` already relies on — and a valued option's argument is
+    skipped as the DATA it is, never inspected."""
+    toks = rest.split()
+    i = 0
+    while i < len(toks) and not toks[i].startswith("-"):
+        i += 1
+    flags = set()
+    while i < len(toks):
+        tok = toks[i]
+        if tok.startswith("-"):
+            flags.add(tok)
+            i += 2 if tok in _START_VALUED else 1
+            continue
+        i += 1   # a stray positional past the flags: not an option, judged by nobody
+    return flags
 
 
 def _review_without_budget(raw):
     """True when any command-position codex dispatch asks for a review seat with no budget."""
     for seg in _cmd_segments(raw):
         view = _pipe_view(seg)
-        if not _SEG_REVIEW.match(view):
+        head = _SEG_REVIEW.match(view)
+        if not head:
             continue
-        toks = view.split()
-        if "--review" not in toks or "--resume-thread" in toks:
+        flags = _start_option_flags(view[head.end():])
+        if "--review" not in flags or "--resume-thread" in flags:
             continue
-        if "--max-rounds" not in toks:
+        if "--max-rounds" not in flags:
             return True
     return False
 
@@ -1283,7 +1331,9 @@ def main():
             "WARN (cto-guard 16): 保姆轮 ≥%d — session '%s' re-hung %d times today "
             "(watch/steer). Read the INSTRUMENT before the next one (a 14 with all three "
             "progress sources blind is a gauge fault), or go to one long-interval wakeup.%s"
-            % (_R16_WARN_AT, sess, n16, "计数未落盘，读数是下限、不可判。" if degraded else "")
+            # the suffix covers BOTH floor causes — this bump could not be persisted, or the
+            # day's ledger was corrupt and the reset is remembered (`_babysit_bump`'s flag)
+            % (_R16_WARN_AT, sess, n16, "读数是下限、不可判（台账当日坏过或未落盘）。" if degraded else "")
         )
 
     reminder = ""

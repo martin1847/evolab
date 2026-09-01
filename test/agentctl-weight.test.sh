@@ -274,18 +274,32 @@ cd "$(dirname "$0")"
 # cto-guard-bash.py 1326→1472 (2026-09-01, 效率强制层: rules 16+17): +146, and the weight HAD to
 # land here for the same reason every other rule did — both are PreToolUse·Bash judgements and a
 # hook matcher has no second home. Neither grew a parse face: (17) reads `_cmd_segments` +
-# `_pipe_view` + the `_ENV_ASSIGN`/`_WRAPPER` head (14)/(15) already built, then compares whole
-# TOKENS; (16) reuses the same three and adds the only thing a counter cannot borrow — a
+# `_pipe_view` + the `_ENV_ASSIGN`/`_WRAPPER` head (14)/(15) already built; (16) reuses the same
+# three and adds the only thing a counter cannot borrow — a
 # day-stamped, uid-scoped tally file with its read/write failure taxonomy (silent on a meter that
 # cannot answer, floor-and-say-so on one that cannot persist), which is ~45 of the 146. The rest
 # is the two message bodies and the per-rule doctrine comments this file carries, including both
 # kill criteria (`g16-babysit-counter` / `g17-review-budget`) the retro GATE-AUDIT reads.
+# 1472→1522 (2026-09-01, F1/F2 cold-review fix round): +50, TWO findings, both correctness on
+# rules already shipped, no new rule and no new surface.
+# F1 (SHIP-BLOCKING) is +38: (17) judged flags by membership in `view.split()`, so a VALUED
+# option's ARGUMENT was read as a flag — one root cause facing both ways (`--goal '--review'`
+# DENIED a legal dispatch; `--goal '--max-rounds' --review` and the `--resume-thread` twin
+# bought their way out of the gate with a filename). The fix is `_start_option_flags`, which
+# mirrors `agentctl start`'s own argv arity (agentctl:183-198) — a six-name set and one token
+# walk, NOT a second parser: the segmentation, the view and the command-position head are still
+# the shared ones, and this walk starts from the head match's own end offset.
+# F2 is +12: the corrupt-ledger floor flag is now PERSISTED in the day's record
+# (`{"floor":…,"n":{…}}`), because the process that reset a corrupt tally knew the history was
+# gone and the next one did not — it published `4 times today` as an exact reading. Sticky for
+# the day, so any later process keeps admitting the floor; the doctrine for why an unrecognized
+# shape must reset AND raise the flag is most of those 12 lines.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1472
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1522
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

@@ -1200,6 +1200,39 @@ chk_eq "17 a dirty seat plus a missing budget is still denied" 2 "$RC"
 chk_contains "17 and the command-text defect answers first" "评审无预算" "$ERR"
 chk_not_contains "17 not 14's verdict" "播种未 seed commit" "$ERR"
 rm -f "$CLEANWT/loose.txt"
+# ── (17) OPTION ARITY (cold review F1, the reviewer's three probes as standing arms) ────────
+# A flat membership test over the token list read a VALUED option's argument as a flag, and the
+# one root cause faced both ways: a legal dispatch was DENIED and two unbudgeted review loops
+# bought their way out with a filename. The scan now mirrors `agentctl start`'s own argv rules
+# (agentctl:183-198). The seat is this suite's clean worktree rather than the probe's `/tmp`,
+# so the green arm cannot be flipped by a stray `/tmp/BLOCKED.md` on the machine.
+ARITY="bash references/agentctl/agentctl start codex rev $CLEANWT"
+run "$ARITY --goal '--review'"
+chk_eq "17-F1 a flag-shaped --goal VALUE is data, not a review dispatch (exit 0)" 0 "$RC"
+chk_eq "17-F1 and no DENY reaches stderr" "" "$ERR"
+run "$ARITY --goal '--max-rounds' --review"
+chk_eq "17-F1 a --max-rounds-shaped VALUE does not buy a budget" 2 "$RC"
+chk_contains "17-F1 and the review is denied for what it is" "评审无预算" "$ERR"
+run "$ARITY --goal '--resume-thread' --review"
+chk_eq "17-F1 a --resume-thread-shaped VALUE does not buy the resume exemption" 2 "$RC"
+chk_contains "17-F1 and that review is denied too" "评审无预算" "$ERR"
+# every other valued option consumes its argument the same way — one arm per remaining member
+# of the set, so a shrunken `_START_VALUED` cannot pass unnoticed
+for opt in --deliverable --workflow --model; do
+  run "$ARITY --goal /tmp/g.md $opt '--review'"
+  chk_eq "17-F1 $opt's VALUE is data too (exit 0)" 0 "$RC"
+done
+# PAIRED CONTROL: the same three flags in real OPTION position still decide
+run "$ARITY --goal /tmp/g.md --review"
+chk_eq "17-F1 control: --review in option position is still judged" 2 "$RC"
+run "$ARITY --goal /tmp/g.md --review --workflow review-loop --max-rounds 2"
+chk_eq "17-F1 control: --max-rounds in option position is still a budget" 0 "$RC"
+run "$ARITY --goal /tmp/g.md --review --resume-thread th_1"
+chk_eq "17-F1 control: --resume-thread in option position still exempts" 0 "$RC"
+# a budget BEFORE the review flag is the same budget (order is not a rule)
+run "$ARITY --workflow review-loop --max-rounds 2 --goal /tmp/g.md --review"
+chk_eq "17-F1 a budget declared before --review counts" 0 "$RC"
+
 
 # ── (16) babysit-round counter ─────────────────────────────────────────────────────────────
 # Re-hanging a watcher is LEGAL, so this can never be a DENY; the fourth re-hang of the same
@@ -1260,7 +1293,7 @@ chk_eq "16 and writes nothing to stderr" "" "$ERR"
 # says so, instead of publishing a floor as a measurement.
 if [ "$(id -u)" != "0" ]; then
   BS5="$G8ROOT/bs5"; mkdir -p "$BS5"
-  printf '{"g16d": 3}' > "$BS5/babysit-$(id -u)-$(date +%Y%m%d).json"
+  printf '{"floor": false, "n": {"g16d": 3}}' > "$BS5/babysit-$(id -u)-$(date +%Y%m%d).json"
   chmod 500 "$BS5"
   runbs "$BS5" 'agentctl watch g16d' 1
   chk_eq "16 an unpersistable bump is not a DENY" 0 "$RC"
@@ -1270,6 +1303,34 @@ if [ "$(id -u)" != "0" ]; then
 else
   echo "  [skip] running as root — the unwritable-run-dir case cannot be built"
 fi
+# ── (16) STICKY FLOOR (cold review F2, the reviewer's repro as a standing arm) ──────────────
+# A corrupt ledger loses the day's history. The process that resets it knew that; the NEXT
+# process read a well-formed file and published `4 times today` as an exact reading of a day
+# whose start it never saw. The day's record now carries the fact, so the admission survives
+# ACROSS PROCESSES — four separate guard invocations here, exactly as the field has them.
+BS6="$G8ROOT/bs6"; mkdir -p "$BS6"
+printf '{bad json' > "$BS6/babysit-$(id -u)-$(date +%Y%m%d).json"
+for i in 1 2 3 4; do
+  runbs "$BS6" 'agentctl watch g16corrupt' 1
+  chk_eq "16-F2 call $i on a corrupt ledger never crashes or denies" 0 "$RC"
+done
+chk_contains "16-F2 the threshold warn still arrives" "4 times today" "$(ctx "$OUT")"
+chk_contains "16-F2 and STILL admits the floor, three processes after the reset" "不可判" "$(ctx "$OUT")"
+chk_eq "16-F2 and nothing reaches stderr" "" "$ERR"
+# PAIRED CONTROL: a ledger that was never corrupt reports the SAME count with no floor wording,
+# so the admission is carried by the record and not stapled to every warn
+BS7="$G8ROOT/bs7"; mkdir -p "$BS7"
+for i in 1 2 3 4; do runbs "$BS7" 'agentctl watch g16clean' 1; done
+chk_contains "16-F2 control: a healthy ledger reaches the same count" "4 times today" "$(ctx "$OUT")"
+chk_not_contains "16-F2 control: and claims no floor" "不可判" "$(ctx "$OUT")"
+# the pre-flag FLAT shape is unknown history, not a count to adopt: it resets AND raises the flag
+BS8="$G8ROOT/bs8"; mkdir -p "$BS8"
+printf '{"g16flat": 3}' > "$BS8/babysit-$(id -u)-$(date +%Y%m%d).json"
+runbs "$BS8" 'agentctl watch g16flat' 1
+chk_eq "16-F2 a legacy flat ledger is not adopted as a count" "" "$OUT"
+for i in 2 3 4; do runbs "$BS8" 'agentctl watch g16flat' 1; done
+chk_contains "16-F2 it counts from zero" "4 times today" "$(ctx "$OUT")"
+chk_contains "16-F2 and says the history is unknown" "不可判" "$(ctx "$OUT")"
 
 
 summary

@@ -48,7 +48,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=12842   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=12860   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -121,7 +121,13 @@ BUDGET_GUARD_TOTAL=12842   # all injected text across the three guards (raised 7
                            #    not come from cutting elsewhere — it has to name the session,
                            #    the count, and the ONE alternative (read the gauge / go to a
                            #    long-interval wakeup), or it is a nag without a next action.
-BUDGET_GUARD_SINGLE=1172   # the longest single message a worker can be handed at once. Raised
+                           # Raised 12842→12860 on 2026-09-01 (F1/F2 fix round), ONE item, +18 B:
+                           #  rule (16)'s floor suffix now names BOTH causes. It said "计数未落盘"
+                           #  only, but the floor flag is persisted since F2, so the same suffix
+                           #  is now also printed by a process whose write SUCCEEDED — for a day
+                           #  whose ledger was corrupt earlier. A suffix that names one cause
+                           #  while the other is live reads as a wrong diagnosis, not a shorter one.
+BUDGET_GUARD_SINGLE=1190   # the longest single message a worker can be handed at once. Raised
                            # 754→893 on 2026-08-28: the worst case is now the (3)+(13)+(14)+(15)
                            # assembled response, i.e. every instrument in this dispatch failing
                            # at once, and it is +151 B — exactly (15)'s new warn, nothing else.
@@ -135,6 +141,8 @@ BUDGET_GUARD_SINGLE=1172   # the longest single message a worker can be handed a
                            # exactly that warn, nothing else. Reachable only when every dispatch
                            # instrument fails at once AND the same session is on its fourth
                            # re-hang today; the counter alone (its normal shape) is 279 B.
+                           # Raised 1172→1190 on 2026-09-01: +18 B, the same widened floor
+                           # suffix and nothing else — the assembly is unchanged.
 BUDGET_GUARD_COUNT=31      # sink count: a drop means extraction broke or a sink moved out of
                            # view. 21→23 on 2026-08-20: +1 real sink (rule 12) and +1 the meter
                            # had been blind to (see `resolve` below). 23→30 on 2026-08-28:
