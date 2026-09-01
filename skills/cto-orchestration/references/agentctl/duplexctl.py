@@ -3474,6 +3474,10 @@ def main() -> None:
                       help="this waiter's poll interval, seconds (pairs with "
                            "--lease-unchanged; without both, the read is one-shot and derives "
                            "no staleness from the lease at all)")
+    p_ws.add_argument("--follow", action="store_true",
+                      help="waiter-internal: report a `dead` supervisor under the following "
+                           "waiter's own code so its continuation decision reads an exit "
+                           "status, never the human line. Same printed verdict either way")
     p_ws.set_defaults(func=watchctl.cmd_watch_state)
 
     p_wl = sub.add_parser("watch-lease", help="renew the supervisor liveness lease (supervisor "
@@ -3532,6 +3536,16 @@ def main() -> None:
                                                       "exit 13 = nothing to adopt, go arm")
     p_armread.add_argument("session")
     p_armread.add_argument("--armed-seq", type=int, default=-1, dest="armed_seq")
+    # the two knobs of follow mode. `--followed` is the shell's only piece of follow state (how
+    # many re-arms it has already been told to make); the CEILING is read here, from the same
+    # env family as every other watch bound, so the POLICY never lives in bash.
+    p_armread.add_argument("--followed", type=int, default=0, dest="followed",
+                           help="re-arms this waiter has already made (follow mode)")
+    p_armread.add_argument("--follow-max", type=int, dest="follow_max",
+                           default=_knob("AGENT_WATCH_FOLLOW_MAX", "8"),
+                           help="ceiling on automatic re-arms after a NON-action verdict "
+                                "(7 WATCH-TIMEOUT, 12 SUPERVISOR-LOST with the supervisor "
+                                "provably dead); 0 = the single-round waiter")
     p_armread.set_defaults(func=watchctl.cmd_watch_arm_read)
 
     p_tomb = sub.add_parser("watch-tombstone", help="record an externally killed waiter")
@@ -3561,6 +3575,12 @@ def main() -> None:
     p_wait.add_argument("--poll", type=float, default=_knob("AGENT_WATCH_POLL_SECS", "15"))
     p_wait.add_argument("--max-polls", type=int, dest="max_polls",
                         default=_knob("AGENT_WATCH_MAX_POLLS", "240"))
+    p_wait.add_argument("--followed", type=int, default=0, dest="followed",
+                        help="re-arms this waiter has already made (follow mode)")
+    p_wait.add_argument("--follow-max", type=int, dest="follow_max",
+                        default=_knob("AGENT_WATCH_FOLLOW_MAX", "8"),
+                        help="ceiling on automatic re-arms after a NON-action verdict; "
+                             "0 = the single-round waiter")
     p_wait.set_defaults(func=watchctl.cmd_watch_wait)
 
     p_sense = sub.add_parser("sense-loop", help="THE sensing loop (supervisor pane, or the "

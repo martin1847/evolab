@@ -251,11 +251,31 @@ cd "$(dirname "$0")"
 # that consumed the round's conclusion, so the next watch re-derived it under a second
 # supervisor (CI M09 swSILENT expected[1] got[2]). The paired oracle is a test, not prose:
 # M01b in agentctl-supervised-watch.test.sh censuses processes after the TERM.
+# watchctl.py 1428→1508, duplexctl.py 3634→3654, agentctl 599→620 (2026-09-01, watch 默认 follow):
+# +80/+20 python and +21 bash. The bash growth is the one number to justify, and it is a LOOP,
+# not a decision: `cmd_watch` now re-arms while a waiter verb tells it to (two opaque internal
+# codes, exactly like the pre-existing 13) and re-captures the two arm-time snapshots per
+# episode. Every judgement stayed in python — whether a round's outcome ends the waiter, and the
+# ceiling on automatic re-arms (`--follow-max`, AGENT_WATCH_FOLLOW_MAX, read where every other
+# watch bound is read) — so C10's measured share moved 66→68/1000, still under its 76 ratchet.
+# The python weight is three named surfaces:
+#  * the follow decision (~35 lines incl. doctrine): `_follow_or_exit` + `_watch_mark` (the
+#    `EXIT=<n>` half of a verdict, now printable without dying on it) + the FOLLOW_* codes. The
+#    action/non-action split is the whole contract and it is stated ONCE, at one call site each
+#    in `cmd_watch_arm_read` and `cmd_watch_wait`.
+#  * round-rotation transparency (~15): `_round_now` + the test at the top of the wait loop. It
+#    is a second reader of the meta round on purpose — `_session_round` normalizes an absent
+#    meta to 0 for the PUBLISH fence, and a loop that read a vanished session as "round 0"
+#    would call SESSION-GONE a rotation.
+#  * `--follow` on the canonical read (~10 python, 4 of them argparse help): the `dead` liveness
+#    fact leaves as its own code so the continuation decision reads an exit status instead of
+#    sniffing the human line for the word the same function printed. The printed verdict, and
+#    every other caller's 12, are byte-identical — asserted in FL3.
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 3634
-skills/cto-orchestration/references/agentctl/watchctl.py 1428
+skills/cto-orchestration/references/agentctl/duplexctl.py 3654
+skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
-skills/cto-orchestration/references/agentctl/agentctl 599
+skills/cto-orchestration/references/agentctl/agentctl 620
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1326
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '

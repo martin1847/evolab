@@ -65,6 +65,27 @@ SUPERVISOR_EXITS = {EXIT_DONE, EXIT_FAILED, EXIT_WAITING_INPUT, EXIT_STALLED_EXT
                     EXIT_IDLE_NO_DELIVERABLE, EXIT_WATCH_TIMEOUT, EXIT_ENGINE_SILENT,
                     EXIT_STALLED_STREAM, EXIT_STALLED_PROGRESS}
 PROCEED_TO_ARM = 13                             # arm-mode only, never leaves the waiter
+# ── follow mode: the waiter's LIFETIME, never a verdict ──────────────────────────────
+# `agentctl watch` FOLLOWS its session by default. The waiter used to hand one round's verdict
+# back and exit, so every non-action outcome cost the orchestrator a manual re-arm — a purely
+# mechanical round, ~27 of them a day across two seats (2026-09-01). The codes below are how the
+# python side asks the driving shell to re-arm instead of exiting. Plumbing exactly like
+# PROCEED_TO_ARM: each one is either mapped back to a published class or consumed by that loop,
+# so none of them can reach a caller.
+FOLLOW_ROTATED = 16    # a steer opened the next round before any verdict was delivered: aim at
+                       # the new round. UNBOUNDED and unable to spin — producing one takes an
+                       # external steer, and the re-armed waiter follows the round it finds.
+FOLLOW_REARM = 17      # a NON-ACTION verdict was reported and this waiter re-arms; bounded by
+                       # AGENT_WATCH_FOLLOW_MAX, because an auto-continue with no ceiling is a
+                       # waiter that can wait forever without ever saying so.
+FOLLOW_DEAD = 18       # `--follow` readers only: SUPERVISOR-LOST whose liveness fact is `dead`
+                       # (lease intact and fenced to us, its pid gone). Every OTHER 12 is
+                       # `unknown` — retired, wedged, pid recycled, evidence unreadable — and
+                       # ends the waiter: only a supervisor that provably died may be
+                       # re-established without an operator looking at the session first.
+# The outcomes a re-arm is equivalent to what the seat did by hand. 14 STALLED-PROGRESS is
+# deliberately NOT one of them: a false 14 is a three-source blind spot to fix, not to outwait.
+FOLLOW_CONTINUES = (EXIT_WATCH_TIMEOUT, FOLLOW_DEAD)
 # A lease older than this is a wedged supervisor, not a live one. The window is derived, never
 # a bare constant: the supervisor renews the lease BEFORE it classifies, and one classify may
 # legitimately block for the WHOLE control-plane timeout the operator granted it
@@ -298,7 +319,12 @@ def watch_state(args: argparse.Namespace) -> int:
     `--lease-unchanged` + `--poll` are the polling waiter's own clock, and the ONLY input that
     can produce rule 3's wedge case: how many of ITS consecutive polls have seen an unmoved
     lease, and how far apart they are. Without them the read makes no staleness claim at all —
-    see `supervisor_liveness`."""
+    see `supervisor_liveness`.
+
+    `--follow` is the FOLLOWING waiter's flag and refines exactly one outcome: rule 3's `dead`
+    case leaves as FOLLOW_DEAD instead of 12, so the continuation decision reads an exit code
+    instead of sniffing the human line for a word it printed itself. The line, and every other
+    caller's 12, are byte-identical."""
     run, name = args.run_dir, args.session
     sess = Session(run, name)
     if not sess.meta:
@@ -339,7 +365,7 @@ def watch_state(args: argparse.Namespace) -> int:
           # a refusal the supervisor could not publish (stale attempt / round / a failed write)
           # must still reach the host: silence there is how a fenced-out watcher went dark.
           + last_words(run, name))
-    return EXIT_SUPERVISOR_LOST
+    return FOLLOW_DEAD if (args.follow and live == "dead") else EXIT_SUPERVISOR_LOST
 
 
 def last_words(run_dir: str, name: str) -> str:
@@ -568,18 +594,51 @@ def _stat_mtime(path: str) -> int | None:
 def _clock() -> str:
     return time.strftime("%H:%M:%S")
 
+def _watch_mark(rc: int) -> None:
+    """The machine-readable half of a verdict: `EXIT=<n>`. A FOLLOWING waiter prints it for a
+    round it reports without dying on, so that round's outcome reaches the stream in the shape
+    wrappers already parse — the LAST such line is still this process's own exit."""
+    print(f"EXIT={rc}")
+
 def _watch_exit(rc: int) -> int:
     """Every watch exit prints the verdict twice: the typed `=== … ===` line for humans and a
     final `EXIT=<n>` for pipes — a wrapper that swallows the process exit code can still parse
     the verdict off the last line."""
-    print(f"EXIT={rc}")
+    _watch_mark(rc)
     sys.exit(rc)
+
+def _follow_or_exit(name: str, rc: int, followed: int, follow_max: int) -> int:
+    """Mark the verdict this waiter just printed, then decide whether its life ends with it.
+
+    An ACTION verdict ends it: the seat is woken by the process exit, so swallowing one strands
+    an orchestrator blocked on an answer that is already on its stream. The two non-action
+    outcomes are the ones an operator answered by re-running the identical command, so the
+    waiter does that itself — bounded by `--follow-max` (AGENT_WATCH_FOLLOW_MAX), where 0
+    reproduces the single-round waiter exactly, verdict for verdict.
+
+    A followed 12 is still reported as 12: FOLLOW_DEAD refines the READ, not the vocabulary."""
+    reported = EXIT_SUPERVISOR_LOST if rc == FOLLOW_DEAD else rc
+    if rc not in FOLLOW_CONTINUES or followed >= follow_max:
+        return _watch_exit(reported)
+    _watch_mark(reported)
+    print(f"--- [{name}] following: re-arm {followed + 1}/{follow_max} after EXIT={reported} "
+          "— no action verdict for this round, so this waiter stays with the session ---")
+    return FOLLOW_REARM
 
 def _session_round(run_dir: str, name: str) -> str:
     """The round a conclusion computed NOW would be about. Empty normalizes to 0, the same
     default the writer uses, so a round-less legacy meta is not a permanent refusal."""
     return (identity._meta_read(os.path.join(run_dir, f"{name}.duplex.meta")).get("round")
             or "0")
+
+def _round_now(run_dir: str, name: str) -> str:
+    """The round a conclusion would be about, or "" when there is no meta to read at all: a
+    session whose control state vanished has not ROTATED, it is GONE, and saying that is the
+    canonical read's job (SESSION-GONE) — never a rotation claim made by a loop."""
+    path = os.path.join(run_dir, f"{name}.duplex.meta")
+    if not os.path.isfile(path):
+        return ""
+    return identity._meta_read(path).get("round") or "0"
 
 def _watch_pid_path(run_dir: str, name: str) -> str:
     return os.path.join(run_dir, f"{name}.duplex.watch.pid")
@@ -637,7 +696,7 @@ def super_note(run_dir: str, name: str, text: str) -> None:
 
 def _read_state(run_dir: str, name: str, arm: bool = False, armed_seq: int | None = None,
                 lease_unchanged: int | None = None, poll: float | None = None,
-                quiet: bool = False) -> tuple[int, str]:
+                quiet: bool = False, follow: bool = False) -> tuple[int, str]:
     """The waiter's canonical read, as its own process — see the watchdog note above.
 
     `--armed-seq` rides along whenever the caller captured one at arm time; the
@@ -650,6 +709,8 @@ def _read_state(run_dir: str, name: str, arm: bool = False, armed_seq: int | Non
         argv += ["--lease-unchanged", str(lease_unchanged), "--poll", str(poll)]
     if arm:
         argv.append("--arm")
+    if follow:
+        argv.append("--follow")
     if quiet:
         proc = subprocess.run([sys.executable, _CTL, "--run-dir", run_dir, *argv],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -772,7 +833,12 @@ def cmd_watch_arm(args: argparse.Namespace) -> int:
 def cmd_watch_arm_read(args: argparse.Namespace) -> int:
     """The arm-time read: a conclusion already on disk is this invocation's answer (that IS
     the recovery path a killed waiter takes), unless a previous waiter already delivered it.
-    PROCEED_TO_ARM means there is none and the caller goes on to establish the sensing loop."""
+    PROCEED_TO_ARM means there is none and the caller goes on to establish the sensing loop.
+
+    This read is also where a re-run after a WATCH-TIMEOUT lands, so it follows a non-action
+    verdict exactly as the polling loop does: report it, DELIVER it (an undelivered record is
+    the one the next arm read would replay), then re-arm. It never needs `--follow`: arm mode
+    answers off the record alone and never reaches supervisor liveness, so 12 cannot arise."""
     run, name = args.run_dir, args.session
     rc, msg = _read_state(run, name, arm=True, armed_seq=args.armed_seq)
     if rc == PROCEED_TO_ARM:
@@ -781,7 +847,7 @@ def cmd_watch_arm_read(args: argparse.Namespace) -> int:
         return PROCEED_TO_ARM
     print(f"=== [{name}] {msg} ===")
     deliver_conclusion(run, name, rc, args.armed_seq, None, None)
-    return _watch_exit(rc)
+    return _follow_or_exit(name, rc, args.followed, args.follow_max)
 
 def _lease_mark(run_dir: str, name: str) -> bytes:
     """The lease's current bytes — b"" when there is no readable lease. Every renewal bumps
@@ -801,14 +867,27 @@ def cmd_watch_wait(args: argparse.Namespace) -> int:
     This loop is also the waiter's OWN CLOCK and the only holder of stall authority in the
     lane: it counts consecutive polls over a byte-identical lease and hands that count to the
     canonical reader, which sizes the threshold from the supervisor's recorded budget. n
-    consecutive samples bound n-1 elapsed intervals, and the reader converts."""
+    consecutive samples bound n-1 elapsed intervals, and the reader converts.
+
+    The loop belongs to ONE round. A steer that opens the next one ends this episode with
+    FOLLOW_ROTATED, and that test comes BEFORE the read: every quantity this iteration would
+    produce — the lease sample, the wedge count, the watermark the read is fenced by — is about
+    the round that just closed, and a fresh arm is the thing that reads the new one. Nothing is
+    lost by re-arming, because the round fence already refuses the closed round's conclusion to
+    every reader in the lane."""
     run, name = args.run_dir, args.session
     poll, maxp = args.poll, args.max_polls
     cap = maxp * 2 + 24
     mark_seen, same = b"", 0
     graced = False
+    rnd = _round_now(run, name)
     i = 1
     while i <= cap:
+        now = _round_now(run, name)
+        if now and rnd and now != rnd:
+            print(f"--- [{name}] round rotated {rnd} → {now}: following the new round "
+                  "(this episode closed with no verdict to deliver) ---")
+            return FOLLOW_ROTATED
         mark = _lease_mark(run, name)
         if not mark:
             same = 0                            # no lease to have watched
@@ -817,8 +896,9 @@ def cmd_watch_wait(args: argparse.Namespace) -> int:
         else:
             same, mark_seen = 1, mark
         rc, msg = _read_state(run, name, armed_seq=args.armed_seq,
-                              lease_unchanged=same, poll=poll)
-        if rc == EXIT_SUPERVISOR_LOST and not graced and "supervisor's last words" not in msg:
+                              lease_unchanged=same, poll=poll, follow=True)
+        if rc in (EXIT_SUPERVISOR_LOST, FOLLOW_DEAD) and not graced \
+                and "supervisor's last words" not in msg:
             # retirement race: the killer writes the last-words note a beat AFTER the sensing
             # process dies, so a LOST read inside that gap would report a mysterious death
             # with no cause. ONE grace poll turns a mid-retirement read into the noted
@@ -831,7 +911,7 @@ def cmd_watch_wait(args: argparse.Namespace) -> int:
         if rc != EXIT_RUNNING:
             print(f"=== [{name}] {msg} ===")
             deliver_conclusion(run, name, rc, args.armed_seq, same, poll)
-            return _watch_exit(rc)
+            return _follow_or_exit(name, rc, args.followed, args.follow_max)
         if i % 12 == 0:
             print(f"[{name}] heartbeat iter {i} {_clock()} — {msg}")
         i += 1

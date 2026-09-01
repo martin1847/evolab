@@ -5,7 +5,7 @@
 #                   [--no-preflight] [--review] [engine args...]
 #   agentctl steer  <session> (-m TEXT | -f FILE) [--interrupt] [-d|--deliverable G]
 #   agentctl status <session>            # one-shot typed state (exit = verdict)
-#   agentctl watch  <session> [--inline]  # block until terminal; typed exits (vocabulary below)
+#   agentctl watch  <session> [--inline]  # follow until an ACTION verdict; typed exits (below)
 #   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
 #   agentctl states [--json]             # runtime-generated typed state vocabulary
@@ -391,6 +391,12 @@ watch_exit() { # $1 rc
   echo "EXIT=$1"; exit "$1"
 }
 
+# The waiter verbs' two internal continuation codes. Opaque numbers, exactly like the 13 below:
+# python decides whether a round's outcome ends the waiter, the shell only re-arms when told to
+# and counts how often it has (the CEILING is the verb's, from AGENT_WATCH_FOLLOW_MAX).
+FOLLOW_ROTATED=16   # a steer opened the next round: re-arm on it, and it costs no budget
+FOLLOW_REARM=17     # a reported non-action verdict: re-arm, one unit of the bounded budget
+
 # ── supervised watch ──────────────────────────────────────────────────────────────────
 # The host reaps orchestrator-side background tasks (field 2026-08-08: ≥6 kills in 40min), so
 # the sensing loop lives in tmux — the one place here the reaper does not reach — and
@@ -490,33 +496,48 @@ cmd_watch() {
   WPID="$DIR/$S.duplex.watch.pid"
   trap 'rm -f "$WPID"' EXIT
   trap 'on_sig TERM 143' TERM; trap 'on_sig INT 130' INT
-  # Poll cadence, the poll budget and the ENGINE-SILENT bound are AGENT_WATCH_* env knobs read
-  # by the loop verbs themselves — the shell forwards the environment, not a copy of the defaults.
-  # The two arm-time snapshots every later decision is fenced by, captured ONCE and passed down:
-  # the identity this watcher may publish under, and the delivery watermark for its episode.
-  # Opaque here — the shell forwards them, it never compares them.
-  ARMED_ID="$(ctl identity token "$S" 2>/dev/null)"
-  ARMED_SEQ="$(ctl identity watermark "$S" 2>/dev/null)"
-  [ -n "${ARMED_SEQ:-}" ] || ARMED_SEQ=0
-  ctl watch-arm "$S" --pid $$
-  [ "$MODE" = inline ] && { sense_inline "$S"; exit $?; }
-  # arm-time read: a conclusion on disk IS this invocation's answer. 13 = keep going; anything
-  # else is the verdict, already printed, and is forwarded untouched.
-  run_child watch-arm-read "$S" --armed-seq "$ARMED_SEQ"; rc=$?
-  [ "$rc" = 13 ] || exit "$rc"
-  sup_why="$(ensure_supervisor "$S")"; sup_rc=$?
-  if [ "$sup_rc" = 2 ]; then
-    # undecidable, NOT a licence to sense inline: the four-state machine's ④.
-    echo "=== [$S] SUPERVISOR-LOST: reason=unknown $sup_why ==="
-    watch_exit 12
-  fi
-  if [ "$sup_rc" != 0 ]; then
-    echo "NOTE: the tmux watch supervisor for '$S' is structurally impossible here — $sup_why. Falling back to the in-process --inline sensing loop: this watch is NOT kill-resilient (an external TERM loses this round's conclusion) and persists no non-DONE class." >&2
-    sense_inline "$S"; exit $?
-  fi
-  echo "[$S] supervised: sensing runs in tmux session $(supervisor_of "$S") (log $DIR/$S.watch.super.log); this waiter only reads the fenced terminal record"
-  run_child watch-wait "$S" --armed-seq "$ARMED_SEQ"
-  exit $?
+  # Poll cadence, the poll budget, the ENGINE-SILENT bound and the follow ceiling are AGENT_WATCH_*
+  # env knobs read by the loop verbs themselves — the shell forwards the environment, not a copy
+  # of the defaults.
+  # FOLLOW: one arm per EPISODE, and a session has as many episodes as it has rounds. The two
+  # arm-time snapshots every later decision is fenced by are therefore re-captured per episode,
+  # never carried across one: the identity this watcher may publish under, and the delivery
+  # watermark for the episode it is entering. Opaque here — the shell forwards them, it never
+  # compares them.
+  FOLLOWED=0
+  while : ; do
+    ARMED_ID="$(ctl identity token "$S" 2>/dev/null)"
+    ARMED_SEQ="$(ctl identity watermark "$S" 2>/dev/null)"
+    [ -n "${ARMED_SEQ:-}" ] || ARMED_SEQ=0
+    ctl watch-arm "$S" --pid $$
+    [ "$MODE" = inline ] && { sense_inline "$S"; exit $?; }
+    # arm-time read: a conclusion on disk IS this episode's answer. 13 = keep going; a follow
+    # code = it was reported and this waiter goes round again; anything else is the verdict,
+    # already printed, and is forwarded untouched.
+    run_child watch-arm-read "$S" --armed-seq "$ARMED_SEQ" --followed "$FOLLOWED"; rc=$?
+    case "$rc" in
+      13) ;;
+      "$FOLLOW_REARM") FOLLOWED=$((FOLLOWED + 1)); continue ;;
+      *) exit "$rc" ;;
+    esac
+    sup_why="$(ensure_supervisor "$S")"; sup_rc=$?
+    if [ "$sup_rc" = 2 ]; then
+      # undecidable, NOT a licence to sense inline: the four-state machine's ④.
+      echo "=== [$S] SUPERVISOR-LOST: reason=unknown $sup_why ==="
+      watch_exit 12
+    fi
+    if [ "$sup_rc" != 0 ]; then
+      echo "NOTE: the tmux watch supervisor for '$S' is structurally impossible here — $sup_why. Falling back to the in-process --inline sensing loop: this watch is NOT kill-resilient (an external TERM loses this round's conclusion) and persists no non-DONE class." >&2
+      sense_inline "$S"; exit $?
+    fi
+    echo "[$S] supervised: sensing runs in tmux session $(supervisor_of "$S") (log $DIR/$S.watch.super.log); this waiter only reads the fenced terminal record"
+    run_child watch-wait "$S" --armed-seq "$ARMED_SEQ" --followed "$FOLLOWED"; rc=$?
+    case "$rc" in
+      "$FOLLOW_ROTATED") ;;
+      "$FOLLOW_REARM") FOLLOWED=$((FOLLOWED + 1)) ;;
+      *) exit "$rc" ;;
+    esac
+  done
 }
 
 cmd_watch_daemon() { # INTERNAL — the sensing loop, launched by ensure_supervisor inside tmux
