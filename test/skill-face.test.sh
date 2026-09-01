@@ -119,7 +119,7 @@ EOF
 # UPDATING A ROW IS A GOVERNED ACT. Same commit, and the reason in the commit message.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
-skills/cto-orchestration/SKILL.md 126
+skills/cto-orchestration/SKILL.md 128
 skills/cto-orchestration/README.md 151
 skills/cto-orchestration/references/agentctl/README.md 225
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
@@ -133,7 +133,7 @@ skills/cto-orchestration/references/onboarding-checklist.md 20
 skills/cto-orchestration/references/ops-prompt-template.md 43
 skills/cto-orchestration/references/retrospective.md 81
 skills/cto-orchestration/references/review-brief-preamble.md 28
-skills/cto-orchestration/references/review-dispatch.md 206
+skills/cto-orchestration/references/review-dispatch.md 208
 skills/cto-orchestration/references/shock-in-the-loop.md 58
 skills/cto-orchestration/references/stocktake.md 25
 '

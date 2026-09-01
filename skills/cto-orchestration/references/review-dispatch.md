@@ -125,7 +125,9 @@ SKILL 主干是判据清单；这里是轴全枚举、ledger 栏目、达标线�
 ### 评审深度分档
 
 先按风险定评审深度：日常/低风险改动 → 轻量标准 review（brief 让评审者自算 `origin/<base>...HEAD` 差分 + 结构级只读，省 prompt，挡基本质量/回归；裸 `codex review` 子命令由 guard ⑩ 拦，一律走 lane）；高风险（鉴权/迁移/基建脚本/大重构）→ 走完整对抗循环。**深档清单命中优先；未命中时可回滚性与并发量级是定档输入**：可回滚 DEV 面 / 低并发 ToB 面 / dormant 代码 → 默认轻档 1 轮只修 blocker、major 进池，并发轴降为「单 session + 运行期补偿」；证据仪式按「能否抓产品缺陷」取舍（mutant 臂有脚本/用例即可，不写 hunk 文档）。
-**shipped 脚本小改走轻量单轮**：文案/常量/单函数收紧、
+**定档同时定轮形态**（下游席位 DEV 级 3 轮/2 轮 overhead 实证，owner 批）：非深档**恒一轮**——
+findings 编排位裁 fix / accept-documented，修复轮不自动回评审（编排位复现抽查闭合，规则本体
+SKILL §2）；深档保留 blocking 循环。**shipped 脚本小改走轻量单轮**：文案/常量/单函数收紧、
 匹配逻辑面未扩 → 单轮冷评审（--max-rounds 1）+ 机器可验修复即收，轮数耗尽转 owner 裁决；碰匹配
 逻辑/新增规则/生命周期 → 完整对抗循环。
 对抗循环**自起会话自控 prompt**（点名轴 + severity/verdict + 多轮收敛）；`codex review` 子命令由 guard ⑩ 拦。
