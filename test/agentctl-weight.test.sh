@@ -348,12 +348,27 @@ cd "$(dirname "$0")"
 # F5 (MAJOR, finding 5) is `_cd_lands_in`: the register carries repo ROOTS and the cd target is
 # resolved against them, because a NAME is not a LOCATION — `cd /somewhere/otherrepo/not-a-repo`
 # was announcing a repo the command was never in.
+# 1805→1846 (2026-09-01, R2 verify 残余 R2-1 的 R3 窄修): +41 = 14 comment + 2 blank + 25 code,
+# ONE finding, the F1 root cause one layer down — and the same fault class this batch exists to
+# remove. F1 anchored rule (8)'s interpreter at command position but still asked the question of
+# the RAW text, so a documentation heredoc that SHOWS a nested shell heredoc (`cat > brief.md
+# <<OUTER` / `bash <<INNER` / …) had its inner EXAMPLE read as a real interpreter feed. A
+# line-start `bash <<TAG` is the ordinary way a brief quotes a command; denying it is the
+# "heredoc body judged as commands" false positive again, one level in.
+# The 25 code lines are NOT a new parse face: the heredoc walk that was already here was split
+# into `_heredoc_scan` (structure: [(command-line, [(body, closer)])], body lines dropped BY
+# CONSTRUCTION) with `_strip_heredocs` now a 7-line projection of it — one walk, two consumers,
+# byte-identical string output. Detection then runs per command LINE of that structure, and only a
+# line that fires rescans the bodies THAT line opens. That last part fixed a SECOND false positive
+# of the same class for free (the old whole-text rescan convicted an innocent feed whenever any
+# document body mentioned git — 587651c denied it, probe rc=2 where 0 was owed), which is why the
+# arm asserting it is paired with the R2-1 repro.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1805
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1846
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

@@ -899,26 +899,35 @@ def main():
     # (`raw_hd` below), where a heredoc body is the DOCUMENT being written, not a list of steps —
     # field false positives n=2, both a brief/note whose prose put `git …` at line start or behind
     # a markdown table pipe, denied as an unanchored command inside a document (GATE-AUDIT false+2).
-    def _strip_heredocs(s, quoted_only):
+    # ONE walk, TWO consumers (review R2-1): the string view below, and the LINE STRUCTURE rule (8)'s
+    # interpreter face needs. A regex over the flat text cannot tell an outer document's body from
+    # real command text, so the structure has to be carried, not re-derived.
+    def _heredoc_scan(s, quoted_only):
+        """[(command-line, [(body, closer-line), …])] for every line that is real COMMAND text,
+        or None when the split cannot be trusted (unterminated / mixed delimiters).
+
+        BODY lines never appear as command lines: text inside a heredoc body is DATA. That is the
+        whole property — a body cannot be a command, and it cannot open an interpreter feed either.
+        """
         lines = s.splitlines(keepends=True)
         quo = r"(?P<quote>['\"])(?P<tag>[^'\"\r\n]+)(?P=quote)"
         opener = re.compile(r"<<(?P<tabs>-?)(?!<)[ \t]*(?:" + quo + r")" if quoted_only else
                             r"<<(?P<tabs>-?)(?!<)[ \t]*(?:" + quo + r"|(?P<bare>[^\s;|&<>]+))")
         any_op = re.compile(r"<<-?(?!<)[ \t]*(?:['\"][^'\"\r\n]+['\"]|[^\s;|&<>]+)")
-        out = []
+        recs = []
         i = 0
         while i < len(lines):
             line = lines[i]
-            out.append(line)
             hits = list(opener.finditer(line))
             # Mixed quoted/unquoted heredocs share one body stream; leave the whole command intact
             # rather than guessing which body belongs to which delimiter. With `quoted_only=False`
             # both patterns see the same openers, so this can only fire on the quoted pass.
             if not hits or len(hits) != len(any_op.findall(line)):
+                recs.append((line, []))
                 i += 1
                 continue
             cursor = i + 1
-            rendered = []
+            pairs = []
             for match in hits:
                 tag = match.group("tag") or match.groupdict().get("bare")
                 strip_tabs = match.group("tabs") == "-"
@@ -930,11 +939,22 @@ def main():
                         end = j
                         break
                 if end is None:
-                    return s  # unterminated/ambiguous: scan conservatively, strip nothing
-                rendered.extend(("<<<HEREDOC-BODY-STRIPPED>>>\n", lines[end]))
+                    return None  # unterminated/ambiguous: the caller falls back, conservatively
+                pairs.append(("".join(lines[cursor:end]), lines[end]))
                 cursor = end + 1
-            out.extend(rendered)
+            recs.append((line, pairs))
             i = cursor
+        return recs
+
+    def _strip_heredocs(s, quoted_only):
+        recs = _heredoc_scan(s, quoted_only)
+        if recs is None:
+            return s  # unterminated/ambiguous: scan conservatively, strip nothing
+        out = []
+        for line, pairs in recs:
+            out.append(line)
+            for _, closer in pairs:
+                out.extend(("<<<HEREDOC-BODY-STRIPPED>>>\n", closer))
         return "".join(out)
     raw = _strip_heredocs(raw, True)
     # rules (8)/(18)/(19) read this face. Built from the ORIGINAL command and never from `raw`:
@@ -1205,24 +1225,45 @@ def main():
                     bad8 = True
                     break
         # A heredoc / pipe INTO a shell runs its body as script, so THERE the body is not document
-        # text and must be judged — on `orig8`, whose bodies are intact. Two review findings live
-        # in this one pattern, and both are the same root cause (it was not built at command
-        # position with the shared wrapper face):
+        # text and must be judged. Three review findings live in this one branch, all the same root
+        # cause — the interpreter face was not asking the question on the right SURFACE:
         #  * finding 1, an under-fire regression: the pipe RHS admitted only a BARE interpreter, so
         #    `cat <<EOF | env sh -` (same class: `command sh`, `/usr/bin/env bash`) went silent at
         #    exit 0 while the shell really ran the body — baseline denied that payload.
-        #  * finding 4, the mirror false positive: with no command-position anchor, the FILENAME in
-        #    `cat > /tmp/bash <<EOF` read as an interpreter and the document body was re-scanned.
-        # `_WRAP8` is the wrapper chain rules (8)/(11) already share; the separator class carries
-        # `\n` because a second line is a new command, exactly as `cmd8` treats it.
-        _pos8 = (r"(?:^|[;|&(\n]\s*)(?:\w+=\S*\s+)*" + _WRAP8 + r"(?:\S*/)?(?:bash|sh|zsh)\b")
-        if not bad8 and not _cd_anchor(v8h) and (
-                # (i) the interpreter's OWN segment carries the heredoc redirect
-                re.search(_pos8 + r"[^|;&\n]*<<", orig8)
-                # (ii) the interpreter sits on a pipe's RHS: its stdin IS the script
-                or re.search(r"\|\s*(?:\w+=\S*\s+)*" + _WRAP8 + r"(?:\S*/)?(?:bash|sh|zsh)\b",
-                             orig8)):
-            bad8 = bool(re.search(r"\bgit\b|\bgh\b", orig8))
+        #  * finding 4: with no command-position anchor, the FILENAME in `cat > /tmp/bash <<EOF`
+        #    read as an interpreter and a document body was re-scanned.
+        #  * R2-1: with detection on the RAW text, a documentation heredoc that SHOWS a nested
+        #    shell heredoc (`cat > brief.md <<OUTER` / `bash <<INNER` / `git status` / …) had its
+        #    inner example read as a real feed. The shell there runs `cat` and nothing else; the
+        #    inner `bash` is bytes being written to a file. That is precisely the false-positive
+        #    class this batch exists to remove, so it is not an acceptable residual.
+        # THE PROPERTY, which the two earlier cuts both lacked: text inside ANY heredoc body is
+        # DATA and can never open an interpreter feed. So detection runs per COMMAND LINE of the
+        # stripped structure (`_heredoc_scan` drops body lines by construction), and only a line
+        # that fires makes us look at the bodies THAT line opens — read from the original text,
+        # because that is where a real feed's script still lives.
+        # `_WRAP8` is the wrapper chain rules (8)/(11) already share; `^` is command position
+        # within a line, exactly as a newline is a `;` everywhere else in this rule.
+        _fed8 = (r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _WRAP8
+                 + r"(?:\S*/)?(?:bash|sh|zsh)\b[^|;&\n]*<<")
+        _piped8 = (r"\|\s*(?:\w+=\S*\s+)*" + _WRAP8 + r"(?:\S*/)?(?:bash|sh|zsh)\b")
+        if not bad8 and not _cd_anchor(v8h):
+            recs8 = _heredoc_scan(ti["command"], False)
+            if recs8 is None:
+                # the split is untrustworthy (unterminated heredoc), so neither is any claim about
+                # which text is a body: fall back to the whole original, the conservative face
+                if re.search(_fed8, orig8) or re.search(_piped8, orig8):
+                    bad8 = bool(re.search(r"\bgit\b|\bgh\b", orig8))
+            else:
+                for line8, pairs8 in recs8:
+                    if not (re.search(_fed8, line8) or re.search(_piped8, line8)):
+                        continue
+                    # the script this feed actually runs: the bodies this line opens, plus the line
+                    # itself (`printf 'git status' | bash` carries its script in argv, no heredoc)
+                    fed = line8 + "".join(b for b, _ in pairs8)
+                    if re.search(r"\bgit\b|\bgh\b", fed):
+                        bad8 = True
+                        break
         if bad8:
             sys.stderr.write(
                 "DENY: unanchored git/gh in a multi-repo umbrella — shell cwd drifts across tool "

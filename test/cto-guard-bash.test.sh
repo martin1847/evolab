@@ -1433,6 +1433,29 @@ chk_eq "8-F1 a redirect TARGET named bash is not an interpreter" 0 "$RC"
 chk_eq "8-F1 and that document is silent" "" "$ERR"
 run "$(printf 'cat > /tmp/sh <<EOF\ngit rebase --continue\nEOF')"
 chk_eq "8-F1 same for a file named sh, body carrying a git verb" 0 "$RC"
+# ── REVIEW R2-1 (residual SHIP-BLOCKING found in the R2 verify of the F1 fix): detection itself
+# had to move onto the heredoc-STRIPPED structure. F1 anchored the interpreter at command
+# position, but still asked the question of the RAW text — so a documentation heredoc that SHOWS a
+# nested shell heredoc had its inner example read as a real feed. A line-start `bash <<TAG` is the
+# ordinary way a brief quotes a command, and denying it is the very false-positive class this
+# batch exists to remove. Text inside ANY heredoc body is DATA: it cannot open a feed.
+run "$(printf 'cat > /tmp/brief.md <<OUTER\nbash <<INNER\ngit status\nINNER\nOUTER')"
+chk_eq "8-R2-1 a nested shell-heredoc EXAMPLE inside a document is data" 0 "$RC"
+chk_eq "8-R2-1 and the document is silent" "" "$ERR"
+run "$(printf "cat > /tmp/brief.md <<'OUTER'\nbash <<INNER\ngit status\nINNER\nOUTER")"
+chk_eq "8-R2-1 quoted outer delimiter, same verdict" 0 "$RC"
+run "$(printf 'cat > /tmp/brief.md <<OUTER\nprintf %%s | sh\ngit status\nOUTER')"
+chk_eq "8-R2-1 a pipe-to-shell EXAMPLE in a document is data too" 0 "$RC"
+# ATTRIBUTION: the rescan now reads the body THAT LINE feeds, not "any git anywhere in the text".
+# Same class, second false positive — 587651c denied this payload (probe rc=2 where 0 is owed).
+run "$(printf 'cat > /tmp/a.md <<A\ngit log --oneline\nA\nbash <<B\necho hello\nB')"
+chk_eq "8-R2-1 git in a DOCUMENT body does not convict an innocent feed" 0 "$RC"
+run "$(printf 'cat > /tmp/a.md <<A\nhello\nA\nbash <<B\ngit status\nB')"
+chk_eq "8-R2-1 …and git in the FED body still denies" 2 "$RC"
+chk_contains "8-R2-1 with rule (8)'s message" "cwd 锚定" "$ERR"
+# a real feed whose script carries no git/gh is nobody's business
+run "$(printf 'bash <<EOF\necho hello\nEOF')"
+chk_eq "8-R2-1 a git-free fed body is silent" 0 "$RC"
 GUARD_CWD="$ISO_REPO"
 
 
