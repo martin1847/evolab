@@ -294,12 +294,22 @@ cd "$(dirname "$0")"
 # gone and the next one did not — it published `4 times today` as an exact reading. Sticky for
 # the day, so any later process keeps admitting the floor; the doctrine for why an unrecognized
 # shape must reset AND raise the flag is most of those 12 lines.
+# 1522→1544 (2026-09-01, R2 verify residual): +22, ONE finding, the F1 root cause one layer
+# down — `_pipe_view` strips backslashes, so the single argv word `--goal x\ --max-rounds\ y`
+# reached the arity walk as three and the `--max-rounds` inside the VALUE was promoted to a
+# budget flag (the quoted spelling of the same value was already correct, which is what made
+# the two spellings disagree about one word). `_arity_view` is 3 lines of code: `_pipe_view`
+# applied to a segment whose escaped whitespace has been parked into a sentinel, the same trick
+# `_ESCAPED` already plays for escaped separators — no new parse face, and rule (17) is the only
+# consumer, so no other rule's view moves. The other ~19 lines are the doctrine this file
+# carries per counter-probe, most of it the BACKSLASH PARITY argument: only an odd run escapes
+# the space, so `x\\ --max-rounds 2` must keep its real option pair.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1522
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1544
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

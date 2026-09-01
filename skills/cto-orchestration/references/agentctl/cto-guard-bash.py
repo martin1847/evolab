@@ -600,6 +600,28 @@ def _babysit_bump(session):
 # does. `--max-rounds=2` still reads as no budget, which is correct: agentctl parses only the
 # separated spelling and would refuse the joined one (accept-documented false positive whose
 # fix line is the spelling the lane accepts).
+# WORD BOUNDARIES ARE PART OF THE ARITY (R2 verify, the same root cause one layer down): the
+# shared `_pipe_view` strips backslashes, so `--goal x\ --max-rounds\ y` — ONE argv word to the
+# shell — arrived at the walk as three, and the `--max-rounds` buried inside the value was
+# promoted to a budget flag (the quoted spelling of the same value was already correct: the
+# view blanks it to `ARG`). An arity walk that splits differently than the shell does is not
+# reading argv. So rule (17) — and ONLY rule (17), no other rule's view moves — scans a view
+# where an escaped space/tab is PARKED into a sentinel instead of being unescaped into a
+# separator, exactly the trick `_ESCAPED` already plays for escaped shell separators.
+# PARITY, load-bearing for the same reason rule 8's line-continuation fold needed it: only an
+# ODD run of backslashes escapes the whitespace. `x\\ --max-rounds 2` is the word `x\` followed
+# by a REAL separator and a REAL option, so the pattern anchors on a non-backslash (or string
+# start), keeps whole `\\` pairs, and consumes only the final lone backslash plus its space.
+# The sentinel is inert to `str.split()` and can never equal an option name, so a value that
+# contains one is data all the way through.
+_ESC_WS = "\x15"
+
+
+def _arity_view(seg):
+    """`_pipe_view` of one segment with escaped whitespace held INSIDE its word."""
+    return _pipe_view(re.sub(r"(^|[^\\])((?:\\\\)*)\\([ \t])", r"\g<1>\g<2>" + _ESC_WS, seg))
+
+
 _START_VALUED = {"--goal", "--deliverable", "--workflow", "--max-rounds",
                  "--resume-thread", "--model"}
 _SEG_REVIEW = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
@@ -629,7 +651,7 @@ def _start_option_flags(rest):
 def _review_without_budget(raw):
     """True when any command-position codex dispatch asks for a review seat with no budget."""
     for seg in _cmd_segments(raw):
-        view = _pipe_view(seg)
+        view = _arity_view(seg)
         head = _SEG_REVIEW.match(view)
         if not head:
             continue

@@ -1232,6 +1232,31 @@ chk_eq "17-F1 control: --resume-thread in option position still exempts" 0 "$RC"
 # a budget BEFORE the review flag is the same budget (order is not a rule)
 run "$ARITY --workflow review-loop --max-rounds 2 --goal /tmp/g.md --review"
 chk_eq "17-F1 a budget declared before --review counts" 0 "$RC"
+# ── (17) WORD BOUNDARIES (R2 verify residual, the reviewer's command as a standing arm) ─────
+# The shared `_pipe_view` strips backslashes, so ONE argv word — `--goal x\ --max-rounds\ y` —
+# reached the arity walk as three, and the `--max-rounds` buried in the VALUE was promoted to a
+# budget flag. The quoted spelling of the same value was already correct (blanked to ARG), which
+# is exactly what made this the same finding one layer down: two spellings of one argv word must
+# get one verdict. Rule (17) now parks escaped whitespace inside its word (`_arity_view`).
+run "$ARITY"' --goal x\ --max-rounds\ y --review'
+chk_eq "17-R2 a --max-rounds inside an ESCAPED-space value is not a budget" 2 "$RC"
+chk_contains "17-R2 and the review is denied" "评审无预算" "$ERR"
+run "$ARITY"' --goal x\ --resume-thread\ y --review'
+chk_eq "17-R2 the --resume-thread twin does not exempt either" 2 "$RC"
+# the two spellings of the same argv word now agree
+run "$ARITY --goal 'x --max-rounds y' --review"
+chk_eq "17-R2 control: the QUOTED spelling of that value was, and stays, denied" 2 "$RC"
+# PAIRED GREEN: parking must not eat a real budget, nor a value that merely has a space in it
+run "$ARITY"' --goal /tmp/my\ brief.md --review --workflow review-loop --max-rounds 2'
+chk_eq "17-R2 an escaped space in a real path keeps a real budget legal" 0 "$RC"
+chk_eq "17-R2 and emits no DENY" "" "$ERR"
+# PARITY: only an ODD run of backslashes escapes the space. `x\\` is the word `x\` followed by a
+# REAL separator, so `--max-rounds 2` here IS an option pair — a blanket park would have glued
+# it into the value and denied a budgeted dispatch.
+run "$ARITY"' --goal x\\ --max-rounds 2 --review'
+chk_eq "17-R2 a literal-backslash word does not swallow the option behind it" 0 "$RC"
+chk_eq "17-R2 and that dispatch is silent" "" "$ERR"
+
 
 
 # ── (16) babysit-round counter ─────────────────────────────────────────────────────────────
