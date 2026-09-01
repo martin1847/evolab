@@ -18,6 +18,10 @@
 #       gate reds on the orchestrator's uncommitted seed and STOPs before working [DENY]
 #  (15) same dispatch with a surviving `<cwd>/BLOCKED.md` -> the new seat inherits a gate held
 #       by its predecessor and has nowhere to write its own [DENY]
+#  (18) `git commit --amend` / `cherry-pick` / `rebase` sharing one command with another step ->
+#       a half-way rewrite leaves a state the command text cannot explain; one step per call [DENY]
+#  (19) a command that `cd`s into repo A and then names repo B by RELATIVE path -> the batch runs
+#       the wrong repo's suite (or 127s) while its `echo PASS` tail claims a gate [ALLOW + WARN]
 # Deny/checker error = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
@@ -663,6 +667,170 @@ def _review_without_budget(raw):
     return False
 
 
+# ── rule (18): a history rewrite is its own step (DENY) ───────────────────────────────────
+# KILL CRITERION (slug `g18-rewrite-single-step`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill.
+# FIELD (downstream seats, n=2, ~30 min recovery each): `git commit --amend` / `cherry-pick` /
+# `rebase` welded into a compound chain. Shell chains are LEFT-ASSOCIATIVE, so in `a && b || c &&
+# d` the `||` arm binds the whole left chain and NOT the step that failed: a rewrite that dies
+# half-way leaves index + worktree in a state whose owner cannot be read off the command text
+# (which step ran? which one is being retried?), and recovery is a reflog walk. These three verbs
+# are the only git commands that rewrite ALREADY-COMMITTED history in place, i.e. the only ones
+# whose half-done state cannot be re-derived by re-reading the command.
+# SHAPE: a command-position rewrite invocation in a command holding >=2 command-position steps.
+# `&&`, `||`, `;` and multi-segment pipelines all count — the hazard is "more than one step in one
+# tool call", not any particular operator.
+# EXEMPTION, load-bearing: ONE leading `cd /abs &&` is rule (8)'s PRESCRIBED anchoring idiom, and
+# env assignments live INSIDE the segment they prefix. Denying `cd /abs && git rebase --continue`
+# would put this rule in a fight with rule (8), whose own fix line hands out that exact spelling.
+# Exactly one anchor is discounted (`cd /abs && git rebase && git push` is still two steps) and
+# the `&&` is required — after a `;` the cd may have failed, rule (8)'s ruling and the same reason.
+# `--continue` / `--abort` / `--skip` are judged identically: resuming IS the half-way state both
+# field cases died in.
+# ACCEPTED FALSE POSITIVE, stated with its recovery: `git rebase --continue; echo rc=$?` is
+# denied. The doctrine's answer is the deny message's own — the tool already reports rc for a
+# single command, so run the rewrite alone and read it there; rule (12)'s file-first shape exists
+# for commands whose verdict a PIPELINE would swallow, which is not this one.
+# COMMAND POSITION, on `_cmd_segments` + the shared `_pipe_view`: a rewrite verb inside a quoted
+# string, a comment or a heredoc BODY is document text and not a step — the caller passes the
+# heredoc-stripped view for exactly that reason.
+_R18_VERBS = {"rebase", "cherry-pick"}
+# git's valued GLOBAL options: each consumes the NEXT token, which is therefore DATA and can never
+# be the subcommand (`git -c alias.x=rebase status` is not a rebase). Same arity discipline rule
+# (17) had to learn, applied to git's own argv.
+_GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+               "--config-env", "--super-prefix"}
+# `git commit`'s valued options: a MESSAGE that happens to read `--amend` is argv data, not a flag.
+_COMMIT_VALUED = {"-m", "--message", "-F", "--file", "--author", "--date", "-C",
+                  "--reuse-message", "-c", "--reedit-message", "--fixup", "--squash",
+                  "--cleanup", "-t", "--template", "--trailer", "--pathspec-from-file",
+                  "-S", "--gpg-sign", "-u", "--untracked-files"}
+_SEG_GIT = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
+                      + r"(?:\S*/)?git(?![\w-])(?P<rest>.*)$", re.S)
+_R18_ANCHOR = re.compile(r"\s*(?:" + _ENV_ASSIGN + r"\s+)*cd\s+/[^\s;|&]*\s*&&")
+
+
+def _git_argv(rest):
+    """(subcommand, tokens after it) for one `git …` tail; (None, []) when there is no subcommand
+    (`git --version`). Valued global options are skipped WITH their value."""
+    toks, i = rest.split(), 0
+    while i < len(toks):
+        t = toks[i]
+        if not t.startswith("-"):
+            return t, toks[i + 1:]
+        i += 2 if (t in _GIT_VALUED and "=" not in t) else 1
+    return None, []
+
+
+def _rewrites_history(view):
+    """True when this command-position segment view is an in-place history rewrite."""
+    head = _SEG_GIT.match(view)
+    if not head:
+        return False
+    sub, rest = _git_argv(head.group("rest"))
+    if sub in _R18_VERBS:
+        return True
+    if sub != "commit":
+        return False
+    i = 0
+    while i < len(rest):          # `--amend` must sit in OPTION position, not in a message
+        t = rest[i]
+        if t == "--amend":
+            return True
+        if not t.startswith("-"):
+            return False
+        i += 2 if (t in _COMMIT_VALUED and "=" not in t) else 1
+    return False
+
+
+def _rewrite_in_chain(raw):
+    """True when a history rewrite shares one tool call with another step."""
+    view = _pipe_view(raw)
+    anchor = _R18_ANCHOR.match(view)
+    if anchor:
+        view = view[anchor.end():]
+    steps = [s for s in _cmd_segments(view) if s.strip()]
+    return len(steps) > 1 and any(_rewrites_history(s) for s in steps)
+
+
+# ── rule (19): a verification batch that drifts across repos (WARN, never DENY) ────────────
+# KILL CRITERION (slug `g19-cwd-drift`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill.
+# FIELD (downstream verification batches, n=4): the command `cd`s into repo A and then names a
+# path RELATIVE to repo B (`cd /umb/a && bash b/test/run.sh && echo PASS`). Two ways it lies: the
+# path misses and the runner 127s, or — worse — the same relative path EXISTS in repo A, so the
+# batch runs the wrong repo's suite and its `echo PASS` tail reports a gate that never ran.
+# WARN ONLY, by owner ruling for this batch: one cwd per command is a discipline, and a relative
+# path naming another repo is legal shell (a monorepo-style invocation from the umbrella root is
+# the same text). False-positive rate decides whether this ever becomes a DENY.
+# REGISTER: the mechanically available face only — the umbrella root's immediate children that
+# carry a `.git` (which is also where `git worktree list`'s roots land: a worktree umbrella's
+# children each carry a `.git` FILE). No subprocess, one `listdir`. A gauge that cannot list is
+# SILENT — never a guess, same contract as rules (14)/(15)/(16).
+# BOUNDARY: `here` is only set by a `cd` whose target names a registered repo, and a later `cd`
+# elsewhere CLEARS it — the premise of this rule is "you told me which repo you are in".
+def _umbrella_near(path):
+    """The umbrella ROOT at or within 5 ancestors of `path` (>=2 immediate children with .git),
+    or None. Rule (8)'s scope gate; rule (19)'s repo register reads the same root."""
+    try:
+        p = os.path.realpath(path)
+    except Exception:
+        return None
+    for _ in range(6):  # cwd + 5 ancestors (range(5) undershot the documented contract)
+        try:
+            kids = os.listdir(p)
+        except OSError:
+            return None
+        n = 0
+        for k in kids:
+            if os.path.exists(os.path.join(p, k, ".git")):
+                n += 1
+                if n >= 2:
+                    return p
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+    return None
+
+
+def _registered_repos(cwd):
+    """Directory NAMES of the umbrella's immediate git children, or an empty set when the
+    register cannot be measured (both cases read the same to the caller: silence)."""
+    root = _umbrella_near(cwd)
+    if root is None:
+        return set()
+    try:
+        kids = os.listdir(root)
+    except OSError:
+        return set()
+    return {k for k in kids if os.path.exists(os.path.join(root, k, ".git"))}
+
+
+_R19_CD = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*cd\s+(?P<path>[^\s;|&]+)")
+_R19_REL = re.compile(r"(?:\./)?(?P<head>[^/\s]+)/")
+
+
+def _cwd_drift(raw, names):
+    """(repo you cd'd into, offending token) for the first relative path naming a DIFFERENT
+    registered repo after such a cd, or (None, None)."""
+    here = None
+    for seg in _cmd_segments(_pipe_view(raw)):
+        cd = _R19_CD.match(seg)
+        if cd:
+            here = None
+            for comp in reversed(cd.group("path").split("/")):
+                if comp in names:
+                    here = comp
+                    break
+            continue
+        if here is None:
+            continue
+        for tok in seg.split():
+            rel = _R19_REL.match(tok)
+            if rel and rel.group("head") in names and rel.group("head") != here:
+                return here, tok
+    return None, None
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -686,28 +854,36 @@ def main():
     if "run_in_background" in ti and not isinstance(ti["run_in_background"], bool):
         return checker_error("tool_input.run_in_background must be boolean.")
     raw = ti["command"]
-    # Only a QUOTED heredoc delimiter disables expansion, so only those bodies are data-safe to
-    # ignore. Unquoted `<<EOF` bodies may execute command substitutions and must remain visible to
-    # every guard rule. Preserve opener/closer lines so commands after the heredoc are still scanned.
-    def _strip_quoted_heredocs(s: str) -> str:
+    # Only a QUOTED heredoc delimiter disables expansion, so only those bodies are data-safe for
+    # EVERY rule to ignore. Unquoted `<<EOF` bodies may execute command substitutions and must stay
+    # visible to the general views. Opener/closer lines survive so commands after the heredoc are
+    # still scanned.
+    # `quoted_only=False` strips EVERY body. That view belongs to rules (8)/(18)/(19) ONLY
+    # (`raw_hd` below), where a heredoc body is the DOCUMENT being written, not a list of steps —
+    # field false positives n=2, both a brief/note whose prose put `git …` at line start or behind
+    # a markdown table pipe, denied as an unanchored command inside a document (GATE-AUDIT false+2).
+    def _strip_heredocs(s, quoted_only):
         lines = s.splitlines(keepends=True)
-        opener = re.compile(r"<<(?P<tabs>-?)(?!<)[ \t]*(?P<quote>['\"])(?P<tag>[^'\"\r\n]+)(?P=quote)")
+        quo = r"(?P<quote>['\"])(?P<tag>[^'\"\r\n]+)(?P=quote)"
+        opener = re.compile(r"<<(?P<tabs>-?)(?!<)[ \t]*(?:" + quo + r")" if quoted_only else
+                            r"<<(?P<tabs>-?)(?!<)[ \t]*(?:" + quo + r"|(?P<bare>[^\s;|&<>]+))")
         any_op = re.compile(r"<<-?(?!<)[ \t]*(?:['\"][^'\"\r\n]+['\"]|[^\s;|&<>]+)")
         out = []
         i = 0
         while i < len(lines):
             line = lines[i]
             out.append(line)
-            quoted = list(opener.finditer(line))
+            hits = list(opener.finditer(line))
             # Mixed quoted/unquoted heredocs share one body stream; leave the whole command intact
-            # rather than guessing which body belongs to which delimiter.
-            if not quoted or len(quoted) != len(any_op.findall(line)):
+            # rather than guessing which body belongs to which delimiter. With `quoted_only=False`
+            # both patterns see the same openers, so this can only fire on the quoted pass.
+            if not hits or len(hits) != len(any_op.findall(line)):
                 i += 1
                 continue
             cursor = i + 1
             rendered = []
-            for match in quoted:
-                tag = match.group("tag")
+            for match in hits:
+                tag = match.group("tag") or match.groupdict().get("bare")
                 strip_tabs = match.group("tabs") == "-"
                 end = None
                 for j in range(cursor, len(lines)):
@@ -723,7 +899,11 @@ def main():
             out.extend(rendered)
             i = cursor
         return "".join(out)
-    raw = _strip_quoted_heredocs(raw)
+    raw = _strip_heredocs(raw, True)
+    # rules (8)/(18)/(19) read this face. Built from the ORIGINAL command and never from `raw`:
+    # the marker line above itself contains `<<`, so a second pass over an already-stripped text
+    # would read the marker as an unterminated opener and bail (stripping nothing).
+    raw_hd = _strip_heredocs(ti["command"], False)
     cmd = raw.replace("\n", " ")
     if not cmd:
         return 0
@@ -844,28 +1024,8 @@ def main():
     #     in a row (the agent acknowledges the deny then re-emits the same text verbatim).
     #     Scope gate: only fires when the REAL cwd (symlinks resolved — a symlinked cwd hid the
     #     umbrella, review probe 2026-07-26) or an ancestor within 5 levels is an umbrella root
-    #     (>=2 immediate children with .git); single-repo projects never see it.
-    def _umbrella_near(path):
-        try:
-            p = os.path.realpath(path)
-        except Exception:
-            return False
-        for _ in range(6):  # cwd + 5 ancestors (range(5) undershot the documented contract)
-            try:
-                kids = os.listdir(p)
-            except OSError:
-                return False
-            n = 0
-            for k in kids:
-                if os.path.exists(os.path.join(p, k, ".git")):
-                    n += 1
-                    if n >= 2:
-                        return True
-            parent = os.path.dirname(p)
-            if parent == p:
-                return False
-            p = parent
-        return False
+    #     (>=2 immediate children with .git); single-repo projects never see it. That scan is
+    #     `_umbrella_near` at module level — rule (19) reads the same root for its repo register.
 
     # Anchor semantics (two cold-review rounds hardened all of these with live probes 2026-07-26):
     # - leading `cd <ABS> && …` anchors the whole line; `cd X; git`, `cd X || git` and
@@ -974,26 +1134,40 @@ def main():
     # lines and rule 8 went fail-open on exactly the shape it exists to catch. The pattern
     # therefore anchors on a non-backslash (or string start), keeps whole `\\` pairs in group 2,
     # and consumes only the final lone backslash plus its newline.
-    cmd8 = re.sub(r"(^|[^\\])((?:\\\\)*)\\\r?\n", r"\g<1>\g<2>", raw).replace("\n", ";")
-    v8 = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", cmd8).replace("\\", "")
+    def _fold8(s):
+        return re.sub(r"(^|[^\\])((?:\\\\)*)\\\r?\n", r"\g<1>\g<2>", s).replace("\n", ";")
+
+    def _unq8(s):
+        return re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", s).replace("\\", "")
+
+    cmd8 = _fold8(raw)          # rule (11)'s face, unchanged
+    v8 = _unq8(cmd8)
+    # RULE (8) ONLY (owner ruling, this batch): the unanchored-git scan reads the SAME
+    # normalization over the heredoc-stripped text. A heredoc body is the document being written,
+    # and rule (8) was scanning it as commands — two field false positives, both a brief/note
+    # whose prose put `git …` at line start or behind a markdown-table `|` (GATE-AUDIT false+2).
+    # The `<<`-into-a-shell branch below is the EXCEPTION and still judges `orig8`: there the body
+    # really is script. No other rule's view moves — rule (11) keeps `cmd8`/`v8` above.
+    cmd8h = _fold8(raw_hd)
+    v8h = _unq8(cmd8h)
     # the shell EXECUTION face: rule 8's normalization, plus multi-word quoted spans collapsed
     # to QSPAN so a mention inside `echo "…"` / `grep "…"` stays DATA rather than a command.
     def _exec_face(s):
-        return _strip_spans(re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", s).replace("\\", ""))
+        return _strip_spans(_unq8(s))
     orig8 = ti["command"]  # pre-heredoc-strip: quoted heredoc bodies are data EXCEPT to a shell consumer
     if ((re.search(r"\b(?:git|gh)\b", v8) or re.search(r"\b(?:git|gh)\b", orig8))
             and _umbrella_near(data.get("cwd") or os.getcwd())):
-        bad8 = _text_unanchored(v8)
+        bad8 = _text_unanchored(v8h)
         if not bad8:
             # interpreter payloads execute too: bash -lc 'git status' hid git in a quoted span
             for mi in re.finditer(
                     r"(?:^|[;|&(]\s*)(?:\w+=\S*\s+)*" + _WRAP8 +
-                    r"(?:\S*/)?(?:bash|sh|zsh)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+)*([\"'])(.*?)\1", cmd8):
-                pv = re.sub(r"\$?([\"'])([^\s\"']*)\1", r"\2", mi.group(2)).replace("\\", "")
+                    r"(?:\S*/)?(?:bash|sh|zsh)\s+(?:-{1,2}[\w-]+(?:=\S*)?\s+)*([\"'])(.*?)\1", cmd8h):
+                pv = _unq8(mi.group(2))
                 if _text_unanchored(pv):
                     bad8 = True
                     break
-        if not bad8 and not _cd_anchor(v8) and re.search(
+        if not bad8 and not _cd_anchor(v8h) and re.search(
                 r"(?:\S*/)?(?:bash|sh|zsh)\b[^|;&]*<<|\|\s*(?:\S*/)?(?:bash|sh|zsh)\b", orig8):
             # heredoc / pipe INTO a shell runs its body as script; the body may be
             # quote-stripped above, so judge on the original text (conservative)
@@ -1008,6 +1182,25 @@ def main():
                 "Read: cto-orchestration/references/agentctl/README.md §cwd 锚定.\n"
             )
             return 2
+
+    # (18) history rewrite welded into a compound chain — placed HERE, immediately after (8),
+    #      because the two rules share one subject (the SHAPE of a git command line) and (8)'s
+    #      `cd /abs && …` prescription is this rule's exemption; letting (8) speak first also
+    #      means a command that is both unanchored AND chained gets the anchoring fix, which the
+    #      rewritten single-step command still needs. Above (3)'s unconditional `return 0`.
+    #      Doctrine, shape, exemption and the one accepted false positive: `_rewrite_in_chain`.
+    #      Judged on `raw_hd`: a rewrite verb in a heredoc BODY is document text, not a step.
+    if _rewrite_in_chain(raw_hd):
+        sys.stderr.write(
+            "DENY: 历史重写混在复合链里 — `git commit --amend` / `cherry-pick` / `rebase` share this "
+            "command with another step. Shell chains are left-associative, so a `||` arm binds the "
+            "whole left chain instead of the step that failed, and a rewrite that dies half-way "
+            "leaves a state the command text cannot explain (downstream seats n=2, ~30 min reflog "
+            "recovery each). Fix: one step per tool call — run the rewrite ALONE, read its rc, then "
+            "send the next command. A single leading `cd /abs && …` anchor and env prefixes pass. "
+            "Read: cto-orchestration/references/dispatch-baseline.md §基线纪律.\n"
+        )
+        return 2
 
     # NOTE: git-push governance (local-E2E-before-push, base-branch protection) intentionally lives in
     # the Git-workflow standard skill + a server-side branch-protection ruleset,
@@ -1358,6 +1551,22 @@ def main():
             % (_R16_WARN_AT, sess, n16, "读数是下限、不可判（台账当日坏过或未落盘）。" if degraded else "")
         )
 
+    # (19) verification batch drifting across repos: WARN only, by owner ruling for this batch.
+    #      Doctrine, register and its boundary: `_registered_repos` / `_cwd_drift`. Judged on
+    #      `raw_hd` so a path named inside a heredoc document is not read as an invocation; an
+    #      unmeasurable register is an empty set, i.e. silence.
+    note19 = ""
+    here19, tok19 = _cwd_drift(raw_hd, _registered_repos(data.get("cwd") or os.getcwd()))
+    if here19:
+        note19 = (
+            # Held to (16)'s length: it joins (3)/(13)/(14)/(15)/(16) in ONE assembled response,
+            # and that assembly is what `BUDGET_GUARD_SINGLE` weighs.
+            "WARN (cto-guard 19): 验证批一条命令一个 cwd — this command cd's into '%s', then names "
+            "'%s' — a DIFFERENT registered repo (n=4). A relative path against the wrong repo "
+            "127s, or silently runs THAT repo's suite while the `&& echo PASS` tail claims a "
+            "gate. Fix: one repo per command, or an absolute path." % (here19, tok19)
+        )
+
     reminder = ""
     if m:
         session = m.group(2)
@@ -1375,16 +1584,16 @@ def main():
                 f"signal now: `agentctl watch {session}` via Bash run_in_background:true (NOT "
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
-    # (13), (14)/(15)'s instrument warnings and (16)'s counter ride (3)'s channel: on exit 0
-    # only additionalContext reaches the agent, and two JSON documents on stdout would be one
-    # malformed hook response. All five strings stay LOCAL to this frame so the injected-text
-    # ratchet can weigh what a worker is actually handed.
-    if reminder or note13 or note14 or note15 or note16:
+    # (13), (14)/(15)'s instrument warnings, (16)'s counter and (19)'s drift warn ride (3)'s
+    # channel: on exit 0 only additionalContext reaches the agent, and two JSON documents on
+    # stdout would be one malformed hook response. All six strings stay LOCAL to this frame so the
+    # injected-text ratchet can weigh what a worker is actually handed.
+    if reminder or note13 or note14 or note15 or note16 or note19:
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
-                    t for t in (reminder, note13, note14, note15, note16) if t),
+                    t for t in (reminder, note13, note14, note15, note16, note19) if t),
             }
         }))
     if m:

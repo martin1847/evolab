@@ -1358,4 +1358,180 @@ chk_contains "16-F2 it counts from zero" "4 times today" "$(ctx "$OUT")"
 chk_contains "16-F2 and says the history is unknown" "不可判" "$(ctx "$OUT")"
 
 
+# ── (8) heredoc BODY is document text, not commands (量具校准, GATE-AUDIT false+2) ───────────
+# Rule (8) scanned every heredoc body whose delimiter was unquoted, so a brief/note WRITTEN by
+# the command was judged as commands run by it. Both field shapes below were denied; the DENY
+# told the seat to anchor a `git` that never runs. The heredoc-fed-to-a-shell exception is the
+# paired control: there the body really is script, and it must still bite.
+GUARD_CWD="$UMB_ROOT"
+# FIELD SHAPE 1 — an evidence recipe line whose base is PARAMETERIZED, which is exactly why the
+# delimiter cannot be quoted (`${BASE}` has to expand).
+fp8_base="$(printf '%s\n' 'cat > /tmp/brief.md <<EOF' \
+                          '基线核对（只针对你自己的 worktree）：' \
+                          'git log ${BASE}..HEAD --oneline' \
+                          'EOF')"
+run "$fp8_base"
+chk_eq "8-hd field FP1: a parameterized-base recipe inside a brief is data" 0 "$RC"
+chk_eq "8-hd FP1 emits no denial" "" "$ERR"
+# FIELD SHAPE 2 — PROSE about version control. The verbs sit behind a parenthetical and a
+# markdown table pipe, both of which rule (8)'s segmenter reads as shell separators, so the next
+# token landed in "command position" inside a document.
+fp8_prose="$(printf '%s\n' 'cat > /tmp/note-${BATCH}.md <<EOF' \
+                           '半途翻车恢复很贵 (git rebase --abort 后重来)，先读 rc 再下一步。' \
+                           '| git cherry-pick | 复合链里禁用 |' \
+                           'EOF')"
+run "$fp8_prose"
+chk_eq "8-hd field FP2: prose naming git verbs is data" 0 "$RC"
+chk_eq "8-hd FP2 emits no denial" "" "$ERR"
+# tab-stripped delimiter is the same body
+run "$(printf 'cat > /tmp/x.md <<-EOF\n\tgit log --oneline\n\tEOF')"
+chk_eq "8-hd a <<- body is data too" 0 "$RC"
+# EXCEPTION, four spellings: a heredoc/pipe INTO a shell runs its body as script
+run "$(printf 'bash <<EOF\ngit status\nEOF')"
+chk_eq "8-hd unquoted heredoc fed to bash still denied" 2 "$RC"
+run "$(printf "bash <<'EOF'\ngit status\nEOF")"
+chk_eq "8-hd quoted heredoc fed to bash still denied" 2 "$RC"
+run "$(printf 'sh <<EOF\ngit status\nEOF')"
+chk_eq "8-hd sh as the consumer denied too" 2 "$RC"
+run "printf 'git status\n' | bash"
+chk_eq "8-hd pipe-to-shell body still denied" 2 "$RC"
+# the opener/closer lines survive the strip, so a REAL command after the heredoc is still judged
+run "$(printf 'cat > /tmp/x.md <<EOF\ngit log --oneline\nEOF\ngit push')"
+chk_eq "8-hd a real command after the heredoc is still caught" 2 "$RC"
+# an unterminated body is ambiguous -> strip nothing, scan conservatively
+run "$(printf 'cat > /tmp/x.md <<EOF\ngit status')"
+chk_eq "8-hd an unterminated heredoc stays conservative" 2 "$RC"
+# NO OTHER RULE'S VIEW MOVED: rule (4) still sees an unquoted body's command substitution
+run "$(printf 'cat <<EOF\n$(tmux send-keys -t s1 "这会在 heredoc 中执行①②③" Enter)\nEOF')"
+chk_eq "8-hd rule (4) still judges an unquoted body's command substitution" 2 "$RC"
+# ACCEPTED BLIND SPOT, asserted so it cannot be "fixed" by accident: a command substitution in an
+# unquoted body DOES run in the drifted cwd, and rule (8) no longer sees it. The owner's scope for
+# this batch names exactly one exception (the shell consumer); widening it here risked re-denying
+# field shape 1. Recovery if it ever bites: anchor the substitution (`$(git -C /abs …)`).
+run "$(printf 'cat > /tmp/x.md <<EOF\n$(git push)\nEOF')"
+chk_eq "8-hd accepted boundary: a substitution inside a body is no longer judged" 0 "$RC"
+GUARD_CWD="$ISO_REPO"
+
+
+# ── (18) a history rewrite is its own step ──────────────────────────────────────────────────
+# Judged on step COUNT, not on repo anchoring, so this battery runs in the single-repo cwd where
+# rule (8) is silent by construction — otherwise every bare-git arm would red for (8)'s reason.
+run 'git commit --amend --no-edit && git push --force-with-lease'
+chk_eq "18 amend welded onto a push denied" 2 "$RC"
+chk_contains "18 the denial names the shape" "历史重写混在复合链里" "$ERR"
+chk_contains "18 and prescribes one step per tool call" "one step per tool call" "$ERR"
+run 'git cherry-pick abc123 || git cherry-pick --abort'
+chk_eq "18 cherry-pick with an || recovery arm denied" 2 "$RC"
+run 'git rebase --continue; git log --oneline -3'
+chk_eq "18 a semicolon-broken rebase chain denied" 2 "$RC"
+run 'git rebase -i HEAD~3 | cat'
+chk_eq "18 a rebase in a pipeline is two segments, denied" 2 "$RC"
+run 'git rebase --abort && echo recovered'
+chk_eq "18 --abort is the half-way state, not an exemption" 2 "$RC"
+run 'git status && git commit --amend --no-edit'
+chk_eq "18 position-independent: the rewrite may be the LAST step" 2 "$RC"
+run "$(printf 'git rebase --continue\ngit status')"
+chk_eq "18 a newline is a step boundary too" 2 "$RC"
+run 'GIT_EDITOR=true git rebase --continue && git push'
+chk_eq "18 an env prefix does not buy a second step" 2 "$RC"
+run 'timeout 60 git rebase --continue && echo ok'
+chk_eq "18 a wrapper chain is still command position" 2 "$RC"
+run 'git commit --amend -m "msg with spaces" && git push'
+chk_eq "18 --amend in OPTION position with a message denied" 2 "$RC"
+# the (8)-anchor exemption is ONE leading `cd /abs &&` — no more, and only with `&&`
+run 'cd /abs/repo && git rebase --continue'
+chk_eq "18 rule (8)'s prescribed anchor is exempt" 0 "$RC"
+chk_eq "18 and the exempt form is silent" "" "$ERR"
+run 'FOO=1 cd /abs/repo && git commit --amend --no-edit'
+chk_eq "18 an env-prefixed anchor is exempt too" 0 "$RC"
+run 'cd /abs/repo && git rebase --continue && git push'
+chk_eq "18 the anchor is discounted ONCE: two real steps still denied" 2 "$RC"
+run 'cd /abs/repo; git rebase --continue'
+chk_eq "18 after a semicolon the cd may have failed — not an anchor (rule 8's ruling)" 2 "$RC"
+run 'cd sub/repo && git rebase --continue'
+chk_eq "18 a RELATIVE cd is not the anchor either" 2 "$RC"
+# single-step forms: the whole point of the rule
+run 'git rebase --continue'
+chk_eq "18 a single-step rebase is the prescribed shape" 0 "$RC"
+run 'git commit --amend --no-edit'
+chk_eq "18 a single-step amend passes" 0 "$RC"
+run 'GIT_EDITOR=true timeout 60 git rebase --continue'
+chk_eq "18 env + wrapper on ONE step passes" 0 "$RC"
+# ARITY: a valued option's ARGUMENT is data, never a verb (rule 17's lesson, git's argv)
+run "git commit -m '--amend' && git push"
+chk_eq "18 a message that reads --amend is argv data" 0 "$RC"
+run "git commit -m 'fix --amend handling' && git push"
+chk_eq "18 and so is a message containing it" 0 "$RC"
+run 'git -c core.editor=rebase status && git push'
+chk_eq "18 a global option VALUE is not the subcommand" 0 "$RC"
+run 'git --git-dir=/abs/.git rebase --continue && git push'
+chk_eq "18 control: a joined global option does not hide the verb" 2 "$RC"
+# non-rewrite git chains are none of this rule's business
+run 'git log --oneline -3 && git status'
+chk_eq "18 a read-only git chain passes" 0 "$RC"
+run 'git commit -m seed && git push'
+chk_eq "18 a plain commit is not a rewrite" 0 "$RC"
+# DATA is not a step
+run "echo 'git rebase --continue && git push'"
+chk_eq "18 a quoted mention is not a rewrite" 0 "$RC"
+run 'git rebase --continue # then push'
+chk_eq "18 a trailing comment is not a step" 0 "$RC"
+run "$(printf 'cat > /tmp/x.md <<EOF\ngit rebase --continue && git push\nEOF')"
+chk_eq "18 a rewrite verb in a heredoc BODY is document text" 0 "$RC"
+# ORDERING: unanchored AND chained -> rule (8) speaks first, because its fix is the one the
+# rewritten single-step command still needs
+GUARD_CWD="$UMB_ROOT"
+run 'git rebase --continue && git push'
+chk_eq "18 in an umbrella an unanchored chain is denied" 2 "$RC"
+chk_contains "18 and rule (8) owns that message" "cwd 锚定" "$ERR"
+run 'git -C /abs/repo rebase --continue && git -C /abs/repo push'
+chk_eq "18 anchored-but-chained is rule (18)'s" 2 "$RC"
+chk_contains "18 and it says so" "历史重写混在复合链里" "$ERR"
+GUARD_CWD="$ISO_REPO"
+
+
+# ── (19) verification batch drifting across repos (WARN, never DENY) ────────────────────────
+# Register = the umbrella root's immediate `.git` children. Own fixture, with NEUTRAL repo names
+# (this is a public repo — the 脱敏闸 owns that rule): `hostrepo` is the one the command cd's
+# into, `otherrepo` is the one its relative path leaks into.
+G19="$G8ROOT/g19"
+mkdir -p "$G19/hostrepo/.git" "$G19/otherrepo/.git" "$G19/hostrepo/test"
+GUARD_CWD="$G19/hostrepo"
+run "cd $G19/hostrepo && bash otherrepo/test/run.sh && echo PASS"
+chk_eq "19 a drifting verification batch is never denied" 0 "$RC"
+chk_eq "19 and writes nothing to stderr" "" "$ERR"
+chk_contains "19 the warn fires" "WARN (cto-guard 19)" "$(ctx "$OUT")"
+chk_contains "19 it names the repo the command cd'd into" "'hostrepo'" "$(ctx "$OUT")"
+chk_contains "19 and the offending relative path" "otherrepo/test/run.sh" "$(ctx "$OUT")"
+chk_contains "19 and the one-cwd-per-command rule" "一条命令一个 cwd" "$(ctx "$OUT")"
+run "cd $G19/hostrepo; bash otherrepo/test/run.sh"
+chk_contains "19 a semicolon chain drifts the same way" "WARN (cto-guard 19)" "$(ctx "$OUT")"
+run "cd $G19/hostrepo && bash ./otherrepo/test/run.sh"
+chk_contains "19 a ./-prefixed relative path counts" "WARN (cto-guard 19)" "$(ctx "$OUT")"
+# SILENT: everything that is not the drift
+run "cd $G19/hostrepo && bash test/run.sh && echo PASS"
+chk_eq "19 the SAME repo's relative path is silent" "" "$OUT"
+run "cd $G19/hostrepo && bash $G19/otherrepo/test/run.sh"
+chk_eq "19 an ABSOLUTE path to the other repo is unambiguous, silent" "" "$OUT"
+run "bash otherrepo/test/run.sh"
+chk_eq "19 with no cd there is no premise, silent" "" "$OUT"
+run "cd /tmp && bash otherrepo/test/run.sh"
+chk_eq "19 a cd into an unregistered dir clears the premise" "" "$OUT"
+run "cd $G19/hostrepo && cd /tmp && bash otherrepo/test/run.sh"
+chk_eq "19 and a LATER cd elsewhere clears it too" "" "$OUT"
+run "cd $G19/hostrepo && echo 'see otherrepo/test/run.sh for the other suite'"
+chk_eq "19 a quoted mention is data, not a path argument" "" "$OUT"
+run "$(printf 'cd %s && cat > /tmp/x.md <<EOF\notherrepo/test/run.sh 是另一仓的门\nEOF' "$G19/hostrepo")"
+chk_eq "19 a path named inside a heredoc body is document text" "" "$OUT"
+# BROKEN GAUGE: no register -> silence, never a guess (same contract as 14/15/16)
+GUARD_CWD="$ISO_REPO"
+run "cd $G19/hostrepo && bash otherrepo/test/run.sh"
+chk_eq "19 outside an umbrella the register is empty: silent" "" "$OUT"
+GUARD_CWD="/nonexistent-cto-guard-g19"
+run "cd $G19/hostrepo && bash otherrepo/test/run.sh"
+chk_eq "19 an unlistable cwd is silent, not an accusation" "" "$OUT"
+chk_eq "19 and still exit 0" 0 "$RC"
+GUARD_CWD="$ISO_REPO"
+
+
 summary

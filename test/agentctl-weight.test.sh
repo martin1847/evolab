@@ -304,12 +304,33 @@ cd "$(dirname "$0")"
 # consumer, so no other rule's view moves. The other ~19 lines are the doctrine this file
 # carries per counter-probe, most of it the BACKSLASH PARITY argument: only an odd run escapes
 # the space, so `x\\ --max-rounds 2` must keep its real option pair.
+# 1544→1753 (2026-09-01, 下游 guard 三件批: rules 18+19 + rule (8) gauge calibration): +209, and
+# the weight HAD to land here for the same reason every other rule did — all three are
+# PreToolUse·Bash judgements and a hook matcher has no second home.
+# NO NEW PARSE FACE, which is why 208 is mostly doctrine and not code:
+#  * (18) reads `_cmd_segments` + `_pipe_view` + one `_ENV_ASSIGN`/`_WRAPPER` head, all already
+#    here, plus `_git_argv` — a 7-line token walk mirroring git's OWN global-option arity, the
+#    same discipline rule (17) had to learn one batch earlier (a valued option's argument is DATA:
+#    `git -c alias.x=rebase status` is not a rebase, `git commit -m '--amend'` is not an amend).
+#  * (19) reads the SAME `_umbrella_near` scan rule (8)已有 — the function moved from rule (8)'s
+#    frame to module level unchanged except for returning the ROOT instead of a bool, so the repo
+#    register is one `listdir` of a directory rule (8) already located. No subprocess, no git.
+#  * the (8) fix is a PARAMETER on the heredoc stripper that was already here (`quoted_only`) plus
+#    two 2-line view helpers (`_fold8`/`_unq8`) that replaced three copies of the same two
+#    substitutions — the rule-8 face got a second view, not a second parser, and `_exec_face`
+#    got shorter.
+# The rest is the per-rule doctrine this file carries: both kill criteria
+# (`g18-rewrite-single-step` / `g19-cwd-drift`) the retro GATE-AUDIT reads, (18)'s exemption
+# argument (denying `cd /abs && git rebase` would put it in a fight with rule (8), whose fix line
+# hands out that spelling) with its one accepted false positive, (19)'s WARN-only ruling and its
+# unmeasurable-register contract, and the (8) calibration's field evidence (false+2) plus the
+# blind spot it accepts by construction (a command substitution inside an unquoted body).
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1544
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1753
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

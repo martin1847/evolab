@@ -48,7 +48,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=12860   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=13775   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -127,7 +127,25 @@ BUDGET_GUARD_TOTAL=12860   # all injected text across the three guards (raised 7
                            #  is now also printed by a process whose write SUCCEEDED — for a day
                            #  whose ledger was corrupt earlier. A suffix that names one cause
                            #  while the other is live reads as a wrong diagnosis, not a shorter one.
-BUDGET_GUARD_SINGLE=1190   # the longest single message a worker can be handed at once. Raised
+                           # Raised 12860→13775 on 2026-09-01 (下游 guard 三件批), TWO items weighed:
+                           #  +602 B rule (18)'s history-rewrite DENY. Bought: `--amend` /
+                           #    `cherry-pick` / `rebase` welded into a chain cost two downstream
+                           #    seats ~30 min of reflog archaeology each. The text must carry the
+                           #    WHY (left-associative chains bind the `||` arm to the whole left
+                           #    chain, not to the step that died — without it the denial reads as
+                           #    style policing and gets re-sent), the one-step-per-call fix, AND
+                           #    the exempt spelling, or the seat's next attempt is denied by
+                           #    rule (8) instead. Could not come from cutting elsewhere: it is
+                           #    the only rule in the file whose subject is a state the agent
+                           #    cannot re-derive by re-reading its own command.
+                           #  +313 B rule (19)'s cwd-drift WARN, joining (3)/(13)/(14)/(15)/(16)
+                           #    in the SAME assembled response. Held to (16)'s length on purpose.
+                           #    Only the drifting branch ever pays: a single-repo command and an
+                           #    unmeasurable register both emit nothing. It has to name BOTH
+                           #    repos (the one cd'd into and the token that leaves it) and the
+                           #    two failure faces (127 vs. running the wrong repo's suite green),
+                           #    or the orchestrator reads it as a path typo.
+BUDGET_GUARD_SINGLE=1503   # the longest single message a worker can be handed at once. Raised
                            # 754→893 on 2026-08-28: the worst case is now the (3)+(13)+(14)+(15)
                            # assembled response, i.e. every instrument in this dispatch failing
                            # at once, and it is +151 B — exactly (15)'s new warn, nothing else.
@@ -143,11 +161,19 @@ BUDGET_GUARD_SINGLE=1190   # the longest single message a worker can be handed a
                            # re-hang today; the counter alone (its normal shape) is 279 B.
                            # Raised 1172→1190 on 2026-09-01: +18 B, the same widened floor
                            # suffix and nothing else — the assembly is unchanged.
-BUDGET_GUARD_COUNT=31      # sink count: a drop means extraction broke or a sink moved out of
+                           # Raised 1190→1503 on 2026-09-01: +313 B, the same assembled response
+                           # with rule (19)'s drift warn joined to it — exactly that warn,
+                           # nothing else. Reachable only when every dispatch instrument fails at
+                           # once AND the same session is on its fourth re-hang today AND the
+                           # command drifts across repos; the warn alone (its normal shape) is
+                           # 313 B. Rule (18)'s own DENY is 602 B, well under this ceiling.
+BUDGET_GUARD_COUNT=32      # sink count: a drop means extraction broke or a sink moved out of
                            # view. 21→23 on 2026-08-20: +1 real sink (rule 12) and +1 the meter
                            # had been blind to (see `resolve` below). 23→30 on 2026-08-28:
-                           # +2 (rules 14/15) and +5 (the whole new guard). Pinned to the
-                           # measured number, never carrying untracked slack.
+                           # +2 (rules 14/15) and +5 (the whole new guard). 31→32 on 2026-09-01:
+                           # +1 rule (18)'s DENY — rule (19)'s warn is NOT a new sink, it joins
+                           # the existing assembled response. Pinned to the measured number,
+                           # never carrying untracked slack.
 
 echo "== injected-context budget =="
 
