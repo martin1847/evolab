@@ -212,16 +212,22 @@ import ast, os, sys
 
 # Fields whose value is handed to the agent verbatim by the harness.
 SINK_KEYS = {"additionalContext", "permissionDecisionReason", "reason"}
-# Messages we KNOW are injected, used to calibrate the extractor itself (see header). The set
-# covers every sink shape in play AND every local inside the assembled one: a bare local handed
-# to a sink, and BOTH locals of the payload assembled at rule (3)'s sink. Two needles were not
-# enough — a resolve() that dropped only rule 13's local still recalled the reminder and stayed
-# green while 388 bytes went unweighed (review R1 M6). The fourth pins the THIRD file into the
-# census: drop cto-guard-edit.py from the invocation below and recall goes 0 instead of the
-# budget quietly reporting a smaller, greener number.
+# Messages we KNOW are injected, used to calibrate the extractor itself (see header). The set must
+# cover every sink SHAPE in play AND every local that rides the assembled one, because a needle is
+# the only thing that makes a dropped local visible: total falls, and a smaller number reads
+# exactly like success. Two needles were not enough — a resolve() that dropped only rule 13's
+# local still recalled the reminder and stayed green while 388 bytes went unweighed (review R1 M6).
+# The same hole was still open for rules 14/15/16 and for the new rule 19 when the drop-one-local
+# probe below was generalized from one arm to every local (review F3/finding 3: dropping note19 cut
+# 313 bytes and the suite reported 7/7 PASS). One needle per local, chosen from wording that rule
+# alone uses.
 KNOWN_POSITIVE = ("[browser/long subagent launched]",          # bare Name sink (PostToolUse)
-                  "REMINDER (cto-guard): session",             # assembled sink, first local
-                  "wording that has tripped",                  # assembled sink, rule 13's local
+                  "REMINDER (cto-guard): session",             # assembled sink: reminder
+                  "wording that has tripped",                  # assembled sink: note13
+                  "DIRTY-worktree precondition went UNCHECKED",  # assembled sink: note14
+                  "could not be stat'ed",                      # assembled sink: note15
+                  "保姆轮",                                     # assembled sink: note16
+                  "验证批一条命令一个 cwd",                      # assembled sink: note19
                   "编排位直写源码面")                            # cto-guard-edit's E1 denial
 # Mutation switch for the recall probe below: comma-separated local names resolve() must ignore.
 # Test-only; the real invocation passes nothing.
@@ -297,19 +303,24 @@ read -r guard_total guard_single guard_count guard_recall <<EOF
 $(python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT")
 EOF
 
-# RECALL PROBE (review R1 M6, the reviewer's mutation run as a standing negative control): a
-# resolve() that ignores ONLY rule 13's local. Before the third known positive this mutation was
-# invisible — total silently fell 9313→8925 while count stayed 23 and recall stayed 1, i.e. the
-# gate reported green for 388 unweighed bytes. The probe asserts the oracle now BITES.
-read -r mut_total _ mut_count mut_recall <<EOF
-$(GUARD_METER_IGNORE=note13 python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT")
+# DROP-ONE-LOCAL PROBE (review R1 M6 created the mechanism; review F3/finding 3 generalized it to
+# every arm): for EACH local that rides a sink, a resolve() that ignores just that one must go RED.
+# This is the oracle's own oracle. R1's version had a single arm (note13) and everything else was
+# unguarded: dropping note19 cut 313 bytes, total fell 13775→13462, single fell 1503→1190, and the
+# suite still reported 7 passed / 0 failed — a shrinking budget reading as success is exactly the
+# failure this file exists to prevent. A new note MUST come with its own needle in KNOWN_POSITIVE,
+# and this loop is what proves the needle discriminates.
+for _local in reminder note13 note14 note15 note16 note19; do
+  read -r mut_total _ mut_count mut_recall <<EOF
+$(GUARD_METER_IGNORE=$_local python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT")
 EOF
-if [ "$mut_recall" = "0" ] && [ "$mut_total" -lt "$guard_total" ]; then
-  _record "recall probe: dropping ONLY rule 13's local goes red ($mut_total < $guard_total bytes)" 1
-else
-  _record "recall probe: dropping ONLY rule 13's local goes red" 0 \
-    "mutated run reported recall=$mut_recall total=$mut_total count=$mut_count — the known-positive set does not discriminate rule 13's message, so its bytes could go unweighed"
-fi
+  if [ "$mut_recall" = "0" ] && [ "$mut_total" -lt "$guard_total" ]; then
+    _record "drop-one probe: losing $_local goes red ($mut_total < $guard_total bytes)" 1
+  else
+    _record "drop-one probe: losing $_local goes red" 0 \
+      "mutated run reported recall=$mut_recall total=$mut_total count=$mut_count — the known-positive set does not discriminate $_local, so its bytes could go unweighed"
+  fi
+done
 
 if [ "$guard_total" -le "$BUDGET_GUARD_TOTAL" ]; then
   _record "guard injected text within budget ($guard_total <= $BUDGET_GUARD_TOTAL)" 1

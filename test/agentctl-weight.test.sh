@@ -307,30 +307,53 @@ cd "$(dirname "$0")"
 # 1544→1753 (2026-09-01, 下游 guard 三件批: rules 18+19 + rule (8) gauge calibration): +209, and
 # the weight HAD to land here for the same reason every other rule did — all three are
 # PreToolUse·Bash judgements and a hook matcher has no second home.
-# NO NEW PARSE FACE, which is why 208 is mostly doctrine and not code:
+# REAL COMPOSITION, measured, not asserted (review F8/finding 8 corrected an earlier claim here
+# that the growth was "mostly doctrine"): net +209 = 78 comment + 20 blank + 111 code/string. So
+# it is MOSTLY CODE AND MESSAGE TEXT, with doctrine a bit over a third. The `git diff -U0` awk
+# that produced those four numbers is in the review record; re-run it before editing this row.
+# Where the 111 went: `_git_argv` + `_rewrites_history` + `_rewrite_in_chain` (the (18) walk and
+# its step count), `_registered_repos` + `_cd_lands_in` + `_cwd_drift` (the (19) register and
+# scan), `_umbrella_near` moved in from rule (8)'s frame, `_fold8`/`_unq8`, the `quoted_only`
+# parameter and second stripper pass, two message bodies (602 B + 313 B), and the header index.
+# NO NEW PARSE FACE, which is the claim that actually matters and is separate from line counts:
 #  * (18) reads `_cmd_segments` + `_pipe_view` + one `_ENV_ASSIGN`/`_WRAPPER` head, all already
-#    here, plus `_git_argv` — a 7-line token walk mirroring git's OWN global-option arity, the
-#    same discipline rule (17) had to learn one batch earlier (a valued option's argument is DATA:
-#    `git -c alias.x=rebase status` is not a rebase, `git commit -m '--amend'` is not an amend).
-#  * (19) reads the SAME `_umbrella_near` scan rule (8)已有 — the function moved from rule (8)'s
+#    here, plus `_git_argv` — a token walk mirroring git's OWN option arity, the same discipline
+#    rule (17) had to learn one batch earlier (a valued option's argument is DATA: `git -c
+#    alias.x=rebase status` is not a rebase, `git commit -m '--amend'` is not an amend).
+#  * (19) reads the SAME `_umbrella_near` scan rule (8) 已有 — the function moved from rule (8)'s
 #    frame to module level unchanged except for returning the ROOT instead of a bool, so the repo
 #    register is one `listdir` of a directory rule (8) already located. No subprocess, no git.
 #  * the (8) fix is a PARAMETER on the heredoc stripper that was already here (`quoted_only`) plus
 #    two 2-line view helpers (`_fold8`/`_unq8`) that replaced three copies of the same two
 #    substitutions — the rule-8 face got a second view, not a second parser, and `_exec_face`
 #    got shorter.
-# The rest is the per-rule doctrine this file carries: both kill criteria
-# (`g18-rewrite-single-step` / `g19-cwd-drift`) the retro GATE-AUDIT reads, (18)'s exemption
-# argument (denying `cd /abs && git rebase` would put it in a fight with rule (8), whose fix line
-# hands out that spelling) with its one accepted false positive, (19)'s WARN-only ruling and its
-# unmeasurable-register contract, and the (8) calibration's field evidence (false+2) plus the
-# blind spot it accepts by construction (a command substitution inside an unquoted body).
+# The doctrine third is: both kill criteria (`g18-rewrite-single-step` / `g19-cwd-drift`) the
+# retro GATE-AUDIT reads, (18)'s exemption argument (denying `cd /abs && git rebase` would put it
+# in a fight with rule (8), whose fix line hands out that spelling) with its accepted false
+# positive, (19)'s WARN-only ruling and its unmeasurable-register contract, and the (8)
+# calibration's field evidence (false+2) plus the blind spot it accepts by construction.
+# 1753→1805 (2026-09-01, 评审 FIX-FIRST 修复轮): +52 = 33 comment + 2 blank + 17 code, three
+# findings' worth of correctness on rules that had just shipped — no new rule, no new surface.
+# F1 (SHIP-BLOCKING, findings 1+4) is the largest share: rule (8)'s interpreter face is now built
+# at COMMAND POSITION on the shared `_WRAP8` chain. One root cause faced both ways — the pipe RHS
+# admitted only a BARE interpreter, so `cat <<EOF | env sh -` went silent at exit 0 where the
+# baseline denied it (under-fire regression), while the same missing anchor read the FILENAME in
+# `cat > /tmp/bash <<EOF` as an interpreter and re-scanned a document. Most of those lines are the
+# argument for why the two halves must be fixed in one pass.
+# F2 (SHIP-BLOCKING, findings 2+6+7) is ~8 code lines: four names left `_COMMIT_VALUED` because
+# `-S[<keyid>]`/`-u[<mode>]` are OPTIONAL-ATTACHED and were swallowing the `--amend` behind them;
+# a `--` terminator arm (everything after it is pathspec); and the cd anchor now asks the RAW text
+# whether the path is absolute, because `_pipe_view` blanks a quoted span with a space to `ARG`
+# and destroyed the leading `/` rule (8) preserves — two spellings of one path, one verdict.
+# F5 (MAJOR, finding 5) is `_cd_lands_in`: the register carries repo ROOTS and the cd target is
+# resolved against them, because a NAME is not a LOCATION — `cd /somewhere/otherrepo/not-a-repo`
+# was announcing a repo the command was never in.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1753
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1805
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

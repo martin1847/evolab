@@ -1410,6 +1410,29 @@ chk_eq "8-hd rule (4) still judges an unquoted body's command substitution" 2 "$
 # field shape 1. Recovery if it ever bites: anchor the substitution (`$(git -C /abs …)`).
 run "$(printf 'cat > /tmp/x.md <<EOF\n$(git push)\nEOF')"
 chk_eq "8-hd accepted boundary: a substitution inside a body is no longer judged" 0 "$RC"
+# ── REVIEW F1 (findings 1 + 4): the interpreter face had to be built at COMMAND POSITION with
+# the shared wrapper chain. Both arms below are the reviewer's repros; they are one root cause
+# facing two ways, so they are asserted together — a fix that only widens the pipe RHS
+# re-introduces the false positive, and one that only anchors it keeps the under-fire hole.
+# UNDER-FIRE (finding 1, a regression this batch introduced): the body IS script when a WRAPPER
+# feeds it to a shell. HEAD returned 0 and stayed silent where 1a4cdba returned 2.
+run "$(printf 'cat <<EOF | env sh -\ngit status\nEOF')"
+chk_eq "8-F1 heredoc piped to a WRAPPED shell (env sh -) denied" 2 "$RC"
+chk_contains "8-F1 and rule (8) owns the message" "cwd 锚定" "$ERR"
+run "$(printf 'cat <<EOF | command sh\ngit status\nEOF')"
+chk_eq "8-F1 command-wrapper on the pipe RHS denied" 2 "$RC"
+run "$(printf 'cat <<EOF | /usr/bin/env bash\ngit status\nEOF')"
+chk_eq "8-F1 path-qualified wrapper on the pipe RHS denied" 2 "$RC"
+run "$(printf 'env bash <<EOF\ngit status\nEOF')"
+chk_eq "8-F1 wrapper on the FED form denied too" 2 "$RC"
+run "$(printf 'bash -s <<EOF\ngit status\nEOF')"
+chk_eq "8-F1 bash -s heredoc denied" 2 "$RC"
+# FALSE POSITIVE (finding 4): a FILE that happens to be named bash/sh is not an interpreter.
+run "$(printf 'cat > /tmp/bash <<EOF\ngit status is discussed here\nEOF')"
+chk_eq "8-F1 a redirect TARGET named bash is not an interpreter" 0 "$RC"
+chk_eq "8-F1 and that document is silent" "" "$ERR"
+run "$(printf 'cat > /tmp/sh <<EOF\ngit rebase --continue\nEOF')"
+chk_eq "8-F1 same for a file named sh, body carrying a git verb" 0 "$RC"
 GUARD_CWD="$ISO_REPO"
 
 
@@ -1487,6 +1510,48 @@ chk_contains "18 and rule (8) owns that message" "cwd 锚定" "$ERR"
 run 'git -C /abs/repo rebase --continue && git -C /abs/repo push'
 chk_eq "18 anchored-but-chained is rule (18)'s" 2 "$RC"
 chk_contains "18 and it says so" "历史重写混在复合链里" "$ERR"
+# back to the single-repo cwd: the arms below are about ARITY, and an umbrella would red them all
+# for rule (8)'s reason instead (that is what the two ordering arms above just proved)
+GUARD_CWD="$ISO_REPO"
+# ── REVIEW F2 (findings 2, 6, 7): the arity walk was not reading git's argv.
+# UNDER-FIRE (finding 2): `-S[<keyid>]` / `-u[<mode>]` and their long twins are OPTIONAL-ATTACHED
+# — the value is GLUED when present, so the next token is never theirs. Listing them as valued
+# swallowed the real `--amend` behind them and a compound amend walked straight through.
+run 'git commit -S --amend && echo done'
+chk_eq "18-F2 -S does not swallow the --amend behind it" 2 "$RC"
+chk_contains "18-F2 and it is rule (18)'s denial" "历史重写混在复合链里" "$ERR"
+run 'git commit -u --amend && echo done'
+chk_eq "18-F2 -u likewise" 2 "$RC"
+run 'git commit --gpg-sign --amend && echo done'
+chk_eq "18-F2 --gpg-sign likewise" 2 "$RC"
+run 'git commit --untracked-files --amend && echo done'
+chk_eq "18-F2 --untracked-files likewise" 2 "$RC"
+# the ATTACHED spellings must reach the same verdict — that is what "optional-attached" means
+run 'git commit -Skeyid --amend && echo done'
+chk_eq "18-F2 the attached -S<keyid> spelling agrees" 2 "$RC"
+run 'git commit --gpg-sign=keyid --amend && echo done'
+chk_eq "18-F2 and the joined --gpg-sign=<keyid> spelling agrees" 2 "$RC"
+# PAIRED GREEN: a genuinely valued option still eats its value, so a MESSAGE stays data
+run "git commit -S -m '--amend' && echo done"
+chk_eq "18-F2 control: -S plus a message reading --amend is still data" 0 "$RC"
+# FALSE POSITIVE (finding 6): after `--` everything is pathspec
+run 'git commit -- --amend && echo done'
+chk_eq "18-F2 an option terminator makes --amend a pathspec" 0 "$RC"
+chk_eq "18-F2 and that command is silent" "" "$ERR"
+run 'git commit -m seed -- --amend && echo done'
+chk_eq "18-F2 terminator after a real message too" 0 "$RC"
+# FALSE POSITIVE (finding 7): rule (8) accepts a QUOTED absolute cd anchor, so this rule must too
+run 'cd "/abs/repo space" && git rebase main'
+chk_eq "18-F2 a double-quoted absolute cd anchor is exempt" 0 "$RC"
+run "cd '/abs/repo space' && git commit --amend --no-edit"
+chk_eq "18-F2 single-quoted spelling agrees" 0 "$RC"
+# and the discount is STILL only one, and still only for an ABSOLUTE cd
+run 'cd "/abs/repo space" && git rebase main && git push'
+chk_eq "18-F2 the quoted anchor is discounted once, not per cd" 2 "$RC"
+run 'cd "relative dir" && git rebase main'
+chk_eq "18-F2 a quoted RELATIVE cd is not an anchor" 2 "$RC"
+run 'echo "/abs" && git rebase main'
+chk_eq "18-F2 the discount is spent on a cd step only" 2 "$RC"
 GUARD_CWD="$ISO_REPO"
 
 
@@ -1523,6 +1588,26 @@ run "cd $G19/hostrepo && echo 'see otherrepo/test/run.sh for the other suite'"
 chk_eq "19 a quoted mention is data, not a path argument" "" "$OUT"
 run "$(printf 'cd %s && cat > /tmp/x.md <<EOF\notherrepo/test/run.sh 是另一仓的门\nEOF' "$G19/hostrepo")"
 chk_eq "19 a path named inside a heredoc body is document text" "" "$OUT"
+# ── REVIEW F5 (finding 5): a NAME is not a LOCATION. The first cut asked whether any COMPONENT of
+# the cd target matched a registered repo name, so a directory that merely shares a name set
+# `here` and the warn then announced a repo the command was never in. The register carries ROOTS
+# and the cd target is resolved against them.
+mkdir -p "$G8ROOT/unrelated/otherrepo/not-a-repo"
+GUARD_CWD="$G19/hostrepo"
+run "cd $G8ROOT/unrelated/otherrepo/not-a-repo && bash hostrepo/test/run.sh"
+chk_eq "19-F5 a same-NAMED directory outside the register sets no premise" "" "$OUT"
+chk_eq "19-F5 and never denies" 0 "$RC"
+# PAIRED POSITIVES: the real root, and a path INSIDE it, both do set the premise
+run "cd $G19/hostrepo && bash otherrepo/test/run.sh"
+chk_contains "19-F5 the repo ROOT itself still warns" "WARN (cto-guard 19)" "$(ctx "$OUT")"
+run "cd $G19/hostrepo/test && bash otherrepo/test/run.sh"
+chk_contains "19-F5 a SUBDIR of a registered repo warns too" "WARN (cto-guard 19)" "$(ctx "$OUT")"
+chk_contains "19-F5 and still names the repo it is inside" "'hostrepo'" "$(ctx "$OUT")"
+# a RELATIVE cd resolves against the payload cwd, so it lands in the register the same way
+run "cd . && bash otherrepo/test/run.sh"
+chk_contains "19-F5 a relative cd resolved against the payload cwd counts" "WARN (cto-guard 19)" "$(ctx "$OUT")"
+run "cd ../otherrepo && bash hostrepo/test/run.sh"
+chk_contains "19-F5 …and a relative cd INTO the sibling repo flips the direction" "'otherrepo'" "$(ctx "$OUT")"
 # BROKEN GAUGE: no register -> silence, never a guess (same contract as 14/15/16)
 GUARD_CWD="$ISO_REPO"
 run "cd $G19/hostrepo && bash otherrepo/test/run.sh"

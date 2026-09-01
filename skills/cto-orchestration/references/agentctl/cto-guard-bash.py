@@ -699,14 +699,30 @@ _R18_VERBS = {"rebase", "cherry-pick"}
 # (17) had to learn, applied to git's own argv.
 _GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                "--config-env", "--super-prefix"}
-# `git commit`'s valued options: a MESSAGE that happens to read `--amend` is argv data, not a flag.
+# `git commit`'s options that take a SEPARATE value: each consumes the NEXT token, so a MESSAGE
+# that happens to read `--amend` is argv data, not a flag.
 _COMMIT_VALUED = {"-m", "--message", "-F", "--file", "--author", "--date", "-C",
                   "--reuse-message", "-c", "--reedit-message", "--fixup", "--squash",
-                  "--cleanup", "-t", "--template", "--trailer", "--pathspec-from-file",
-                  "-S", "--gpg-sign", "-u", "--untracked-files"}
+                  "--cleanup", "-t", "--template", "--trailer", "--pathspec-from-file"}
+# NOT listed above, and that is the whole point (review F2/finding 2): `-S[<keyid>]` /
+# `--gpg-sign[=<keyid>]` / `-u[<mode>]` / `--untracked-files[=<mode>]` are OPTIONAL-ATTACHED —
+# `git commit -h` publishes them with the value GLUED to the flag, so the next token is NEVER
+# theirs. Listing them as valued swallowed the real flag behind them, and
+# `git commit -S --amend && echo done` sailed straight through the gate this rule IS (probe rc=0
+# where a DENY was owed). They fall through to the advance-by-one arm, which is correct for them.
 _SEG_GIT = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
                       + r"(?:\S*/)?git(?![\w-])(?P<rest>.*)$", re.S)
-_R18_ANCHOR = re.compile(r"\s*(?:" + _ENV_ASSIGN + r"\s+)*cd\s+/[^\s;|&]*\s*&&")
+# The anchor is decided on the RAW text, not on `_pipe_view` (review F2/finding 7): the view blanks
+# a quoted span carrying a space to ` ARG `, which destroys exactly the leading `/` that makes the
+# path absolute — so rule (8) accepted `cd "/abs/repo space" && …` as an anchor while this rule
+# counted it as an extra step and denied a legal single-step rewrite. Both spellings of one path
+# must get one verdict. The step COUNT still comes from the view; only the absolute-ness question
+# is asked of the raw text.
+_R18_ANCHOR = re.compile(r"\s*(?:" + _ENV_ASSIGN + r"\s+)*cd\s+"
+                         r"(?:\"/[^\"\n]*\"|'/[^'\n]*'|/[^\s;|&]*)\s*&&")
+# …and the first VIEW segment must itself be that `cd` step, so the discount can only ever be
+# spent on a cd (never on a rewrite that happens to follow an absolute path in the text).
+_R18_CD_STEP = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*cd\s+\S+\s*$")
 
 
 def _git_argv(rest):
@@ -734,6 +750,8 @@ def _rewrites_history(view):
     i = 0
     while i < len(rest):          # `--amend` must sit in OPTION position, not in a message
         t = rest[i]
+        if t == "--":
+            return False          # option terminator: everything after it is pathspec DATA
         if t == "--amend":
             return True
         if not t.startswith("-"):
@@ -744,11 +762,12 @@ def _rewrites_history(view):
 
 def _rewrite_in_chain(raw):
     """True when a history rewrite shares one tool call with another step."""
-    view = _pipe_view(raw)
-    anchor = _R18_ANCHOR.match(view)
-    if anchor:
-        view = view[anchor.end():]
-    steps = [s for s in _cmd_segments(view) if s.strip()]
+    steps = [s for s in _cmd_segments(_pipe_view(raw)) if s.strip()]
+    # rule (8)'s prescribed `cd <ABS> &&` anchor, discounted exactly ONCE. Two faces must AGREE
+    # here: the first STEP is a `cd` (asked of the view, where the step boundaries are) and its
+    # target is ABSOLUTE (asked of the raw text, where a quoted path still has its leading `/`).
+    if steps and _R18_CD_STEP.match(steps[0]) and _R18_ANCHOR.match(raw):
+        steps = steps[1:]
     return len(steps) > 1 and any(_rewrites_history(s) for s in steps)
 
 
@@ -765,8 +784,12 @@ def _rewrite_in_chain(raw):
 # carry a `.git` (which is also where `git worktree list`'s roots land: a worktree umbrella's
 # children each carry a `.git` FILE). No subprocess, one `listdir`. A gauge that cannot list is
 # SILENT — never a guess, same contract as rules (14)/(15)/(16).
-# BOUNDARY: `here` is only set by a `cd` whose target names a registered repo, and a later `cd`
-# elsewhere CLEARS it — the premise of this rule is "you told me which repo you are in".
+# BOUNDARY: `here` is only set by a `cd` whose target IS a registered repo root or lies INSIDE
+# one, decided by PATH (review F5/finding 5), and a later `cd` elsewhere CLEARS it — the premise
+# of this rule is "you told me which repo you are in". An earlier cut asked whether any COMPONENT
+# of the cd target matched a registered NAME, so `cd /somewhere/otherrepo/not-a-repo` (a directory
+# that merely shares a name) set `here='otherrepo'` and the warn then announced a repo the command
+# was never in. A name is not a location; the register therefore carries ROOTS, not just names.
 def _umbrella_near(path):
     """The umbrella ROOT at or within 5 ancestors of `path` (>=2 immediate children with .git),
     or None. Rule (8)'s scope gate; rule (19)'s repo register reads the same root."""
@@ -793,40 +816,54 @@ def _umbrella_near(path):
 
 
 def _registered_repos(cwd):
-    """Directory NAMES of the umbrella's immediate git children, or an empty set when the
+    """{repo NAME: absolute repo ROOT} for the umbrella's immediate git children, or {} when the
     register cannot be measured (both cases read the same to the caller: silence)."""
     root = _umbrella_near(cwd)
     if root is None:
-        return set()
+        return {}
     try:
         kids = os.listdir(root)
     except OSError:
-        return set()
-    return {k for k in kids if os.path.exists(os.path.join(root, k, ".git"))}
+        return {}
+    out = {}
+    for k in kids:
+        p = os.path.join(root, k)
+        if os.path.exists(os.path.join(p, ".git")):
+            out[k] = os.path.realpath(p)
+    return out
 
 
 _R19_CD = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*cd\s+(?P<path>[^\s;|&]+)")
 _R19_REL = re.compile(r"(?:\./)?(?P<head>[^/\s]+)/")
 
 
-def _cwd_drift(raw, names):
+def _cd_lands_in(target, base, repos):
+    """The registered repo NAME whose root contains (or IS) this `cd` target, else None.
+    Unreadable/expanding targets resolve to a path that matches nothing, i.e. to None."""
+    try:
+        p = os.path.realpath(target if os.path.isabs(target) else os.path.join(base, target))
+    except Exception:
+        return None
+    for name, root in repos.items():
+        if p == root or p.startswith(root + os.sep):
+            return name
+    return None
+
+
+def _cwd_drift(raw, repos, base):
     """(repo you cd'd into, offending token) for the first relative path naming a DIFFERENT
     registered repo after such a cd, or (None, None)."""
     here = None
     for seg in _cmd_segments(_pipe_view(raw)):
         cd = _R19_CD.match(seg)
         if cd:
-            here = None
-            for comp in reversed(cd.group("path").split("/")):
-                if comp in names:
-                    here = comp
-                    break
+            here = _cd_lands_in(cd.group("path"), base, repos)
             continue
         if here is None:
             continue
         for tok in seg.split():
             rel = _R19_REL.match(tok)
-            if rel and rel.group("head") in names and rel.group("head") != here:
+            if rel and rel.group("head") in repos and rel.group("head") != here:
                 return here, tok
     return None, None
 
@@ -1167,10 +1204,24 @@ def main():
                 if _text_unanchored(pv):
                     bad8 = True
                     break
-        if not bad8 and not _cd_anchor(v8h) and re.search(
-                r"(?:\S*/)?(?:bash|sh|zsh)\b[^|;&]*<<|\|\s*(?:\S*/)?(?:bash|sh|zsh)\b", orig8):
-            # heredoc / pipe INTO a shell runs its body as script; the body may be
-            # quote-stripped above, so judge on the original text (conservative)
+        # A heredoc / pipe INTO a shell runs its body as script, so THERE the body is not document
+        # text and must be judged — on `orig8`, whose bodies are intact. Two review findings live
+        # in this one pattern, and both are the same root cause (it was not built at command
+        # position with the shared wrapper face):
+        #  * finding 1, an under-fire regression: the pipe RHS admitted only a BARE interpreter, so
+        #    `cat <<EOF | env sh -` (same class: `command sh`, `/usr/bin/env bash`) went silent at
+        #    exit 0 while the shell really ran the body — baseline denied that payload.
+        #  * finding 4, the mirror false positive: with no command-position anchor, the FILENAME in
+        #    `cat > /tmp/bash <<EOF` read as an interpreter and the document body was re-scanned.
+        # `_WRAP8` is the wrapper chain rules (8)/(11) already share; the separator class carries
+        # `\n` because a second line is a new command, exactly as `cmd8` treats it.
+        _pos8 = (r"(?:^|[;|&(\n]\s*)(?:\w+=\S*\s+)*" + _WRAP8 + r"(?:\S*/)?(?:bash|sh|zsh)\b")
+        if not bad8 and not _cd_anchor(v8h) and (
+                # (i) the interpreter's OWN segment carries the heredoc redirect
+                re.search(_pos8 + r"[^|;&\n]*<<", orig8)
+                # (ii) the interpreter sits on a pipe's RHS: its stdin IS the script
+                or re.search(r"\|\s*(?:\w+=\S*\s+)*" + _WRAP8 + r"(?:\S*/)?(?:bash|sh|zsh)\b",
+                             orig8)):
             bad8 = bool(re.search(r"\bgit\b|\bgh\b", orig8))
         if bad8:
             sys.stderr.write(
@@ -1556,7 +1607,8 @@ def main():
     #      `raw_hd` so a path named inside a heredoc document is not read as an invocation; an
     #      unmeasurable register is an empty set, i.e. silence.
     note19 = ""
-    here19, tok19 = _cwd_drift(raw_hd, _registered_repos(data.get("cwd") or os.getcwd()))
+    base19 = data.get("cwd") or os.getcwd()
+    here19, tok19 = _cwd_drift(raw_hd, _registered_repos(base19), base19)
     if here19:
         note19 = (
             # Held to (16)'s length: it joins (3)/(13)/(14)/(15)/(16) in ONE assembled response,
