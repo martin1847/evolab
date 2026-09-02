@@ -1305,6 +1305,13 @@ def _stop_sample_path(run_dir: str, name: str) -> str:
     return os.path.join(run_dir, f".{name}.stop-sample.tmp")
 
 _STOP_SAMPLE_NONE = "-"        # the handoff word for "there is nothing to sample"
+# The identity half of the same handoff. `stop-cleanup` re-reads the lane's identity right
+# before it clears it and compares that with the token the shell captured INSIDE the lane fence;
+# `ok` means the two describe the same seat, `drift` means they do not and no phase-ledger stop
+# row may be written for this teardown (review R2: a stop that killed one lane while holding
+# another lane's token wrote the ledger row for the wrong seat).
+_STOP_ID_OK = "ok"
+_STOP_ID_DRIFT = "drift"
 
 def _write_stop_sample(sample: str, token: str, value: str) -> None:
     """Publish `<token> <value>` atomically: a reader never sees a half-written sample, and a
@@ -1331,7 +1338,15 @@ def _read_stop_sample(sample: str, token: str) -> str | None:
     stamped, sep, value = line.partition(" ")
     return value if sep and stamped == token else None
 
-_STOP_KEPT = ("duplex.in", "duplex.meta", "duplex.round-started", "duplex.wlock",
+# The control state teardown removes. `duplex.wlock` is DELIBERATELY not in it: that file is
+# the lane's single-writer lock and now also the fence `agentctl start`/`agentctl stop` take
+# around their whole claim/teardown, so it must be the SAME inode across a stop + same-name
+# start. Unlinking a lock that a live critical section holds does not end the section — it
+# just lets the next caller create a fresh inode and walk straight in, which is exactly the
+# concurrent-stop race the fence exists to close. Same rule, same reason as
+# `IdentityStore.clear`'s refusal to unlink the identity lock: the file outlives the session as
+# an empty marker in the run dir.
+_STOP_KEPT = ("duplex.in", "duplex.meta", "duplex.round-started",
               "duplex.prompt", "duplex.sent-offset", "duplex.write-intent",
               "duplex.watch.pid", "duplex.idle-marks", "duplex.progress",
               "duplex.expect-report", "steer-log.jsonl")
@@ -1354,15 +1369,74 @@ def _identity_clear(run_dir: str, name: str) -> tuple[int, str]:
     name inherit its predecessor's authority."""
     return _ctl(run_dir, "identity", "clear", name, merge_stderr=True)
 
+def cmd_lane_fence(args: argparse.Namespace) -> int:
+    """Take the lane's single-writer lock on a file descriptor THE CALLER already holds open.
+
+    WHY a verb and not a lock taken inside each step: `agentctl start`'s claim and `agentctl
+    stop`'s teardown are each a SEQUENCE of shell steps (tmux, process-group signals) with
+    python verbs in between, and the fence has to span the whole sequence. `flock(2)` belongs
+    to the open file DESCRIPTION, not to the process, so a child that locks an inherited fd
+    leaves the lock held by the parent's description after it exits — the shell opens fd 9 on
+    `<run>/<name>.duplex.wlock`, this verb locks it, and closing fd 9 (or the shell exiting)
+    releases it. That is the whole mechanism: no new lock file, no new state, no daemon.
+
+    It is the SAME lock `send` and the over-budget reporter take, which is the point: while a
+    teardown holds it no frame can open a round underneath, and while a claim holds it no
+    concurrent stop can locate the lane, kill it, and hand a different lane's identity to the
+    ledger (review R2). NOTHING inside either fenced sequence takes this lock, so it cannot
+    self-deadlock — `wait-ready`, `send` and `classify` all do, and all three run OUTSIDE it.
+
+    Blocking acquire under a SIGALRM bound, exactly like `acquire_writer_lock` argues: the
+    kernel's flock queue is fair, and a LOCK_NB retry loop starves against a churning writer.
+    A timeout is a REFUSAL — the caller must fail loudly rather than proceed unfenced, because
+    proceeding is what produced the divergence this fence closes."""
+    def _expired(_signum, _frame):
+        raise TimeoutError
+
+    signal.signal(signal.SIGALRM, _expired)
+    signal.setitimer(signal.ITIMER_REAL, args.timeout)
+    try:
+        duplexctl.acquire_writer_lock(args.fd)
+    except TimeoutError:
+        print(f"ERR: {args.gate} '{args.session}' could not take the lane fence "
+              f"({args.run_dir}/{args.session}.duplex.wlock) within {args.timeout:g}s — another "
+              "start/stop/steer holds it. Nothing was changed and no phase-ledger row was "
+              f"written; re-run, or inspect with agentctl status {args.session}",
+              file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"ERR: {args.gate} '{args.session}' cannot lock the lane fence ({exc}) — a lane "
+              "that cannot be fenced must not be claimed or torn down", file=sys.stderr)
+        return 1
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    return 0
+
 def cmd_stop_cleanup(args: argparse.Namespace) -> int:
     """Duplex-lane teardown, between the tmux kill and the reap. Control state goes down
     BEFORE the reap: the terminal-marker guard (the meta re-check right before publish) prices
-    in a µs kill→cleanup gap, and a grace-long reap in between would stretch it to seconds."""
+    in a µs kill→cleanup gap, and a grace-long reap in between would stretch it to seconds.
+
+    It is also where the phase ledger's stop row is AUTHORISED, and the authorisation is a
+    re-read: the lane's identity is compared, right before this verb clears it, with the token
+    the shell captured inside the lane fence. Agreement rides the sentinel handoff as `ok`, and
+    anything else as `drift` — which the sentinel turns into "no stop row, and say why".
+    Belt and braces on top of the fence: under it a same-name restart cannot start until this
+    teardown releases, so drift should be unreachable. It is checked anyway because the failure
+    it guards against is a row that names the wrong seat, and the reader has no way to spot
+    one; a missing row is recoverable, a confidently wrong one is not."""
     run, name = args.run_dir, args.session
     marker = os.path.join(run, f"{name}.terminal.json")
     marker_mtime = _stat_mtime(marker) if os.path.isfile(marker) else None
-    _write_stop_sample(_stop_sample_path(run, name), args.token,
-                       _STOP_SAMPLE_NONE if marker_mtime is None else str(marker_mtime))
+    current = identity.IdentityStore(run, name).token()
+    verdict = _STOP_ID_OK if _phase_same_seat(args.identity, current) else _STOP_ID_DRIFT
+    if verdict == _STOP_ID_DRIFT:
+        print(f"WARN: identity drifted between the kill and the cleanup of '{name}' — the "
+              f"fence captured '{args.identity or '-'}' but the lane now reads '{current}'; NO "
+              "phase-ledger stop row will be written for this teardown (a row naming the wrong "
+              "seat cannot be spotted by any reader)", file=sys.stderr)
+    sample = _STOP_SAMPLE_NONE if marker_mtime is None else str(marker_mtime)
+    _write_stop_sample(_stop_sample_path(run, name), args.token, f"{sample}|{verdict}")
     # ONE `rm -f` over the whole control-state set, through PATH: the executed process set is
     # part of teardown's observable behaviour (the same reason `cmd_supervisor_retire` keeps
     # `rm`), so a `rm` that refuses, audits or is missing still sees exactly this invocation.
@@ -1395,6 +1469,14 @@ def _phase_stop_triple(token: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+def _phase_same_seat(captured: str, current: str) -> bool:
+    """Do two identity tokens describe the SAME seat? Both unresolvable counts as agreement —
+    there is nothing to contradict, and the row that follows carries the reserved unknown key
+    anyway. One resolvable and the other not is a DISAGREEMENT: a lane that had an identity
+    when the fence captured it and none by cleanup (or the reverse) is not the same lane."""
+    return _phase_stop_triple(captured) == _phase_stop_triple(current)
+
+
 def _phase_record_stop(run: str, name: str, token: str, reason: str, lane: int) -> None:
     """The ledger's stop row, under the two conditions that make it true.
 
@@ -1423,15 +1505,29 @@ def cmd_stop_sentinel(args: argparse.Namespace) -> int:
     the engine still spoke (the silent-misfire class, made loud); +2s prices in the
     marker-write vs final-flush race.
 
-    It is also the phase ledger's STOP commit point, for the same reason — but only when the
-    reap actually finished: `--reap-rc` non-zero means survivors outlived the KILL, and a
-    ledger that calls that an ending would shorten an open seat and manufacture idle time out
-    of a process that is still burning the machine."""
+    It is also the phase ledger's STOP commit point, under THREE conditions, all of which have
+    to hold for the row to be true:
+      * the reap finished — `--reap-rc` non-zero means survivors outlived the KILL, and a
+        ledger that calls that an ending would shorten an open seat and manufacture idle time
+        out of a process that is still burning the machine;
+      * the handoff sample is the one THIS stop's cleanup wrote (the nonce proves it), because
+        without it there is no evidence about the seat's identity at teardown time at all;
+      * that sample says `ok` — cleanup compared the fence-captured token against the lane's
+        own identity right before clearing it, and `drift` means they named different seats.
+    Missing evidence therefore costs the row, never its accuracy: a reader can recover from a
+    seat that shows `open` too long, and cannot recover from a stop attributed to the wrong
+    one."""
     run, name = args.run_dir, args.session
-    if args.reap_rc == 0:
-        _phase_record_stop(run, name, args.identity, "stopped", 1)
     sample = _stop_sample_path(run, name)
     handoff = _read_stop_sample(sample, args.token)
+    mtime_part, has_verdict, id_verdict = (handoff or "").partition("|")
+    if args.reap_rc == 0 and has_verdict and id_verdict == _STOP_ID_OK:
+        _phase_record_stop(run, name, args.identity, "stopped", 1)
+    elif args.reap_rc == 0:
+        why = f"reported {id_verdict}" if has_verdict else "is missing, or is not this stop's"
+        print(f"WARN: no phase-ledger stop row for '{name}' — the cleanup handoff {why}, so "
+              "which seat this teardown ended cannot be established", file=sys.stderr)
+    handoff = mtime_part if has_verdict else None
     try:
         os.unlink(sample)
     except OSError:
@@ -1475,8 +1571,11 @@ def cmd_stop_residue(args: argparse.Namespace) -> int:
     cleaned = args.killed == 1
     reap_rc = args.reap_rc
     # one PATH `rm -f` per residue file, exactly as the old loop ran it: the executed process
-    # set is part of the observable teardown, not an implementation detail of the delete
-    for suffix in ("duplex.in", "duplex.wlock", "duplex.prompt", "duplex.sent-offset",
+    # set is part of the observable teardown, not an implementation detail of the delete.
+    # `duplex.wlock` is NOT in this set, for the reason spelled out at `_STOP_KEPT`: it is the
+    # fence this very branch is running inside, and unlinking it would let the next caller
+    # create a fresh inode and walk past a live critical section.
+    for suffix in ("duplex.in", "duplex.prompt", "duplex.sent-offset",
                    "duplex.round-started", "duplex.write-intent", "duplex.watch.pid",
                    "terminal.json", "terminal.consumed.json"):
         path = os.path.join(run, f"{name}.{suffix}")

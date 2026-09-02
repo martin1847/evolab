@@ -735,13 +735,23 @@ chk_eq "R2-B1 the retro pane's gate sees unknown, so it will print n/a" "unknown
 # `stop-sentinel` ran unconditionally, so a stop whose process group still had survivors after
 # the KILL still appended `stop`. That shortens an open seat and manufactures idle time out of
 # a process that is still burning the machine. Verb level first (the gate), then the entry.
-B2RUN="$SANDBOX/reap-gate"; mkdir -p "$B2RUN"
-printf 'engine=omp\ncwd=%s\n' "$SANDBOX" > "$B2RUN/b2.duplex.meta"
-python3 "$CTL" --run-dir "$B2RUN" identity start b2 >/dev/null 2>&1
-B2TOK="$(python3 "$CTL" --run-dir "$B2RUN" identity token b2)"
+# The two verbs are a PAIR now: cleanup re-reads the lane's identity and stamps agreement onto
+# the handoff sample, and the sentinel writes the row only if it finds that stamp (review R2).
+# So every verb-level case here seeds a real lane + identity and runs both halves in order.
+b2_seed() { # $1 run dir  $2 session -> echoes the lane's identity token
+  rm -rf "$1"; mkdir -p "$1"
+  printf 'engine=omp\ncwd=%s\n' "$SANDBOX" > "$1/$2.duplex.meta"
+  python3 "$CTL" --run-dir "$1" identity start "$2" >/dev/null 2>&1
+  python3 "$CTL" --run-dir "$1" identity token "$2"
+}
+B2RUN="$SANDBOX/reap-gate"
+B2TOK="$(b2_seed "$B2RUN" b2)"
+python3 "$CTL" --run-dir "$B2RUN" stop-cleanup b2 --token t1 --identity "$B2TOK" >/dev/null 2>&1
 python3 "$CTL" --run-dir "$B2RUN" stop-sentinel b2 --token t1 --reap-rc 1 \
         --identity "$B2TOK" >/dev/null 2>&1
 chk_eq "R2-B2 a reap that left survivors records NO stop" "" "$(ledger_events_in "$B2RUN")"
+B2TOK="$(b2_seed "$B2RUN" b2)"
+python3 "$CTL" --run-dir "$B2RUN" stop-cleanup b2 --token t2 --identity "$B2TOK" >/dev/null 2>&1
 python3 "$CTL" --run-dir "$B2RUN" stop-sentinel b2 --token t2 --reap-rc 0 \
         --identity "$B2TOK" >/dev/null 2>&1
 chk_eq "R2-B2 known-positive: a clean reap does record one" "stop" "$(ledger_events_in "$B2RUN")"
@@ -786,9 +796,13 @@ install_running_tmux
 # ── R1-B3: the stop must name the seat it ends ───────────────────────────────────────
 # Teardown clears identity BEFORE the reap, and the ledger's stop used to re-resolve the
 # identity by NAME afterwards — so a same-name restart that got its `start` row in first stole
-# the old stop and closed a seat that had just begun. The triple is captured at the top of
-# stop now and carried across cleanup as an opaque token.
-B3RUN="$SANDBOX/stop-steal"; mkdir -p "$B3RUN"
+# the old stop and closed a seat that had just begun. The identity is now read inside the lane
+# fence, from the located lane, and carried across cleanup as an opaque token.
+B3RUN="$SANDBOX/stop-steal"
+B3TOK="$(b2_seed "$B3RUN" same)"
+B3SID="$(printf '%s' "$B3TOK" | cut -d/ -f1)"
+# the restart's row is ALREADY in the ledger when the old teardown gets to write its own: this
+# is the exact payload that used to make the stop land on `new-sid`
 python3 - "$B3RUN" <<'PY'
 import json, os, sys, time
 run = sys.argv[1]
@@ -800,13 +814,11 @@ def stamp(when):
 
 
 rows = [
-    {"ts": stamp(base), "event": "start", "name": "same", "session_id": "old-sid",
-     "attempt": "old-att", "engine": "omp", "cwd": run, "review": 0, "launcher_ppid": 1},
     {"ts": stamp(base + 120), "event": "start", "name": "same", "session_id": "new-sid",
      "attempt": "new-att", "engine": "omp", "cwd": run, "review": 0, "launcher_ppid": 1},
 ]
 day = time.strftime("%Y%m%d", time.gmtime(int(base)))
-with open(os.path.join(run, "phase-ledger-%s.jsonl" % day), "w", encoding="utf-8") as fh:
+with open(os.path.join(run, "phase-ledger-%s.jsonl" % day), "a", encoding="utf-8") as fh:
     for row in rows:
         fh.write(json.dumps(row) + "\n")
 # the window may straddle UTC midnight; give the neighbouring days real empty shards so the
@@ -815,13 +827,13 @@ for delta in (-86400, 86400):
     other = time.strftime("%Y%m%d", time.gmtime(int(base) + delta))
     open(os.path.join(run, "phase-ledger-%s.jsonl" % other), "a", encoding="utf-8").close()
 PY
-# the OLD stop arrives after the restart already appended its own start row
+python3 "$CTL" --run-dir "$B3RUN" stop-cleanup same --token t1 --identity "$B3TOK" >/dev/null 2>&1
 python3 "$CTL" --run-dir "$B3RUN" stop-sentinel same --token t1 --reap-rc 0 \
-        --identity "old-sid/old-att/inc-1" >/dev/null 2>&1
-chk_eq "R2-B3 the late stop lands on the seat that captured it" "old-sid" \
-  "$(ledger_field_in "$B3RUN" stop session_id 1)"
-chk_eq "R2-B3 and carries that seat's attempt, not the restart's" "old-att" \
-  "$(ledger_field_in "$B3RUN" stop attempt 1)"
+        --identity "$B3TOK" >/dev/null 2>&1
+chk_eq "R2-B3 the stop lands on the lane it tore down, not the newest row for the name" \
+  "$B3SID" "$(ledger_field_in "$B3RUN" stop session_id 1)"
+chk_eq "R2-B3 known-positive: a competing same-name start really was newer in the ledger" 1 \
+  "$([ -n "$(ledger_field_in "$B3RUN" start session_id 1)" ] && echo 1 || echo 0)"
 out="$(AGENT_WATCH_DIR="$B3RUN" bash "$AGENTCTL" phases --json --since 1h)"
 chk_eq "R2-B3 so the restarted seat is still open" "open" \
   "$(printf '%s' "$out" | python3 -c '
@@ -829,10 +841,10 @@ import json, sys
 seats = {s["session_id"]: s["state"] for s in json.load(sys.stdin)["sessions"]}
 print(seats.get("new-sid", "MISSING"))')"
 chk_eq "R2-B3 while the seat that really ended is stopped" "stopped" \
-  "$(printf '%s' "$out" | python3 -c '
+  "$(printf '%s' "$out" | python3 -c "
 import json, sys
-seats = {s["session_id"]: s["state"] for s in json.load(sys.stdin)["sessions"]}
-print(seats.get("old-sid", "MISSING"))')"
+seats = {s['session_id']: s['state'] for s in json.load(sys.stdin)['sessions']}
+print(seats.get('$B3SID', 'MISSING'))")"
 
 # an unobtainable triple is reported as unattributable, NEVER applied by elimination
 python3 "$CTL" --run-dir "$B3RUN" stop-residue same2 --killed 1 --reap-rc 0 \
@@ -892,6 +904,205 @@ chk_eq "R2-M1 known-positive: widen now past it and the seat closes at 1500s" "s
   "$(report_py "$M1RUN" 1000 4000 sessions.0.state)"
 chk_eq "R2-M1 known-positive: with nothing dropped" "0" \
   "$(report_py "$M1RUN" 1000 4000 future_dropped)"
+
+# ── §R3 the lane fence (review R2) ───────────────────────────────────────────────────
+# The R1-B3 fix carried the identity ACROSS teardown, which closed the late-stop payload but
+# left a sharper one: the token was captured before `lane_of`, so a stop that had read one
+# lane's identity could go on to locate, kill and clean the lane a same-name start had created
+# behind it — and then record the OLD seat as stopped while the killed one stayed `open`.
+# Both halves are now inside ONE critical section on the lane's existing single-writer lock:
+# the identity is read after the lane is located, and cleanup re-verifies it before clearing.
+echo "== R3: one fence over locate → kill → clean → record =="
+
+# Sets HOLDER; it does NOT echo the pid. A holder backgrounded inside a command substitution
+# does not survive the subshell that spawned it (probed: the lock was released before the case
+# under test ever ran, and the arrange assertion still passed because the marker had been
+# written), so the holder must be a background job of THIS shell.
+fence_hold() { # $1 run dir  $2 session  $3 seconds -> sets HOLDER
+  rm -f "$1/.held"
+  python3 -c '
+import fcntl, os, sys, time
+path, secs = sys.argv[1], float(sys.argv[2])
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX)
+sys.stderr.write("held\n")
+sys.stderr.flush()
+time.sleep(secs)
+' "$1/$2.duplex.wlock" "$3" 2>"$1/.held" &
+  HOLDER=$!
+}
+fence_wait_held() { # $1 run dir — block until the holder says it owns the lock
+  local i=0
+  while [ "$i" -lt 100 ]; do
+    grep -q held "$1/.held" 2>/dev/null && return 0
+    /bin/sleep 0.05; i=$((i + 1))
+  done
+  return 1
+}
+
+# R3-1 — a stop that cannot take the fence changes nothing and records nothing
+F1RUN="$SANDBOX/fence-stop"
+F1TOK="$(b2_seed "$F1RUN" fs)"
+fence_hold "$F1RUN" fs 30
+chk_eq "R3-1 arrange: the holder owns the fence" 0 \
+  "$(fence_wait_held "$F1RUN" && echo 0 || echo 1)"
+out="$(AGENT_WATCH_DIR="$F1RUN" AGENTCTL_FENCE_SECS=1 bash "$AGENTCTL" stop fs 2>&1)"; rc=$?
+chk_eq "R3-1 a fenced-out stop refuses instead of proceeding" 1 "$rc"
+chk_contains "R3-1 and names the fence it could not take" "lane fence" "$out"
+chk_contains "R3-1 and says nothing was recorded" "no phase-ledger row was written" "$out"
+chk_eq "R3-1 the ledger really is untouched" "" "$(ledger_events_in "$F1RUN")"
+chk_eq "R3-1 and the lane is still there — nothing was torn down" 1 \
+  "$([ -f "$F1RUN/fs.duplex.meta" ] && echo 1 || echo 0)"
+kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+# known-positive: with the fence free, the SAME command tears the lane down and records
+out="$(AGENT_WATCH_DIR="$F1RUN" AGENTCTL_FENCE_SECS=5 AGENTCTL_REAP_GRACE=0 \
+       bash "$AGENTCTL" stop fs 2>&1)"; rc=$?
+chk_eq "R3-1 known-positive: released, the same stop succeeds" 0 "$rc"
+chk_eq "R3-1 known-positive: and records exactly one ending" "stop" "$(ledger_events_in "$F1RUN")"
+chk_eq "R3-1 known-positive: on the seat it tore down" \
+  "$(printf '%s' "$F1TOK" | cut -d/ -f1)" "$(ledger_field_in "$F1RUN" stop session_id 1)"
+
+# R3-2 — a same-name START is held by the same fence, so a restart cannot slip inside a
+# teardown. This is what makes the reentry payload unreachable rather than merely detected.
+F2RUN="$SANDBOX/fence-start"; rm -rf "$F2RUN"; mkdir -p "$F2RUN"
+F2WT="$SANDBOX/fence-wt"; mkdir -p "$F2WT"
+printf 'claim the lane\nPreflight: ls => ok\n' > "$SANDBOX/fence-goal.md"
+fence_hold "$F2RUN" fstart 30
+chk_eq "R3-2 arrange: the holder owns the fence" 0 \
+  "$(fence_wait_held "$F2RUN" && echo 0 || echo 1)"
+out="$(AGENT_WATCH_DIR="$F2RUN" AGENTCTL_FENCE_SECS=1 \
+       bash "$AGENTCTL" start omp fstart "$F2WT" --goal "$SANDBOX/fence-goal.md" 2>&1)"; rc=$?
+chk_eq "R3-2 a fenced-out start refuses" 1 "$rc"
+chk_contains "R3-2 and names the fence" "lane fence" "$out"
+chk_eq "R3-2 it claimed NOTHING: no fifo" 0 \
+  "$([ -e "$F2RUN/fstart.duplex.in" ] && echo 1 || echo 0)"
+chk_eq "R3-2 no meta" 0 "$([ -e "$F2RUN/fstart.duplex.meta" ] && echo 1 || echo 0)"
+chk_eq "R3-2 and no start row" "" "$(ledger_events_in "$F2RUN")"
+kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+out="$(AGENT_WATCH_DIR="$F2RUN" AGENTCTL_FENCE_SECS=5 \
+       bash "$AGENTCTL" start omp fstart "$F2WT" --goal "$SANDBOX/fence-goal.md" 2>&1)"; rc=$?
+chk_eq "R3-2 known-positive: released, the same start succeeds" 0 "$rc"
+chk_eq "R3-2 known-positive: and opens its seat in the ledger" "start" \
+  "$(ledger_events_in "$F2RUN")"
+AGENT_WATCH_DIR="$F2RUN" AGENTCTL_REAP_GRACE=0 bash "$AGENTCTL" stop fstart >/dev/null 2>&1
+sweep_fakes
+
+# R3-3 — the reentry payload, end to end, with the teardown OBSERVABLY inside its critical
+# section. A previous cut of this case ran the start only after the stop had already finished,
+# which the mutation probe showed to be non-discriminating (it stayed green unfenced). Now the
+# stop is made slow INSIDE the fence — a fake `pgrep` reports survivors for the first few polls
+# so the reap keeps the lock for a few hundred ms and still succeeds — and the start is
+# attempted while a NB-flock probe proves the lock is held. Unfenced, that start walks straight
+# in; fenced, it is refused.
+fence_busy() { # $1 run dir  $2 session -> 1 when somebody else holds the fence
+  python3 -c '
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    print(1)
+else:
+    print(0)
+' "$1/$2.duplex.wlock"
+}
+F3RUN="$SANDBOX/fence-order"
+F3TOK="$(b2_seed "$F3RUN" reent)"
+F3SID="$(printf '%s' "$F3TOK" | cut -d/ -f1)"
+# pane_pid 999999 is above every reachable pid here, so the reap's TERM/KILL can never touch a
+# real process group — the fake `pgrep` is the only thing that "sees" that group, and its
+# call counter is what makes the hold long enough to observe.
+printf 'engine=omp\ncwd=%s\npane_pid=999999\n' "$F2WT" > "$F3RUN/reent.duplex.meta"
+export FAKE_TMUX_STATE="$SANDBOX/tmux-state"; mkdir -p "$FAKE_TMUX_STATE"
+cat > "$BIN/tmux" <<'EOF'
+#!/usr/bin/env bash
+sub="$1"; shift || true
+name=""; cwd=""; cmd=""
+while [ "$#" -gt 0 ]; do case "$1" in
+  -s|-t) name="$2"; shift 2;;
+  -c) cwd="$2"; shift 2;;
+  -d|-p) shift;;
+  *) cmd="$1"; shift;;
+esac; done
+name="${name#=}"; name="${name%:}"
+case "$sub" in
+  new-session)
+    ( cd "${cwd:-/}" && exec bash -c "$cmd" ) >/dev/null 2>&1 &
+    echo $! > "$FAKE_TMUX_STATE/$name.pid"; exit 0 ;;
+  display-message)
+    pid="$(cat "$FAKE_TMUX_STATE/$name.pid" 2>/dev/null)"
+    [ -n "$pid" ] && echo "0 $pid"; exit 0 ;;
+  has-session)
+    pid="$(cat "$FAKE_TMUX_STATE/$name.pid" 2>/dev/null)" || exit 1
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null ;;
+  kill-session)
+    pid="$(cat "$FAKE_TMUX_STATE/$name.pid" 2>/dev/null)"
+    if [ -n "$pid" ]; then pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; fi
+    rm -f "$FAKE_TMUX_STATE/$name.pid"; exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+cat > "$BIN/pgrep" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$F3RUN/.pgrep" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "$F3RUN/.pgrep"
+[ "\$n" -lt 3 ] && exit 0 || exit 1
+EOF
+# the reap's grace loop must really elapse, so this block gets a real sleep back
+printf '#!/usr/bin/env bash\nexec /bin/sleep "$@"\n' > "$BIN/sleep"
+chmod +x "$BIN/tmux" "$BIN/pgrep" "$BIN/sleep"
+( AGENT_WATCH_DIR="$F3RUN" AGENTCTL_FENCE_SECS=20 AGENTCTL_REAP_GRACE=1 \
+  bash "$AGENTCTL" stop reent >"$F3RUN/.stopout" 2>&1 ) &
+STOPPER=$!
+i=0; BUSY=0
+while [ "$i" -lt 200 ]; do
+  [ "$(fence_busy "$F3RUN" reent)" = 1 ] && { BUSY=1; break; }
+  /bin/sleep 0.02; i=$((i + 1))
+done
+chk_eq "R3-3 arrange: the teardown is observably holding the fence" 1 "$BUSY"
+out="$(AGENT_WATCH_DIR="$F3RUN" AGENTCTL_FENCE_SECS=1 \
+       bash "$AGENTCTL" start omp reent "$F2WT" --goal "$SANDBOX/fence-goal.md" 2>&1)"; rc=$?
+chk_eq "R3-3 a same-name start cannot enter a live teardown" 1 "$rc"
+chk_contains "R3-3 and is told which fence stopped it" "lane fence" "$out"
+wait "$STOPPER" 2>/dev/null
+chk_eq "R3-3 the teardown itself completed" 1 \
+  "$(grep -c 'reaped process group' "$F3RUN/.stopout")"
+out="$(AGENT_WATCH_DIR="$F3RUN" AGENTCTL_FENCE_SECS=20 \
+       bash "$AGENTCTL" start omp reent "$F2WT" --goal "$SANDBOX/fence-goal.md" 2>&1)"; rc=$?
+chk_eq "R3-3 known-positive: once released, the same start succeeds" 0 "$rc"
+chk_eq "R3-3 the ledger shows the ending before the new beginning" "stop start" \
+  "$(ledger_events_in "$F3RUN")"
+chk_eq "R3-3 the ending names the seat that was torn down" "$F3SID" \
+  "$(ledger_field_in "$F3RUN" stop session_id 1)"
+chk_eq "R3-3 and the new seat is a different session_id" 1 \
+  "$([ "$(ledger_field_in "$F3RUN" start session_id 1)" != "$F3SID" ] && echo 1 || echo 0)"
+AGENT_WATCH_DIR="$F3RUN" AGENTCTL_REAP_GRACE=0 bash "$AGENTCTL" stop reent >/dev/null 2>&1
+rm -f "$BIN/pgrep"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/sleep"; chmod +x "$BIN/sleep"
+install_running_tmux
+sweep_fakes
+
+# R3-4 — belt and braces: if the identity DOES change between the kill and the cleanup, the
+# row is withheld and the drift is said out loud. Under the fence this should be unreachable;
+# it is checked because a row naming the wrong seat is invisible to every reader.
+F4RUN="$SANDBOX/fence-drift"
+F4TOK="$(b2_seed "$F4RUN" drift)"
+python3 "$CTL" --run-dir "$F4RUN" identity replace drift >/dev/null 2>&1
+out="$(python3 "$CTL" --run-dir "$F4RUN" stop-cleanup drift --token t1 \
+         --identity "$F4TOK" 2>&1)"
+chk_contains "R3-4 cleanup says the identity drifted" "identity drifted" "$out"
+out2="$(python3 "$CTL" --run-dir "$F4RUN" stop-sentinel drift --token t1 --reap-rc 0 \
+          --identity "$F4TOK" 2>&1)"
+chk_eq "R3-4 so no stop row is written" "" "$(ledger_events_in "$F4RUN")"
+chk_contains "R3-4 and the sentinel says why" "no phase-ledger stop row" "$out2"
+# a LOST handoff is the same class of missing evidence, and costs the row for the same reason
+F5RUN="$SANDBOX/fence-nohandoff"
+F5TOK="$(b2_seed "$F5RUN" lost)"
+out="$(python3 "$CTL" --run-dir "$F5RUN" stop-sentinel lost --token t9 --reap-rc 0 \
+         --identity "$F5TOK" 2>&1)"
+chk_eq "R3-4 a sentinel with no cleanup handoff records nothing" "" \
+  "$(ledger_events_in "$F5RUN")"
+chk_contains "R3-4 and says the handoff is missing" "is missing, or is not this stop's" "$out"
 
 # ── §V the verb is a reading, and stays one ─────────────────────────────────────────
 echo "== V: numbers only — the verb never renders a verdict =="

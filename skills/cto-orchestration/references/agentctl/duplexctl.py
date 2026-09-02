@@ -4029,7 +4029,24 @@ def main() -> None:
     # gets and a different one from any other stop invocation's
     p_clean.add_argument("--token", default="",
                          help="per-invocation nonce stamped on the sentinel handoff sample")
+    p_clean.add_argument("--identity", required=True,
+                         help="`identity token` the shell captured INSIDE the lane fence; this "
+                              "verb re-reads the lane's identity before clearing it and stamps "
+                              "agreement (or drift) onto the sentinel handoff")
     p_clean.set_defaults(func=watchctl.cmd_stop_cleanup)
+    # The fence both `agentctl start` and `agentctl stop` take around their whole sequence. It
+    # locks an fd the SHELL holds open, so the hold outlives this process — see cmd_lane_fence.
+    p_fence = sub.add_parser("lane-fence", help="take the lane's single-writer lock on an "
+                                                "inherited fd; the caller's fd owns the hold")
+    p_fence.add_argument("session")
+    p_fence.add_argument("--fd", type=int, required=True,
+                         help="file descriptor the caller opened on <name>.duplex.wlock")
+    p_fence.add_argument("--timeout", type=float, required=True,
+                         help="seconds to wait; expiry is a REFUSAL, never a free pass")
+    p_fence.add_argument("--gate", required=True,
+                         help="label used in the refusal line (start / stop)")
+    p_fence.set_defaults(func=watchctl.cmd_lane_fence)
+
 
     p_sent = sub.add_parser("stop-sentinel", help="false-DONE sentinel, sampled after the reap")
     p_sent.add_argument("session")
