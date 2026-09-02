@@ -1336,4 +1336,53 @@ chk_eq "③ stop removes the delivery log with the rest of the control state" 0 
 unset FAKE_OMP_QUEUED FAKE_OMP_STATE_FILE FAKE_PROVIDER_LOG
 sweep_fakes; sandbox_clean
 
+# ── prog-doc-omp-unchanged: the omp lane has NO tool-frame vocabulary, so the new
+#    self-observation filter cannot reach it — whatever the frames happen to look like ──────
+# [n/a], never [unknown]: an omp stream carries lane protocol only (ready, correlated
+# responses, agent_start/agent_end), so `tools` votes on nothing and accuses nobody. The two
+# sessions below get streams shaped like SELF-OBSERVATION and like REAL WORK respectively; the
+# published verdict and its sub-reason word must be identical, because neither was read.
+# A live engine is required: classify's omp projector asks the ENGINE for its turn state.
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wt"; mkdir -p "$WT"
+printf 'investigate the thing\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' \
+  > "$SANDBOX/goal.md"
+export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
+export FAKE_OMP_STATE_FILE="$SANDBOX/omp-state"
+printf 'streaming' > "$FAKE_OMP_STATE_FILE"       # RUNNING, so the progress union is consulted
+OMPREPO="$SANDBOX/omprepo"; mkdir -p "$OMPREPO"   # a repo, so the REPO source can be judged
+git -C "$OMPREPO" init -q 2>/dev/null
+git -C "$OMPREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
+omp_progress() { AGENT_WATCH_PROGRESS_MINS=0.01 bash "$AGENTCTL" status "$1" 2>&1; }
+omp_reason() { printf '%s\n' "$1" | sed -n 's/.*\(reason=[a-z+-]*\).*/\1/p' | head -1; }
+for pair in "pgOMPSELF:agentctl status pgOMPSELF" "pgOMPWORK:pytest -q tests/unit"; do
+  s="${pair%%:*}"; cmd="${pair#*:}"
+  bash "$AGENTCTL" start omp "$s" "$OMPREPO" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+  rc="$(omp_progress "$s" >/dev/null 2>&1; echo $?)"
+  chk_eq "prog-doc-omp-unchanged: [$s] the first read opens the window (RUNNING)" 10 "$rc"
+  /bin/sleep 1
+  # a codex-shaped commandExecution frame in an OMP stream: the counter must not read it at all
+  printf '%s\n' "{\"method\":\"item/started\",\"params\":{\"item\":{\"type\":\"commandExecution\",\"command\":\"$cmd\"}}}" \
+    >> "$WATCH_RUN_DIR/$s.duplex.events.jsonl"
+  eval "OUT_$s=\"\$(omp_progress $s)\"; RC_$s=\$?"
+  chk_eq "prog-doc-omp-unchanged: [$s] the tools source never voted" "false" \
+    "$(python3 -c '
+import json, sys
+try:
+    print(json.dumps(json.load(open(sys.argv[1])).get("tools_j")))
+except Exception:
+    print("")' "$WATCH_RUN_DIR/$s.duplex.progress")"
+  bash "$AGENTCTL" stop "$s" >/dev/null 2>&1
+done
+chk_eq "prog-doc-omp-unchanged: both streams reach the SAME typed exit" "$RC_pgOMPWORK" \
+  "$RC_pgOMPSELF"
+chk_eq "prog-doc-omp-unchanged: and the SAME sub-reason word — nothing was read either way" \
+  "$(omp_reason "$OUT_pgOMPWORK")" "$(omp_reason "$OUT_pgOMPSELF")"
+chk_eq "prog-doc-omp-unchanged: the shared verdict really is the frozen one (14)" 14 \
+  "$RC_pgOMPSELF"
+chk_not_contains "prog-doc-omp-unchanged: and tools is never named as a broken gauge" \
+  "tools —" "$OUT_pgOMPSELF"
+unset FAKE_OMP_STATE_FILE
+sweep_fakes; sandbox_clean
+
 summary

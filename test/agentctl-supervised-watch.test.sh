@@ -2390,4 +2390,193 @@ chk_eq "ob-tail-bounded-600: and the newest row survived" 1 \
   "$(printf '%s\n' "$rows6" | tail -1 | grep -c 'case-12')"
 unset AGENT_WATCH_MAX_POLLS
 sw_clean
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+echo "== PROG: the tools source does not count this lane's own observation verbs =="
+# Field motive (2026-09-02): the review seat's entire 2h03m of "tool activity" was ten
+# `agentctl status` / `agentctl watch` invocations on ITSELF — watching work is not doing it,
+# so the progress clock stayed alive on self-observation alone. The frames below are the REAL
+# ones from that seat's stream (sanitized to the fields under test), because the shape that
+# matters is codex's own nesting: `/bin/zsh -lc "bash -lc 'agentctl status <s>'"` — a
+# single-level parse sees `/bin/zsh` and counts every self-poll as work.
+sw_sandbox
+export AGENT_WATCH_STALL_MINS=0          # isolate: the STREAM probe must not answer for this
+PGREPO="$SANDBOX/pgrepo"; mkdir -p "$PGREPO"
+git -C "$PGREPO" init -q 2>/dev/null
+git -C "$PGREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
+PGW=0.01                                 # window in MINUTES; 0.01 = 0.6s
+FIXTURE="duplex-fixtures/codex-commandexec-observe.jsonl"
+
+pg_seed2() { # $1 session  [$2 engine (default codex)]
+  seed "$1"
+  printf 'engine=%s\ncwd=%s\nround=1\nthread=t-fixture\n' "${2:-codex}" "$PGREPO" \
+    > "$WATCH_RUN_DIR/$1.duplex.meta"
+}
+pg_status2() { AGENT_WATCH_PROGRESS_MINS=$PGW bash "$AGENTCTL" status "$1" 2>&1; }
+# REAL frames, selected by what their command string contains
+pg_real() { # $1 session  $2 substring of params.item.command
+  python3 - "$WATCH_RUN_DIR/$1.duplex.events.jsonl" "$2" "$FIXTURE" <<'PGPY'
+import json, sys
+dst, sel, src = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(dst, "a", encoding="utf-8") as out:
+    for line in open(src, encoding="utf-8"):
+        if sel in json.loads(line)["params"]["item"]["command"]:
+            out.write(line)
+PGPY
+}
+# a synthetic codex commandExecution pair (single-quoted commands only — this is shell)
+pg_cx() { # $1 session  $2 command
+  ev "$1" "{\"method\":\"item/started\",\"params\":{\"threadId\":\"t-fixture\",\"item\":{\"type\":\"commandExecution\",\"id\":\"c$RANDOM\",\"command\":\"$2\",\"status\":\"inProgress\"}}}"
+}
+# claude's own vocabulary: a Bash call with a real command, and its answer frame
+pg_bash() { # $1 session  $2 id  $3 command
+  ev "$1" "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"$2\",\"name\":\"Bash\",\"input\":{\"command\":\"$3\"}}]}}"
+  ev "$1" "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"$2\",\"content\":\"ok\"}]}}"
+}
+
+# ── prog-neg-codex-self-observe-frames-silent: the real self-polls, real shape ────────────
+pg_seed2 pgSELF
+rc="$(pg_status2 pgSELF >/dev/null 2>&1; echo $?)"
+chk_eq "prog-neg-codex-self-observe-frames-silent: the first read opens the window (RUNNING)" \
+  10 "$rc"
+/bin/sleep 1
+pg_real pgSELF "agentctl status guard21-codex-gr"
+pg_real pgSELF "agentctl watch guard21-codex-gr"
+chk_eq "prog-neg-codex-self-observe-frames-silent: the fixture really delivered frames" 1 \
+  "$([ "$(grep -c . "$WATCH_RUN_DIR/pgSELF.duplex.events.jsonl")" -ge 8 ] && echo 1 || echo 0)"
+out="$(pg_status2 pgSELF)"; rc=$?
+chk_eq "prog-neg-codex-self-observe-frames-silent: ten self-polls later the window still fires" \
+  14 "$rc"
+chk_contains "prog-neg-codex-self-observe-frames-silent: both judged sources read silent" \
+  "reason=repo-silent+tools-silent" "$out"
+
+# ── prog-pos-codex-pytest-frames-count: real work still refreshes the clock ───────────────
+pg_seed2 pgWORK
+rc="$(pg_status2 pgWORK >/dev/null 2>&1; echo $?)"
+chk_eq "prog-pos-codex-pytest-frames-count: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+pg_cx pgWORK 'pytest -q tests/unit -k progress'
+out="$(pg_status2 pgWORK)"; rc=$?
+chk_eq "prog-pos-codex-pytest-frames-count: a real command frame WITHHOLDS the verdict" 10 "$rc"
+chk_contains "prog-pos-codex-pytest-frames-count: and the engine is published as active" \
+  "progress_reason=repo-silent+tools-active" "$out"
+
+# ── prog-neg-codex-inventory-silent: the read-only verb set is the whole set ───────────────
+pg_seed2 pgINV
+rc="$(pg_status2 pgINV >/dev/null 2>&1; echo $?)"
+chk_eq "prog-neg-codex-inventory-silent: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+pg_cx pgINV 'agentctl inventory --dry-run'
+pg_cx pgINV 'agentctl states --json'
+out="$(pg_status2 pgINV)"; rc=$?
+chk_eq "prog-neg-codex-inventory-silent: inventory/states polls are not work either" 14 "$rc"
+chk_contains "prog-neg-codex-inventory-silent: as tools-silent, not a broken gauge" \
+  "reason=repo-silent+tools-silent" "$out"
+
+# ── prog-pos-codex-wrapper-abs-path-still-filtered: carriers and absolute paths ────────────
+pg_seed2 pgWRAP
+rc="$(pg_status2 pgWRAP >/dev/null 2>&1; echo $?)"
+chk_eq "prog-pos-codex-wrapper-abs-path-still-filtered: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+pg_cx pgWRAP 'timeout 30 /opt/agentctl/agentctl status pgWRAP'
+pg_cx pgWRAP 'AGENT_WATCH_SYNC=1 agentctl watch pgWRAP'
+out="$(pg_status2 pgWRAP)"; rc=$?
+chk_eq "prog-pos-codex-wrapper-abs-path-still-filtered: same verb through a carrier + abs path" \
+  14 "$rc"
+chk_contains "prog-pos-codex-wrapper-abs-path-still-filtered: still silent, not active" \
+  "reason=repo-silent+tools-silent" "$out"
+
+# ── prog-doc-raw-run-read-counts: reading the run dir by hand IS work (declared boundary) ──
+pg_seed2 pgRAW
+rc="$(pg_status2 pgRAW >/dev/null 2>&1; echo $?)"
+chk_eq "prog-doc-raw-run-read-counts: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+pg_cx pgRAW 'cat /tmp/agent-watch-run/pgRAW.duplex.events.jsonl'
+out="$(pg_status2 pgRAW)"; rc=$?
+chk_eq "prog-doc-raw-run-read-counts: a forensic seat reading the raw stream still counts" \
+  10 "$rc"
+chk_contains "prog-doc-raw-run-read-counts: published as engine activity" \
+  "progress_reason=repo-silent+tools-active" "$out"
+# the same rule from the other side: an agentctl verb that CHANGES the session counts too
+pg_seed2 pgSTEER
+rc="$(pg_status2 pgSTEER >/dev/null 2>&1; echo $?)"
+chk_eq "prog-doc-raw-run-read-counts: (steer control) first read RUNNING" 10 "$rc"
+/bin/sleep 1
+pg_cx pgSTEER 'agentctl steer other-seat -f /tmp/ruling.md'
+out="$(pg_status2 pgSTEER)"; rc=$?
+chk_eq "prog-doc-raw-run-read-counts: dispatching a steer is work, not observation" 10 "$rc"
+chk_contains "prog-doc-raw-run-read-counts: (steer) published as engine activity" \
+  "progress_reason=repo-silent+tools-active" "$out"
+
+# ── prog-claude-bash-tool-filtered / prog-claude-other-tool-counts ─────────────────────────
+# claude's filter reaches EXACTLY what it can prove: a Bash call with readable command text,
+# and the tool_result that closes it (a filtered call must not keep the clock alive through
+# its own answer frame). Anything else keeps counting.
+pg_seed2 pgCLB claude
+rc="$(pg_status2 pgCLB >/dev/null 2>&1; echo $?)"
+chk_eq "prog-claude-bash-tool-filtered: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+pg_bash pgCLB t1 'agentctl status pgCLB'
+pg_bash pgCLB t2 'agentctl watch pgCLB'
+out="$(pg_status2 pgCLB)"; rc=$?
+chk_eq "prog-claude-bash-tool-filtered: the Bash self-poll AND its result frame are silent" \
+  14 "$rc"
+chk_contains "prog-claude-bash-tool-filtered: as tools-silent" \
+  "reason=repo-silent+tools-silent" "$out"
+pg_seed2 pgCLO claude
+rc="$(pg_status2 pgCLO >/dev/null 2>&1; echo $?)"
+chk_eq "prog-claude-other-tool-counts: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+# a NON-Bash tool (no shell body to prove anything about) and a Bash call with no command text
+ev pgCLO '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/repo/x.py"}}]}}'
+out="$(pg_status2 pgCLO)"; rc=$?
+chk_eq "prog-claude-other-tool-counts: a tool this filter cannot judge still counts" 10 "$rc"
+chk_contains "prog-claude-other-tool-counts: published as engine activity" \
+  "progress_reason=repo-silent+tools-active" "$out"
+/bin/sleep 1
+ev pgCLO '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r2","name":"Bash","input":{}}]}}'
+out="$(pg_status2 pgCLO)"; rc=$?
+chk_eq "prog-claude-other-tool-counts: a Bash frame with no readable command counts too" \
+  10 "$rc"
+
+# prog-doc-omp-unchanged lives in agentctl-duplex.test.sh: an omp session cannot be
+# hand-seeded (classify's omp projector asks the LIVE engine for its turn state), and that
+# suite is where the fake omp duplex engine already runs.
+
+# ── the verb table is ONE table: it may not drift from the CLI's own dispatch ──────────────
+pg_verbs="$(python3 - "$AW_DIR" <<'VBPY'
+import ast, os, re, sys
+
+d = sys.argv[1]
+table = None
+for node in ast.parse(open(os.path.join(d, "duplexctl.py"), encoding="utf-8").read()).body:
+    names = ([t.id for t in node.targets if isinstance(t, ast.Name)]
+             if isinstance(node, ast.Assign)
+             else [node.target.id] if isinstance(node, ast.AnnAssign)
+             and isinstance(node.target, ast.Name) else [])
+    if "AGENTCTL_VERBS" in names and isinstance(node.value, ast.Tuple):
+        table = {elt.elts[0].value: elt.elts[1].value for elt in node.value.elts}
+sh = open(os.path.join(d, "agentctl"), encoding="utf-8").read()
+# the dispatch `case` of the entry script: `  <verb>)  shift; …`
+block = sh.split('case "${1:-}" in', 1)[-1]
+dispatch = {m.group(1) for m in re.finditer(r"(?m)^  ([a-z][a-z-]*)\)", block)}
+dispatch -= {"watch-daemon"}                       # INTERNAL, documented as such
+bad = []
+if not table:
+    bad.append("AGENTCTL_VERBS-not-found")
+elif not dispatch:
+    bad.append("dispatch-not-found")
+else:
+    if set(table) - dispatch:
+        bad.append("table-only:" + ",".join(sorted(set(table) - dispatch)))
+    if dispatch - set(table):
+        bad.append("dispatch-only:" + ",".join(sorted(dispatch - set(table))))
+print(" ".join(bad) if bad else "AGREES %d observe=%d"
+      % (len(table), sum(1 for v in table.values() if v)))
+VBPY
+)"
+chk_eq "prog-neg-codex-inventory-silent: the verb table IS the CLI's dispatch, no second copy" \
+  "AGREES 8 observe=5" "$pg_verbs"
+unset AGENT_WATCH_STALL_MINS
+sw_clean
 summary

@@ -469,8 +469,17 @@ cd "$(dirname "$0")"
 # `_report_over_budget` + the status note sit in watchctl (+62). agentctl grew 9 lines of pure
 # plumbing (one flag in two verbs, one meta line, one `set-expect` call) and the bash SHARE
 # ratchet in agentctl-capabilities.test.sh C10 still measures 60/1000 against its 76 ceiling.
+# duplexctl.py 3861→3983 (2026-09-02, progress source excludes this lane's own observation
+# verbs): +122, and it had to be duplexctl — the two engine tool counters live there and the
+# predicate is now the ONE thing they share, so the two vocabularies cannot disagree about what
+# self-observation is. The weight is the verb TABLE (one table, and a test pins it against the
+# entry script's own dispatch), the shell-shape reader the real frames demand (codex emits
+# `/bin/zsh -lc "bash -lc 'agentctl status <s>'"`, so a single-level parse counts every
+# self-poll as work), the claude side's paired tool_result suppression, and the doctrine
+# paragraph declaring the three boundaries this rule refuses to cross (observation verbs only,
+# every segment or none, hand-reads of `$RUN/<s>.*` still count).
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 3861
+skills/cto-orchestration/references/agentctl/duplexctl.py 3983
 skills/cto-orchestration/references/agentctl/watchctl.py 1570
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 629

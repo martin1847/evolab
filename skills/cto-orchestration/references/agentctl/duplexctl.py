@@ -1798,18 +1798,131 @@ def progress_fingerprint(sess: Session, budget: ProbeBudget) -> tuple[str | None
 #
 # Both answer None = UNKNOWN, never a confident zero: a probe that could not look must not vote
 # "nothing happened". Which is not the same as "the verdict is dead" — see progress_verdict.
+#
+# ── what the `tools` source does NOT count: this lane's own observation verbs ──────────
+# A seat polling `agentctl status/watch` is WATCHING work, not doing it, and those polls are
+# command frames like any other — so a seat that only observes (its own session, or a child's)
+# kept the progress clock alive forever. Field 2026-09-02: a review seat's whole 2h03m of
+# "tool activity" was ten `agentctl status`/`watch` invocations on itself.
+# THE VERB SET IS A TABLE, ONCE (below), and the boundary is deliberately narrow:
+#   * only the PUBLIC OBSERVATION verbs — read-only about the WORK (they still write lane
+#     control state: a waiter pid, a lease, a terminal record);
+#   * only when EVERY segment of the command line is one of them, so `agentctl status s &&
+#     pytest` still counts (over-filtering is the one direction that can manufacture a
+#     STALLED-PROGRESS, and this rule refuses to guess);
+#   * reading `$RUN/<s>.*` by hand (`cat`/`python3` on the events or meta files) COUNTS — a
+#     forensic seat reading logs is working. Accepted boundary, not an oversight.
+AGENTCTL_VERBS: tuple[tuple[str, bool], ...] = (
+    ("start", False), ("steer", False), ("stop", False),           # they change the session
+    ("status", True), ("watch", True), ("states", True),           # they only look at it
+    ("capabilities", True), ("inventory", True),
+)
+OBSERVE_VERBS = frozenset(verb for verb, observe in AGENTCTL_VERBS if observe)
+# hosts that merely CARRY a command: the real command is one of their arguments
+WRAPPER_HOSTS = frozenset({"timeout", "env", "nice", "nohup", "stdbuf"})
+SHELL_HOSTS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+# the engines really do wrap: codex's own frames read `/bin/zsh -lc "bash -lc 'agentctl …'"`,
+# so a single-level parse would see `/bin/zsh` and count every self-poll as work
+SHELL_DEPTH = 4
+_ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_DURATION = re.compile(r"^[0-9]+(\.[0-9]+)?[smhd]?$")
+
+
+def _segments(command: str) -> list[list[str]] | None:
+    """The command line split into shell segments of tokens, or None when it cannot be lexed at
+    all. Unlexable is never "an observation": a frame nobody can read must keep counting as
+    work, exactly like every other unknown in this union."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token and not token.strip("&|;()\n"):
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    return [seg for seg in segments if seg]
+
+
+def _observe_segment(tokens: list[str], depth: int) -> bool:
+    """Whether ONE segment is an agentctl observation verb — unwrapping the `sh -c` nesting the
+    engines emit, bounded by SHELL_DEPTH. An env-assignment prefix (`AGENT_WATCH_SYNC=1 …`) and
+    a carrier host (`timeout 30 /abs/agentctl status s`) are skipped; anything else at command
+    position ends it, so `rg agentctl status src/` is NOT an observation — the command position
+    is what makes an argument an argument."""
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if _ENV_ASSIGN.match(token) or token.startswith("-") or _DURATION.match(token):
+            i += 1
+            continue
+        base = os.path.basename(token)
+        if base in WRAPPER_HOSTS:
+            i += 1
+            continue
+        if base in SHELL_HOSTS:
+            # `-c` / `-lc` / `-ic`: the NEXT token is a whole command line of its own
+            if depth <= 0 or not any(t.startswith("-") and "c" in t for t in tokens[:i + 3]):
+                return False
+            nested = next((t for t in tokens[i + 1:] if not t.startswith("-")), None)
+            return nested is not None and _observe_command(nested, depth - 1)
+        if base != "agentctl":
+            return False
+        verb = next((t for t in tokens[i + 1:] if not t.startswith("-")), None)
+        return verb in OBSERVE_VERBS
+    return False
+
+
+def _observe_command(command: str, depth: int = SHELL_DEPTH) -> bool:
+    segments = _segments(command)
+    if not segments:
+        return False
+    return all(_observe_segment(seg, depth) for seg in segments)
+
+
+def agentctl_observe_command(command: object) -> bool:
+    """True when this command line does nothing but LOOK at the lane through agentctl's public
+    observation verbs — the ONE predicate both engine counters use, so the two vocabularies
+    cannot disagree about what self-observation is."""
+    return isinstance(command, str) and bool(command.strip()) and _observe_command(command)
+
+
 def claude_tool_events(sess: Session, frames: list[dict]) -> int | None:
     """Count of claude's own tool/command frames — the SAME vocabulary claude_inflight pairs
     (tool_use / tool_result items, command_lifecycle transitions), counted instead of paired:
-    a tool that opened and closed between two polls left no unmatched pair but IS activity."""
+    a tool that opened and closed between two polls left no unmatched pair but IS activity.
+
+    A Bash `tool_use` whose command is nothing but this lane's observation verbs is NOT
+    activity, and neither is the `tool_result` that closes it — a filtered call must not keep
+    the clock alive through its own answer frame. The filter reaches EXACTLY the frames it can
+    prove: a tool this stream does not show as Bash, or a Bash call whose command text is not
+    a readable string, keeps counting. That gap is real and declared, not silent: claude's
+    `command_lifecycle` frames carry no command text in this lane's vocabulary at all."""
     count = 0
+    observed: set[str] = set()          # tool_use ids whose call was filtered out
     for frame in frames:
         ftype = frame.get("type")
         if ftype == "command_lifecycle":
             count += 1
         elif ftype in ("assistant", "user"):
             for item in (frame.get("message") or {}).get("content") or []:
-                if isinstance(item, dict) and item.get("type") in ("tool_use", "tool_result"):
+                if not isinstance(item, dict):
+                    continue
+                kind = item.get("type")
+                if kind == "tool_use":
+                    argv = item.get("input")
+                    if item.get("name") == "Bash" and isinstance(argv, dict) \
+                            and agentctl_observe_command(argv.get("command")):
+                        if isinstance(item.get("id"), str):
+                            observed.add(item["id"])
+                        continue
+                    count += 1
+                elif kind == "tool_result":
+                    if item.get("tool_use_id") in observed:
+                        continue
                     count += 1
     return count
 
@@ -1817,14 +1930,23 @@ def claude_tool_events(sess: Session, frames: list[dict]) -> int | None:
 def codex_tool_events(sess: Session, frames: list[dict]) -> int | None:
     """Count of codex item lifecycle frames on our thread. An UNSCOPED frame is counted, the
     one place this differs from codex_inflight's pairing: over-counting can only refresh the
-    progress clock (no verdict), while dropping a frame could manufacture a STALLED-PROGRESS."""
+    progress clock (no verdict), while dropping a frame could manufacture a STALLED-PROGRESS.
+
+    The ONE deliberate exception is a commandExecution item whose `params.item.command` is
+    nothing but this lane's observation verbs (started and completed alike): a seat polling
+    `agentctl status` is watching work, not doing it."""
     ours = sess.meta.get("thread")
     count = 0
     for frame in frames:
         if frame.get("method") not in ("item/started", "item/completed"):
             continue
-        tid = (frame.get("params") or {}).get("threadId")
+        params = frame.get("params") or {}
+        tid = params.get("threadId")
         if ours and tid is not None and tid != ours:
+            continue
+        item = params.get("item")
+        if isinstance(item, dict) and item.get("type") == "commandExecution" \
+                and agentctl_observe_command(item.get("command")):
             continue
         count += 1
     return count
