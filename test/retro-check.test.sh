@@ -413,5 +413,90 @@ out="$(run "$r")"; rc=$?
 assert_rc "$rc" 1 "TL7/half-billed rc"
 assert_has "$out" "批条目缺时间记账" "TL7/half accounting is unbilled"
 
+# --- 第 9 检的读数面 (MECHANICAL INPUT): 只出数, 不出裁决, 不动 PASS/FAIL --------------
+# The pane's whole risk is that a printed number gets read as a ruling, so these cases pin the
+# three properties that stop it: the banner is present, no `wall≈`/`avoidable≈` suggestion is
+# printed, and the existing accounting verdict is byte-identical with the pane on or off.
+# A fake `agentctl` on PATH keeps the readings deterministic — the machine's real run dir must
+# never leak into a test case (same rule case J..M follow for check 6).
+mkphases(){ # $1 dir, $2 json body -> a PATH bin holding a fake `agentctl phases`
+  mkdir -p "$1"
+  { printf '#!/usr/bin/env bash\n[ "$1" = phases ] || exit 1\ncat <<'\''JSON'\''\n'
+    printf '%s\n' "$2"
+    printf 'JSON\n'
+  } > "$1/agentctl"
+  chmod +x "$1/agentctl"
+}
+PH_OK='{"coverage":"ok","shards_missing":[],"skipped":1,"clock_regressed":2,
+ "sessions":[{"name":"a"},{"name":"b"}],
+ "readings":{"batch_span_s":5700,"seat_wall_s":10260,"review_wall_s":2520,
+ "idle_span_s":720,"idle_segments":2,
+ "idle_top":[{"from":"2026-09-02T01:20:00.000Z","to":"2026-09-02T01:27:00.000Z","seconds":420}],
+ "dispatch_latency":[{"name":"a","class":"DONE","next_event":"start","next_name":"b",
+ "seconds":480}],"dispatch_latency_max_s":480,"dispatch_pending":0}}'
+PH_UNKNOWN='{"coverage":"unknown","shards_missing":["20260901"],"skipped":0,
+ "clock_regressed":0,"sessions":[],"readings":{}}'
+
+# Case PH1 — readings available: the banner leads, the numbers follow, no suggestion is made,
+# and the accounting check keeps its own verdict (the green fixture is billed)
+r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_OK"
+out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
+        bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
+assert_rc "$rc" 0 "PH1/readings do not change rc"
+assert_has "$out" "MECHANICAL INPUT — DO NOT COPY AS VERDICT" "PH1/the banner leads the pane"
+assert_has "$out" "batch_span=95m" "PH1/batch span is rendered in minutes"
+assert_has "$out" "seat_wall=171m" "PH1/seat wall too"
+assert_has "$out" "seat machine-time" "PH1/and is labelled as machine-time, not wall clock"
+assert_has "$out" "review_wall=42m" "PH1/review wall is broken out"
+assert_has "$out" "idle_span=12m" "PH1/idle span is totalled"
+assert_has "$out" "dispatch_latency max=8m" "PH1/dispatch latency reports its maximum"
+assert_has "$out" "never summed" "PH1/and says it is never summed"
+assert_has "$out" "clock_regressed=2" "PH1/the excluded edges are surfaced, not hidden"
+assert_no  "$out" "wall≈" "PH1/no wall suggestion is offered"
+assert_no  "$out" "avoidable≈" "PH1/no avoidable suggestion is offered"
+assert_has "$out" "均记了 wall/avoidable" "PH1/the accounting check still reports its own verdict"
+
+# Case PH2 — the pane must not manufacture a pass: an UNBILLED entry still FAILs with the
+# readings printed right above it (that is the whole point — input, not verdict)
+r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_OK"
+printf '# agents\n- 批 %s effgate：效率强制层四件\n' "$TODAY" > "$r/AGENTS.md"
+out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
+        bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
+assert_rc "$rc" 1 "PH2/readings never bill an entry for the human"
+assert_has "$out" "MECHANICAL INPUT" "PH2/the pane still printed"
+assert_has "$out" "批条目缺时间记账" "PH2/and the accounting FAIL is untouched"
+
+# Case PH3 — coverage unknown: one n/a line, no numbers, verdict unchanged
+r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_UNKNOWN"
+out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
+        bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
+assert_rc "$rc" 0 "PH3/unknown coverage does not change rc"
+assert_has "$out" "phases: n/a (coverage unknown" "PH3/it says it cannot vouch for the window"
+assert_has "$out" "20260901" "PH3/and names the shard it is missing"
+assert_no  "$out" "MECHANICAL INPUT" "PH3/no banner over numbers it did not measure"
+assert_no  "$out" "batch_span" "PH3/and no numbers at all"
+assert_has "$out" "均记了 wall/avoidable" "PH3/the accounting verdict is byte-identical"
+
+# Case PH4 — `agentctl` is on PATH but has no ledger to answer from (silent, nonzero exit):
+# the same one-line degradation. The truly-absent-verb branch cannot be built by stripping
+# PATH — that would take `git`/`date` away too and degrade every other check in the same run
+# — so the honest fixture is a verb that answers with nothing.
+r="$(mkrepo)"; mkdir -p "$r/.fakebin"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$r/.fakebin/agentctl"; chmod +x "$r/.fakebin/agentctl"
+out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
+        bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
+assert_rc "$rc" 0 "PH4/a verb with nothing to say does not change rc"
+assert_has "$out" "phases: n/a" "PH4/a silent verb degrades to one n/a line"
+assert_no  "$out" "MECHANICAL INPUT" "PH4/and prints no readings"
+assert_has "$out" "均记了 wall/avoidable" "PH4/the accounting verdict is byte-identical"
+
+# Case PH5 — a verb that answers with garbage is not a reading either
+r="$(mkrepo)"; mkphases "$r/.fakebin" "not json at all"
+out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
+        bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
+assert_rc "$rc" 0 "PH5/an unreadable report does not change rc"
+assert_has "$out" "phases: n/a" "PH5/it degrades rather than guessing"
+assert_no  "$out" "MECHANICAL INPUT" "PH5/and prints no banner"
+
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

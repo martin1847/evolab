@@ -517,13 +517,50 @@ cd "$(dirname "$0")"
 # (separate batch), and the KILL CRITERION for the ruling itself — one live double report in 4
 # weeks and the reconciliation batch happens. A ruling recorded only in a review file is a
 # ruling the next batch re-derives from scratch.
+# duplexctl.py 4015→4089 / watchctl.py 1638→2055 / identity.py 1509→1671 / agentctl 658→663
+# (2026-09-03, 相位账本 + `agentctl phases` 读数): +658 python, +5 bash — the thin-entry
+# contract held (the entry script grew one usage line, one header line and a three-line
+# forwarding `case`; every judgement is python's). What the lines buy, and why none of it
+# could be cut instead:
+#  * the ledger itself (~145 lines in identity.py, half of it doctrine): shard naming by UTC
+#    DAY, the RFC3339-with-milliseconds stamp, the single-`os.write` O_APPEND writer, the
+#    closed five-event set, and `phase_resolve` — the identity triple from the active record
+#    while one exists, and from the ledger's own newest row for that name once teardown has
+#    cleared it, which is the only thing that makes a `stop` row attributable at all. It lives
+#    in identity.py because the ledger's aggregation key IS the identity triple and no other
+#    module may open those files.
+#  * the five commit points (~55 lines across duplexctl/watchctl/identity): one call each at
+#    the identity commit, the round commit, the terminal publish (inside the ONE writer, after
+#    the atomic rename, so a refused publish records nothing), the post-reap stop, and the
+#    waiter arm. Plus `_phase_start_failed` and the `started` box: the start row is durable
+#    BEFORE the goal frame leaves, so a prompt that dies in between has an opened seat that
+#    must be closed with a typed reason instead of reading `open` for the rest of the day.
+#  * the reader (~400 lines in watchctl.py, `cmd_phases` and its helpers). It is the biggest
+#    single piece and it is all judgement about the DATA, never about the work: `--since`
+#    grammar that refuses a naive instant (UTC skew that hides in a number is the worst kind),
+#    component-wise `--repo` containment so a sibling worktree sharing a name prefix is not
+#    this repo, append-order loading so a regressed clock is still visible, per-session window
+#    INTERSECTION with `truncated_start`, the state-transition read (terminal→steer reopens the
+#    seat AND keeps the earlier terminal), a sweep-line `idle_span`, per-terminal
+#    `dispatch_latency` that publishes no sum, and the three-state `coverage` with its shard
+#    census. None of it can move to bash (thin-entry) and none of it can move to retro-check
+#    (that file must not grow a second reader).
+#  * the doctrine comments this file prices per decision (~60 lines): why the readings are not
+#    a verdict, why `session_id` and not the name, why the ledger is fail-open, why the shard
+#    name carries no session prefix, and the KILL CRITERION for the whole face.
+# cto-guard-stop.py 129 and seat-liveness.py 276 are NEW ROWS, not growth: D10-1 shipped both
+# without a ratchet row, so they have been unmeasured since. Registered at their current size
+# — the ratchet's job is to notice the NEXT change, and a row that starts at today's count is
+# the only honest way to adopt an existing file.
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 4015
-skills/cto-orchestration/references/agentctl/watchctl.py 1638
-skills/cto-orchestration/references/agentctl/identity.py 1509
-skills/cto-orchestration/references/agentctl/agentctl 658
+skills/cto-orchestration/references/agentctl/duplexctl.py 4089
+skills/cto-orchestration/references/agentctl/watchctl.py 2055
+skills/cto-orchestration/references/agentctl/identity.py 1671
+skills/cto-orchestration/references/agentctl/agentctl 663
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
+skills/cto-orchestration/references/agentctl/cto-guard-stop.py 129
+skills/cto-orchestration/references/agentctl/seat-liveness.py 276
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked
 
@@ -663,10 +700,10 @@ chk_contains "W5 unreadable file is named" "ERROR $DX" "$UNREADABLE_OUT"
 # ERROR outranks BREACH: a tree that is both unmeasurable and over baseline must not report the
 # softer verdict, because the unmeasured file is the one nobody is watching.
 mk_tree "$SANDBOX/both" "$DX=-"
-mk_lines "$SANDBOX/both/skills/cto-orchestration/references/agentctl/identity.py" 1600
+mk_lines "$SANDBOX/both/skills/cto-orchestration/references/agentctl/identity.py" 1700
 run_gate "$SANDBOX/both"
 chk_eq "W5 ERROR outranks BREACH (rc)" 2 "$GRC"
-chk_contains "W5 the breach is still reported alongside" "grew 1509->1600" "$GOUT"
+chk_contains "W5 the breach is still reported alongside" "grew 1671->1700" "$GOUT"
 
 sandbox_clean
 summary

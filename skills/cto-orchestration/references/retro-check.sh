@@ -315,6 +315,77 @@ fi
 # 外加一条本检独有的——**记数从未改变过任何决策**（连续两个周期两个数都记了、没有一次因此
 # 改派发/砍轮数/换车道）⇒ kill：一个只被填写、从不被读的字段是仪式，不是门。
 echo "9) 批时间记账 (本周期「批」行须记 wall= / avoidable=):"
+# ── the READ-OUT half (2026-09-03) ────────────────────────────────────────────────────
+# This check's input used to be entirely human: both numbers were computed by hand off the
+# session transcripts, so all the check could verify was that SOMEBODY had typed two numbers.
+# `agentctl phases` gives the first of them a machine source, and this block prints it BEFORE
+# the accounting check — as INPUT to the person writing the entry.
+# It is deliberately not a verdict and not a suggestion: no `wall≈` / `avoidable≈` line is
+# printed. Avoidable minutes are a judgement about what a batch should have cost, and a machine
+# guess would be pasted into the ledger as if a machine had made that judgement. The banner
+# says which of the two this is, in the one place a reader cannot miss.
+# It never touches PASS/FAIL. Coverage `unknown` (a missing ledger shard, an empty ledger, no
+# `agentctl` on PATH, no python3) prints ONE `n/a` line and the accounting check below runs
+# byte-identically — a reading nobody can vouch for must not look like a measurement.
+# Window start comes from the SAME TODAY/YDAY cycle source as every other date-judging check
+# here (yesterday 00:00 local, or today 00:00 on a box with no date arithmetic), carried with
+# the local UTC offset: ledger rows are UTC, so a naive instant would skew by the timezone
+# without saying a word.
+PH_OFF="$(date +%z 2>/dev/null)"
+case "$PH_OFF" in
+  [+-][0-9][0-9][0-9][0-9]) PH_SINCE="${YDAY:-$TODAY}T00:00:00${PH_OFF%??}:${PH_OFF#???}" ;;
+  *) PH_SINCE="" ;;
+esac
+if [ -z "$PH_SINCE" ]; then
+  echo "  phases: n/a (date +%z gave no UTC offset — the cycle start cannot be spelled RFC3339)"
+elif ! command -v agentctl >/dev/null 2>&1; then
+  echo "  phases: n/a (agentctl not on PATH — no phase ledger to read)"
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "  phases: n/a (no python3 — the reading cannot be rendered)"
+else
+  PH_JSON="$(agentctl phases --json --since "$PH_SINCE" ${TOP:+--repo "$TOP"} 2>/dev/null)"
+  printf '%s' "$PH_JSON" | python3 -c '
+import json
+import sys
+
+raw = sys.stdin.read()
+try:
+    report = json.loads(raw)
+except ValueError:
+    print("  phases: n/a (agentctl phases produced no readable report)")
+    raise SystemExit(0)
+if report.get("coverage") == "unknown":
+    missing = ",".join(report.get("shards_missing") or []) or "-"
+    print("  phases: n/a (coverage unknown — ledger shards missing for %s)" % missing)
+    raise SystemExit(0)
+
+
+def mins(seconds):
+    return "n/a" if not isinstance(seconds, (int, float)) else "%.0fm" % (seconds / 60.0)
+
+
+read = report["readings"]
+print("  MECHANICAL INPUT — DO NOT COPY AS VERDICT")
+print("    coverage=%s  seats=%d  skipped=%d  clock_regressed=%d"
+      % (report["coverage"], len(report["sessions"]), report["skipped"],
+         report["clock_regressed"]))
+print("    batch_span=%s  seat_wall=%s (seat machine-time, parallel seats sum above wall)"
+      % (mins(read["batch_span_s"]), mins(read["seat_wall_s"])))
+print("    review_wall=%s  idle_span=%s over %d gap(s)"
+      % (mins(read["review_wall_s"]), mins(read["idle_span_s"]),
+         read["idle_segments"]))
+for gap in read["idle_top"]:
+    print("      idle %s from %s" % (mins(gap["seconds"]), gap["from"]))
+hops = sorted(read["dispatch_latency"], key=lambda hop: hop["seconds"], reverse=True)[:3]
+print("    dispatch_latency max=%s (%d measured, per terminal — never summed)"
+      % (mins(read["dispatch_latency_max_s"]), len(read["dispatch_latency"])))
+for hop in hops:
+    print("      +%s after %s %s → %s %s"
+          % (mins(hop["seconds"]), hop["name"], hop["class"], hop["next_event"],
+             hop["next_name"]))
+print("    ^ numbers only. wall= / avoidable= remain YOUR judgement about this batch.")
+'
+fi
 LEDGER="$REPO/AGENTS.md"
 if [ ! -f "$LEDGER" ] || [ ! -r "$LEDGER" ]; then
   fail "台账 $LEDGER 不可读 — 批 overhead 记账面未检查（量具坏 ≠ 绿）；建台账或用 --repo 指对仓"
