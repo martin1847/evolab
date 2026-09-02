@@ -21,6 +21,8 @@ preflight_body="$(cat "$PREFLIGHT")"
 queue_body="$(cat "$QUEUE")"
 retro_body="$(cat "$RETRO")"
 readme_body="$(cat ../skills/cto-orchestration/references/agentctl/README.md)"
+CLAUSES="../skills/cto-orchestration/references/goal-clauses.md"
+clauses_body="$(cat "$CLAUSES")"
 
 echo "== cto docs contract =="
 # white-box coupling ban (owner ruling 2026-08-09): tests drive the CLI. Dynamically loading the
@@ -152,10 +154,17 @@ chk_eq "goal has exactly one evidence-depth line" 1 "$(grep -cF "$evidence_line"
 chk_contains "evidence depth defaults to a single suite" "缺省 = 单套件" "$goal_body"
 chk_contains "full runs need the run itself to be the acceptance object" "全量仅当运行本身是验收对象" "$goal_body"
 chk_contains "the evidence line is declared machine-unjudged" "preflight 不机判它" "$goal_body"
-# measurement protocol: one canonical file, consumed by goal-template row + goal-review face.
+# measurement protocol: one canonical file, consumed by goal-clauses C05 + goal-review face.
 MEAS="../skills/cto-orchestration/references/measurement-protocol.md"
 meas_body="$(cat "$MEAS")"
-chk_contains "goal measurement row defers to the protocol single source" "measurement-protocol.md" "$goal_body"
+# RE-ANCHORED (scenario clauses externalized): the 14 scenario clause BODIES moved out of
+# goal-template.md into goal-clauses.md; the template keeps ONE index row per clause. What these
+# assertions judge is unchanged — the protocol pointer, the byte-exact row, its adjacency — they
+# now judge it on the file that OWNS the clause text. Leaving them on the template would have
+# pinned a SECOND copy of the body there, which is exactly the drift the single-source block
+# below forbids. The negative arm is new: the template must NOT carry the protocol pointer.
+chk_contains "clause C05 defers to the protocol single source" "measurement-protocol.md" "$clauses_body"
+chk_not_contains "the template index carries no protocol pointer" "measurement-protocol.md" "$goal_body"
 chk_contains "goal-review consumes the protocol on measurement face" "measurement-protocol.md" "$review_body"
 chk_contains "skill routes to the measurement protocol" "references/measurement-protocol.md" "$skill_body"
 # consumers stay bare pointers: clause vocabulary re-appearing in a consumer = second index drift.
@@ -165,17 +174,79 @@ chk_not_contains "goal row carries no clause summary (identity freeze)" "身份�
 chk_not_contains "goal row carries no clause summary (blinding)" "盲化" "$goal_body"
 chk_not_contains "skill routing row carries no clause summary (identity freeze)" "身份冻结" "$skill_body"
 chk_not_contains "skill routing row carries no clause summary (blinding)" "盲化" "$skill_body"
+# the clause file is a consumer too — it inherited the row, so it inherits the denylist.
+chk_not_contains "clause file does not inline rerun-scope detail" "整批环境性失效" "$clauses_body"
+chk_not_contains "clause file carries no exclusion-category vocabulary" "剔除类别" "$clauses_body"
+chk_not_contains "clause file carries no clause summary (identity freeze)" "身份冻结" "$clauses_body"
+chk_not_contains "clause file carries no clause summary (blinding)" "盲化" "$clauses_body"
 # structural boundary (vocabulary denylists cannot catch paraphrase): the scenario row is pinned
-# byte-exact, its successor row must stay adjacent (nothing squeezed inside the row), and the
-# file-wide checkbox census is pinned — inserting ANY new operational row forces a deliberate
-# test update instead of sliding in silently.
+# byte-exact, the next clause heading must stay adjacent (nothing squeezed inside the row), and the
+# template's file-wide checkbox census is pinned — inserting ANY new operational row forces a
+# deliberate test update instead of sliding in silently.
 meas_row1='- [ ] 测量/评测类 Done-when（对比判定 / 命中率 / 基准 / 评测报告）→ 读 measurement-protocol.md，'
 meas_row2='  七条款逐条对照实例化进本 goal（细则该文件单源，本模板不复制）。'
-chk_eq "goal measurement row line 1 is byte-exact and unique" 1 "$(grep -cF -- "$meas_row1" "$GOAL")"
-chk_eq "goal measurement row line 2 is byte-exact and unique" 1 "$(grep -cF -- "$meas_row2" "$GOAL")"
-meas_ctx="$(grep -A2 -F -- "$meas_row1" "$GOAL")"
-chk_contains "goal measurement row has no interior additions" "- [ ] 鉴权/会话/用户数据相关改动" "$meas_ctx"
+chk_eq "clause C05 row line 1 is byte-exact and unique" 1 "$(grep -cF -- "$meas_row1" "$CLAUSES")"
+chk_eq "clause C05 row line 2 is byte-exact and unique" 1 "$(grep -cF -- "$meas_row2" "$CLAUSES")"
+meas_ctx="$(grep -A3 -F -- "$meas_row1" "$CLAUSES")"
+chk_contains "clause C05 has no interior additions" "## C06 鉴权/会话/用户数据相关改动" "$meas_ctx"
+# census UNCHANGED at 20 and that is the point: the 14 clause bodies that left the template carried
+# exactly 14 `- [ ]` rows, replaced 1:1 by the 14 index rows, so the 6 non-clause checkboxes
+# (Premises x3, Done-when x3) plus 14 = 20 still holds. A moved clause must not buy slack here.
 chk_eq "goal checkbox census is pinned" 20 "$(grep -c '^- \[ \]' "$GOAL")"
+
+# ── scenario clauses: ONE body per clause in goal-clauses.md, ONE index row in the template ──
+# The externalization's whole value is that a goal author reads 14 index lines instead of ~41 lines
+# of bodies. Two failure modes get gates: a body creeping back into the template (double source,
+# the two copies then drift) and an index row growing into a body (the template re-fattens).
+chk_eq "clause file has exactly fourteen clause sections" 14 "$(grep -c '^## C[0-9][0-9] ' "$CLAUSES")"
+chk_eq "clause file has exactly fourteen clause bodies" 14 "$(grep -c '^- \[ \]' "$CLAUSES")"
+chk_eq "template index has exactly fourteen rows" 14 "$(grep -c '^- \[ \] C[0-9][0-9] ' "$GOAL")"
+chk_contains "clause file states the on-demand instantiation rule" "命中则把该条正文" "$clauses_body"
+chk_contains "template section points at the clause file" 'references/goal-clauses.md' "$goal_body"
+chk_contains "skill 1.2 points at the clause file on demand" '场景条款按需读 `references/goal-clauses.md`' "$skill_body"
+# every id defined once and indexed once — a renumber, a dropped clause or a duplicated id reds
+id_defects=""
+for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do
+  h="$(grep -c "^## C$n " "$CLAUSES")"; r="$(grep -c "^- \[ \] C$n " "$GOAL")"
+  [ "$h" = 1 ] && [ "$r" = 1 ] || id_defects="$id_defects C$n(heading=$h,index=$r)"
+done
+chk_eq "every clause id is defined once and indexed once" "" "$id_defects"
+chk_eq "the id census counts a planted duplicate" 2 "$(printf '## C09 a\n## C09 b\n' | grep -c '^## C09 ')"
+# index rows stay index-shaped. Width in CHARACTERS (python3, already a suite dependency): a byte
+# bound would be a different, looser rule on CJK text.
+idx_over() { # $1 file  $2 char limit -> index rows longer than the limit
+  python3 -c 'import re, sys
+lim = int(sys.argv[2])
+for l in open(sys.argv[1], encoding="utf-8").read().splitlines():
+    if re.match(r"^- \[ \] C\d\d ", l) and len(l) > lim:
+        print(l)
+' "$1" "$2"
+}
+chk_eq "template index rows carry no clause body (<=60 chars each)" "" "$(idx_over "$GOAL" 60)"
+# known positive for the width probe itself, through the SAME code path: at an impossible limit
+# every one of the 14 rows must be reported, so a probe that silently sees nothing cannot pass.
+chk_eq "the width probe fires on all rows at an impossible limit" 14 "$(idx_over "$GOAL" 5 | grep -c '^- \[ \] C')"
+# no double source: each clause body's first line lives exactly once in the clause file and never
+# in the template.
+dual=""
+while IFS= read -r row; do
+  [ -z "$row" ] && continue
+  c="$(grep -cF -- "$row" "$CLAUSES")"; g="$(grep -cF -- "$row" "$GOAL")"
+  [ "$c" = 1 ] && [ "$g" = 0 ] || dual="$dual[clauses=$c template=$g] $row"
+done <<EOF
+$(grep '^- \[ \] ' "$CLAUSES")
+EOF
+chk_eq "each clause body is single-sourced in goal-clauses.md" "" "$dual"
+# known positive for that comparison: the same rows looked up in the file that DOES hold them must
+# all be found — proves the -cF lookup would catch a body copied back into the template.
+found=0
+while IFS= read -r row; do
+  [ -z "$row" ] && continue
+  [ "$(grep -cF -- "$row" "$CLAUSES")" = 0 ] || found=$((found + 1))
+done <<EOF
+$(grep '^- \[ \] ' "$CLAUSES")
+EOF
+chk_eq "the double-source probe sees a copy that IS present" 14 "$found"
 # structural completeness: exactly seven numbered clauses, one load-bearing invariant pinned each.
 chk_eq "protocol has exactly seven numbered clauses" 7 "$(grep -cE '^[0-9]+\. \*\*' "$MEAS")"
 chk_contains "c1 freezes instrument identity per batch" "禁与旧批合并" "$meas_body"
@@ -196,7 +267,10 @@ chk_contains "review loop runtime meta is sole source" "stop-loss 只认 runtime
 chk_contains "review continuation requires lease from round 2" '（**第 2 轮起**）须在 brief 写 `SHIP-BLOCKING: <依据>`' "$skill_body"
 chk_contains "self-growing review fixes stop after two rounds" '连续 2 轮只新增 finding，则止损走三选项之一' "$skill_body"
 chk_contains "and the stop-loss space includes the requirement layer" '向主理人请示需求降级' "$skill_body"
-chk_contains "goal does not duplicate review rounds" "本 GOAL 不复制轮数" "$goal_body"
+# RE-ANCHORED with the clause move: the round-budget carve-out is clause C13's text, so it is
+# asserted where C13 now lives; the template must not grow a second copy of it.
+chk_contains "clause C13 does not duplicate review rounds" "本 GOAL 不复制轮数" "$clauses_body"
+chk_not_contains "the template index does not re-copy the round carve-out" "本 GOAL 不复制轮数" "$goal_body"
 chk_contains "runtime persists workflow" "workflow=%s" "$agentctl_body"
 chk_contains "runtime persists max rounds" "max_rounds=%s" "$agentctl_body"
 chk_contains "runtime owns budget exhausted" "BUDGET-EXHAUSTED" "$duplexctl_body"

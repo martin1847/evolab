@@ -174,6 +174,18 @@ EOF
 # publish. The STALLED-PROGRESS half-sentence (only-read verbs' frames are not counted) went
 # INSIDE the existing row, +0 lines. Measured on the rebased tip: this batch's +3 sits on top of
 # D10-1's 244→255, and 258 is the measured value, not a rounded-up allowance.
+# goal-template.md 136→110 + NEW ROW goal-clauses.md 76 (2026-09-03, 场景条款按需外置): the goal
+# contract's 14 场景条款 bodies (41 lines) left the template for a new shipped page and the section
+# now holds 14 index rows (one ≤60-char 命中判据 each), net -27; +1 line went INTO the template's
+# Done-when 验收仪器 row (the four 越界信号 examples: hook 点名 / monkeypatch 目标 / 内嵌多行 bash /
+# 期望某文件某行). Why the words had to move OUT of this shipped file: every goal author paid for
+# all 14 clauses on every goal — read them, judge hit/miss, delete the misses — while a clause is
+# useful only when it hits. The template is the per-goal toll booth; the clause file is read on
+# demand. It is a MOVE, not a deletion: the 14 bodies are byte-identical in goal-clauses.md and
+# cto-docs-contract pins them single-sourced there (a body reappearing in the template reds), so
+# the template's floor is locked at the measured 110 — the floor arm would have tolerated 123 and
+# 13 untaken lines is slack the next batch re-spends silently. The new row is registered at its
+# measured 76 in this same commit, which is what P5 asks of any new shipped page.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 146
@@ -183,7 +195,8 @@ skills/cto-orchestration/references/agents-md-orchestration-section.md 55
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42
 skills/cto-orchestration/references/frontend-verify.md 104
-skills/cto-orchestration/references/goal-template.md 136
+skills/cto-orchestration/references/goal-clauses.md 76
+skills/cto-orchestration/references/goal-template.md 110
 skills/cto-orchestration/references/implementation-discipline.md 102
 skills/cto-orchestration/references/measurement-protocol.md 43
 skills/cto-orchestration/references/onboarding-checklist.md 23

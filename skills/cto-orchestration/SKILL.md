@@ -49,7 +49,7 @@ metadata:
 ## 1. 每次派工闭环
 
 1. **校准基线**：fetch 远端，确认目标 base 与 worktree；base 未动不仪式性 rebase。只读 scout 也显式指定 cwd/base，防静默继承过期 checkout。命令与核证见 `references/dispatch-baseline.md`。
-2. **写自包含 goal**：一个 goal = 一个可独立交付的单元 + 一个清晰交付物；每条 Done-when 绑定证明命令，写清 scope、out-of-scope、stop-and-report。高不确定方向进入昂贵设计/实现前，先跑最便宜证伪；取证 / 机械 / 纯研究类 goal 用 `--no-preflight` 显式豁免，其余 goal 默认过 preflight 门（start 校验 Preflight 声明已解）。单行合同、Premises 与 Value gate 直接用 `references/goal-template.md`。
+2. **写自包含 goal**：一个 goal = 一个可独立交付的单元 + 一个清晰交付物；每条 Done-when 绑定证明命令，写清 scope、out-of-scope、stop-and-report。高不确定方向进入昂贵设计/实现前，先跑最便宜证伪；取证 / 机械 / 纯研究类 goal 用 `--no-preflight` 显式豁免，其余 goal 默认过 preflight 门（start 校验 Preflight 声明已解）。单行合同、Premises 与 Value gate 直接用 `references/goal-template.md`；场景条款按需读 `references/goal-clauses.md`。
 3. **派发并挂 watcher**：`agentctl start …`——goal 帧被接受即返回、**不会自动 watch**，紧接着用宿主
    受控后台跑 `agentctl watch`；先接线 `references/agentctl/guard-hooks.json`（高频机械失误归 guard，
    主干不复制其规则表）。理解门与 BLOCKED 协议由 runtime footer 固定追加（真源，本文不复制字面）：
