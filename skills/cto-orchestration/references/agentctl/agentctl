@@ -591,6 +591,13 @@ cmd_watch_daemon() { # INTERNAL — the sensing loop, launched by ensure_supervi
 cmd_stop() {
   S="${1:?usage: agentctl stop <session>}"
   refuse_self stop "$S"
+  # WHO this stop is ending, captured NOW — before the supervisor is retired, before cleanup
+  # clears the identity record, and therefore before the name is free for a same-name start to
+  # claim. Opaque here: the shell never parses it, it only carries it to the verb that records
+  # the ledger's stop row. Resolving the identity AFTER cleanup used to mean looking up "the
+  # newest ledger row for this name", and a restart that got its `start` row in first stole the
+  # old stop and closed a seat that had just begun (review R1 B3).
+  STOP_ID="$(ctl identity token "$S" 2>/dev/null)"
   case "$(lane_of "$S")" in
     duplex)
       # Read the reap identity BEFORE the kill: the live pane pid is only trustworthy while the
@@ -611,7 +618,7 @@ cmd_stop() {
       else reap_tree "$meta_pg" "$meta_ls"; fi
       REAP_RC=$?
       survivor_advise "$S"
-      ctl stop-sentinel "$S" --token "$STOP_TOK"
+      ctl stop-sentinel "$S" --token "$STOP_TOK" --reap-rc "$REAP_RC" --identity "$STOP_ID"
       # a refused identity clear fails stop's contract: the name is not free to reuse
       [ "$ID_RC" = 0 ] || exit 1
       exit "$REAP_RC" ;;
@@ -627,7 +634,7 @@ cmd_stop() {
         survivor_advise "$S"
         echo "killed bare tmux session $S"; cleaned=1
       fi
-      ctl stop-residue "$S" --killed "$cleaned" --reap-rc "$reap_rc"; exit $? ;;
+      ctl stop-residue "$S" --killed "$cleaned" --reap-rc "$reap_rc" --identity "$STOP_ID"; exit $? ;;
   esac
 }
 

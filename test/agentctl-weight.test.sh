@@ -552,11 +552,40 @@ cd "$(dirname "$0")"
 # without a ratchet row, so they have been unmeasured since. Registered at their current size
 # — the ratchet's job is to notice the NEXT change, and a row that starts at today's count is
 # the only honest way to adopt an existing file.
+# duplexctl.py 4089→4103 / watchctl.py 2055→2129 / agentctl 663→670, identity.py unchanged at
+# 1671 (2026-09-03, D10PHASE R1 评审修复: 3 blocking + 1 major). +88 python, +7 bash, and the
+# net on identity.py is ZERO because one of the fixes DELETED a fallback (see below). Every
+# line here closes a way the readings could be confidently wrong:
+#  * B1 readability is measured, not assumed (~22 lines in watchctl): `_phase_load` returns a
+#    fourth value, and a day counts as `present` only after its shard was opened AND read. A
+#    directory wearing a shard name, a dangling link and a mode-000 file used to read as "that
+#    day is covered and it was empty", so the window had no holes, coverage said `ok`, and the
+#    retro pane printed a full set of zeroes it had never read. `shards_unreadable` is the new
+#    field; unreadable joins missing in forcing `unknown`.
+#  * B2 a failed reap is not an ending (~14 lines across watchctl/duplexctl/agentctl):
+#    `stop-sentinel` takes `--reap-rc` (REQUIRED — a silent default would make the row lie)
+#    and records `stop` only at 0. Survivors after the KILL used to still append `stop`, which
+#    shortened an open seat and manufactured idle time out of a process still burning the
+#    machine. NO `stop_failed` event was added: a sixth event is a schema change for every
+#    reader, and "still open, plus the survivor advisory stop already prints" is already true.
+#  * B3 the stop names the seat it ends (~45 lines in watchctl, MINUS ~20 in identity):
+#    `_phase_stop_triple` + `_phase_record_stop` + `--identity` on both stop verbs + one
+#    capture line in `agentctl`'s stop, and the name-based fallback inside `phase_resolve` is
+#    GONE. Cleanup clears identity before the reap, so the old code re-resolved by NAME
+#    afterwards — and a same-name restart that appended its `start` first stole the stop and
+#    closed a seat that had just begun. An unobtainable triple now writes the reserved
+#    `PHASE_SESSION_UNKNOWN` key, which the reader refuses to treat as a seat.
+#  * M1 the window is closed at both ends (~12 lines in watchctl): `since <= t <= now`, plus
+#    `future_dropped` and a `starts` lookup that ignores future rows. A clock that jumped
+#    forward used to let a not-yet-happened terminal/stop decide `state`, `last_event`,
+#    `batch_span` and `seat_wall`, without tripping `clock_regressed`.
+# The rest is the doctrine each fix carries: what the wrong answer WAS, and why the cheaper
+# repair (clamp, default, guess by name) is the one that reintroduces it.
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 4089
-skills/cto-orchestration/references/agentctl/watchctl.py 2055
+skills/cto-orchestration/references/agentctl/duplexctl.py 4103
+skills/cto-orchestration/references/agentctl/watchctl.py 2129
 skills/cto-orchestration/references/agentctl/identity.py 1671
-skills/cto-orchestration/references/agentctl/agentctl 663
+skills/cto-orchestration/references/agentctl/agentctl 670
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 skills/cto-orchestration/references/agentctl/cto-guard-stop.py 129

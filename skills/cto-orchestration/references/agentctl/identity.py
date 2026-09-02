@@ -1552,6 +1552,11 @@ class IdentityStore:
 PHASE_EVENTS = ("start", "steer", "terminal", "stop", "watch_arm")
 PHASE_LEDGER_PREFIX = "phase-ledger-"
 PHASE_LEDGER_SUFFIX = ".jsonl"
+# The session_id a teardown writes when it could not capture an identity triple before the
+# state it needed was already gone (the no-lane residue branch, or a corrupt identity record).
+# It is a RESERVED key, never a seat: the reader refuses to close anything under it, because a
+# stop that cannot say WHICH seat it ended must not be allowed to end one by elimination.
+PHASE_SESSION_UNKNOWN = "unknown"
 # one WARN per process: a reading that spams the control plane it observes is not free anymore
 _PHASE_WARNED = [False]
 
@@ -1639,33 +1644,28 @@ def phase_event(run_dir: str, name: str, event: str, session_id: str, attempt: s
 
 
 def phase_resolve(run_dir: str, name: str) -> tuple[str, str]:
-    """(session_id, attempt) for a session NAME — from the active identity record while one
-    exists, and from the ledger's own newest row for that name when it does not.
+    """(session_id, attempt) for a session NAME, from the ACTIVE identity record — and from
+    nothing else. No established record means ("", "") and `phase_event` writes no row.
 
-    The fallback is what makes a `stop` row attributable. Teardown clears the identity record
-    BEFORE the process group is reaped, and the reap is the stop commit point, so by then the
-    only surviving statement of who this seat was is the ledger. Newest shard first, last
-    matching line wins; no shard anywhere means ("", "") and `phase_event` writes nothing."""
+    There used to be a fallback here that took "the newest ledger row for this name" when the
+    record was gone, so that teardown (which clears identity BEFORE the reap) could still
+    attribute its `stop`. That fallback is a NAME lookup, and names are reusable by design:
+    once cleanup has released the name, a same-name start can claim it and append its own
+    `start` first — the old teardown's `stop` then landed on the NEW session_id and closed a
+    seat that had just begun (review R1 B3, reproduced). A guess that can close the wrong seat
+    is worse than no row.
+
+    Teardown therefore captures the immutable triple at the TOP of stop, while the record is
+    still there, and carries it across cleanup as an opaque token (`agentctl` reads it with
+    `identity token`, watchctl parses it in `_phase_stop_triple`). Every other commit point
+    runs with the record live, which is why this function needs no fallback at all."""
     rec, status = IdentityStore(run_dir, name).load()
     if status == STATUS_OK and rec is not None:
         return rec["sessionId"], rec["attemptId"]
-    for _day, path in reversed(phase_shards(run_dir)):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                lines = fh.readlines()
-        except OSError:
-            continue
-        for raw in reversed(lines):
-            try:
-                row = json.loads(raw)
-            except ValueError:
-                continue
-            if isinstance(row, dict) and row.get("name") == name and row.get("session_id"):
-                return str(row["session_id"]), str(row.get("attempt") or "")
     return "", ""
 
 
 def phase_record(run_dir: str, name: str, event: str, extra: dict | None = None) -> bool:
-    """`phase_event` for the commit points that do not already hold the identity triple."""
+    """`phase_event` for the commit points that run while the identity record is live."""
     session_id, attempt = phase_resolve(run_dir, name)
     return phase_event(run_dir, name, event, session_id, attempt, extra=extra)

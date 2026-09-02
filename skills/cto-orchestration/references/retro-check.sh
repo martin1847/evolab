@@ -354,9 +354,18 @@ try:
 except ValueError:
     print("  phases: n/a (agentctl phases produced no readable report)")
     raise SystemExit(0)
-if report.get("coverage") == "unknown":
-    missing = ",".join(report.get("shards_missing") or []) or "-"
-    print("  phases: n/a (coverage unknown — ledger shards missing for %s)" % missing)
+if not isinstance(report, dict):
+    print("  phases: n/a (agentctl phases produced no readable report)")
+    raise SystemExit(0)
+if report.get("coverage") != "ok" and report.get("coverage") != "partial":
+    # `unknown` — a missing shard, an UNREADABLE one (a directory wearing a shard name, a
+    # dangling link, mode 000), an empty ledger, or a report from a version that does not
+    # publish coverage at all. Every one of them means this pane cannot vouch for the window,
+    # and a set of zeroes nobody measured looks exactly like a measurement.
+    holes = ",".join(report.get("shards_missing") or []) or "-"
+    dark = ",".join(report.get("shards_unreadable") or []) or "-"
+    print("  phases: n/a (coverage unknown — shards missing %s, unreadable %s)"
+          % (holes, dark))
     raise SystemExit(0)
 
 
@@ -364,26 +373,37 @@ def mins(seconds):
     return "n/a" if not isinstance(seconds, (int, float)) else "%.0fm" % (seconds / 60.0)
 
 
-read = report["readings"]
-print("  MECHANICAL INPUT — DO NOT COPY AS VERDICT")
-print("    coverage=%s  seats=%d  skipped=%d  clock_regressed=%d"
-      % (report["coverage"], len(report["sessions"]), report["skipped"],
-         report["clock_regressed"]))
-print("    batch_span=%s  seat_wall=%s (seat machine-time, parallel seats sum above wall)"
-      % (mins(read["batch_span_s"]), mins(read["seat_wall_s"])))
-print("    review_wall=%s  idle_span=%s over %d gap(s)"
-      % (mins(read["review_wall_s"]), mins(read["idle_span_s"]),
-         read["idle_segments"]))
-for gap in read["idle_top"]:
-    print("      idle %s from %s" % (mins(gap["seconds"]), gap["from"]))
-hops = sorted(read["dispatch_latency"], key=lambda hop: hop["seconds"], reverse=True)[:3]
-print("    dispatch_latency max=%s (%d measured, per terminal — never summed)"
-      % (mins(read["dispatch_latency_max_s"]), len(read["dispatch_latency"])))
-for hop in hops:
-    print("      +%s after %s %s → %s %s"
-          % (mins(hop["seconds"]), hop["name"], hop["class"], hop["next_event"],
-             hop["next_name"]))
-print("    ^ numbers only. wall= / avoidable= remain YOUR judgement about this batch.")
+# Everything below indexes the documented report shape. A report that does not HAVE that shape
+# degrades to n/a like every other unusable input: this pane is advisory, and a traceback in
+# the middle of a retro is not an advisory.
+try:
+    read = report["readings"]
+    lines = [
+        "  MECHANICAL INPUT — DO NOT COPY AS VERDICT",
+        "    coverage=%s  seats=%d  skipped=%d  clock_regressed=%d  future_dropped=%d"
+        % (report["coverage"], len(report["sessions"]), report["skipped"],
+           report["clock_regressed"], report.get("future_dropped", 0)),
+        "    batch_span=%s  seat_wall=%s (seat machine-time, parallel seats sum above wall)"
+        % (mins(read["batch_span_s"]), mins(read["seat_wall_s"])),
+        "    review_wall=%s  idle_span=%s over %d gap(s)"
+        % (mins(read["review_wall_s"]), mins(read["idle_span_s"]), read["idle_segments"]),
+    ]
+    for gap in read["idle_top"]:
+        lines.append("      idle %s from %s" % (mins(gap["seconds"]), gap["from"]))
+    hops = sorted(read["dispatch_latency"], key=lambda hop: hop["seconds"],
+                  reverse=True)[:3]
+    lines.append("    dispatch_latency max=%s (%d measured, per terminal — never summed)"
+                 % (mins(read["dispatch_latency_max_s"]), len(read["dispatch_latency"])))
+    for hop in hops:
+        lines.append("      +%s after %s %s → %s %s"
+                     % (mins(hop["seconds"]), hop["name"], hop["class"], hop["next_event"],
+                        hop["next_name"]))
+    lines.append("    ^ numbers only. wall= / avoidable= remain YOUR judgement about "
+                 "this batch.")
+except (KeyError, TypeError, IndexError, ValueError):
+    print("  phases: n/a (agentctl phases produced no readable report)")
+    raise SystemExit(0)
+print("\n".join(lines))
 '
 fi
 LEDGER="$REPO/AGENTS.md"

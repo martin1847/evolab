@@ -638,6 +638,261 @@ chk_eq "B13 and the missing days are named" 1 \
 chk_eq "B13 known-positive: the OLD shard is present and was read" 1 \
   "$(printf '%s' "$out" | python3 -c 'import json,sys; print(1 if json.load(sys.stdin)["shards_present"] else 0)')"
 
+# ── §R2 the four review-R1 regressions ───────────────────────────────────────────────
+# Each of these was a live wrong answer, reproduced by the reviewer. They are grouped so the
+# next reader can see what the fixes are FOR, not just that they hold.
+echo "== R2: an existing path is not readable data, a failed reap is not an ending =="
+
+report_py() { # $1 run dir  $2 since  $3 now  $4 dotted path — the reader at a FIXED `now`
+  # The CLI cannot pin `now`, and three of these four regressions are about the boundary at
+  # `now` itself, so those assertions call the reader directly with both ends fixed. Same
+  # code path the verb uses (`cmd_phases` only parses arguments above it).
+  python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import watchctl
+node = watchctl._phase_report(sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), "")
+for key in sys.argv[5].split("."):
+    node = node[int(key)] if key.isdigit() else node[key]
+print(node if isinstance(node, str) else json.dumps(node, sort_keys=True))
+' "$AW_DIR" "$1" "$2" "$3" "$4"
+}
+
+ledger_events_in() { # $1 run dir
+  ledger_events "$1"
+}
+
+ledger_field_in() { # $1 run dir  $2 event  $3 field  $4 occurrence
+  python3 -c '
+import glob, json, os, sys
+run, want, field, nth = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+hits = []
+for path in sorted(glob.glob(os.path.join(run, "phase-ledger-*.jsonl"))):
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip() and json.loads(line)["event"] == want:
+                hits.append(json.loads(line))
+print("" if len(hits) < nth else hits[nth - 1].get(field, ""))
+' "$1" "$2" "$3" "$4"
+}
+
+# ── R1-B1: an existing path is not readable data ─────────────────────────────────────
+# `_phase_load` used to mark a day `present` off the GLOB, with the open failure merely
+# skipped, so a directory wearing a shard name / a dangling link / a mode-000 file all read as
+# "covered, and empty" → no holes → coverage `ok` → the retro pane printed a full set of
+# zeroes it had never read. Three forms, one rule.
+UDAY="$(date -u +%Y%m%d)"
+UYDAY="$(python3 -c 'import time; print(time.strftime("%Y%m%d", time.gmtime(time.time() - 86400)))')"
+u_case() { # $1 form -> a run dir whose CURRENT-day shard takes that form
+  URUN="$SANDBOX/unreadable-$1"
+  rm -rf "$URUN"; mkdir -p "$URUN"
+  # yesterday's shard is a real empty file, so a window that straddles UTC midnight has no
+  # MISSING day and the only thing under test is readability of today's
+  : > "$URUN/phase-ledger-$UYDAY.jsonl"
+  case "$1" in
+    dir)   mkdir -p "$URUN/phase-ledger-$UDAY.jsonl" ;;
+    link)  ln -s "$URUN/nowhere-at-all.jsonl" "$URUN/phase-ledger-$UDAY.jsonl" ;;
+    mode)  : > "$URUN/phase-ledger-$UDAY.jsonl"; chmod 000 "$URUN/phase-ledger-$UDAY.jsonl" ;;
+    plain) : > "$URUN/phase-ledger-$UDAY.jsonl" ;;
+  esac
+}
+
+# known-positive FIRST: with today's shard a real (empty) file, this exact window is covered
+u_case plain
+out="$(AGENT_WATCH_DIR="$URUN" bash "$AGENTCTL" phases --json --since 1m)"
+chk_eq "R2-B1 known-positive: a readable empty shard covers the window" "ok" \
+  "$(printf '%s' "$out" | jget coverage)"
+chk_eq "R2-B1 known-positive: nothing is reported unreadable" "[]" \
+  "$(printf '%s' "$out" | jget shards_unreadable)"
+
+if [ "$(id -u)" != "0" ]; then
+  for form in dir link mode; do
+    u_case "$form"
+    out="$(AGENT_WATCH_DIR="$URUN" bash "$AGENTCTL" phases --json --since 1m)"; rc=$?
+    chk_eq "R2-B1 $form: an unreadable shard is never coverage ok" "unknown" \
+      "$(printf '%s' "$out" | jget coverage)"
+    chk_eq "R2-B1 $form: the day is named as unreadable, not as present" 1 \
+      "$(printf '%s' "$out" | python3 -c "
+import json, sys
+report = json.load(sys.stdin)
+print(1 if '$UDAY' in report['shards_unreadable']
+      and '$UDAY' not in report['shards_present'] else 0)")"
+    chk_eq "R2-B1 $form: and the verb still exits 0 (a reading, not a failure)" 0 "$rc"
+    [ "$form" = mode ] && chmod 644 "$URUN/phase-ledger-$UDAY.jsonl"
+  done
+else
+  echo "  [skip] running as root — the mode-000 form cannot be built; dir/link forms skipped with it"
+fi
+
+# and the pane that consumes it: coverage unknown is the ONLY thing retro reads before it
+# decides to print numbers, so an unreadable shard must reach it as unknown (retro-check.test.sh
+# PH3 asserts the n/a rendering itself)
+u_case dir
+chk_eq "R2-B1 the retro pane's gate sees unknown, so it will print n/a" "unknown" \
+  "$(AGENT_WATCH_DIR="$URUN" bash "$AGENTCTL" phases --json --since 1m | jget coverage)"
+
+# ── R1-B2: a failed reap is not an ending ────────────────────────────────────────────
+# `stop-sentinel` ran unconditionally, so a stop whose process group still had survivors after
+# the KILL still appended `stop`. That shortens an open seat and manufactures idle time out of
+# a process that is still burning the machine. Verb level first (the gate), then the entry.
+B2RUN="$SANDBOX/reap-gate"; mkdir -p "$B2RUN"
+printf 'engine=omp\ncwd=%s\n' "$SANDBOX" > "$B2RUN/b2.duplex.meta"
+python3 "$CTL" --run-dir "$B2RUN" identity start b2 >/dev/null 2>&1
+B2TOK="$(python3 "$CTL" --run-dir "$B2RUN" identity token b2)"
+python3 "$CTL" --run-dir "$B2RUN" stop-sentinel b2 --token t1 --reap-rc 1 \
+        --identity "$B2TOK" >/dev/null 2>&1
+chk_eq "R2-B2 a reap that left survivors records NO stop" "" "$(ledger_events_in "$B2RUN")"
+python3 "$CTL" --run-dir "$B2RUN" stop-sentinel b2 --token t2 --reap-rc 0 \
+        --identity "$B2TOK" >/dev/null 2>&1
+chk_eq "R2-B2 known-positive: a clean reap does record one" "stop" "$(ledger_events_in "$B2RUN")"
+chk_eq "R2-B2 both flags are load-bearing, so both are required" 2 \
+  "$(python3 "$CTL" --run-dir "$B2RUN" stop-sentinel b2 --token t3 >/dev/null 2>&1; echo $?)"
+
+# entry level: the shell must actually FORWARD its reap rc. A fake tmux that reports a pane
+# pgid plus a `pgrep` that always finds survivors is the whole harness (the reviewer's shape).
+echo "== R2: the entry forwards its reap verdict =="
+e2_setup() { # $1 session  $2 survivors(1)/clean(0)
+  E2RUN="$SANDBOX/entry-$1"; rm -rf "$E2RUN"; mkdir -p "$E2RUN"
+  cat > "$BIN/tmux" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  display-message) echo "0 999999" ;;
+  has-session)     exit 1 ;;
+  *)               exit 0 ;;
+esac
+EOF
+  cat > "$BIN/pgrep" <<EOF
+#!/usr/bin/env bash
+exit $([ "$2" = 1 ] && echo 0 || echo 1)
+EOF
+  chmod +x "$BIN/tmux" "$BIN/pgrep"
+  printf 'engine=omp\ncwd=%s\n' "$SANDBOX" > "$E2RUN/$1.duplex.meta"
+  python3 "$CTL" --run-dir "$E2RUN" identity start "$1" >/dev/null 2>&1
+}
+# pgid 999999 is above every reachable pid on this host, so the TERM/KILL this exercises can
+# never reach a real process group — the fake `pgrep` is the only thing that "sees" it.
+e2_setup e2fail 1
+out="$(AGENT_WATCH_DIR="$E2RUN" AGENTCTL_REAP_GRACE=0 bash "$AGENTCTL" stop e2fail 2>&1)"; rc=$?
+chk_eq "R2-B2 entry: a reap that cannot clear the group exits non-zero" 1 "$rc"
+chk_contains "R2-B2 entry: and says survivors remain" "survivors in process group" "$out"
+chk_eq "R2-B2 entry: so the ledger records no ending" "" "$(ledger_events_in "$E2RUN")"
+e2_setup e2ok 0
+out="$(AGENT_WATCH_DIR="$E2RUN" AGENTCTL_REAP_GRACE=0 bash "$AGENTCTL" stop e2ok 2>&1)"; rc=$?
+chk_eq "R2-B2 entry known-positive: a clean reap exits 0" 0 "$rc"
+chk_eq "R2-B2 entry known-positive: and records the stop" "stop" "$(ledger_events_in "$E2RUN")"
+rm -f "$BIN/pgrep"
+install_running_tmux
+
+# ── R1-B3: the stop must name the seat it ends ───────────────────────────────────────
+# Teardown clears identity BEFORE the reap, and the ledger's stop used to re-resolve the
+# identity by NAME afterwards — so a same-name restart that got its `start` row in first stole
+# the old stop and closed a seat that had just begun. The triple is captured at the top of
+# stop now and carried across cleanup as an opaque token.
+B3RUN="$SANDBOX/stop-steal"; mkdir -p "$B3RUN"
+python3 - "$B3RUN" <<'PY'
+import json, os, sys, time
+run = sys.argv[1]
+base = float(int(time.time())) - 600
+
+
+def stamp(when):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(when))) + ".000Z"
+
+
+rows = [
+    {"ts": stamp(base), "event": "start", "name": "same", "session_id": "old-sid",
+     "attempt": "old-att", "engine": "omp", "cwd": run, "review": 0, "launcher_ppid": 1},
+    {"ts": stamp(base + 120), "event": "start", "name": "same", "session_id": "new-sid",
+     "attempt": "new-att", "engine": "omp", "cwd": run, "review": 0, "launcher_ppid": 1},
+]
+day = time.strftime("%Y%m%d", time.gmtime(int(base)))
+with open(os.path.join(run, "phase-ledger-%s.jsonl" % day), "w", encoding="utf-8") as fh:
+    for row in rows:
+        fh.write(json.dumps(row) + "\n")
+# the window may straddle UTC midnight; give the neighbouring days real empty shards so the
+# only thing under test is attribution, never coverage
+for delta in (-86400, 86400):
+    other = time.strftime("%Y%m%d", time.gmtime(int(base) + delta))
+    open(os.path.join(run, "phase-ledger-%s.jsonl" % other), "a", encoding="utf-8").close()
+PY
+# the OLD stop arrives after the restart already appended its own start row
+python3 "$CTL" --run-dir "$B3RUN" stop-sentinel same --token t1 --reap-rc 0 \
+        --identity "old-sid/old-att/inc-1" >/dev/null 2>&1
+chk_eq "R2-B3 the late stop lands on the seat that captured it" "old-sid" \
+  "$(ledger_field_in "$B3RUN" stop session_id 1)"
+chk_eq "R2-B3 and carries that seat's attempt, not the restart's" "old-att" \
+  "$(ledger_field_in "$B3RUN" stop attempt 1)"
+out="$(AGENT_WATCH_DIR="$B3RUN" bash "$AGENTCTL" phases --json --since 1h)"
+chk_eq "R2-B3 so the restarted seat is still open" "open" \
+  "$(printf '%s' "$out" | python3 -c '
+import json, sys
+seats = {s["session_id"]: s["state"] for s in json.load(sys.stdin)["sessions"]}
+print(seats.get("new-sid", "MISSING"))')"
+chk_eq "R2-B3 while the seat that really ended is stopped" "stopped" \
+  "$(printf '%s' "$out" | python3 -c '
+import json, sys
+seats = {s["session_id"]: s["state"] for s in json.load(sys.stdin)["sessions"]}
+print(seats.get("old-sid", "MISSING"))')"
+
+# an unobtainable triple is reported as unattributable, NEVER applied by elimination
+python3 "$CTL" --run-dir "$B3RUN" stop-residue same2 --killed 1 --reap-rc 0 \
+        --identity "ABSENT/deadbeef" >/dev/null 2>&1
+chk_eq "R2-B3 a teardown with no triple records the reserved unknown key" "unknown" \
+  "$(ledger_field_in "$B3RUN" stop session_id 2)"
+out="$(AGENT_WATCH_DIR="$B3RUN" bash "$AGENTCTL" phases --json --since 1h)"
+chk_eq "R2-B3 which is not a seat" 1 \
+  "$(printf '%s' "$out" | python3 -c '
+import json, sys
+print(0 if any(s["session_id"] == "unknown" for s in json.load(sys.stdin)["sessions"]) else 1)')"
+chk_eq "R2-B3 and closes nothing: the live seat stays open" "open" \
+  "$(printf '%s' "$out" | python3 -c '
+import json, sys
+seats = {s["session_id"]: s["state"] for s in json.load(sys.stdin)["sessions"]}
+print(seats.get("new-sid", "MISSING"))')"
+chk_eq "R2-B3 an unattributable ending makes the reading partial, not ok" "partial" \
+  "$(printf '%s' "$out" | jget coverage)"
+
+# ── R1-M1: the window is closed at both ends ─────────────────────────────────────────
+# Only `>= since` was checked, so a row written by a clock that had jumped forward decided
+# `state`, `last_event`, `batch_span` and `seat_wall` for a batch it had not happened in — and
+# did it without tripping `clock_regressed`. Fixed `now` here, because the boundary IS `now`.
+M1RUN="$SANDBOX/future"; mkdir -p "$M1RUN"
+python3 - "$M1RUN" <<'PY'
+import json, os, sys, time
+run = sys.argv[1]
+
+
+def stamp(when):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(when))) + ".000Z"
+
+
+rows = [
+    {"ts": stamp(1500), "event": "start", "name": "f", "session_id": "fs",
+     "attempt": "fa", "engine": "omp", "cwd": run, "review": 0, "launcher_ppid": 1},
+    {"ts": stamp(3000), "event": "stop", "name": "f", "session_id": "fs",
+     "attempt": "fa", "reason": "stopped", "lane": 1},
+]
+with open(os.path.join(run, "phase-ledger-19700101.jsonl"), "w", encoding="utf-8") as fh:
+    for row in rows:
+        fh.write(json.dumps(row) + "\n")
+PY
+chk_eq "R2-M1 a stop after now does not end the seat" "open" \
+  "$(report_py "$M1RUN" 1000 2000 sessions.0.state)"
+chk_eq "R2-M1 the span stops at now, not at the future row" "500.0" \
+  "$(report_py "$M1RUN" 1000 2000 readings.seat_wall_s)"
+chk_eq "R2-M1 the future row is counted as dropped" "1" \
+  "$(report_py "$M1RUN" 1000 2000 future_dropped)"
+chk_eq "R2-M1 and it is not the window's last event" "1970-01-01T00:25:00.000Z" \
+  "$(report_py "$M1RUN" 1000 2000 last_event)"
+chk_eq "R2-M1 nor does it inflate batch_span" "0.0" \
+  "$(report_py "$M1RUN" 1000 2000 readings.batch_span_s)"
+chk_eq "R2-M1 a dropped future row is NOT a clock regression (different fact)" "0" \
+  "$(report_py "$M1RUN" 1000 2000 clock_regressed)"
+chk_eq "R2-M1 known-positive: widen now past it and the seat closes at 1500s" "stopped" \
+  "$(report_py "$M1RUN" 1000 4000 sessions.0.state)"
+chk_eq "R2-M1 known-positive: with nothing dropped" "0" \
+  "$(report_py "$M1RUN" 1000 4000 future_dropped)"
+
 # ── §V the verb is a reading, and stays one ─────────────────────────────────────────
 echo "== V: numbers only — the verb never renders a verdict =="
 ph_case two-terminals /repo/one

@@ -427,15 +427,23 @@ mkphases(){ # $1 dir, $2 json body -> a PATH bin holding a fake `agentctl phases
   } > "$1/agentctl"
   chmod +x "$1/agentctl"
 }
-PH_OK='{"coverage":"ok","shards_missing":[],"skipped":1,"clock_regressed":2,
+PH_OK='{"coverage":"ok","shards_missing":[],"shards_unreadable":[],"skipped":1,
+ "clock_regressed":2,"future_dropped":3,
  "sessions":[{"name":"a"},{"name":"b"}],
  "readings":{"batch_span_s":5700,"seat_wall_s":10260,"review_wall_s":2520,
  "idle_span_s":720,"idle_segments":2,
  "idle_top":[{"from":"2026-09-02T01:20:00.000Z","to":"2026-09-02T01:27:00.000Z","seconds":420}],
  "dispatch_latency":[{"name":"a","class":"DONE","next_event":"start","next_name":"b",
  "seconds":480}],"dispatch_latency_max_s":480,"dispatch_pending":0}}'
-PH_UNKNOWN='{"coverage":"unknown","shards_missing":["20260901"],"skipped":0,
- "clock_regressed":0,"sessions":[],"readings":{}}'
+PH_UNKNOWN='{"coverage":"unknown","shards_missing":["20260901"],"shards_unreadable":[],
+ "skipped":0,"clock_regressed":0,"future_dropped":0,"sessions":[],"readings":{}}'
+# the R1-B1 shape: every window day EXISTS on disk, but one of them could not be read. It must
+# reach this pane as `unknown` — an existing path is not readable data, and a set of zeroes
+# nobody measured looks exactly like a measurement.
+PH_DARK='{"coverage":"unknown","shards_missing":[],"shards_unreadable":["20260902"],
+ "skipped":0,"clock_regressed":0,"future_dropped":0,"sessions":[],"readings":{}}'
+# a report whose shape this pane does not know (an older/newer verb): degrade, never traceback
+PH_ALIEN='{"coverage":"ok","sessions":[],"readings":{"batch_span_s":1}}'
 
 # Case PH1 — readings available: the banner leads, the numbers follow, no suggestion is made,
 # and the accounting check keeps its own verdict (the green fixture is billed)
@@ -452,6 +460,7 @@ assert_has "$out" "idle_span=12m" "PH1/idle span is totalled"
 assert_has "$out" "dispatch_latency max=8m" "PH1/dispatch latency reports its maximum"
 assert_has "$out" "never summed" "PH1/and says it is never summed"
 assert_has "$out" "clock_regressed=2" "PH1/the excluded edges are surfaced, not hidden"
+assert_has "$out" "future_dropped=3" "PH1/so are rows dropped for claiming a future instant"
 assert_no  "$out" "wall≈" "PH1/no wall suggestion is offered"
 assert_no  "$out" "avoidable≈" "PH1/no avoidable suggestion is offered"
 assert_has "$out" "均记了 wall/avoidable" "PH1/the accounting check still reports its own verdict"
@@ -497,6 +506,27 @@ out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch"
 assert_rc "$rc" 0 "PH5/an unreadable report does not change rc"
 assert_has "$out" "phases: n/a" "PH5/it degrades rather than guessing"
 assert_no  "$out" "MECHANICAL INPUT" "PH5/and prints no banner"
+
+# Case PH6 — the R1-B1 shape: no shard is MISSING, one is unreadable. Same n/a, and the
+# message must name the dark day — otherwise the operator hunts for a hole that is not there.
+r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_DARK"
+out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
+        bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
+assert_rc "$rc" 0 "PH6/an unreadable shard does not change rc"
+assert_has "$out" "phases: n/a (coverage unknown" "PH6/it still refuses to vouch"
+assert_has "$out" "unreadable 20260902" "PH6/and names the day it could not read"
+assert_no  "$out" "MECHANICAL INPUT" "PH6/no banner over data it never read"
+assert_has "$out" "均记了 wall/avoidable" "PH6/the accounting verdict is byte-identical"
+
+# Case PH7 — a report of a shape this pane does not know (an older or newer verb): degrade to
+# n/a. A traceback in the middle of a retro is not an advisory, and this pane is only advisory.
+r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_ALIEN"
+out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
+        bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
+assert_rc "$rc" 0 "PH7/an unknown report shape does not change rc"
+assert_has "$out" "phases: n/a" "PH7/it degrades to one n/a line"
+assert_no  "$out" "Traceback" "PH7/and never leaks a traceback into the retro"
+assert_has "$out" "均记了 wall/avoidable" "PH7/the accounting verdict is byte-identical"
 
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

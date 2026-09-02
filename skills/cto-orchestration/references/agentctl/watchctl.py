@@ -1380,6 +1380,41 @@ def cmd_stop_cleanup(args: argparse.Namespace) -> int:
           "(replay-corpus sidecar)")
     return 1 if id_rc != 0 else 0
 
+def _phase_stop_triple(token: str) -> tuple[str, str]:
+    """(session_id, attempt) out of the arm-style identity token `agentctl` captured at the TOP
+    of stop, or ("", "") when that token does not describe an established identity.
+
+    The token is `IdentityStore.token()`'s output, carried through as an opaque string exactly
+    like every other fence token in this lane: `<sessionId>/<attemptId>/<incarnation>` for a
+    live record, and `<STATUS>/<nonce>` — TWO segments by construction — for an absent or
+    corrupt one. So the three-segment shape IS the "we really know who this was" test, and
+    nothing here has to interpret the identity itself."""
+    parts = token.strip().split("/", 2)
+    if len(parts) != 3 or not parts[0] or not parts[1]:
+        return "", ""
+    return parts[0], parts[1]
+
+
+def _phase_record_stop(run: str, name: str, token: str, reason: str, lane: int) -> None:
+    """The ledger's stop row, under the two conditions that make it true.
+
+    A stop row is a claim that a seat ENDED. Two ways that claim used to be false:
+      * the reap failed and survivors are still running (review R1 B2) — the caller does not
+        call this at all in that case, and the seat correctly stays `open` in the readings,
+        matching the survivor advisory stop already prints on stderr. No `stop_failed` event
+        was added for it: a sixth event is a schema change for every reader, and "still open
+        plus a loud stderr advisory" already says the true thing.
+      * the identity was resolved by NAME after cleanup released it, so a same-name restart
+        could inherit the row (review R1 B3). The triple is captured before cleanup now; when
+        it is genuinely unobtainable the row is written under the reserved
+        PHASE_SESSION_UNKNOWN key, which the reader refuses to treat as a seat — an
+        unattributable ending is reported as unattributable, never applied by elimination."""
+    session_id, attempt = _phase_stop_triple(token)
+    identity.phase_event(run, name, "stop",
+                         session_id or identity.PHASE_SESSION_UNKNOWN, attempt,
+                         extra={"reason": reason, "lane": lane})
+
+
 def cmd_stop_sentinel(args: argparse.Namespace) -> int:
     """False-DONE sentinel, part 2 — advisory, and it must never change stop's rc.
 
@@ -1388,13 +1423,13 @@ def cmd_stop_sentinel(args: argparse.Namespace) -> int:
     the engine still spoke (the silent-misfire class, made loud); +2s prices in the
     marker-write vs final-flush race.
 
-    It is also the phase ledger's STOP commit point, for the same reason: the process group is
-    reaped, so the seat is over as a fact and not as an intention. `stop-cleanup` already
-    cleared the identity record by now, so the triple comes from the ledger's own newest row
-    for this name (`identity.phase_resolve`) — the only surviving statement of who the seat
-    was."""
+    It is also the phase ledger's STOP commit point, for the same reason — but only when the
+    reap actually finished: `--reap-rc` non-zero means survivors outlived the KILL, and a
+    ledger that calls that an ending would shorten an open seat and manufacture idle time out
+    of a process that is still burning the machine."""
     run, name = args.run_dir, args.session
-    identity.phase_record(run, name, "stop", extra={"reason": "stopped", "lane": 1})
+    if args.reap_rc == 0:
+        _phase_record_stop(run, name, args.identity, "stopped", 1)
     sample = _stop_sample_path(run, name)
     handoff = _read_stop_sample(sample, args.token)
     try:
@@ -1463,14 +1498,18 @@ def cmd_stop_residue(args: argparse.Namespace) -> int:
         reap_rc = 1
         print(f"WARN: identity state was NOT cleared for '{name}' — {clear_out}",
               file=sys.stderr)
-    # THE stop commit point of the no-lane branch, after the shell's own reap: `lane=0` says
-    # this stop found no duplex meta, so the seat it closes is one the ledger knows about only
-    # from its `start` row. Neither branch below records anything: an idempotent re-stop is
-    # not a second seat end (the real one already wrote its row, and a duplicate would move
-    # the seat's end to whenever somebody re-ran the verb), and a name with no lane state, no
-    # tmux, no residue and no post-mortem artifact never held a seat to close at all.
+    # THE stop commit point of the no-lane branch, after the shell's own reap. `lane=0` says
+    # this stop found no duplex meta, so the identity was very likely already gone before the
+    # verb ran: the captured token then has no triple and the row lands under
+    # PHASE_SESSION_UNKNOWN, which the reader refuses to close a seat with. Same reap
+    # condition as the duplex branch — a teardown whose reap failed did not end anything.
+    # Neither branch below records anything: an idempotent re-stop is not a second seat end
+    # (the real one already wrote its row, and a duplicate would move the seat's end to
+    # whenever somebody re-ran the verb), and a name with no lane state, no tmux, no residue
+    # and no post-mortem artifact never held a seat to close at all.
     if cleaned:
-        identity.phase_record(run, name, "stop", extra={"reason": "no-lane", "lane": 0})
+        if reap_rc == 0:
+            _phase_record_stop(run, name, args.identity, "no-lane", 0)
         print(f"removed orphan session residue for '{name}'")
         return reap_rc
     if (os.path.exists(os.path.join(run, f"{name}.duplex.events.jsonl"))
@@ -1732,25 +1771,36 @@ def _phase_contains(repo: str, cwd: str) -> bool:
         return False
 
 
-def _phase_load(run_dir: str) -> tuple[list[dict], int, set[str]]:
-    """(rows in APPEND order, skipped, shard days present).
+def _phase_load(run_dir: str) -> tuple[list[dict], int, set[str], list[str]]:
+    """(rows in APPEND order, skipped, shard days READ, shard days that could not be read).
 
     Append order — shard day ascending, then line order — is the CAUSAL order, and it is the
     order the durations and the dispatch scan use. Sorting by `ts` would erase the one thing a
     regressed clock leaves behind: a row that arrived after another while claiming to be
     earlier. A line that is not decodable JSON, not an object, carries an event outside the
     closed set, has no readable `ts` or no `session_id` is COUNTED and dropped: the count is
-    the honest signal, and guessing at a broken row would put invented time in a total."""
+    the honest signal, and guessing at a broken row would put invented time in a total.
+
+    A day is `present` only once its shard was OPENED AND READ. It used to be marked present
+    from the glob alone, with the open failure merely `continue`d, so a directory wearing a
+    shard's name, a dangling symlink and a mode-000 file all read as "that day is covered,
+    and it contained nothing" — the window then had no holes, coverage said `ok`, and the
+    retro pane printed a full set of zeroes it had never measured (review R1 B1). Existence of
+    a path is not readability of its data, and the difference is the whole value of `coverage`.
+    `UnicodeDecodeError` counts as unreadable too: a shard that is not text is not a shard."""
     rows: list[dict] = []
     skipped = 0
     days: set[str] = set()
+    unreadable: list[str] = []
     for day, path in identity.phase_shards(run_dir):
-        days.add(day)
         try:
             with open(path, encoding="utf-8") as fh:
                 lines = fh.readlines()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            if day not in unreadable:
+                unreadable.append(day)
             continue
+        days.add(day)
         for raw in lines:
             if not raw.strip():
                 continue
@@ -1770,7 +1820,7 @@ def _phase_load(run_dir: str) -> tuple[list[dict], int, set[str]]:
                 continue
             row["_t"] = stamp
             rows.append(row)
-    return rows, skipped, days
+    return rows, skipped, days, unreadable
 
 
 def _phase_needed_days(since: float, now: float) -> list[str]:
@@ -1807,16 +1857,18 @@ def _phase_round_of(row: dict) -> int:
 def _phase_report(run_dir: str, since: float, now: float, repo: str) -> dict:
     """The whole reading, as data. Every judgement in here is about the DATA (is it covered, is
     a duration measurable) and never about the work the data describes."""
-    rows, skipped, days_present = _phase_load(run_dir)
+    rows, skipped, days_present, days_unreadable = _phase_load(run_dir)
     needed = _phase_needed_days(since, now)
     missing = [day for day in needed if day not in days_present]
 
-    # Each session's start row, found across ALL shards: a seat that opened before the window
-    # still owns the engine/cwd/review facts, and `--repo` cannot judge a seat whose cwd it
-    # never saw. This is the "跨分片向前找 start" half of the window semantics.
+    # Each session's start row, found across ALL shards but never from the FUTURE: a seat that
+    # opened before the window still owns the engine/cwd/review facts, and `--repo` cannot
+    # judge a seat whose cwd it never saw. This is the "跨分片向前找 start" half of the window
+    # semantics. A `start` claiming an instant after `now` is not a beginning this reading may
+    # measure from — it would put `begin` in the future and turn every duration negative.
     starts: dict[str, dict] = {}
     for row in rows:
-        if row["event"] == "start":
+        if row["event"] == "start" and row["_t"] <= now:
             starts.setdefault(row["session_id"], row)
 
     def in_repo(sid: str) -> bool:
@@ -1825,7 +1877,14 @@ def _phase_report(run_dir: str, since: float, now: float, repo: str) -> dict:
         start = starts.get(sid)
         return start is not None and _phase_contains(repo, str(start.get("cwd") or ""))
 
-    window = [row for row in rows if row["_t"] >= since and in_repo(row["session_id"])]
+    # THE WINDOW IS CLOSED AT BOTH ENDS. It used to have a lower bound only, so a row written
+    # by a clock that had jumped forward — or any future row in a shard — decided `state`,
+    # `last_event`, `batch_span` and `seat_wall` for a batch it had not happened in, and did it
+    # without tripping `clock_regressed` (review R1 M1). A reading may not extend past the
+    # instant it was taken; future rows are counted and dropped, exactly like corrupt ones.
+    future_dropped = sum(1 for row in rows if row["_t"] > now)
+    window = [row for row in rows
+              if since <= row["_t"] <= now and in_repo(row["session_id"])]
     clock_regressed = 0
 
     order: list[str] = []
@@ -1841,6 +1900,14 @@ def _phase_report(run_dir: str, since: float, now: float, repo: str) -> dict:
     unattributed = 0
     for sid in order:
         seq = grouped[sid]
+        # The reserved key an unattributable teardown writes (identity.PHASE_SESSION_UNKNOWN).
+        # It is NOT a seat and must never become one: a `stop` that cannot name the seat it
+        # ended would otherwise close a seat by elimination, which is the exact failure the
+        # captured-triple handoff exists to prevent. Its rows still count for `batch_span`
+        # (they happened), and their presence makes the whole reading `partial`.
+        if sid == identity.PHASE_SESSION_UNKNOWN:
+            unattributed += 1
+            continue
         start = starts.get(sid)
         start_t = start["_t"] if start is not None else None
         if start is None:
@@ -1948,7 +2015,10 @@ def _phase_report(run_dir: str, since: float, now: float, repo: str) -> dict:
                         "next_ts": nxt["ts"], "next_event": nxt["event"],
                         "next_name": str(nxt.get("name") or ""), "seconds": gap})
 
-    if missing:
+    # An UNREADABLE shard is `unknown`, exactly like a missing one: both mean this reading
+    # cannot speak for a day the window covers, and the pane that consumes it must print n/a
+    # rather than a set of zeroes nobody measured.
+    if missing or days_unreadable:
         coverage = "unknown"
     elif unattributed or any(s["truncated_start"] for s in sessions):
         coverage = "partial"
@@ -1965,11 +2035,13 @@ def _phase_report(run_dir: str, since: float, now: float, repo: str) -> dict:
         "shards_present": sorted(days_present),
         "shards_needed": needed,
         "shards_missing": missing,
+        "shards_unreadable": sorted(days_unreadable),
         "first_event": identity.phase_stamp(frame_start) if window else None,
         "last_event": identity.phase_stamp(frame_end) if window else None,
         "events": len(window),
         "skipped": skipped,
         "clock_regressed": clock_regressed,
+        "future_dropped": future_dropped,
         "readings": {
             "batch_span_s": batch_span,
             "seat_wall_s": seat_wall,
@@ -2001,10 +2073,12 @@ def _phase_print(report: dict, run_dir: str) -> None:
           f"  since={report['since']}  now={report['now']}"
           + (f"  repo={report['repo']}" if report["repo"] else ""))
     print(f"coverage: {report['coverage']}  shards_present={shards}  "
-          f"shards_missing={','.join(report['shards_missing']) or '-'}")
+          f"shards_missing={','.join(report['shards_missing']) or '-'}  "
+          f"shards_unreadable={','.join(report['shards_unreadable']) or '-'}")
     print(f"          events={report['events']}  first={report['first_event'] or '-'}  "
           f"last={report['last_event'] or '-'}  skipped={report['skipped']}  "
-          f"clock_regressed={report['clock_regressed']}")
+          f"clock_regressed={report['clock_regressed']}  "
+          f"future_dropped={report['future_dropped']}")
     print(f"batch_span       {_phase_mins(read['batch_span_s'])}  (first → last event of the "
           "window)")
     print(f"seat_wall        {_phase_mins(read['seat_wall_s'])}  (SUM of per-seat spans = seat "

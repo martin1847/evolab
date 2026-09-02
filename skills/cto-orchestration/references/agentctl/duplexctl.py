@@ -4036,6 +4036,16 @@ def main() -> None:
     p_sent.add_argument("--token", default="",
                         help="the nonce stop-cleanup was given; a sample stamped with anything "
                              "else is a failed handoff, not a reading")
+    # Both REQUIRED, because both are load-bearing for the phase ledger's stop row and a
+    # silent default would make it lie: `--reap-rc` decides whether the seat ended at all, and
+    # `--identity` is the triple the shell captured BEFORE cleanup released the name. A caller
+    # that forgets either gets a usage error, never a row attributed by guesswork.
+    p_sent.add_argument("--reap-rc", type=int, required=True, dest="reap_rc",
+                        help="exit code the shell's own reap produced; non-zero = survivors "
+                             "outlived the KILL, so no stop is recorded")
+    p_sent.add_argument("--identity", required=True,
+                        help="`identity token` captured at the TOP of stop (opaque); its "
+                             "three-segment form is what proves WHICH seat this stop ends")
     p_sent.set_defaults(func=watchctl.cmd_stop_sentinel)
 
     p_res = sub.add_parser("stop-residue", help="the no-lane branch of stop")
@@ -4044,6 +4054,10 @@ def main() -> None:
                        help="1 when the shell already killed a bare tmux session")
     p_res.add_argument("--reap-rc", type=int, default=0, dest="reap_rc",
                        help="exit code the shell's own reap produced")
+    p_res.add_argument("--identity", required=True,
+                       help="`identity token` captured at the TOP of stop (opaque); a no-lane "
+                            "stop usually has no established identity, and the ledger then "
+                            "records the reserved unknown key rather than guessing")
     p_res.set_defaults(func=watchctl.cmd_stop_residue)
 
     p_probe = sub.add_parser("stop-probe", help="pre-kill snapshot of descendants ALREADY "
