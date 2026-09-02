@@ -218,9 +218,10 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   （代码 import 复用，不复制）：活体席位写自己 worktree 放行、`touch /tmp/cto-allow-direct-write` 一次性放行、
   run dir 不可读或目标不属任何受管 work tree → ALLOW+WARN。铁律出处见 [SKILL §0 铁律①](../../SKILL.md)。
   **另一条已知未覆盖**：注释文本里出现的 heredoc opener（`echo ok # <<EOF`）会被**共享**的 heredoc 剥离面
-  （`_heredoc_scan`，规则 ⑧/⑩/⑪ 同用）当成真 opener，其后行对**所有**规则不可见——包括下一行的真实源码写入。
-  修它要动共享面，另批处理；当前行为钉在断言 `r20-doc-comment-heredoc-opener-uncovered`（谁修共享面，那条会
-  翻红，必须有意识地改断言）。
+  （`_heredoc_scan`）当成真 opener，其后行对**读该面「非 quoted-only 视图」（源码里的 `raw_hd`）的那几条规则**
+  不可见——即源码规则 (8)/(18)/(19)/(20)，包括下一行的真实源码写入；只读 quoted-only 视图的规则不受影响
+  （那一遍只剥 `<<'TAG'` / `<<"TAG"`）。修它要动共享面，另批处理；当前行为钉在断言
+  `r20-doc-comment-heredoc-opener-uncovered`（谁修共享面，那条会翻红，必须有意识地改断言）。
   git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：编排位对源码/测试文件的写入 → DENY
   （活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir 不可读 → ALLOW+WARN）。

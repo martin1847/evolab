@@ -1919,10 +1919,12 @@ chk_eq "r20-neg-comment-not-operand is silent on stdout" "" "$OUT"
 chk_eq "r20-neg-comment-not-operand is silent on stderr" "" "$ERR"
 # ACCEPTED-UNCOVERED, PINNED (owner ruling this round; README §强制层 ⑳ 覆盖边界): a heredoc
 # opener that appears inside COMMENT TEXT is taken for a real opener by the SHARED heredoc
-# stripper (`_heredoc_scan`, which rules (8)/(11)/(12) read too), so the lines after it are
-# invisible to EVERY rule — including a real write on the next line. Fixing that means changing
-# the shared face, which is out of this batch's scope. This assertion pins today's rc=0 so the
-# batch that does fix `_heredoc_scan` sees it go red and must change it DELIBERATELY.
+# stripper (`_heredoc_scan`), so the lines after it are invisible to the rules that read its
+# NON-quoted-only view (`raw_hd`) — rules (8)/(18)/(19)/(20) — including a real write on the
+# next line; the quoted-only pass strips `<<'TAG'` / `<<"TAG"` only, so its readers are unaffected.
+# Fixing that means changing the shared face, which is out of this batch's scope. This assertion
+# pins today's rc=0 so the batch that does fix `_heredoc_scan` sees it go red and must change
+# it DELIBERATELY.
 run20 "$(printf 'echo ok # <<EOF\necho x > %s/comment-hidden.py\nEOF' "$R20")"
 chk_eq "r20-doc-comment-heredoc-opener-uncovered: pinned at rc 0 (known gap, another batch)" 0 "$RC"
 chk_eq "r20-doc-comment-heredoc-opener-uncovered writes nothing to stderr" "" "$ERR"

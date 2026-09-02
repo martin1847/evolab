@@ -147,11 +147,16 @@ EOF
 # rule. Fixing that means changing the face rules ⑧/⑩/⑪ read, which is another batch — and an
 # undeclared blind spot in a DENY's own `Read:` target is exactly what this ratchet's obligation
 # clause exists to price. The paired oracle is `r20-doc-comment-heredoc-opener-uncovered`.
+# agentctl/README.md 261→262 (2026-09-02, R3-1 minor): +1 line, a CORRECTION of that same
+# boundary's blast radius — "invisible to every rule" was wider than the truth. Only the rules
+# reading `_heredoc_scan`'s non-quoted-only view are affected ((8)/(18)/(19)/(20) in the source's
+# own numbering), and the quoted-only readers are not. An overstated blind spot is as much a
+# wrong承诺面 as an understated one, and it is stated where the DENY's `Read:` lands.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 261
+skills/cto-orchestration/references/agentctl/README.md 262
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42
