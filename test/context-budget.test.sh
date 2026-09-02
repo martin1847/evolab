@@ -36,6 +36,8 @@ AGENTCTL_SRC="../skills/cto-orchestration/references/agentctl/agentctl"
 GUARD_BASH="../skills/cto-orchestration/references/agentctl/cto-guard-bash.py"
 GUARD_AGENT="../skills/cto-orchestration/references/agentctl/cto-guard-agent.py"
 GUARD_EDIT="../skills/cto-orchestration/references/agentctl/cto-guard-edit.py"
+GUARD_STOP="../skills/cto-orchestration/references/agentctl/cto-guard-stop.py"
+GUARD_NAG="../skills/cto-orchestration/references/agentctl/seat-liveness.py"
 
 # ---- baselines: UTF-8 bytes, measured 2026-08-12 ----------------------------------------------
 # These are CURRENT-MAXIMUM ratchets, not validated thresholds. No experiment says 754 bytes is
@@ -48,7 +50,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=15542   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=17302   # all injected text across the FIVE guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -181,6 +183,30 @@ BUDGET_GUARD_TOTAL=15542   # all injected text across the three guards (raised 7
                            #  Rule (21) adds no WARN and no new local, so BUDGET_GUARD_SINGLE
                            #    does not move: 507 B is far under the 2012 B assembled worst
                            #    case, which is still (3)+(13)+(14)+(15)+(16)+(19)+(20)'s.
+                           # Raised 15542→17302 on 2026-09-02 (D10 Stop 门 + prompt-time 存活
+                           # 提醒), and the census now covers a FOURTH and FIFTH file
+                           # (cto-guard-stop.py / seat-liveness.py — a sink in a file not listed
+                           # here is unweighed, which is why both joined on arrival, together
+                           # with the two sink SHAPES they introduced: a Stop `reason`, and the
+                           # plain `print` stdout that UserPromptSubmit/SessionStart add to
+                           # context). +1760 B over four sinks, all weighed:
+                           #  +730 B the S1 block reason (`_BLOCK` + `cap_note` + `own_note`).
+                           #    Bought: the ONLY moment a turn-end omission can be judged is the
+                           #    Stop event, and the seat that meets this text has already decided
+                           #    it was done — so the reason must carry the field evidence (44 min
+                           #    idle, 2026-09-02), BOTH legal exits (`agentctl watch` in the
+                           #    host's background vs `agentctl stop`) and the doc pointer, or the
+                           #    block reads as a bug and the seat re-stops. Still 730 B, well
+                           #    under the unmoved per-message ceiling.
+                           #  +635 B the fail-open WARN (`_WARN`, 327 B), counted TWICE because
+                           #    it is spent at two sinks — `main()`'s single blind-branch emit
+                           #    and the last-resort net under `__main__`. A static over-count of
+                           #    one message that no single run can emit twice, kept rather than
+                           #    argued away (same treatment as rule (20)'s two warns).
+                           #  +395 B the prompt-time reminder (`_NAG` + `cap_nag` + `own_nag`).
+                           #    Could not come from cutting elsewhere: it is the only text on the
+                           #    prompt-time channel, and one line has to carry the seat names,
+                           #    both actions and why an unwatched RUNNING seat costs anything.
 BUDGET_GUARD_SINGLE=2012   # the longest single message a worker can be handed at once. Raised
                            # 754→893 on 2026-08-28: the worst case is now the (3)+(13)+(14)+(15)
                            # assembled response, i.e. every instrument in this dispatch failing
@@ -208,7 +234,11 @@ BUDGET_GUARD_SINGLE=2012   # the longest single message a worker can be handed a
                            # one response (`if opaque20 and not note20`), so the reachable worst
                            # case is +313 B; this ceiling carries the meter's static sum instead
                            # of a hand-argued smaller number. Rule (20)'s own DENY is 752 B.
-BUDGET_GUARD_COUNT=34      # sink count: a drop means extraction broke or a sink moved out of
+                           # Raised 2012→2012 (unmoved) on 2026-09-02: the Stop gate's block
+                           # reason is 730 B and its WARN 327 B, both far under the assembled
+                           # (3)+(13)+(14)+(15)+(16)+(19)+(20) worst case, and neither joins that
+                           # assembly — a Stop response carries exactly one of the two.
+BUDGET_GUARD_COUNT=38      # sink count: a drop means extraction broke or a sink moved out of
                            # view. 21→23 on 2026-08-20: +1 real sink (rule 12) and +1 the meter
                            # had been blind to (see `resolve` below). 23→30 on 2026-08-28:
                            # +2 (rules 14/15) and +5 (the whole new guard). 31→32 on 2026-09-01:
@@ -218,6 +248,11 @@ BUDGET_GUARD_COUNT=34      # sink count: a drop means extraction broke or a sink
                            # assembled response. 33→34 on 2026-09-02: +1 rule (21)'s DENY, the
                            # rule's only sink (no WARN, no new local). Pinned to the measured
                            # number, never carrying untracked slack.
+                           # 34→38 on 2026-09-02: +3 for the Stop gate (one block `reason`, one
+                           # `systemMessage` in `main()`, one in the `__main__` net) and +1 for
+                           # seat-liveness's plain-stdout reminder. `main()` deliberately keeps
+                           # ONE warn sink for four blind branches so the same sentence is not
+                           # charged four times.
 
 echo "== injected-context budget =="
 
@@ -255,7 +290,9 @@ import ast, os, sys
 
 
 # Fields whose value is handed to the agent verbatim by the harness.
-SINK_KEYS = {"additionalContext", "permissionDecisionReason", "reason"}
+# `reason` is the Stop block's channel; `systemMessage` is the fail-open WARN's (shown to the
+# user, and delivered as an SDKInformationalMessage headless) — text this repo emits either way.
+SINK_KEYS = {"additionalContext", "permissionDecisionReason", "reason", "systemMessage"}
 # Messages we KNOW are injected, used to calibrate the extractor itself (see header). The set must
 # cover every sink SHAPE in play AND every local that rides the assembled one, because a needle is
 # the only thing that makes a dropped local visible: total falls, and a smaller number reads
@@ -274,7 +311,14 @@ KNOWN_POSITIVE = ("[browser/long subagent launched]",          # bare Name sink 
                   "验证批一条命令一个 cwd",                      # assembled sink: note19
                   "a write to a source path was allowed",      # assembled sink: note20
                   "write target not literal",                  # assembled sink: note20b
-                  "编排位直写源码面")                            # cto-guard-edit's E1 denial
+                  "编排位直写源码面",                            # cto-guard-edit's E1 denial
+                  "结束 turn 时有 RUNNING 席位没人看",           # stop gate: _BLOCK
+                  "past the census cap were not checked",      # stop gate: cap_note
+                  "may belong to another checkout",            # stop gate: own_note
+                  "RUNNING-seat liveness went UNJUDGED",       # stop gate: _WARN (fail-open)
+                  "RUNNING seats without a live watcher",      # seat-liveness: _NAG
+                  "-meta census cap were not checked",         # seat-liveness: cap_nag
+                  "checkouts may be listed")                   # seat-liveness: own_nag
 # Mutation switch for the recall probe below: comma-separated local names resolve() must ignore.
 # Test-only; the real invocation passes nothing.
 IGNORE = {n for n in os.environ.get("GUARD_METER_IGNORE", "").split(",") if n}
@@ -332,6 +376,19 @@ def collect(path):
                                 t = resolve(v)
                                 if len(t) > 15:
                                     msgs.append(t)
+        # A plain `print("…")` IS a sink on the two events whose stdout the harness adds to the
+        # model's context (UserPromptSubmit / SessionStart) — that is seat-liveness.py's whole
+        # channel, and without this arm its reminder would be weighed as zero. Args carrying a
+        # `dumps` call are skipped: those are the JSON responses the branch above already weighed,
+        # and counting both would double-charge every additionalContext byte in the file.
+        if isinstance(f, ast.Name) and f.id == "print":
+            for a in node.args:
+                if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                       and n.func.attr == "dumps" for n in ast.walk(a)):
+                    continue
+                t = resolve(a)
+                if len(t) > 15:
+                    msgs.append(t)
     return msgs
 
 total = longest = count = 0
@@ -346,7 +403,7 @@ print(total, longest, count, recall)
 PY
 
 read -r guard_total guard_single guard_count guard_recall <<EOF
-$(python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT")
+$(python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT" "$GUARD_STOP" "$GUARD_NAG")
 EOF
 
 # DROP-ONE-LOCAL PROBE (review R1 M6 created the mechanism; review F3/finding 3 generalized it to
@@ -356,9 +413,11 @@ EOF
 # suite still reported 7 passed / 0 failed — a shrinking budget reading as success is exactly the
 # failure this file exists to prevent. A new note MUST come with its own needle in KNOWN_POSITIVE,
 # and this loop is what proves the needle discriminates.
-for _local in reminder note13 note14 note15 note16 note19 note20 note20b; do
+for _local in reminder note13 note14 note15 note16 note19 note20 note20b \
+              _BLOCK _WARN cap_note own_note _NAG cap_nag own_nag; do
   read -r mut_total _ mut_count mut_recall <<EOF
-$(GUARD_METER_IGNORE=$_local python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT")
+$(GUARD_METER_IGNORE=$_local python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT" \
+    "$GUARD_STOP" "$GUARD_NAG")
 EOF
   if [ "$mut_recall" = "0" ] && [ "$mut_total" -lt "$guard_total" ]; then
     _record "drop-one probe: losing $_local goes red ($mut_total < $guard_total bytes)" 1

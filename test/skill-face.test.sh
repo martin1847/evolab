@@ -149,11 +149,23 @@ EOF
 #    all hook-deny-pointer asks of them.
 #    Baseline locked at the measured 244 instead of left at 265: the floor arm would have
 #    tolerated 239, and 21 untaken lines is exactly the slack the next batch re-spends silently.
+# agentctl/README.md 244→259 (2026-09-02, D10 Stop 门 + prompt-time 存活提醒): +15, and the words
+# had to go into THIS shipped file because it is the ONLY reader-facing page for the 强制层 and
+# the Wiring matrix, and the new gate's own DENY points at it (`Read: …/agentctl/README.md
+# §强制层`, gated by hook-deny-pointer) — a seat whose turn end was just blocked lands here.
+# Where the 15 went: +9 the two new §强制层 bullets (何时拦 / fail-open 面 / 归属判据 for
+# cto-guard-stop.py, and the 提醒-not-a-gate contract + throttle for seat-liveness.py), +1 the
+# Wiring table's Stop row (CC ✓ / codex 同构且首次需 `/hooks` 信任 / omp ✗), +5 the codex
+# `.codex/hooks.json` snippet and its TRUST sentence. That last block is the one thing a codex
+# 编排位 cannot derive from this repo: an untrusted hook silently does not load, so a wiring
+# section that omitted it would ship a gate that reads as installed and never fires. No 边界目录
+# came back in (the 2026-09-02 ruling holds): both bullets point at the scripts' own headers and
+# at test/cto-guard-stop.test.sh for the enumerations.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 244
+skills/cto-orchestration/references/agentctl/README.md 259
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42

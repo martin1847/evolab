@@ -178,7 +178,7 @@ job 会呈 idle 但没完成——`沉默 ≠ 交付`。
   gate 是真消费路径（A 完成后引擎立即起 B，下一读即 RUNNING）。turn 级关联等 P2
   （codex app-server 上车时统一按 id 解）。
 
-## 强制层：两个单一职责 guard 脚本
+## 强制层：单一职责 guard 脚本
 
 脆弱完成信号会骗编排者，光记规则没用 → 工具调用层兜底（[电在回路](../shock-in-the-loop.md)：DENY
 三件套 = why + 正路 + 本文档指针）。**entry 真源 = 本目录 `guard-hooks.json`**（唯一权威）：接入时把
@@ -223,6 +223,15 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   120s 内还在长 = 活的 → DENY（Agent 型 `.output` 常是静态 stub，判活主要靠 transcript）（**完成通知黑洞**与"零截图≠卡死"实证；override =
   `touch /tmp/cto-allow-kill-<id>`，适用于**任何经核实的杀单动机**——含"派错前提"，P0b）；
   Post·Agent：browser 派发注入 deadline-watch 提醒（必须 JSON `additionalContext`，纯 stdout 黑洞）。
+- **`cto-guard-stop.py`（Stop）** — S1：结束 turn 时本仓有 RUNNING 席位且 `agentctl status` 附
+  `no watcher armed` → `{"decision":"block"}` 挡住这次结束（reason 带三件套）。**fail-open 是设计**：
+  `stop_hook_active` 为真、payload 读不懂、run dir 不可读、agentctl 缺失或 `status` 超时，一律 exit 0
+  + 一行 `systemMessage` WARN，绝不 block——Stop 门误判的代价是这个 session 每次都结束不了。
+  归属只算 meta `cwd=` 在本 payload `cwd` 的 git 顶层之下的席位（run dir 全席位共享，他人的不管）；
+  顶层判不出则不过滤并在 reason 标 `UNKNOWN-ownership`。
+- **`seat-liveness.py`（SessionStart + UserPromptSubmit）** — 同一份席位普查的提醒面（Stop 门 import
+  它，判据单源、两个通道不会互相打脸）：命中出一行纯文本进上下文，无命中 0 字节，普查判不出则静默
+  （提醒不是门）；同一席位集合 10 分钟只提醒一次，SessionStart 不节流。
 
 ### Wiring（CC / Codex / omp 都能坐编排位）
 
@@ -230,10 +239,16 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 |---|---|---|---|
 | hook 形态 | command 脚本 + stdin JSON | 同 CC（契约对齐） | in-process TS/JS 模块 |
 | 两脚本直接挂 | ✓ | ✓（agent 脚本休眠） | ✗ 需 TS port（`{block:true,reason}`） |
+| Stop 门（`cto-guard-stop.py`） | ✓ | ✓ 同构（`Stop` 事件 + `stop_hook_active` + `{"decision":"block"}`），首次需用户 `/hooks` 信任 | ✗ in-process TS，Stop 契约未实证 |
 | wiring | `.claude/settings.json` | `.codex/hooks.json` | `.omp/hooks/pre/*.ts` |
 
 不另造 settings 脚手架——并进 `repo-governance-bootstrap` §11 已建的那份。**不靠 skill frontmatter
 `hooks:` 自注册**（mid-session 经 Skill 工具激活不注册 → 显式 wiring 才可靠）。
+
+Codex 的 Stop 片段（`<repo>/.codex/hooks.json`，形态与 CC 逐字同构；`~/.codex/hooks.json` 与两层
+`config.toml` 内联 `[hooks]` 也认）：`{"Stop":[{"matcher":"","command":"/abs/<安装根>/references/agentctl/cto-guard-stop.py"}]}`。
+**非托管 hook 必须先由用户 `/hooks` 审阅并信任那份精确定义**（按 hash 记账，脚本一改就要重新信任；
+自动化才用 `--dangerously-bypass-hook-trust`）——所以 codex 侧只给片段，活体验证归主理人信任后那一次。
 
 ## cwd 锚定（多仓工作区）
 

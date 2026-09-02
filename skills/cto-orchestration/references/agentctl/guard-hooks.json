@@ -7,5 +7,14 @@
   ],
   "PostToolUse": [
     { "matcher": "Agent|Task", "command": "references/agentctl/cto-guard-agent.py" }
+  ],
+  "Stop": [
+    { "matcher": "", "command": "references/agentctl/cto-guard-stop.py" }
+  ],
+  "UserPromptSubmit": [
+    { "matcher": "", "command": "references/agentctl/seat-liveness.py" }
+  ],
+  "SessionStart": [
+    { "matcher": "", "command": "references/agentctl/seat-liveness.py" }
   ]
 }

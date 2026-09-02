@@ -97,8 +97,12 @@ out="$(scan "$FIX/good.py")"; rc=$?
 chk_eq "scanner passes resolvable DENY" 0 "$rc"
 rm -rf "$FIX"
 
-# the shipped guards
+# the shipped guards. cto-guard-stop.py belongs here even though its DENY leaves through a Stop
+# `{"decision":"block","reason":…}` rather than stderr: the scanner judges the LITERAL, and the
+# exit contract it enforces (why + 正路 + resolvable pointer) is the same one — a block whose
+# reason has no pointer leaves the model with a refusal and no page to read.
 for f in ../skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
+         ../skills/cto-orchestration/references/agentctl/cto-guard-stop.py \
          ../skills/cto-orchestration/references/agentctl/cto-guard-agent.py \
          ../skills/cto-orchestration/references/agentctl/cto-guard-edit.py \
          ../skills/agent-mail/mail-guard.py; do
@@ -112,5 +116,15 @@ for f in ../skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
     chk_eq "$(basename "$f"): scanner saw denies" "some" "some"
   fi
 done
+
+# seat-liveness.py is REMINDER-ONLY (plain stdout at SessionStart/UserPromptSubmit) and has no
+# DENY at all, so it cannot join the loop above: that loop requires >=1 deny, by design. It is
+# accounted for here instead, through the SAME scanner — the day a DENY appears in it, this arm
+# reds and says where the file has to move, instead of the file silently sitting outside every
+# pointer gate.
+out="$(scan ../skills/cto-orchestration/references/agentctl/seat-liveness.py)"; rc=$?
+chk_eq "seat-liveness.py: reminder-only, zero DENY literals (else move it into the loop above)" 1 \
+  "$rc"
+chk_contains "seat-liveness.py: the scanner really weighed it and found none" "0 denies" "$out"
 
 summary
