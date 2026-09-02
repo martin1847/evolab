@@ -214,6 +214,16 @@ chk_eq "every clause id is defined once and indexed once" "" "$id_defects"
 chk_eq "the id census counts a planted duplicate" 2 "$(printf '## C09 a\n## C09 b\n' | grep -c '^## C09 ')"
 # index rows stay index-shaped. Width in CHARACTERS (python3, already a suite dependency): a byte
 # bound would be a different, looser rule on CJK text.
+# LIMIT 60→80 (R1 Major-1 ruling): the index row must carry the ORIGINAL condition's full
+# qualifiers — C01's 「（含「现无 / 不存在 / 没有机制拦」类断言）」, C14's 「（非仓内既有套件/CLI 的
+# 证明命令）」 — because a qualifier IS the hit boundary: with C14's exclusion dropped, an
+# orchestrator reading only the index judges an in-repo suite to be a self-made instrument and
+# fires the four-arm obligation for nothing. 60 chars forced C01 (61) to shed its parenthetical,
+# i.e. the number was deleting contract semantics. 80 keeps the growth arm live (widest row is 61
+# chars) but width ALONE cannot separate an index row from a body — every clause body first line
+# measures 46-74 chars too. The shape that does separate them is asserted right below, and a body
+# copied into the template is caught by the single-source scan further down; width is only the
+# coarse arm against the section re-fattening.
 idx_over() { # $1 file  $2 char limit -> index rows longer than the limit
   python3 -c 'import re, sys
 lim = int(sys.argv[2])
@@ -222,31 +232,55 @@ for l in open(sys.argv[1], encoding="utf-8").read().splitlines():
         print(l)
 ' "$1" "$2"
 }
-chk_eq "template index rows carry no clause body (<=60 chars each)" "" "$(idx_over "$GOAL" 60)"
+chk_eq "template index rows carry no clause body (<=80 chars each)" "" "$(idx_over "$GOAL" 80)"
 # known positive for the width probe itself, through the SAME code path: at an impossible limit
 # every one of the 14 rows must be reported, so a probe that silently sees nothing cannot pass.
 chk_eq "the width probe fires on all rows at an impossible limit" 14 "$(idx_over "$GOAL" 5 | grep -c '^- \[ \] C')"
-# no double source: each clause body's first line lives exactly once in the clause file and never
-# in the template.
-dual=""
-while IFS= read -r row; do
-  [ -z "$row" ] && continue
-  c="$(grep -cF -- "$row" "$CLAUSES")"; g="$(grep -cF -- "$row" "$GOAL")"
-  [ "$c" = 1 ] && [ "$g" = 0 ] || dual="$dual[clauses=$c template=$g] $row"
-done <<EOF
-$(grep '^- \[ \] ' "$CLAUSES")
+# the structural arm width cannot buy: an index row is CONDITION ONLY, the operative half of a
+# clause (everything after `→`) stays in the body. All 14 bodies carry `→`, so an index row that
+# grows one has stopped being an index row — this is what "carries no clause body" actually means.
+chk_eq "index rows are condition-only (no operative arrow)" "" "$(grep -n '^- \[ \] C[0-9][0-9] .*→' "$GOAL" || true)"
+chk_eq "known positive: every clause body DOES carry the operative arrow" 14 \
+  "$(grep -c '^- \[ \] .*→' "$CLAUSES")"
+# ── no double source, over EVERY non-empty body line (R1 Major-3 ruling) ─────────────────────
+# The first-line-only scan covered 14 of 43 body lines: a CONTINUATION copied back into the
+# template (C13's `active + STOP and report…`) was invisible, and a partial copy drifts exactly
+# like a whole one. The face is now every non-empty line that belongs to a clause body — the 41
+# migrated lines plus C09's 2 approved patch lines.
+clause_body_lines() { # $1 clause file -> every non-empty line belonging to a clause body
+  python3 -c 'import re, sys
+inbody = False
+for l in open(sys.argv[1], encoding="utf-8").read().splitlines():
+    if re.match(r"^- \[ \] ", l):
+        inbody = True; print(l); continue
+    if inbody and l.startswith("  ") and l.strip():
+        print(l); continue
+    inbody = False
+' "$1"
+}
+dual_scan() { # $1 clause file  $2 template -> one defect line per body line not single-sourced
+  local row c g
+  while IFS= read -r row; do
+    [ -z "$row" ] && continue
+    c="$(grep -cF -- "$row" "$1")"; g="$(grep -cF -- "$row" "$2")"
+    [ "$c" = 1 ] && [ "$g" = 0 ] || printf '[clauses=%s template=%s] %s\n' "$c" "$g" "$row"
+  done <<EOF
+$(clause_body_lines "$1")
 EOF
-chk_eq "each clause body is single-sourced in goal-clauses.md" "" "$dual"
-# known positive for that comparison: the same rows looked up in the file that DOES hold them must
-# all be found — proves the -cF lookup would catch a body copied back into the template.
-found=0
-while IFS= read -r row; do
-  [ -z "$row" ] && continue
-  [ "$(grep -cF -- "$row" "$CLAUSES")" = 0 ] || found=$((found + 1))
-done <<EOF
-$(grep '^- \[ \] ' "$CLAUSES")
-EOF
-chk_eq "the double-source probe sees a copy that IS present" 14 "$found"
+}
+chk_eq "the single-source face is all 43 body lines, not just the 14 first lines" 43 \
+  "$(clause_body_lines "$CLAUSES" | grep -c '[^[:space:]]')"
+chk_eq "every clause body line is single-sourced in goal-clauses.md" "" "$(dual_scan "$CLAUSES" "$GOAL")"
+# known positive: a CONTINUATION line — the shape the old gate could not see — copied into a
+# template COPY must be reported, and reported as present in the template.
+dual_tmpl="$(mktemp)"
+cp "$GOAL" "$dual_tmpl"
+dual_cont="$(clause_body_lines "$CLAUSES" | grep '^  ' | sed -n '7p')"
+printf '%s\n' "$dual_cont" >> "$dual_tmpl"
+dual_out="$(dual_scan "$CLAUSES" "$dual_tmpl")"
+rm -f "$dual_tmpl"
+chk_eq "the scan reports exactly the one continuation line copied back" \
+  "[clauses=1 template=1] $dual_cont" "$dual_out"
 # structural completeness: exactly seven numbered clauses, one load-bearing invariant pinned each.
 chk_eq "protocol has exactly seven numbered clauses" 7 "$(grep -cE '^[0-9]+\. \*\*' "$MEAS")"
 chk_contains "c1 freezes instrument identity per batch" "禁与旧批合并" "$meas_body"
