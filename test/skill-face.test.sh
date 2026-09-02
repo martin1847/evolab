@@ -164,7 +164,7 @@ skills/cto-orchestration/references/measurement-protocol.md 43
 skills/cto-orchestration/references/onboarding-checklist.md 23
 skills/cto-orchestration/references/ops-prompt-template.md 43
 skills/cto-orchestration/references/retrospective.md 81
-skills/cto-orchestration/references/review-brief-preamble.md 28
+skills/cto-orchestration/references/review-brief-preamble.md 29
 skills/cto-orchestration/references/review-dispatch.md 208
 skills/cto-orchestration/references/shock-in-the-loop.md 58
 skills/cto-orchestration/references/stocktake.md 25
