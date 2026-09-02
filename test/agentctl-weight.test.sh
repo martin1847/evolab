@@ -363,12 +363,40 @@ cd "$(dirname "$0")"
 # of the same class for free (the old whole-text rescan convicted an innocent feed whenever any
 # document body mentioned git — 587651c denied it, probe rc=2 where 0 was owed), which is why the
 # arm asserting it is paired with the R2-1 repro.
+# cto-guard-bash.py 1846→2298 (2026-09-02, guard ⑧ 收窄 + 新规则 ⑳ + R1 评审 F1 修复): +452, and
+# the weight HAD to land here for the same reason every other rule's did — both are
+# PreToolUse·Bash judgements and a hook matcher has no second home. What the lines buy:
+#  * rule (8)'s narrowing (~60): `_git_top` (a no-subprocess walk to the nearest `.git`, because
+#    this runs on EVERY umbrella-scoped git/gh command and `git rev-parse` measured 12.5 ms) +
+#    `_cwd_is_session_root` + the `transcript_path`/slug doctrine. `_umbrella_near` is BYTE-EQUAL
+#    — the scan was not touched, a second conjunct was added to the gate. The DENY text SHRANK
+#    (430→429 B) while changing what it claims.
+#  * rule (20)'s judgement (~110): `_write_targets` + `_r20_judge` + `_sed_in_place` +
+#    `_positionals` + `_cmd_head`, one DENY (752 B) and two WARNs (313/196 B). Seat attribution
+#    is IMPORTED from cto-guard-edit.py rather than copied (`_edit_guard`, 14 lines including its
+#    load-failure degrade), so the census, the liveness rules and the source face stayed single-
+#    source: without that import this row would have grown by another ~120 and the two channels
+#    could then disagree about who owns a work tree.
+#  * rule (20)'s own execution face (~90): `_write_face` / `_write_segments` / `_seg_tokens` /
+#    `_unquote_word`. This is the one place a NEW face was unavoidable and R1 F1 is the proof:
+#    `_pipe_view` blanks a multi-word quoted span to `ARG` and strips backslashes, so
+#    `> "/a b/x.py"` and `> /a\ b/y.py` — two ordinary spellings of one real file — reached the
+#    rule with no target at all (both counter-probed at rc=0). A gate that cannot read a
+#    space-bearing filename is not a gate. The face is length-preserving so operators are found
+#    on the blinded text and the path is read from the ORIGINAL bytes — the same two-read idiom
+#    `_quote_blind` already established for rules (14)/(17), not a third parser.
+#  * the rest (~190) is comment: the two kill criteria the retro GATE-AUDIT reads
+#    (`g20-bash-direct-write` plus rule (8)'s recalibration evidence), the CLOSED SET with its
+#    accepted-uncovered list (`cp` / `mv` / `dd of=` / `git apply` / interpreter writes …), and
+#    the per-decision counter-probe record this file carries per rule. The uncovered list is
+#    load-bearing prose: a gate that implied coverage it does not have would be worse than the
+#    gap, and README §强制层 carries the reader-facing twin.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 1846
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2298
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

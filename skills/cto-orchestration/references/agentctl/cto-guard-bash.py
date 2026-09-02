@@ -947,17 +947,172 @@ def _cwd_drift(raw, repos, base):
 # `dd of=` / `rsync` / `git apply` / `patch` / an editor / a write from INSIDE an interpreter
 # (`python - <<EOF` … `open().write`) are accept-UNCOVERED and said so out loud in README
 # §强制层 — a gate that implied coverage it does not have would be worse than the gap.
-# JUDGED ON THE EXECUTION FACE: `_pipe_view` of the heredoc-stripped text, so a `>` inside a
-# quoted argument or a heredoc BODY is document data (the same face rules (8)/(18)/(19) read).
-# `2>&1` / `>&2` are already normalized away there — a duplication is not a file write.
-_R20_OPAQUE = re.compile(r"""[$`*?\[\]]|^~""")
-# One operator run of 1-2 `>`, optionally fd-prefixed, not followed by another `>`/`&`/`|`:
-# `>>>` (the heredoc-body marker `_strip_heredocs` leaves behind) and `>&` are not file writes.
-_R20_REDIR = re.compile(r"\d*>{1,2}(?![>&|])\s*([^\s;|&()<>]*)")
-_R20_TEE = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
-                      + r"(?:\S*/)?tee(?![\w-])(?P<rest>.*)$", re.S)
-_R20_SED = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
-                      + r"(?:\S*/)?sed(?![\w-])(?P<rest>.*)$", re.S)
+# JUDGED ON AN EXECUTION FACE OF THIS RULE'S OWN, and `_pipe_view` could not be it (cold review
+# R1 F1, both spellings counter-probed at rc=0): that view BLANKS a multi-word quoted span to
+# `ARG` and STRIPS backslashes, so `> "/a b/x.py"` and `> /a\ b/x.py` — two ordinary spellings of
+# one real file — arrived with no target at all and were silently allowed. A write target has to
+# be read the way the SHELL reads it. The idiom is the one rules (14)/(17) already established
+# for exactly this problem: a LENGTH-PRESERVING blind decides WHERE the operators are, and the
+# ORIGINAL bytes at those offsets are then unquoted to recover the path — one face, two reads,
+# no third parser. Two properties fall out and both are load-bearing: a `>` inside quotes or a
+# heredoc BODY can never be an operator (`echo "a > b.py"`, and a brief that documents a
+# redirect, stay silent), and `2>&1` / `>&2` are matched as duplication operators in their own
+# right, so the word behind them is never read as a file.
+_R20_BLIND = "\x01"
+
+
+def _write_face(text):
+    """`text` with the CONTENT of every quoted span, every backslash escape and every unquoted
+    `#` comment replaced 1:1 by a sentinel. Length-preserving, so an offset in this face is an
+    offset in `text`: operators are located here, bytes are read there. An unterminated quote
+    blinds to end of text — the conservative direction, since nothing after it is executable."""
+    out, i, n = list(text), 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            out[i] = out[i + 1] = _R20_BLIND     # `\>` is not an operator, `\ ` not a separator
+            i += 2
+            continue
+        if c == "#" and (i == 0 or text[i - 1] in " \t\n;|&()"):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out[i:j] = _R20_BLIND * (j - i)
+            i = j
+            continue
+        if c not in "'\"":
+            i += 1
+            continue
+        quote, j = c, i + 1
+        while j < n:
+            if text[j] == "\\" and quote == '"' and j + 1 < n:
+                j += 2
+                continue
+            if text[j] == quote:
+                break
+            j += 1
+        out[i + 1:j] = _R20_BLIND * (len(text[i + 1:j]))
+        i = j + 1
+    return "".join(out)
+
+
+def _write_segments(face):
+    """(start, end) of every command-position segment of the blinded face. An `&` that belongs
+    to a redirect (`&>` / `&>>`) or to a duplication (`>&`) is NOT a separator — splitting there
+    would tear the operator off its operand."""
+    segs, start, i, n = [], 0, 0, len(face)
+    while i < n:
+        c = face[i]
+        if c == "&" and (face[i + 1:i + 2] == ">" or face[i - 1:i] == ">"):
+            i += 1
+            continue
+        if c in ";|&()\n":
+            segs.append((start, i))
+            start = i + 1
+        i += 1
+    segs.append((start, n))
+    return segs
+
+
+# Redirect operators, longest alternative first. A duplication (`2>&1`, `>&2`) is its own
+# operator so its operand is never a file; `&>` / `&>>` send BOTH streams to a file; the
+# `<`-family is matched only to CONSUME its operand — a heredoc tag, an input file and
+# `_strip_heredocs`'s own `<<<HEREDOC-BODY-STRIPPED>>>` marker are not write targets.
+_R20_OP = re.compile(r"\d*>&\d*|&>>|&>|\d*>>|\d*>|<<-|<<<|<<|<&\d*|<")
+_R20_WRITE_OP = re.compile(r"(?:\d*|&)>{1,2}")
+
+
+def _seg_tokens(face, lo, hi):
+    """[(operator or None, start, end)] for one segment of the blinded face; a word token has
+    `None` and the caller reads the ORIGINAL bytes at [start, end)."""
+    toks, i = [], lo
+    while i < hi:
+        if face[i] in " \t":
+            i += 1
+            continue
+        m = _R20_OP.match(face, i, hi)
+        if m:
+            toks.append((m.group(0), m.start(), m.end()))
+            i = m.end()
+            continue
+        if face[i] in "<>&":       # a stray operator byte (the `>` left over from `>>>`)
+            i += 1
+            continue
+        j = i
+        while j < hi and face[j] not in " \t<>&":
+            j += 1
+        toks.append((None, i, j))
+        i = j
+    return toks
+
+
+def _unquote_word(word):
+    """(the path the SHELL would hand the program, expands). `expands` True when the shell would
+    expand something this guard cannot evaluate; the text is then the word with its quoting
+    removed, which is what the WARN shows. Quoting IS resolved, so `"/a b/x.py"` and
+    `/a\\ b/x.py` both read as `/a b/x.py`."""
+    out, i, n, expands = [], 0, len(word), False
+    while i < n:
+        c = word[i]
+        if c == "\\" and i + 1 < n:
+            out.append(word[i + 1])
+            i += 2
+            continue
+        if c == "'":
+            j = word.find("'", i + 1)
+            if j < 0:
+                return "".join(out) + word[i + 1:], True
+            out.append(word[i + 1:j])
+            i = j + 1
+            continue
+        if c == '"':
+            j, buf = i + 1, []
+            while j < n and word[j] != '"':
+                if word[j] == "\\" and j + 1 < n:
+                    buf.append(word[j + 1])
+                    j += 2
+                    continue
+                buf.append(word[j])
+                j += 1
+            body = "".join(buf)
+            out.append(body)
+            if re.search(r"[$`]", body):     # `"$x"` / `"`x`"` still expand inside dquotes
+                expands = True
+            if j >= n:
+                return "".join(out), True
+            i = j + 1
+            continue
+        if c in "$`*?[" or (c == "~" and i == 0):
+            expands = True
+        out.append(c)
+        i += 1
+    return "".join(out), expands
+
+
+# The wrapper chain rules (8)-(19) share, as a NAME set: the command this segment really runs
+# sits behind any env assignments, wrapper words and their flags / duration operands.
+_R20_WRAPPERS = {"bash", "sh", "zsh", "env", "command", "exec", "nohup", "timeout", "time",
+                 "nice"}
+_R20_DURATION = re.compile(r"\d+(?:\.\d+)?[smhd]?$")
+
+
+def _cmd_head(words):
+    """(basename of the command this segment runs, index of its first argument). A wrapper flag
+    that takes a SEPARATE non-numeric value (`timeout -s KILL 30 tee f`) still breaks the anchor
+    — the same accept-documented limit `_WRAPPER` carries for every other rule in this file."""
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if re.match(r"\w+=", w) or w.startswith("-") or _R20_DURATION.match(w):
+            i += 1
+            continue
+        base = w.rsplit("/", 1)[-1]
+        if base in _R20_WRAPPERS:
+            i += 1
+            continue
+        return base, i + 1
+    return None, len(words)
+
+
 # sed's options that take a SEPARATE value: their argument is DATA and must not be judged as a
 # path (same arity discipline rules (17)/(18) apply to argv). `-i SUFFIX` is deliberately NOT
 # listed: BSD and GNU disagree about whether that token is a suffix or the script, and it does
@@ -975,57 +1130,63 @@ def _sed_in_place(tok):
             or bool(re.match(r"-[A-Za-z]*i", tok)))
 
 
-def _positionals(rest, valued):
-    """Non-flag tokens of one command tail. `--` ends option parsing (everything after it is a
-    path), and each `valued` option consumes its argument."""
-    toks, out, i = rest.split(), [], 0
-    while i < len(toks):
-        tok = toks[i]
+def _positionals(words, valued):
+    """The non-flag words of one command tail, returned STILL QUOTED (the caller unquotes them
+    with the path recovery). `--` ends option parsing and each `valued` option consumes its
+    argument; the option tests read the UNQUOTED form, because `'-e'` is the same flag as `-e`."""
+    out, i = [], 0
+    while i < len(words):
+        tok = _unquote_word(words[i])[0]
         if tok == "--":
-            out.extend(toks[i + 1:])
+            out.extend(words[i + 1:])
             break
         if tok.startswith("-") and tok != "-":
             i += 2 if (tok in valued and "=" not in tok) else 1
             continue
-        out.append(tok)
+        out.append(words[i])
         i += 1
     return out
 
 
-def _write_view(s):
-    """The execution face for rule (20). `&>` / `&>>` are FILE redirects, so they are normalized
-    to their plain spelling BEFORE segmentation — otherwise their `&` reads as a separator and
-    the target lands in a segment of its own."""
-    return re.sub(r"&(>>?)", r"\1", _pipe_view(s))
+def _write_targets(text):
+    """(literal, expanding): every path this command's three parseable channels name. `text` is
+    the heredoc-STRIPPED command, so a body is the document being written and never a step.
+    An absent target (a bare trailing `>`) is not a write. `/dev/null` is deliberately NOT
+    special-cased: it carries no source extension, so the source face already passes it, and a
+    branch the suite cannot turn red is worse than no branch."""
+    face = _write_face(text)
+    lit, expanding = [], []
 
-
-def _write_targets(view):
-    """(literal, opaque): every path the three parseable channels name in this command.
-    `opaque` = a target the SHELL expands (`$x`, a glob, `~`), i.e. a token whose real path this
-    guard does not know — reported as such, never guessed at. An absent target (a bare trailing
-    `>`) is not a write. `/dev/null` is deliberately NOT special-cased: it carries no source
-    extension, so the source face already passes it, and a branch the suite cannot turn red is
-    worse than no branch."""
-    lit, opaque = [], []
-
-    def add(tok):
-        if not tok:
+    def add(raw_word):
+        path, expands = _unquote_word(raw_word)
+        if not path:
             return
-        (opaque if _R20_OPAQUE.search(tok) else lit).append(tok)
+        (expanding if expands else lit).append(path)
 
-    for seg in _cmd_segments(view):
-        for m in _R20_REDIR.finditer(seg):
-            add(m.group(1))
-        head = _R20_TEE.match(seg)
-        if head:
-            for tok in _positionals(head.group("rest"), ()):
-                add(tok)
-            continue
-        head = _R20_SED.match(seg)
-        if head and any(_sed_in_place(t) for t in head.group("rest").split()):
-            for tok in _positionals(head.group("rest"), _SED_VALUED):
-                add(tok)
-    return lit, opaque
+    for lo, hi in _write_segments(face):
+        toks = _seg_tokens(face, lo, hi)
+        words, after_op = [], False
+        for k, (op, start, end) in enumerate(toks):
+            if op is not None:
+                after_op = True
+                if _R20_WRITE_OP.fullmatch(op):
+                    nxt = toks[k + 1] if k + 1 < len(toks) else None
+                    if nxt and nxt[0] is None:
+                        add(text[nxt[1]:nxt[2]])
+                continue
+            if after_op:            # a redirect's operand is not an argv positional
+                after_op = False
+                continue
+            words.append(text[start:end])
+        plain = [_unquote_word(w)[0] for w in words]
+        base, first = _cmd_head(plain)
+        if base == "tee":
+            for w in _positionals(words[first:], ()):
+                add(w)
+        elif base == "sed" and any(_sed_in_place(t) for t in plain[first:]):
+            for w in _positionals(words[first:], _SED_VALUED):
+                add(w)
+    return lit, expanding
 
 
 _EDIT_GUARD = []
@@ -1534,7 +1695,7 @@ def main():
     #      the anchoring rewrite first, which is the cheaper fix — and ABOVE every `return 0`
     #      that follows (rule (7)'s benign-prune allow, rule (3)'s reminder branch), so a write
     #      chained after a legal dispatch is still judged.
-    lit20, opaque20 = _write_targets(_write_view(raw_hd))
+    lit20, opaque20 = _write_targets(raw_hd)
     note20 = note20b = ""
     if lit20:
         g20 = _edit_guard()

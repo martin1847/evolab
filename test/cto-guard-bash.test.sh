@@ -534,6 +534,24 @@ run_tp 'git status' "$G8ROOT/link-r8" "$G8ROOT/link-r8"
 chk_eq "r8-neg-symlinked-cwd: a slug built from the LINK path does not match realpath — denied" 2 "$RC"
 chk_contains "r8 the deny still names the real conditions" "the session root IS the umbrella" "$ERR"
 chk_not_contains "r8 and no longer blames cwd drift across tool calls" "drifts across tool" "$ERR"
+# ACCEPTED BOUNDARY #1 (README §cwd 锚定, R1 F3 BLOCKING): an OUTER repo with a single NESTED
+# repo and no multi-repo umbrella within 5 ancestors is a shape rule (8) never evaluates at all —
+# `_umbrella_near` needs >=2 direct `.git` children somewhere in that window and never finds
+# them. The fixture sits 6 levels below the temp root so the host's own directories cannot
+# supply the second child, and the transcript root is DELIBERATELY mismatched: if the rule were
+# evaluating, that mismatch would deny. Implementation happening to comply is not a pinned
+# boundary — this is the oracle.
+NEST8="$G8ROOT/nest/l1/l2/l3/l4/l5/l6"
+mkdir -p "$NEST8/outer/.git" "$NEST8/outer/nested/.git"
+run_tp 'git status' "$NEST8/outer/nested" "$G8ROOT/definitely-not-the-session-root"
+chk_eq "r8-doc-nested-no-umbrella-never-evaluates: no umbrella in 5 ancestors — never evaluated" 0 "$RC"
+chk_eq "r8-doc-nested-no-umbrella-never-evaluates writes nothing to stderr" "" "$ERR"
+chk_eq "r8-doc-nested-no-umbrella-never-evaluates is silent on stdout" "" "$OUT"
+# PAIRED POSITIVE on the same fixture: add a SECOND direct git child and the window qualifies,
+# so the very same payload denies — the boundary is the umbrella scan, not the nesting.
+mkdir -p "$NEST8/sibling/.git"
+run_tp 'git status' "$NEST8/outer/nested" "$G8ROOT/definitely-not-the-session-root"
+chk_eq "r8-doc-nested-no-umbrella control: a second direct child makes it an umbrella — denied" 2 "$RC"
 GUARD_CWD="$ISO_REPO"
 
 # non-dispatch command -> silent
@@ -1775,35 +1793,68 @@ chk_eq "r20-recall-heredoc write denied" 2 "$RC"
 # a RELATIVE target resolves against the payload cwd, exactly as the shell would resolve it
 run20 'echo x > x.py'
 chk_eq "r20-recall-relative target resolved against the payload cwd denied" 2 "$RC"
+# R1 F1 (BLOCKING): a path with a SPACE is still an ordinary literal filename. Both spellings the
+# shell accepts were silently allowed before, because `_pipe_view` blanked the quoted span to
+# `ARG` and stripped the escaping backslash — rule (20) now reads its target off the ORIGINAL
+# bytes at the operator's offset.
+mkdir -p "$R20/space dir"
+run20 "echo x > \"$R20/space dir/x.py\""
+chk_eq "r20-recall-quoted-space target denied" 2 "$RC"
+chk_contains "r20-recall-quoted-space names the unquoted path" "$R20/space dir/x.py" "$ERR"
+chk_contains "r20-recall-quoted-space carries the doc pointer" "agentctl/README.md §强制层" "$ERR"
+run20 "echo x > $R20/space\\ dir/y.py"
+chk_eq "r20-recall-escaped-space target denied" 2 "$RC"
+chk_contains "r20-recall-escaped-space names the unescaped path" "$R20/space dir/y.py" "$ERR"
+chk_contains "r20-recall-escaped-space hands over the override" "/tmp/cto-allow-direct-write" "$ERR"
+run20 "echo x | tee \"$R20/space dir/t.sh\""
+chk_eq "r20-recall-tee quoted-space target denied" 2 "$RC"
+run20 "sed -i '' 's/a/b/' \"$R20/space dir/m.py\""
+chk_eq "r20-recall-sed quoted-space target denied" 2 "$RC"
+# …and the same spelling on a NON-source path stays silent: the space is not what decides
+run20 "echo x > \"/tmp/some dir/out.log\""
+chk_eq "r20-neg a quoted space path with no source extension is allowed" 0 "$RC"
+chk_eq "r20-neg the quoted-space .log target says nothing on stdout" "" "$OUT"
+chk_eq "r20-neg the quoted-space .log target says nothing on stderr" "" "$ERR"
 # …and a target that is not there at all is not a write: silence, not a guess
 run20 'echo x >'
 chk_eq "r20-neg a bare trailing redirect names no target: allowed" 0 "$RC"
 chk_eq "r20-neg and says nothing about it" "" "$OUT"
+chk_eq "r20-neg the bare redirect is silent on stderr too" "" "$ERR"
 
 # NEGATIVE CONTROLS — a duplication is not a file write, a non-source extension is not product
 # code, and a `>` inside quoted data or a heredoc BODY is DOCUMENT text.
 run20 'ls 2>/dev/null'
 chk_eq "r20-neg 2>/dev/null is not a file write" 0 "$RC"
 chk_eq "r20-neg 2>/dev/null is silent" "" "$OUT"
+chk_eq "r20-neg 2>/dev/null writes nothing to stderr" "" "$ERR"
 run20 'ls 2>&1 | grep x'
 chk_eq "r20-neg 2>&1 is a duplication, not a target" 0 "$RC"
 chk_eq "r20-neg 2>&1 is silent" "" "$OUT"
+chk_eq "r20-neg 2>&1 writes nothing to stderr" "" "$ERR"
 run20 'ls >&1'
 chk_eq "r20-neg >&1 is a duplication" 0 "$RC"
+chk_eq "r20-neg >&1 is silent on stdout" "" "$OUT"
+chk_eq "r20-neg >&1 is silent on stderr" "" "$ERR"
 run20 'ls >&2'
 chk_eq "r20-neg >&2 is a duplication" 0 "$RC"
+chk_eq "r20-neg >&2 is silent on stdout" "" "$OUT"
+chk_eq "r20-neg >&2 is silent on stderr" "" "$ERR"
 run20 'ls > /tmp/out.log'
 chk_eq "r20-neg a .log target is not source" 0 "$RC"
 chk_eq "r20-neg the .log target is silent" "" "$OUT"
+chk_eq "r20-neg the .log target writes nothing to stderr" "" "$ERR"
 run20 "echo x >> $R20/docs/notes.md"
 chk_eq "r20-neg the orchestrator's own docs face passes" 0 "$RC"
 chk_eq "r20-neg and passes SILENTLY (it writes goals and records all day)" "" "$OUT"
+chk_eq "r20-neg the docs face writes nothing to stderr" "" "$ERR"
 run20 "$(printf 'cat > %s/brief.md <<EOF\nthen run: sed -i s/a/b/ > foo.py\nEOF' "$R20")"
 chk_eq "r20-neg a redirect inside a heredoc BODY is document text" 0 "$RC"
 chk_eq "r20-neg the heredoc body is silent" "" "$OUT"
+chk_eq "r20-neg the heredoc body writes nothing to stderr" "" "$ERR"
 run20 'echo "a > b.py"'
 chk_eq "r20-neg a redirect inside a quoted argument is data" 0 "$RC"
 chk_eq "r20-neg the quoted argument is silent" "" "$OUT"
+chk_eq "r20-neg the quoted argument writes nothing to stderr" "" "$ERR"
 # …and the same control with a target the source face WOULD judge if the quote blanking were
 # removed: in `"a > b.py"` the extracted token keeps a trailing quote and fails the extension
 # test for an incidental reason, so it cannot tell a working quote face from a broken one
@@ -1812,9 +1863,18 @@ chk_eq "r20-neg the quoted argument is silent" "" "$OUT"
 run20 "echo 'x > $R20/quoted.py and more words'"
 chk_eq "r20-neg a quoted ABSOLUTE source path is data too" 0 "$RC"
 chk_eq "r20-neg and that one is silent as well" "" "$OUT"
+chk_eq "r20-neg the quoted ABSOLUTE path writes nothing to stderr" "" "$ERR"
 run20 "sed -e s/a/b/ $R20/m.py"
 chk_eq "r20-neg sed without an in-place flag only READS" 0 "$RC"
 chk_eq "r20-neg the reading sed is silent" "" "$OUT"
+chk_eq "r20-neg the reading sed writes nothing to stderr" "" "$ERR"
+# an unquoted `#` opens a comment: everything after it — including a redirect into a source
+# path — is text the shell never executes. This face is `_write_face`'s own (R2), so it gets
+# its own oracle rather than riding `_pipe_view`'s comment strip.
+run20 "echo ok # > $R20/commented.py"
+chk_eq "r20-neg a redirect behind a shell comment is not executed" 0 "$RC"
+chk_eq "r20-neg the commented redirect is silent on stdout" "" "$OUT"
+chk_eq "r20-neg the commented redirect is silent on stderr" "" "$ERR"
 
 # UNJUDGEABLE TARGETS — the shell expands them, so this guard does not know the path. ALLOW and
 # say so; a silent pass would hide the blind spot and a DENY would be an accusation about a path

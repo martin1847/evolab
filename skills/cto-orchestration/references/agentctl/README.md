@@ -209,7 +209,9 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   重定向族 `>` `>>` `&>` `&>>` `N>` `N>>` 指向一个路径（`>&N` / `N>&M` 是复制不是写文件；`/dev/null` 之类不带
   源码扩展的目标本来就过不了源码面，不另设特例）；`tee` 的**每个**
   路径参数（含 `-a` / `--`，任一命中即 DENY）；`sed` 就地（`-i` / `-iSUF` / `-i SUF` / `--in-place[=SUF]`，命中后该段
-  所有位置参数逐个过源码面）。判定在 shell **执行面**做：引号内与 heredoc 正文里的 `>` 是 DATA。**accepted-uncovered，
+  所有位置参数逐个过源码面）。**带空格的字面路径也算字面**：`> "…/a b/x.py"` 与 `> …/a\ b/y.py` 都判（判定读
+  操作符偏移处的**原始字节**再按 shell 规则去引号/去转义，不读会把 quoted span 抹成 `ARG` 的通用视图）。
+  判定在 shell **执行面**做：引号内、`#` 注释后与 heredoc 正文里的 `>` 是 DATA。**accepted-uncovered，
   不声称覆盖**：`cp` / `mv` / `install` / `dd of=` / `rsync` / `git apply` / `patch` / 编辑器 / 解释器内写文件
   （`python - <<EOF` 里的 `open().write`）；目标含 `$`、反引号、`$(`、glob（`* ? [`）或前导 `~` → 不可判，
   ALLOW + 一行 WARN 且**不消费** override；目标缺失（行尾裸 `>`）→ 静默。席位归属、override、降级方向与 E1 同源
@@ -247,7 +249,9 @@ session 自己的项目根——那种 cwd 打不到别的仓）：**只在 cwd 
 跨调用持久、`cd` 出项目根后下一条被拉回，所以这种 cwd 不可能是漂到兄弟仓的 cwd；session 根从 hook payload 的
 `transcript_path` 父目录名反解：目录名 = 项目根路径把每个非 `[A-Za-z0-9]` 字符换成 `-`——**实测归纳、非官方契约**，
 所以只用一个方向：相等才放行）。**照拦**：session 根本身就是伞形（2026-07-26「PR 开错仓」的形态）、cwd 落在伞形内
-另一个仓（含该仓之下的嵌套仓）、payload 无 `transcript_path`（codex 席位）、cwd 不可读。三条 accepted 边界：
-① 外层仓 + 单个嵌套仓且 5 层祖先内无伞形 → 规则从不评估（现状，不变）；② slug 编码非单射，同一伞形下仅以标点
+另一个仓（含该仓之下的嵌套仓）、payload 无 `transcript_path`（codex 席位）。**cwd 不存在 / 不可列**不在照拦面上：
+`_umbrella_near` 直接返回 None，规则从不评估（fail-open，oracle = 断言 `unreadable cwd fails open`）。三条 accepted 边界：
+① 外层仓 + 单个嵌套仓且 5 层祖先内无伞形 → 规则从不评估（现状，不变；钉成断言
+`r8-doc-nested-no-umbrella-never-evaluates` + 加一个直接子仓即翻成 DENY 的对照）；② slug 编码非单射，同一伞形下仅以标点
 区分的兄弟仓（`a.b` / `a-b`）会互认 → 放行，accept-documented（钉成断言 `r8-doc-slug-collision`，要改方向先改
 那条断言与本节）；③ cwd 经 symlink 指到仓根时按 realpath 判，slug 不等 → 照拦（保守方向）。

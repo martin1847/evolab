@@ -134,11 +134,18 @@ EOF
 # is the single source for the three write channels it covers, the channels it explicitly does
 # NOT (`cp` / `mv` / `dd of=` / `git apply` / interpreter writes …), and the unjudgeable-target
 # WARN. A gate that implies coverage it does not have is worse than the gap it hides.
+# agentctl/README.md 253→257 (2026-09-02, R1 评审 F1/F2/F3 修复轮): +4 lines, all three of them
+# CORRECTIONS to承诺面 this page is the single source of: the covered-channel list now says a
+# space-bearing literal path (`> "…/a b/x.py"` / `> …/a\ b/y.py`) IS judged (F1 was a real
+# miss, not an accepted gap), the ⑧ 照拦 list no longer claims an unreadable cwd is denied
+# (`_umbrella_near` returns None there — the rule never evaluates), and accepted boundary ①
+# now names the assertion that pins it. A承诺面 that overstates coverage is the failure mode
+# this ratchet's obligation clause exists for, so the words belong here, next to the claim.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 253
+skills/cto-orchestration/references/agentctl/README.md 257
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42
