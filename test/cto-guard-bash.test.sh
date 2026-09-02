@@ -2047,6 +2047,22 @@ chk_eq "r21-neg the -f 正路 is silent on stderr" "" "$ERR"
 run 'agentctl steer s1 --interrupt -f /tmp/b.md && echo `date`'
 chk_eq "r21-neg no -m in the command: nothing to judge" 0 "$RC"
 chk_eq "r21-neg and it stays silent on stderr" "" "$ERR"
+# R1 BLOCKING: the `-m` has to belong to THIS steer. The scan used to run past `;` / `&&` / `|`,
+# so a `-f` steer borrowed the NEXT command's `-m` and this rule denied with a message naming a
+# `-m` the steer never had — breaking its own two promises (`-f` never matches, no `-m` never
+# matches). Counter-probed at rc=2 before the fix.
+run "agentctl steer s1 -f /tmp/b.md; printf '%s' -m 'literal \`date\`'"
+chk_eq "r21-neg-dash-m-of-next-command-is-not-ours" 0 "$RC"
+chk_eq "r21-neg-dash-m-of-next-command-is-not-ours is silent on stdout" "" "$OUT"
+chk_eq "r21-neg-dash-m-of-next-command-is-not-ours is silent on stderr" "" "$ERR"
+# …and the paired POSITIVE control, so the narrowing cannot be satisfied by going blind: a second
+# steer that carries its OWN `-m` is still judged, from its own command position.
+run 'agentctl steer s1 -f /tmp/b.md && agentctl steer s2 -m "x `y`"'
+chk_eq "r21-a chained steer with its own -m is still judged" 2 "$RC"
+chk_contains "r21-the chained steer deny is rule (21)'s" "正文含命令替换" "$ERR"
+# a quoted OPTION VALUE carrying a separator is data, not a segment end (`_quote_blind`)
+run 'agentctl steer s1 -d "out|x.md" -m "x `y`"'
+chk_eq "r21-a quoted separator inside an option value does not end the segment" 2 "$RC"
 run 'echo "`date`"'
 chk_eq "r21-neg an unrelated substitution is none of this rule's business" 0 "$RC"
 chk_eq "r21-neg the unrelated substitution is silent on stdout" "" "$OUT"

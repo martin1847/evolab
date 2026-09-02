@@ -237,7 +237,7 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 
 ## cwd 锚定（多仓工作区）
 
-伞形多仓里 shell cwd 跨调用漂移会让 git/gh 打错仓——每段含 git/gh 的命令自带锚：`cd /abs/<repo> && …`、
+伞形多仓里 bare git/gh 会打在 cwd 所在的仓——未必是你以为的那个；每段含 git/gh 的命令自带锚：`cd /abs/<repo> && …`、
 `git -C <path>`、`gh -R <owner>/<repo>`。guard ⑧ 只拦两种形态：**session 根本身就是伞形**（2026-07-26
 「PR 开错仓」的形态）、**cwd 落在伞形内另一个仓**（含该仓之下的嵌套仓）；**cwd 所在仓就是本 session 项目根
 时不拦**（Claude Code 的 cwd 不漂出项目树），payload 无 `transcript_path` 的席位（codex）照旧拦，单仓永不触发。

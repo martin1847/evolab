@@ -435,12 +435,25 @@ cd "$(dirname "$0")"
 # comment-heredoc-opener gap, and the opaque-target / missing-target verdict directions.
 # This is the cheaper place for those bytes: a承诺面 stated twice drifts, and the README rows
 # this replaces included two corrections of exactly that drift.
+# cto-guard-bash.py 2412→2423 (2026-09-02, R1 评审 blocking 修复): +11, one CORRECTNESS fix on
+# rule (21) and the argument for it. The matcher's pre-`-m` scan ran past `;` / `&&` / `||` / `|`,
+# so a `steer` carrying only `-f` borrowed the NEXT command's `-m` and the rule denied with a
+# message naming a `-m` that steer never had — `agentctl steer s1 -f /tmp/b.md; printf '%s' -m
+# 'literal `date`'` counter-probed at rc=2, i.e. the rule broke its own two published promises
+# (`-f` never matches, no `-m` never matches). The scan now stops at rule (12)'s separator set
+# plus newline, and WHICH separators count is decided on `_quote_blind` — no new parse face, the
+# same length-preserving two-read idiom rules (14)/(17) carry, so a quoted option value holding a
+# `;` or `|` stays data while the body is still read from `raw` at the same offset. The comment
+# carries the counter-probe and the one direction the narrowing gives up (a backslash-ESCAPED
+# separator ends the scan = a MISS, fail-open), because a boundary nobody wrote down is the one
+# the next batch re-widens by accident. Oracles: `r21-neg-dash-m-of-next-command-is-not-ours`
+# plus a chained-steer positive control and a quoted-separator positive.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2412
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2423
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

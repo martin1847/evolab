@@ -1335,7 +1335,15 @@ def _r20_judge(g, lit, cwd):
 # where such a body really ends means parsing the quoting this ban already refuses to reason
 # about. Second accepted over-reach, same recovery: a separate command chained AFTER a clean `-m`
 # is read as body (`r21-doc-tail-after-m-judged`), and its fix is the same `-f` rewrite.
-# NEVER MATCHES: `-f <file>` (there is no `-m`), and a `steer` with no `-m` at all.
+# NEVER MATCHES: `-f <file>` (there is no `-m`), and a `steer` with no `-m` at all. Those two
+# promises are why the pre-`-m` scan STOPS AT A COMMAND SEPARATOR (R1 blocking, counter-probed):
+# `agentctl steer s1 -f /tmp/b.md; printf '%s' -m 'literal `date`'` used to borrow the NEXT
+# command's `-m` and DENY with a message naming a `-m` this steer never had. The separator set is
+# rule (12)'s (`;` `&` `|`, so `&&` / `||` are covered) plus newline, and WHICH of them count is
+# decided on `_quote_blind` — the length-preserving face rules (14)/(17) already established, so
+# a `;` or `|` inside a quoted OPTION VALUE is data and offsets still map 1:1 back to the raw
+# bytes the body is read from. A backslash-ESCAPED separator stops the scan instead, i.e. a MISS:
+# fail-open, the same class `_pipe_view`'s parked escapes exist for.
 # JUDGED ON `raw`, the quoted-heredoc-stripped face the general rules read — one view, both
 # directions pinned: a `<<'EOF'` body is DATA (the shell expands nothing inside it, so the text
 # reaches agentctl intact), while a BARE `<<EOF` body stays visible because its substitutions
@@ -1344,7 +1352,7 @@ def _r20_judge(g, lit, cwd):
 # s1 -m \`x\`"` is not at command position and is not judged, even though that backtick expands.
 # The rule owns the steer channel, not shell substitution in general.
 _R21_HEAD = re.compile(_pos_head(r";&(|\n") + _AGENTCTL
-                       + r"\s+steer(?![\w-])[^\n]*?\s-m(?=[\s\"'])")
+                       + r"\s+steer(?![\w-])[^;&|\n]*?\s-m(?=[\s\"'])")
 _R21_SUBST = re.compile(r"`|\$\(")
 
 
@@ -1491,7 +1499,10 @@ def main():
     #      verdict, and run_in_background does nothing about a substitution that already ran.
     #      Below (12), which owns the piped shape and whose file-first fix the steer still needs.
     #      Doctrine, the byte ban and its two accepted over-reaches: `_R21_HEAD` at module level.
-    m21 = _R21_HEAD.search(raw)
+    #      The head is located on `_quote_blind(raw)` so a quoted option value cannot end the
+    #      segment; that face is length-preserving, so the BODY is read from `raw` at the same
+    #      offset — one face, two reads, the idiom rules (14)/(17) already carry.
+    m21 = _R21_HEAD.search(_quote_blind(raw))
     if m21 and _R21_SUBST.search(raw[m21.end():]):
         sys.stderr.write(
             "DENY: `agentctl steer -m` 正文含命令替换 — a backtick or `$(` in the inline body is "
