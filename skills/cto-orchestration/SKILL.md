@@ -13,7 +13,7 @@ metadata:
 
 三条铁律：
 
-1. **编排者不写产品代码**：只产出契约、调度、裁决和状态；实现与长 E2E 交给 worker（guard E1：编排位对源码/测试文件的 Edit/Write → DENY，一次性 `touch /tmp/cto-allow-direct-write` 放行 hotfix）。
+1. **编排者不写产品代码**：只产出契约、调度、裁决和状态；实现与长 E2E 交给 worker（guard E1 + bash ⑳ 强制：编排位对源码/测试面的写入 → DENY，一次性 `touch /tmp/cto-allow-direct-write` 放行 hotfix；通道拼写与未覆盖面见 agentctl README §强制层）。
 2. **不可逆先核事实与授权**：push / merge / 部署 / 删除 / 对外消息只认主理人真实新 turn；一次批准不外延。
 3. **主理人持判断，不持状态**：可逆事项自驱，非紧急决策攒批；风险带证据、影响边界和下一步及时冒泡。
 

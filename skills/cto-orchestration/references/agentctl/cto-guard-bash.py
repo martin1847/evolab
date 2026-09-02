@@ -22,6 +22,11 @@
 #       a half-way rewrite leaves a state the command text cannot explain; one step per call [DENY]
 #  (19) a command that `cd`s into repo A and then names repo B by RELATIVE path -> the batch runs
 #       the wrong repo's suite (or 127s) while its `echo PASS` tail claims a gate [ALLOW + WARN]
+#  (20) the ORCHESTRATOR writing a source/test path through one of three parseable literal-write
+#       spellings (redirection / `tee` / in-place `sed`) — cto-guard-edit's E1 on this channel,
+#       because auto mode prefers Bash over Edit|Write for editing files and E1 is dark there
+#       (four spellings measured at rc=0, 2026-09-02). Seat attribution is IMPORTED from that
+#       guard, never copied; uncovered channels are listed in README §强制层 [DENY]
 # Deny/checker error = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
@@ -926,6 +931,165 @@ def _cwd_drift(raw, repos, base):
     return None, None
 
 
+# ── rule (20): the orchestrator writing SOURCE through bash (DENY) ────────────────────────
+# KILL CRITERION (slug `g20-bash-direct-write`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill;
+# plus two of its own — a LIVE seat falsely denied inside its own worktree even once means the
+# attribution is broken before the rule is worth keeping, and a non-literal WARN that fires
+# >=10 times in a week without ever standing over a real source write goes silent.
+# WHY THIS EXISTS: E1 (cto-guard-edit.py) is the SAME rule on the Edit|Write channel, and in
+# auto mode the harness explicitly prefers Bash (heredoc / sed / a script) for editing files —
+# so E1 is a paper door there. Measured 2026-09-02, by the orchestrator and again by a cold
+# review: a heredoc write, an append redirect, a `tee` and a `sed -i` onto a repo `.py` all
+# returned rc=0 with zero output from this guard.
+# THE CLOSED SET, and it is a set of SPELLINGS this file can parse rather than a claim about
+# shell writes in general: (a) redirections `> >> &> &>> N> N>>` naming a path, (b) `tee`'s
+# path arguments (every one of them), (c) `sed` with an in-place flag. `cp` / `mv` / `install` /
+# `dd of=` / `rsync` / `git apply` / `patch` / an editor / a write from INSIDE an interpreter
+# (`python - <<EOF` … `open().write`) are accept-UNCOVERED and said so out loud in README
+# §强制层 — a gate that implied coverage it does not have would be worse than the gap.
+# JUDGED ON THE EXECUTION FACE: `_pipe_view` of the heredoc-stripped text, so a `>` inside a
+# quoted argument or a heredoc BODY is document data (the same face rules (8)/(18)/(19) read).
+# `2>&1` / `>&2` are already normalized away there — a duplication is not a file write.
+_R20_OPAQUE = re.compile(r"""[$`*?\[\]]|^~""")
+# One operator run of 1-2 `>`, optionally fd-prefixed, not followed by another `>`/`&`/`|`:
+# `>>>` (the heredoc-body marker `_strip_heredocs` leaves behind) and `>&` are not file writes.
+_R20_REDIR = re.compile(r"\d*>{1,2}(?![>&|])\s*([^\s;|&()<>]*)")
+_R20_TEE = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
+                      + r"(?:\S*/)?tee(?![\w-])(?P<rest>.*)$", re.S)
+_R20_SED = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
+                      + r"(?:\S*/)?sed(?![\w-])(?P<rest>.*)$", re.S)
+# sed's options that take a SEPARATE value: their argument is DATA and must not be judged as a
+# path (same arity discipline rules (17)/(18) apply to argv). `-i SUFFIX` is deliberately NOT
+# listed: BSD and GNU disagree about whether that token is a suffix or the script, and it does
+# not matter here — a suffix (`.bak`) and a script (`s/a/b/`) both fail the source-face test,
+# so judging EVERY positional is correct under either parse.
+_SED_VALUED = {"-e", "--expression", "-f", "--file", "-l", "--line-length"}
+
+
+def _sed_in_place(tok):
+    """True when this argv token asks sed to rewrite its input files. Covers the bare `-i`, an
+    attached suffix (`-i.bak`), a short-flag cluster carrying `i` (`-ni`), and both long
+    spellings. sed has no OTHER option whose name starts with `i`, so the cluster test cannot
+    catch an unrelated flag."""
+    return (tok == "--in-place" or tok.startswith("--in-place=")
+            or bool(re.match(r"-[A-Za-z]*i", tok)))
+
+
+def _positionals(rest, valued):
+    """Non-flag tokens of one command tail. `--` ends option parsing (everything after it is a
+    path), and each `valued` option consumes its argument."""
+    toks, out, i = rest.split(), [], 0
+    while i < len(toks):
+        tok = toks[i]
+        if tok == "--":
+            out.extend(toks[i + 1:])
+            break
+        if tok.startswith("-") and tok != "-":
+            i += 2 if (tok in valued and "=" not in tok) else 1
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+def _write_view(s):
+    """The execution face for rule (20). `&>` / `&>>` are FILE redirects, so they are normalized
+    to their plain spelling BEFORE segmentation — otherwise their `&` reads as a separator and
+    the target lands in a segment of its own."""
+    return re.sub(r"&(>>?)", r"\1", _pipe_view(s))
+
+
+def _write_targets(view):
+    """(literal, opaque): every path the three parseable channels name in this command.
+    `opaque` = a target the SHELL expands (`$x`, a glob, `~`), i.e. a token whose real path this
+    guard does not know — reported as such, never guessed at. An absent target (a bare trailing
+    `>`) is not a write. `/dev/null` is deliberately NOT special-cased: it carries no source
+    extension, so the source face already passes it, and a branch the suite cannot turn red is
+    worse than no branch."""
+    lit, opaque = [], []
+
+    def add(tok):
+        if not tok:
+            return
+        (opaque if _R20_OPAQUE.search(tok) else lit).append(tok)
+
+    for seg in _cmd_segments(view):
+        for m in _R20_REDIR.finditer(seg):
+            add(m.group(1))
+        head = _R20_TEE.match(seg)
+        if head:
+            for tok in _positionals(head.group("rest"), ()):
+                add(tok)
+            continue
+        head = _R20_SED.match(seg)
+        if head and any(_sed_in_place(t) for t in head.group("rest").split()):
+            for tok in _positionals(head.group("rest"), _SED_VALUED):
+                add(tok)
+    return lit, opaque
+
+
+_EDIT_GUARD = []
+
+
+def _edit_guard():
+    """cto-guard-edit's seat-attribution face, loaded from the SAME directory on demand, or None
+    when it cannot be loaded at all (a missing / unreadable sibling: the rule then DEGRADES to
+    ALLOW+WARN like every other unanswerable case, rather than taking the Bash tool down with a
+    CHECKER-ERROR).
+    IMPORTED, never copied: rule (20) IS E1 on another channel, and two copies of "which live
+    seat owns this work tree" would drift until the two channels disagreed about the same write.
+    Lazy + cached, so a command with no literal write target never pays for it — measured at
+    1.0 ms, against 12.5 ms for ONE of the `git rev-parse` calls the judgement itself makes (the
+    hyphenated filename is why this goes through importlib rather than `import`)."""
+    if not _EDIT_GUARD:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cto-guard-edit.py")
+        try:
+            spec = importlib.util.spec_from_file_location("cto_guard_edit", path)
+            if spec is None or spec.loader is None:
+                return None
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)   # `main()` is under a __main__ guard: no side effects
+        except Exception:
+            return None
+        _EDIT_GUARD.append(mod)
+    return _EDIT_GUARD[0]
+
+
+def _r20_judge(g, lit, cwd):
+    """(target to deny, reason it could not be judged) for one command's literal write targets.
+    E1's predicate, per target and in E1's order:
+      * seat-attribution module unloadable          -> UNANSWERABLE, ALLOW and say so
+      * not a source/test path                      -> none of this rule's business, silent
+      * inside a LIVE seat's work tree              -> a worker writing its own repo, ALLOW
+      * census incomplete, or no governed work tree
+        owns it while the caller is not a seat      -> UNANSWERABLE, ALLOW and say so
+      * whatever is left                            -> the orchestrator typing product code."""
+    if g is None:
+        return None, "cto-guard-edit.py could not be loaded, so no seat census exists"
+    src = [(t, t if os.path.isabs(t) else os.path.join(cwd, t)) for t in lit]
+    src = [(t, full) for t, full in src if g._is_source(full)]
+    if not src:
+        return None, None
+    run_dir = os.environ.get("AGENT_WATCH_DIR") or g._RUN_DEFAULT
+    seats, complete = g.live_seat_cwds(run_dir)
+    if not complete:
+        return None, "run dir %s could not be listed, so the LIVE seat set is unknown" % run_dir
+    croot, cdecided = g._worktree_root(cwd)
+    caller_seat = any(g._seat_holds(cwd, s, croot, cdecided) for s in seats)
+    unjudged = None
+    for tok, full in src:
+        tdir = g._target_dir(full, cwd)
+        troot, tdecided = g._worktree_root(tdir)
+        if any(g._seat_holds(tdir, s, troot, tdecided) for s in seats):
+            continue
+        if not (tdecided and (caller_seat or (cdecided and croot == troot))):
+            unjudged = unjudged or "%s is inside no work tree this call can attribute" % tok
+            continue
+        return tok, None
+    return None, unjudged
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -1361,6 +1525,63 @@ def main():
         )
         return 2
 
+    # (20) the orchestrator writing SOURCE through bash — E1 (cto-guard-edit.py) on this
+    #      channel, because in auto mode the harness prefers Bash over Edit/Write for editing
+    #      files and E1 is dark there (four spellings measured at rc=0, 2026-09-02). Doctrine,
+    #      the closed set of parseable spellings, the uncovered channels and the seat
+    #      attribution it imports rather than copies: `_write_targets` / `_r20_judge`.
+    #      PLACEMENT: below (8)/(18) — a command that is both unanchored and a hand-write gets
+    #      the anchoring rewrite first, which is the cheaper fix — and ABOVE every `return 0`
+    #      that follows (rule (7)'s benign-prune allow, rule (3)'s reminder branch), so a write
+    #      chained after a legal dispatch is still judged.
+    lit20, opaque20 = _write_targets(_write_view(raw_hd))
+    note20 = note20b = ""
+    if lit20:
+        g20 = _edit_guard()
+        tgt20, why20 = _r20_judge(g20, lit20, cwd8)
+        if tgt20 is not None and g20 is not None:
+            # The override is the LICENSED direct-write path (SKILL.md §2: the orchestrator may
+            # write the shipped 教义 / 门 / guard face itself), and consumption IS the approval —
+            # the same one-shot marker E1 consumes, so one `touch` can never become a standing
+            # bypass and an unremovable object at that path still denies.
+            try:
+                os.remove(g20._OVERRIDE)
+                tgt20 = None
+            except OSError:
+                pass
+        if tgt20 is not None and g20 is not None:
+            sys.stderr.write(
+                "DENY: 编排位经 bash 直写源码面 — this command writes %s (a source/test path) "
+                "through a redirect / tee / in-place sed, and no LIVE agentctl seat holds that "
+                "work tree (call cwd %s): that is the orchestrator typing product code (铁律① "
+                "车道分工, n=2 — the seat hand-coded what it had just briefed and lost the "
+                "review lane it was paying for). Fix: dispatch it — `agentctl start <engine> "
+                "<session> <cwd> --goal <abs>` — and let the worker edit inside its own "
+                "worktree; writes into a live seat's work tree pass untouched. Writing the "
+                "SHIPPED face (教义 / 门 / guard) yourself is licensed for ANY verified motive: "
+                "`touch %s` (one-shot, consumed on use) and re-run. "
+                "Read: cto-orchestration/references/agentctl/README.md §强制层.\n"
+                % (tgt20, cwd8, g20._OVERRIDE)
+            )
+            return 2
+        if why20:
+            note20 = (
+                # TWO locals for this rule, not one with two assignment arms: the injected-text
+                # ratchet resolves ONE literal per local name, so a second assignment to `note20`
+                # would go entirely unweighed. Held near (14)/(15)/(16)/(19)'s length — they join
+                # in ONE assembled response, and that assembly is what `BUDGET_GUARD_SINGLE` weighs.
+                "WARN (cto-guard 20): 席位归属未判 — %s, so a write to a source path was allowed "
+                "unjudged. 铁律① 车道分工 still holds: the orchestrator dispatches product code, "
+                "it does not type it." % why20
+            )
+    if opaque20 and not note20:
+        note20b = (
+            "WARN (cto-guard 20): write target not literal (%s) — the shell expands it, so 席位"
+            "归属未判 and the override marker was NOT consumed. If you are the orchestrator and "
+            "that path is source, dispatch it (`agentctl start … --goal <abs>`) or `touch "
+            "/tmp/cto-allow-direct-write` and re-send with a LITERAL path." % opaque20[0]
+        )
+
     # NOTE: git-push governance (local-E2E-before-push, base-branch protection) intentionally lives in
     # the Git-workflow standard skill + a server-side branch-protection ruleset,
     # NOT here — cto-guard owns orchestration slips (backgrounding, idle-polling, dispatch, send-keys),
@@ -1744,16 +1965,19 @@ def main():
                 f"signal now: `agentctl watch {session}` via Bash run_in_background:true (NOT "
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
-    # (13), (14)/(15)'s instrument warnings, (16)'s counter and (19)'s drift warn ride (3)'s
-    # channel: on exit 0 only additionalContext reaches the agent, and two JSON documents on
-    # stdout would be one malformed hook response. All six strings stay LOCAL to this frame so the
-    # injected-text ratchet can weigh what a worker is actually handed.
-    if reminder or note13 or note14 or note15 or note16 or note19:
+    # (13), (14)/(15)'s instrument warnings, (16)'s counter, (19)'s drift warn and (20)'s two
+    # unjudged-write warns ride (3)'s channel: on exit 0 only additionalContext reaches the
+    # agent, and two JSON documents on stdout would be one malformed hook response. All eight
+    # strings stay LOCAL to this frame so the injected-text ratchet can weigh what a worker is
+    # actually handed.
+    if reminder or note13 or note14 or note15 or note16 or note19 or note20 or note20b:
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
-                    t for t in (reminder, note13, note14, note15, note16, note19) if t),
+                    t for t in (reminder, note13, note14, note15, note16, note19,
+                                note20, note20b)
+                    if t),
             }
         }))
     if m:

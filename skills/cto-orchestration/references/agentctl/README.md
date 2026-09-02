@@ -203,6 +203,18 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）；⑨ 浏览器归属：`playwright-cli attach`
   带接管旗标（CDP / 浏览器扩展）→ 默认 DENY，主理人批后 `touch /tmp/cto-allow-browser-attach` 一次性放行；正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
   见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）位于管道**非末端** → DENY（末端放行；rc 被末命令吞、帧被截）；⑫ 门命令段以 `;` 结束且其后接 `git commit` → DENY（commit 不再依赖门 rc；`&&` 链放行）；⑬ 直接派 `agentctl start codex --goal <brief>` 时扫该 brief 的六个字面攻击词 → WARN（brief 读不到也 WARN）；⑭ `agentctl start … <cwd>` 且 `git -C <cwd> status --porcelain` 非空 → DENY（先 seed commit）；⑮ `<cwd>/BLOCKED.md` 存在 → DENY（先收割）。
+  ⑳ 编排位经 bash **三类可解析字面文本写入**触及源码/测试路径 → DENY（= edit 侧 E1 同一条规则的 bash 通道：
+  auto mode 下 harness 优先用 Bash 改文件，E1 挂在 Edit|Write 上对这条路径是纸门——2026-09-02 编排位与冷评审
+  各自实测 heredoc / 追加重定向 / `tee` / `sed -i` 四形态全 rc=0）。**覆盖面就是这三类，别读成"bash 写文件都拦"**：
+  重定向族 `>` `>>` `&>` `&>>` `N>` `N>>` 指向一个路径（`>&N` / `N>&M` 是复制不是写文件；`/dev/null` 之类不带
+  源码扩展的目标本来就过不了源码面，不另设特例）；`tee` 的**每个**
+  路径参数（含 `-a` / `--`，任一命中即 DENY）；`sed` 就地（`-i` / `-iSUF` / `-i SUF` / `--in-place[=SUF]`，命中后该段
+  所有位置参数逐个过源码面）。判定在 shell **执行面**做：引号内与 heredoc 正文里的 `>` 是 DATA。**accepted-uncovered，
+  不声称覆盖**：`cp` / `mv` / `install` / `dd of=` / `rsync` / `git apply` / `patch` / 编辑器 / 解释器内写文件
+  （`python - <<EOF` 里的 `open().write`）；目标含 `$`、反引号、`$(`、glob（`* ? [`）或前导 `~` → 不可判，
+  ALLOW + 一行 WARN 且**不消费** override；目标缺失（行尾裸 `>`）→ 静默。席位归属、override、降级方向与 E1 同源
+  （代码 import 复用，不复制）：活体席位写自己 worktree 放行、`touch /tmp/cto-allow-direct-write` 一次性放行、
+  run dir 不可读或目标不属任何受管 work tree → ALLOW+WARN。铁律出处见 [SKILL §0 铁律①](../../SKILL.md)。
   git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：编排位对源码/测试文件的写入 → DENY
   （活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir 不可读 → ALLOW+WARN）。

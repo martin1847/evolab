@@ -48,7 +48,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=13775   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=15035   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -145,7 +145,24 @@ BUDGET_GUARD_TOTAL=13775   # all injected text across the three guards (raised 7
                            #    repos (the one cd'd into and the token that leaves it) and the
                            #    two failure faces (127 vs. running the wrong repo's suite green),
                            #    or the orchestrator reads it as a path typo.
-BUDGET_GUARD_SINGLE=1503   # the longest single message a worker can be handed at once. Raised
+                           # Raised 13775→15035 on 2026-09-02 (guard ⑧ 收窄 + 新规则 ⑳), THREE
+                           # items weighed:
+                           #  +752 B rule (20)'s bash direct-write DENY. Bought: E1 guards the
+                           #    Edit|Write channel, and in auto mode the harness prefers Bash for
+                           #    editing files — four spellings (heredoc / append redirect / tee /
+                           #    sed -i) onto a repo `.py` all measured rc=0 on 2026-09-02, i.e.
+                           #    铁律① had no enforcement on the channel actually being used. The
+                           #    text must carry which target it judged, the dispatch fix AND the
+                           #    licensed override, because the denial lands on a seat mid-edit.
+                           #  +313 B rule (20)'s 席位归属未判 warn (`note20`) and
+                           #  +196 B its non-literal-target warn (`note20b`), both joining the
+                           #    SAME assembled response. TWO locals, not one with two arms: this
+                           #    meter resolves ONE literal per local name, so a second assignment
+                           #    would be spent unweighed. They are MUTUALLY EXCLUSIVE at runtime
+                           #    (`if opaque20 and not note20`), so this total counts 196 B that
+                           #    no single response can carry — a static over-count, kept rather
+                           #    than argued away.
+BUDGET_GUARD_SINGLE=2012   # the longest single message a worker can be handed at once. Raised
                            # 754→893 on 2026-08-28: the worst case is now the (3)+(13)+(14)+(15)
                            # assembled response, i.e. every instrument in this dispatch failing
                            # at once, and it is +151 B — exactly (15)'s new warn, nothing else.
@@ -167,13 +184,20 @@ BUDGET_GUARD_SINGLE=1503   # the longest single message a worker can be handed a
                            # once AND the same session is on its fourth re-hang today AND the
                            # command drifts across repos; the warn alone (its normal shape) is
                            # 313 B. Rule (18)'s own DENY is 602 B, well under this ceiling.
-BUDGET_GUARD_COUNT=32      # sink count: a drop means extraction broke or a sink moved out of
+                           # Raised 1503→2012 on 2026-09-02: +509 B, the same assembled response
+                           # with BOTH of rule (20)'s warns joined to it. The two cannot fire in
+                           # one response (`if opaque20 and not note20`), so the reachable worst
+                           # case is +313 B; this ceiling carries the meter's static sum instead
+                           # of a hand-argued smaller number. Rule (20)'s own DENY is 752 B.
+BUDGET_GUARD_COUNT=33      # sink count: a drop means extraction broke or a sink moved out of
                            # view. 21→23 on 2026-08-20: +1 real sink (rule 12) and +1 the meter
                            # had been blind to (see `resolve` below). 23→30 on 2026-08-28:
                            # +2 (rules 14/15) and +5 (the whole new guard). 31→32 on 2026-09-01:
                            # +1 rule (18)'s DENY — rule (19)'s warn is NOT a new sink, it joins
-                           # the existing assembled response. Pinned to the measured number,
-                           # never carrying untracked slack.
+                           # the existing assembled response. 32→33 on 2026-09-02: +1 rule (20)'s
+                           # DENY — its two warns are NOT new sinks either, they join the same
+                           # assembled response. Pinned to the measured number, never carrying
+                           # untracked slack.
 
 echo "== injected-context budget =="
 
@@ -228,6 +252,8 @@ KNOWN_POSITIVE = ("[browser/long subagent launched]",          # bare Name sink 
                   "could not be stat'ed",                      # assembled sink: note15
                   "保姆轮",                                     # assembled sink: note16
                   "验证批一条命令一个 cwd",                      # assembled sink: note19
+                  "a write to a source path was allowed",      # assembled sink: note20
+                  "write target not literal",                  # assembled sink: note20b
                   "编排位直写源码面")                            # cto-guard-edit's E1 denial
 # Mutation switch for the recall probe below: comma-separated local names resolve() must ignore.
 # Test-only; the real invocation passes nothing.
@@ -310,7 +336,7 @@ EOF
 # suite still reported 7 passed / 0 failed — a shrinking budget reading as success is exactly the
 # failure this file exists to prevent. A new note MUST come with its own needle in KNOWN_POSITIVE,
 # and this loop is what proves the needle discriminates.
-for _local in reminder note13 note14 note15 note16 note19; do
+for _local in reminder note13 note14 note15 note16 note19 note20 note20b; do
   read -r mut_total _ mut_count mut_recall <<EOF
 $(GUARD_METER_IGNORE=$_local python3 "$EXTRACT" "$GUARD_BASH" "$GUARD_AGENT" "$GUARD_EDIT")
 EOF

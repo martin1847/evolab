@@ -129,11 +129,16 @@ EOF
 # resolves), and this page is the declared SINGLE SOURCE for what the rule now evaluates and for
 # its three accepted boundaries. A pointer to a second page is read only after the DENY has
 # already been re-sent.
+# agentctl/README.md 241→253 (2026-09-02, 新规则 ⑳): +12 lines — ⑳'s entry in the rule list.
+# Same reason, same page: rule ⑳'s DENY points at `…/agentctl/README.md §强制层`, and that entry
+# is the single source for the three write channels it covers, the channels it explicitly does
+# NOT (`cp` / `mv` / `dd of=` / `git apply` / interpreter writes …), and the unjudgeable-target
+# WARN. A gate that implies coverage it does not have is worse than the gap it hides.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 241
+skills/cto-orchestration/references/agentctl/README.md 253
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42

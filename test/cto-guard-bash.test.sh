@@ -1704,5 +1704,170 @@ chk_eq "19 an unlistable cwd is silent, not an accusation" "" "$OUT"
 chk_eq "19 and still exit 0" 0 "$RC"
 GUARD_CWD="$ISO_REPO"
 
+# ── (20) 编排位经 bash 直写源码面 (DENY) ─────────────────────────────────────────────────────
+# E1 on the Bash channel. Preflight 2026-09-02: a heredoc write, an append redirect, a `tee` and
+# a `sed -i` onto a repo `.py` all returned rc=0 from this guard — auto mode prefers Bash for
+# editing files, so E1's Edit|Write matcher never saw them. The seat attribution is IMPORTED
+# from cto-guard-edit.py, so the fixture is that guard's: a run dir of `duplex.meta` files, a
+# fake tmux for liveness, and real `git init`ed trees for the work-tree face.
+chk_eq "r20 fixture prerequisite: git on PATH" 1 "$(command -v git >/dev/null 2>&1 && echo 1 || echo 0)"
+G20="$G8ROOT/g20"
+R20="$G20/l1/l2/l3/l4/repo"          # the orchestrator's own checkout, deep enough that the
+SEAT20="$R20/wt-seat"                # umbrella scan cannot wander out of the fixture
+RUN20="$G20/run"
+BIN20="$G20/bin"
+mkdir -p "$R20/docs" "$SEAT20" "$RUN20" "$BIN20"
+git -C "$R20" init -q
+git -C "$SEAT20" init -q
+# Fake tmux, same shape as cto-guard-edit.test.sh: `has-session -t =<name>` succeeds only for a
+# session named in $TMUX_LIVE. Prepended, so the real `git` this battery needs still resolves.
+cat > "$BIN20/tmux" <<'EOF'
+#!/usr/bin/env bash
+target=""
+for a in "$@"; do case "$a" in =*) target="${a#=}";; esac; done
+case " ${TMUX_LIVE:-} " in *" $target "*) exit 0 ;; esac
+exit 1
+EOF
+chmod +x "$BIN20/tmux"
+OLDPATH20="$PATH"; PATH="$BIN20:$PATH"; export PATH
+TMUX_LIVE=""; export TMUX_LIVE
+GUARD20_CWD="$R20"
+run20() { # $1 command  [$2 run-dir override]; payload carries cwd only (no transcript_path)
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(mkcmd_tp "$1" "$GUARD20_CWD" - | AGENT_WATCH_DIR="${2:-$RUN20}" python3 "$GUARD" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+rm -f /tmp/cto-allow-direct-write
+
+# RECALL — one assertion per declared spelling in the closed set. A channel with no assertion
+# here is a channel nobody proved is wired.
+for _sp in '>' '>>' '&>' '&>>' '2>' '2>>'; do
+  run20 "echo x $_sp $R20/x.py"
+  chk_eq "r20-recall-redirect '$_sp' into a source path denied" 2 "$RC"
+done
+chk_contains "r20 the deny names the channel" "编排位经 bash 直写源码面" "$ERR"
+chk_contains "r20 the deny names the target" "$R20/x.py" "$ERR"
+chk_contains "r20 the deny hands over the dispatch fix" "agentctl start <engine>" "$ERR"
+chk_contains "r20 the deny hands over the one-shot override" "/tmp/cto-allow-direct-write" "$ERR"
+chk_contains "r20 the deny carries the doc pointer" "agentctl/README.md §强制层" "$ERR"
+run20 "echo x | tee $R20/a.sh"
+chk_eq "r20-recall-tee denied" 2 "$RC"
+run20 "echo x | tee -a $R20/a.sh"
+chk_eq "r20-recall-tee -a denied" 2 "$RC"
+run20 "echo x | tee -- $R20/a.sh"
+chk_eq "r20-recall-tee -- denied" 2 "$RC"
+run20 "echo x | tee /tmp/ok.log $R20/b.py"
+chk_eq "r20-recall-tee judges EVERY target, not just the first" 2 "$RC"
+run20 "sed -i 's/a/b/' $R20/m.py"
+chk_eq "r20-recall-sed -i (GNU bare) denied" 2 "$RC"
+run20 "sed -i '' 's/a/b/' $R20/m.py"
+chk_eq "r20-recall-sed -i '' (BSD empty suffix) denied" 2 "$RC"
+run20 "sed -i .bak 's/a/b/' $R20/m.py"
+chk_eq "r20-recall-sed -i .bak (BSD separated suffix) denied" 2 "$RC"
+run20 "sed -i.bak 's/a/b/' $R20/m.py"
+chk_eq "r20-recall-sed -i.bak (attached suffix) denied" 2 "$RC"
+run20 "sed --in-place 's/a/b/' $R20/m.py"
+chk_eq "r20-recall-sed --in-place denied" 2 "$RC"
+run20 "sed --in-place=.bak 's/a/b/' $R20/m.py"
+chk_eq "r20-recall-sed --in-place=.bak denied" 2 "$RC"
+run20 "$(printf "cat > %s/x.py <<'EOF'\nprint(1)\nEOF" "$R20")"
+chk_eq "r20-recall-heredoc write denied" 2 "$RC"
+# a RELATIVE target resolves against the payload cwd, exactly as the shell would resolve it
+run20 'echo x > x.py'
+chk_eq "r20-recall-relative target resolved against the payload cwd denied" 2 "$RC"
+# …and a target that is not there at all is not a write: silence, not a guess
+run20 'echo x >'
+chk_eq "r20-neg a bare trailing redirect names no target: allowed" 0 "$RC"
+chk_eq "r20-neg and says nothing about it" "" "$OUT"
+
+# NEGATIVE CONTROLS — a duplication is not a file write, a non-source extension is not product
+# code, and a `>` inside quoted data or a heredoc BODY is DOCUMENT text.
+run20 'ls 2>/dev/null'
+chk_eq "r20-neg 2>/dev/null is not a file write" 0 "$RC"
+chk_eq "r20-neg 2>/dev/null is silent" "" "$OUT"
+run20 'ls 2>&1 | grep x'
+chk_eq "r20-neg 2>&1 is a duplication, not a target" 0 "$RC"
+chk_eq "r20-neg 2>&1 is silent" "" "$OUT"
+run20 'ls >&1'
+chk_eq "r20-neg >&1 is a duplication" 0 "$RC"
+run20 'ls >&2'
+chk_eq "r20-neg >&2 is a duplication" 0 "$RC"
+run20 'ls > /tmp/out.log'
+chk_eq "r20-neg a .log target is not source" 0 "$RC"
+chk_eq "r20-neg the .log target is silent" "" "$OUT"
+run20 "echo x >> $R20/docs/notes.md"
+chk_eq "r20-neg the orchestrator's own docs face passes" 0 "$RC"
+chk_eq "r20-neg and passes SILENTLY (it writes goals and records all day)" "" "$OUT"
+run20 "$(printf 'cat > %s/brief.md <<EOF\nthen run: sed -i s/a/b/ > foo.py\nEOF' "$R20")"
+chk_eq "r20-neg a redirect inside a heredoc BODY is document text" 0 "$RC"
+chk_eq "r20-neg the heredoc body is silent" "" "$OUT"
+run20 'echo "a > b.py"'
+chk_eq "r20-neg a redirect inside a quoted argument is data" 0 "$RC"
+chk_eq "r20-neg the quoted argument is silent" "" "$OUT"
+# …and the same control with a target the source face WOULD judge if the quote blanking were
+# removed: in `"a > b.py"` the extracted token keeps a trailing quote and fails the extension
+# test for an incidental reason, so it cannot tell a working quote face from a broken one
+# (measured: mutation B3 left it green). Here the path ends at a space, so only the quote face
+# stands between it and a DENY.
+run20 "echo 'x > $R20/quoted.py and more words'"
+chk_eq "r20-neg a quoted ABSOLUTE source path is data too" 0 "$RC"
+chk_eq "r20-neg and that one is silent as well" "" "$OUT"
+run20 "sed -e s/a/b/ $R20/m.py"
+chk_eq "r20-neg sed without an in-place flag only READS" 0 "$RC"
+chk_eq "r20-neg the reading sed is silent" "" "$OUT"
+
+# UNJUDGEABLE TARGETS — the shell expands them, so this guard does not know the path. ALLOW and
+# say so; a silent pass would hide the blind spot and a DENY would be an accusation about a path
+# nobody read. The override marker must NOT be spent on a verdict that was never reached.
+run20 'dst=/x/y.py; echo x > "$dst"'
+chk_eq "r20-opaque a variable target is allowed" 0 "$RC"
+chk_eq "r20-opaque writes nothing to stderr" "" "$ERR"
+chk_contains "r20-opaque warns instead" "WARN (cto-guard 20)" "$(ctx "$OUT")"
+chk_contains "r20-opaque quotes the token verbatim" '($dst)' "$(ctx "$OUT")"
+run20 "echo x > $R20/*.py"
+chk_eq "r20-opaque a glob target is allowed" 0 "$RC"
+chk_contains "r20-opaque the glob warns too" "not literal" "$(ctx "$OUT")"
+touch /tmp/cto-allow-direct-write
+run20 'dst=/x/y.py; echo x > "$dst"'
+chk_eq "r20-opaque does NOT consume the override marker" 1 "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
+
+# OVERRIDE — the licensed direct-write path; consumption IS the approval, so it can never linger.
+run20 "echo x > $R20/x.py"
+chk_eq "r20-override lifts the DENY" 0 "$RC"
+chk_eq "r20-override consumes the marker" 0 "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
+rm -f /tmp/cto-allow-direct-write
+run20 "echo x > $R20/x.py"
+chk_eq "r20-override is one-shot: the next write is denied again" 2 "$RC"
+
+# SEAT ATTRIBUTION — a LIVE seat writing inside its OWN worktree is the whole point of the
+# census; a STOPPED seat's surviving meta (watchctl keeps it) must not grant write rights.
+printf 'engine=omp\ncwd=%s\nround=1\n' "$SEAT20" > "$RUN20/g20seat.duplex.meta"
+rm -f "$RUN20/g20seat.duplex.rc"
+TMUX_LIVE="g20seat"
+GUARD20_CWD="$SEAT20"
+run20 "echo x > $SEAT20/x.py"
+chk_eq "r20-live-seat writing its own worktree is allowed" 0 "$RC"
+chk_eq "r20-live-seat passes silently" "" "$OUT"
+run20 "sed -i '' 's/a/b/' $SEAT20/m.py"
+chk_eq "r20-live-seat in-place sed inside its own worktree passes too" 0 "$RC"
+printf '0\n' > "$RUN20/g20seat.duplex.rc"
+run20 "echo x > $SEAT20/x.py"
+chk_eq "r20-stopped-seat: a surviving meta with an rc file grants nothing" 2 "$RC"
+rm -f "$RUN20/g20seat.duplex.meta" "$RUN20/g20seat.duplex.rc"
+TMUX_LIVE=""
+GUARD20_CWD="$R20"
+
+# DEGRADE FACES — an unlistable run dir and a target no work tree owns are both UNANSWERABLE:
+# ALLOW + WARN, exactly E1's口径. A guard that cannot answer must not brick the Bash tool.
+run20 "echo x > $R20/x.py" "$BABYSIT_OFF"
+chk_eq "r20-rundir a run dir that is a regular FILE cannot be listed: allowed" 0 "$RC"
+chk_eq "r20-rundir writes nothing to stderr" "" "$ERR"
+chk_contains "r20-rundir warns that the seat set is unknown" "LIVE seat set is unknown" "$(ctx "$OUT")"
+run20 'echo x > /tmp/g20-outside-any-repo.py'
+chk_eq "r20-ungoverned a target no work tree owns is allowed" 0 "$RC"
+chk_contains "r20-ungoverned warns instead of accusing" "席位归属未判" "$(ctx "$OUT")"
+PATH="$OLDPATH20"; export PATH
+GUARD_CWD="$ISO_REPO"
+
 
 summary
