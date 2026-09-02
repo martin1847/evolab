@@ -546,7 +546,7 @@ cmd_watch() {
     ARMED_ID="$(ctl identity token "$S" 2>/dev/null)"
     ARMED_SEQ="$(ctl identity watermark "$S" 2>/dev/null)"
     [ -n "${ARMED_SEQ:-}" ] || ARMED_SEQ=0
-    ctl watch-arm "$S" --pid $$
+    ctl watch-arm "$S" --pid $$ --mode "$MODE"
     [ "$MODE" = inline ] && { sense_inline "$S"; exit $?; }
     # arm-time read: a conclusion on disk IS this episode's answer. 13 = keep going; a follow
     # code = it was reported and this waiter goes round again; anything else is the verdict,

@@ -13,6 +13,11 @@ module opens these files. Layout (one record, per session, inside the session st
     <run>/<name>.identity.d/lock          flock for read-modify-write of that record
     <run>/<name>.identity.d/blocked-stamp.txt  stamp line the worker copies into BLOCKED.md
 
+The PHASE LEDGER (bottom of this file) is the one artifact here that is not identity state,
+and it lives here because its aggregation key IS the identity triple:
+
+    <run>/phase-ledger-YYYYMMDD.jsonl     append-only commit-point log, never cleaned by stop
+
 Identity triple:
     sessionId            stable across follow-up rounds
     attemptId            new UUID on start and on every state-resetting steer (--interrupt)
@@ -55,6 +60,7 @@ import re
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -1462,6 +1468,15 @@ class IdentityStore:
             # here where BOTH strings are in hand — the reader then needs no heuristic
             marker[RECEIPT_LINE_DROPPED] = not marker["detail"].endswith(published)
             self._atomic_json(self.marker_path, marker)
+            # THE terminal commit point of the phase ledger: the record is durable, so this
+            # round really HAS a published conclusion. Every refusal above returned without
+            # writing and never reaches this line, which is what makes the ledger's terminal
+            # count equal the lane's published-conclusion count instead of its attempt count.
+            # The triple comes from `rec` — the record this critical section already read — so
+            # nothing here re-enters the lock.
+            phase_event(self.run_dir, self.name, "terminal",
+                        rec["sessionId"], rec["attemptId"],
+                        extra={"round": now_round, "class": marker["class"], "rc": rc})
             return OK, published + (DELIVERED_CAVEAT if delivered else "")
 
     def clear(self) -> None:
@@ -1507,3 +1522,150 @@ class IdentityStore:
             os.rmdir(self.dir)
         except OSError:
             pass
+
+
+# ── the phase ledger ─────────────────────────────────────────────────────────────────
+# WHY: seat wall-clock, the span of a batch, and the gap between one seat reaching a terminal
+# state and the next dispatch going out were recoverable only by hand-reading transcripts
+# (2026-09-02: the orchestrator computed both numbers for two batches on a calculator, and the
+# retro check could only verify that SOMEBODY had typed two numbers). This gives those numbers
+# a machine source.
+#
+# It is a READING, and the whole design follows from that:
+#   * it records COMMIT POINTS, never conclusions — nothing here decides whether a span was
+#     avoidable, whether a seat was slow, or whether a batch should have been split;
+#   * every write is FAIL-OPEN. Each caller sits on a hot control path (identity commit, round
+#     commit, terminal publish, teardown) and an instrument that can fail a dispatch is worse
+#     than no instrument: an unwritable run dir costs one stderr WARN and nothing else;
+#   * `stop` never deletes it. Every other artifact of this lane is session-scoped and dies
+#     with the seat, while the ledger's entire point is the batch AFTER the seat is gone. The
+#     file name carries NO session prefix, so none of teardown's `<name>.*` sets can reach it
+#     (watchctl `_control_state_paths` / `cmd_stop_residue`, and agentctl's start-time `rm -f`).
+#
+# Shape: one file per UTC day, append-only, one JSON object per line:
+#   <run>/phase-ledger-YYYYMMDD.jsonl
+# UTC, not local: a shard whose NAME moves with the host timezone cannot be mapped back to an
+# instant, and the reader has to enumerate shard names to decide whether a window is covered.
+#
+# The event set is CLOSED. A sixth event is a schema change for every reader, so it is a
+# ValueError here rather than a row nobody aggregates.
+PHASE_EVENTS = ("start", "steer", "terminal", "stop", "watch_arm")
+PHASE_LEDGER_PREFIX = "phase-ledger-"
+PHASE_LEDGER_SUFFIX = ".jsonl"
+# one WARN per process: a reading that spams the control plane it observes is not free anymore
+_PHASE_WARNED = [False]
+
+
+def phase_shard_day(when: float) -> str:
+    """The UTC day a timestamp is filed under."""
+    return time.strftime("%Y%m%d", time.gmtime(when))
+
+
+def phase_shard_path(run_dir: str, when: float | None = None) -> str:
+    day = phase_shard_day(time.time() if when is None else when)
+    return os.path.join(run_dir, f"{PHASE_LEDGER_PREFIX}{day}{PHASE_LEDGER_SUFFIX}")
+
+
+def phase_shards(run_dir: str) -> list[tuple[str, str]]:
+    """[(day, path)] for every shard present in the run dir, oldest first. Absence is DATA —
+    it is exactly what tells the reader a window is not covered — so nothing here creates a
+    shard or infers one."""
+    found: list[tuple[str, str]] = []
+    pattern = os.path.join(globmod.escape(run_dir),
+                           f"{PHASE_LEDGER_PREFIX}????????{PHASE_LEDGER_SUFFIX}")
+    for path in globmod.glob(pattern):
+        day = os.path.basename(path)[len(PHASE_LEDGER_PREFIX):-len(PHASE_LEDGER_SUFFIX)]
+        if day.isdigit():
+            found.append((day, path))
+    return sorted(found)
+
+
+def phase_stamp(when: float) -> str:
+    """RFC3339 UTC with milliseconds — the ledger's ONE time format, so a reader parses one
+    shape or refuses the line."""
+    whole = int(when)
+    millis = int(round((when - whole) * 1000))
+    if millis >= 1000:                      # the rounding carried into the next second
+        whole, millis = whole + 1, 0
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(whole)) + f".{millis:03d}Z"
+
+
+def _phase_warn(detail: str) -> None:
+    if _PHASE_WARNED[0]:
+        return
+    _PHASE_WARNED[0] = True
+    print(f"WARN: phase ledger not recorded — {detail}; this window's readings will be "
+          "incomplete (`agentctl phases` reports its own coverage)", file=sys.stderr)
+
+
+def phase_event(run_dir: str, name: str, event: str, session_id: str, attempt: str,
+                extra: dict | None = None, when: float | None = None) -> bool:
+    """Append ONE ledger line. True = durable; False = nothing was written (and, for an I/O
+    failure, one WARN went to stderr). No caller branches on the rc — it exists for the tests.
+
+    A row with an EMPTY `session_id` is not written at all. `session_id` is the reader's
+    aggregation key, so such a row would be counted inside a batch span while belonging to no
+    seat; the honest report of a seat nobody can identify is silence plus the coverage field.
+    """
+    if event not in PHASE_EVENTS:
+        raise ValueError(f"phase event {event!r} is outside the closed set {PHASE_EVENTS}")
+    if not session_id:
+        return False
+    stamp = time.time() if when is None else when
+    row: dict = {"ts": phase_stamp(stamp), "event": event, "name": name,
+                 "session_id": session_id, "attempt": attempt}
+    for key, value in (extra or {}).items():
+        if value is not None:
+            row[key] = value
+    # ONE os.write of ONE complete line onto an O_APPEND fd: the offset move and the write are
+    # one operation for a regular file, so concurrent seats interleave LINES, never bytes.
+    # json.dumps escapes a newline inside any string value, so the record separator holds even
+    # for a hostile field.
+    line = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+    try:
+        fd = os.open(phase_shard_path(run_dir, stamp),
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    except OSError as exc:
+        _phase_warn(f"cannot open the ledger shard in {run_dir} ({exc})")
+        return False
+    try:
+        os.write(fd, line)
+    except OSError as exc:
+        _phase_warn(f"cannot append to the ledger shard in {run_dir} ({exc})")
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
+def phase_resolve(run_dir: str, name: str) -> tuple[str, str]:
+    """(session_id, attempt) for a session NAME — from the active identity record while one
+    exists, and from the ledger's own newest row for that name when it does not.
+
+    The fallback is what makes a `stop` row attributable. Teardown clears the identity record
+    BEFORE the process group is reaped, and the reap is the stop commit point, so by then the
+    only surviving statement of who this seat was is the ledger. Newest shard first, last
+    matching line wins; no shard anywhere means ("", "") and `phase_event` writes nothing."""
+    rec, status = IdentityStore(run_dir, name).load()
+    if status == STATUS_OK and rec is not None:
+        return rec["sessionId"], rec["attemptId"]
+    for _day, path in reversed(phase_shards(run_dir)):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        for raw in reversed(lines):
+            try:
+                row = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("name") == name and row.get("session_id"):
+                return str(row["session_id"]), str(row.get("attempt") or "")
+    return "", ""
+
+
+def phase_record(run_dir: str, name: str, event: str, extra: dict | None = None) -> bool:
+    """`phase_event` for the commit points that do not already hold the identity triple."""
+    session_id, attempt = phase_resolve(run_dir, name)
+    return phase_event(run_dir, name, event, session_id, attempt, extra=extra)

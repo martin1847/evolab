@@ -2763,12 +2763,41 @@ def classify(sess: Session) -> int:
 def cmd_send(args: argparse.Namespace) -> int:
     """send reaches the blocking writer flock and the fifo write with NO classify
     watchdog above it, so it arms the same one-alarm-per-process bound around the
-    whole verb (armed before Session(), cleared on every exit path)."""
+    whole verb (armed before Session(), cleared on every exit path).
+
+    `started` is the phase ledger's start box. The ledger's `start` row is written at the
+    identity commit point INSIDE send_frame — the first instant this session HAS a durable
+    identity — but a `prompt` that then fails to reach the engine must not leave a seat that
+    reads `open` for the rest of the day. The box carries the triple back out so that failure
+    can be closed with its own typed reason. Ledger-only: nothing about this verb's rc or
+    output depends on it, and a SIGALRM `os._exit` (the send watchdog) is an accepted boundary
+    — that path closes no row, and `agentctl phases` reports the seat as still open."""
     arm_watchdog(args.run_dir, args.session, send_timeout(), "send")
+    started: dict[str, str] = {}
     try:
-        return send_frame(args)
+        rc = send_frame(args, started)
+    except SystemExit as exc:
+        _phase_start_failed(args, started, exc.code)
+        raise
     finally:
         signal.alarm(0)
+    if rc not in (EXIT_DONE, EXIT_DELIVERED_NEXT_TURN):
+        _phase_start_failed(args, started, rc)
+    return rc
+
+
+def _phase_start_failed(args: argparse.Namespace, started: dict[str, str],
+                        code: object) -> None:
+    """Close a `start` row whose goal frame never landed: `start` + `stop reason=start-failed`,
+    so the reader sees a seat that opened and ended rather than one that never ends. Only ever
+    called for a `prompt` that already committed its identity — `started` is empty otherwise."""
+    if not started:
+        return
+    rc = code if isinstance(code, int) else 1
+    identity.phase_event(args.run_dir, args.session, "stop",
+                         started["session_id"], started["attempt"],
+                         extra={"reason": "start-failed", "lane": 1, "rc": rc})
+    started.clear()
 
 
 # ── codex routes: the executable branch behind each declared codex capability ────────
@@ -2850,7 +2879,7 @@ def codex_route_replace(sess: Session, ctx: dict):
                          on_ready=ctx["on_ready"])
 
 
-def send_frame(args: argparse.Namespace) -> int:
+def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
     sess = Session(args.run_dir, args.session)
     sess.require_meta()
     engine = sess.meta["engine"]
@@ -2916,6 +2945,22 @@ def send_frame(args: argparse.Namespace) -> int:
                 "record (if any) stays authoritative", EXIT_FAILED)
         print(f"identity: attempt {rec['attemptId']} incarnation "
               f"{rec.get('processIncarnation') or 'UNESTABLISHED'}")
+        if kind != "start":
+            return
+        # THE start commit point of the phase ledger: identity and meta are both durable and
+        # the goal frame has NOT gone out yet, which is the earliest instant a seat exists as
+        # an identity at all. Recorded before delivery on purpose — a start that dies between
+        # here and the engine is a seat that occupied the batch, and `_phase_start_failed`
+        # closes it rather than hiding it. `cwd` is the realpath: the reader's `--repo`
+        # containment test compares components, and a symlinked spelling would miss.
+        started["session_id"], started["attempt"] = rec["sessionId"], rec["attemptId"]
+        cwd = sess.meta.get("cwd", "")
+        identity.phase_event(args.run_dir, args.session, "start",
+                             rec["sessionId"], rec["attemptId"],
+                             extra={"engine": engine,
+                                    "cwd": os.path.realpath(cwd) if cwd else "",
+                                    "review": 1 if sess.meta.get("review") == "1" else 0,
+                                    "launcher_ppid": os.getppid()})
 
     if args.verb == "prompt":
         commit_identity("start")
@@ -2939,7 +2984,8 @@ def send_frame(args: argparse.Namespace) -> int:
             check_review_budget(fresh, text)
             with open(sess.epoch, "a", encoding="utf-8"):
                 os.utime(sess.epoch, None)
-            meta_update(fresh, "round", str(int(fresh.meta.get("round", "0")) + 1))
+            round_after = int(fresh.meta.get("round", "0")) + 1
+            meta_update(fresh, "round", str(round_after))
             offset_box["v"] = events_size(sess)
             # atomic replace: an in-place truncate gave lock-free classify a window
             # where the offset read as empty → 0 → an old result revived as DONE
@@ -2990,6 +3036,17 @@ def send_frame(args: argparse.Namespace) -> int:
             # same best-effort rule. `prompt` is goal delivery, not a steer, and is not logged.
             if args.verb in ("steer", "interrupt"):
                 steer_log_append(sess, f"{args.verb}:{wire}", text)
+                # THE steer commit point of the phase ledger: the round counter has moved, so
+                # the next round is a durable fact and this steer is what opened it — even if
+                # the frame is later only half-acked (untyped rc 3 "delivered, unconfirmed"),
+                # because a round that opened IS a dispatch the batch paid for. Same
+                # best-effort rule as the two logs above. `prompt` is goal delivery and is
+                # recorded as `start`, not as a steer. `--interrupt` already minted the new
+                # attempt, so `phase_record` reads THAT attempt off the active record.
+                identity.phase_record(
+                    args.run_dir, args.session, "steer",
+                    extra={"round_after": round_after,
+                           "interrupt": 1 if args.verb == "interrupt" else 0})
 
     if engine == "codex":
         thread = sess.meta.get("thread") or die("no threadId in meta — handshake incomplete")
@@ -3891,6 +3948,9 @@ def main() -> None:
                                              "announce the arm")
     p_arm.add_argument("session")
     p_arm.add_argument("--pid", type=int, required=True, help="the waiter process pid")
+    p_arm.add_argument("--mode", choices=["supervised", "inline"], required=True,
+                       help="which sensing lane this arm is for — a phase-ledger field, not a "
+                            "behaviour switch: the arm itself is identical either way")
     p_arm.set_defaults(func=watchctl.cmd_watch_arm)
 
     p_armread = sub.add_parser("watch-arm-read", help="arm-time read of the fenced record; "
@@ -4006,6 +4066,7 @@ def main() -> None:
     p_inv.add_argument("--dry-run", action="store_true", required=True, dest="dry_run",
                        help="the ONLY accepted spelling; this verb never acts")
     p_inv.set_defaults(func=watchctl.cmd_inventory)
+
 
     args = parser.parse_args()
     sys.exit(args.func(args))

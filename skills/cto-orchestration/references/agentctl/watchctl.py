@@ -4,7 +4,7 @@
 Split out of duplexctl.py verbatim (2026-08-30): the engine side of the lane (frame builder,
 classify, the provider/state vocabularies, the argv front door) stayed there, the PATROL side
 came here. Nothing in this module is an operator surface of its own — it has NO argv front door
-and never grows one: `duplexctl.py` stays the single entry, its `main()` wires these 19 `cmd_*`
+and never grows one: `duplexctl.py` stays the single entry, its `main()` wires these 20 `cmd_*`
 functions, and the self-exec below re-enters through THAT file. `duplexctl` imports this module
 inside `main()` only, which is what keeps the import cycle a cycle on paper and not at runtime.
 """
@@ -840,6 +840,12 @@ def cmd_watch_arm(args: argparse.Namespace) -> int:
     except OSError:
         pass
     consume_tombstone(run, name)
+    # THE watch-arm commit point of the phase ledger: one row per ARM, which in follow mode
+    # means one row per episode — the waiter re-captures its fences per round, so a session
+    # has as many arms as it has rounds watched. It is the only ledger event that is not a
+    # state change of the seat, and it is here because "the orchestrator was attached" is a
+    # different fact from "the seat was running".
+    identity.phase_record(run, name, "watch_arm", extra={"mode": args.mode})
     print(f"=== [{name}] DUPLEX-WATCH ARMED at {_clock()} "
           "(stateless — safe to kill and re-run) ===")
     return 0
@@ -1379,8 +1385,15 @@ def cmd_stop_sentinel(args: argparse.Namespace) -> int:
     With the tree fully reaped nothing can write the events file anymore, so THIS is the
     honest sampling point. Events growing >2s past the marker = the round was concluded while
     the engine still spoke (the silent-misfire class, made loud); +2s prices in the
-    marker-write vs final-flush race."""
+    marker-write vs final-flush race.
+
+    It is also the phase ledger's STOP commit point, for the same reason: the process group is
+    reaped, so the seat is over as a fact and not as an intention. `stop-cleanup` already
+    cleared the identity record by now, so the triple comes from the ledger's own newest row
+    for this name (`identity.phase_resolve`) — the only surviving statement of who the seat
+    was."""
     run, name = args.run_dir, args.session
+    identity.phase_record(run, name, "stop", extra={"reason": "stopped", "lane": 1})
     sample = _stop_sample_path(run, name)
     handoff = _read_stop_sample(sample, args.token)
     try:
@@ -1449,7 +1462,14 @@ def cmd_stop_residue(args: argparse.Namespace) -> int:
         reap_rc = 1
         print(f"WARN: identity state was NOT cleared for '{name}' — {clear_out}",
               file=sys.stderr)
+    # THE stop commit point of the no-lane branch, after the shell's own reap: `lane=0` says
+    # this stop found no duplex meta, so the seat it closes is one the ledger knows about only
+    # from its `start` row. Neither branch below records anything: an idempotent re-stop is
+    # not a second seat end (the real one already wrote its row, and a duplicate would move
+    # the seat's end to whenever somebody re-ran the verb), and a name with no lane state, no
+    # tmux, no residue and no post-mortem artifact never held a seat to close at all.
     if cleaned:
+        identity.phase_record(run, name, "stop", extra={"reason": "no-lane", "lane": 0})
         print(f"removed orphan session residue for '{name}'")
         return reap_rc
     if (os.path.exists(os.path.join(run, f"{name}.duplex.events.jsonl"))
@@ -1636,3 +1656,4 @@ def cmd_inventory(args: argparse.Namespace) -> int:
         else:
             print("\n".join(rows))
     return 0
+
