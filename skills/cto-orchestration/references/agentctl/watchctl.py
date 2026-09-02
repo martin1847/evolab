@@ -1066,6 +1066,9 @@ def _sense_conclude(args: argparse.Namespace, rnd: str, rc: int, msg: str,
             super_note(run, name, pmsg)
             sys.exit(3)
         if on_delivered is not None:
+            # THE at-least-once window: dying between the accepted publish above and this
+            # callback leaves a delivered conclusion with no ledger line, and the next arm
+            # reports that round again (ruled accept-documented, R2 — see _report_over_budget)
             on_delivered()
         print(f"[{name}] published {rc} — {msg}\n{pmsg}")
         sys.exit(0)
@@ -1127,13 +1130,27 @@ def _expect_record(run_dir: str, name: str, key: str) -> bool:
         return False
     return True
 
+# ── OVER-BUDGET delivery semantics: AT-LEAST-ONCE, and that is a RULING, not a gap ──────
+# The claim below is fenced (one publisher per round) and the ledger records only what was
+# DELIVERED, which closes every direction except one: a supervisor that dies AFTER `identity
+# publish` returns 0 and BEFORE the ledger append leaves a published 19 with no ledger line, so
+# the next arm reports that same (session, attempt, round) a SECOND time. Owner ruling (R2,
+# accept-documented): the state is at-least-once, not exactly-once — an orchestrator woken
+# twice pays one wasted read, a report LOST pays another 2h03m. Exactly-once needs the terminal
+# record itself to carry the report key and every consumer/re-arm to reconcile against it,
+# which is a separate batch (a new field in the published record shape, plus the reconciliation
+# on both the waiter and arm paths). `ob-doc-postpublish-crash-may-duplicate` pins the CURRENT
+# direction on purpose: that assertion is meant to be flipped, consciously, by that batch.
+# KILL CRITERION for the ruling (record it here, not in a doc nobody re-reads): if a live
+# double report is observed even ONCE in 4 weeks, do the reconciliation batch. Zero in 4 weeks
+# means the window is theoretical and the ruling stands.
 def _report_over_budget(args: argparse.Namespace, rnd: str) -> None:
     """Conclude OVER-BUDGET at THIS sampling point, or return and keep sensing.
 
-    ONE report per (sessionId, attemptId, round), and the whole decision — read the ledger,
-    deliver the conclusion, record it — runs under the LANE'S SINGLE-WRITER LOCK, the same
-    flock `send` serializes steers on. Two properties come from that, and neither survives a
-    lock-free check-then-append (review R1 B1):
+    ONE report per (sessionId, attemptId, round) — at-least-once, see the block above — and the
+    whole decision (read the ledger, deliver the conclusion, record it) runs under the LANE'S
+    SINGLE-WRITER LOCK, the same flock `send` serializes steers on. Two properties come from
+    that, and neither survives a lock-free check-then-append (review R1 B1):
       * two observers of the same round cannot both publish. The loser reads the winner's
         record and returns to ordinary sensing (a terminal class, or the poll budget running
         out as WATCH-TIMEOUT);

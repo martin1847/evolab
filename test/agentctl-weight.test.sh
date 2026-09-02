@@ -508,9 +508,18 @@ cd "$(dirname "$0")"
 # unexpected shape now publishing as `[unparsed item]` rather than vanishing, plus the B2
 # accept-documented paragraph that renames the claim over AGENTCTL_VERBS from "single source" to
 # "two definitions, one parity gate; generated dispatch is a separate batch".
+# watchctl.py 1621→1638 (2026-09-02, R2 裁决登记): +17, comment ONLY — the machinery is
+# byte-identical. R2 closed five of six findings and RULED on the last: OVER-BUDGET is
+# AT-LEAST-ONCE, not exactly-once (a supervisor dying between the accepted publish and the
+# ledger append re-reports that round once; a duplicate wake costs one read, a lost report cost
+# 2h03m). The weight buys the ruling where the code is: the semantics, the ONE window that
+# produces a duplicate, why exactly-once needs the terminal record to carry the report key
+# (separate batch), and the KILL CRITERION for the ruling itself — one live double report in 4
+# weeks and the reconciliation batch happens. A ruling recorded only in a review file is a
+# ruling the next batch re-derives from scratch.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 4015
-skills/cto-orchestration/references/agentctl/watchctl.py 1621
+skills/cto-orchestration/references/agentctl/watchctl.py 1638
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 658
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431

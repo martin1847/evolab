@@ -2514,6 +2514,37 @@ chk_eq "ob-pos-publish-failure-retries-after-reattach: the re-armed waiter still
   "$rcp2"
 chk_eq "ob-pos-publish-failure-retries-after-reattach: recorded once, now that it landed" 1 \
   "$(grep -c . "$WATCH_RUN_DIR/obPUB.duplex.expect-report")"
+
+# ── ob-doc-postpublish-crash-may-duplicate: the state is AT-LEAST-ONCE, by ruling ──────────
+# Review R2, accept-documented: a supervisor that dies AFTER `identity publish` returns 0 and
+# BEFORE the ledger append leaves a DELIVERED 19 with no ledger line, so the next arm reports
+# that same (session, attempt, round) a second time. Waking an orchestrator twice costs one
+# read; losing the report cost 2h03m. THIS ASSERTION IS MEANT TO BE FLIPPED, consciously, by
+# the reconciliation batch (terminal record carries the report key, consumers reconcile).
+# The interleaving is deterministic because the crash's on-disk RESIDUE is: record published,
+# key absent from the ledger — constructed here rather than raced for, and the oracle is the
+# publish SEQUENCE (two accepted publishes for one key), not merely a second exit code.
+ob_seed obDUP 0.02
+ob_age obDUP 5
+wm() { python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity watermark "$1" 2>/dev/null; }
+chk_eq "ob-doc-postpublish-crash-may-duplicate: a fresh attempt has published nothing" 0 \
+  "$(wm obDUP)"
+outd="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obDUP 2>&1)"; rcd=$?
+chk_eq "ob-doc-postpublish-crash-may-duplicate: the first report is delivered" 19 "$rcd"
+chk_eq "ob-doc-postpublish-crash-may-duplicate: publish #1 is on the record" 1 "$(wm obDUP)"
+chk_eq "ob-doc-postpublish-crash-may-duplicate: and recorded once" 1 \
+  "$(grep -c . "$WATCH_RUN_DIR/obDUP.duplex.expect-report")"
+# the residue of a crash inside the window: the conclusion is out, the ledger never got it
+: > "$WATCH_RUN_DIR/obDUP.duplex.expect-report"
+outd2="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obDUP 2>&1)"; rcd2=$?
+chk_eq "ob-doc-postpublish-crash-may-duplicate: the re-armed waiter reports the SAME round again" \
+  19 "$rcd2"
+chk_eq "ob-doc-postpublish-crash-may-duplicate: published=2 for one key (at-least-once)" 2 \
+  "$(wm obDUP)"
+chk_eq "ob-doc-postpublish-crash-may-duplicate: ledger=1 — it never doubles, it only misses" 1 \
+  "$(grep -c . "$WATCH_RUN_DIR/obDUP.duplex.expect-report")"
+chk_eq "ob-doc-postpublish-crash-may-duplicate: both reports were the same round, not a rotation" \
+  1 "$(sed -n 's#.*/\([0-9]*\)$#\1#p' "$WATCH_RUN_DIR/obDUP.duplex.expect-report")"
 unset AGENT_WATCH_MAX_POLLS
 sw_clean
 
