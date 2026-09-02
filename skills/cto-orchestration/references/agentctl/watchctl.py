@@ -36,8 +36,9 @@ from duplexctl import (  # noqa: E402  (needs the path above)
     EXIT_RUNNING, EXIT_STALLED_EXTERNAL, EXIT_STALLED_PROGRESS, EXIT_STALLED_STREAM,
     EXIT_SUPERVISOR_LOST, EXIT_WAITING_INPUT, EXIT_WATCH_TIMEOUT, OVER_BUDGET_FACTOR,
     PANE_GONE_WHY, PROVIDERS, SUB_REASON_CHANGED, SUB_REASON_UNCHANGED, SUB_REASON_UNKNOWN,
-    Session, arm_watchdog, classify, die, escaped_descendants, over_budget_line,
-    progress_state, ps_identity_rows, status_timeout, sub_reason, tmux_alive, wait_budget,
+    Session, acquire_writer_lock, arm_watchdog, classify, die, escaped_descendants,
+    over_budget_line, progress_state, ps_identity_rows, status_timeout, sub_reason, tmux_alive,
+    wait_budget,
 )
 
 
@@ -1044,18 +1045,28 @@ def cmd_supervisor_retire(args: argparse.Namespace) -> int:
         i += 1
     return 0
 
-def _sense_conclude(args: argparse.Namespace, rnd: str, rc: int, msg: str) -> None:
+def _sense_conclude(args: argparse.Namespace, rnd: str, rc: int, msg: str,
+                    on_delivered=None) -> None:
     """One conclusion point for both modes. Daemon: publish through the fenced writer and stop
     — a refused publish publishes NOTHING and leaves the refusal where the waiter reads it.
-    Inline: the pre-supervised behaviour (DONE publishes, everything else prints)."""
+    Inline: the pre-supervised behaviour (DONE publishes, everything else prints).
+
+    `on_delivered` runs at the instant this conclusion is really OUT — after an accepted
+    publish in daemon mode, and immediately before the printed verdict in inline mode (where
+    the print plus this process's exit code IS the delivery, since inline persists no non-DONE
+    class). It exists so a caller can record what was DELIVERED rather than what was
+    attempted; it never runs on a refused publish."""
     run, name = args.run_dir, args.session
     if args.mode == "daemon":
         prc, pmsg = _ctl(run, "identity", "publish", name, "--armed", args.armed,
                          "--rc", str(rc), "--round", rnd, "--detail", msg, merge_stderr=True)
         if prc != 0:
+            # nothing delivered ⇒ nothing recorded: a caller's claim must stay retryable
             print(f"[{name}] conclusion {rc} NOT published: {pmsg}")
             super_note(run, name, pmsg)
             sys.exit(3)
+        if on_delivered is not None:
+            on_delivered()
         print(f"[{name}] published {rc} — {msg}\n{pmsg}")
         sys.exit(0)
     if rc == EXIT_DONE:
@@ -1067,6 +1078,8 @@ def _sense_conclude(args: argparse.Namespace, rnd: str, rc: int, msg: str) -> No
         if prc != 0:
             rc = EXIT_FAILED      # armed under another identity: publish nothing, report the class
     print(f"=== [{name}] {msg} ===")
+    if on_delivered is not None:
+        on_delivered()
     _watch_exit(rc)
 
 def _expect_mark_path(run_dir: str, name: str) -> str:
@@ -1082,11 +1095,28 @@ def _expect_mark_key(run_dir: str, name: str, rnd: str) -> str:
     return f"{rec.get('sessionId')}/{rec.get('attemptId')}/{rnd}"
 
 def _expect_reported(run_dir: str, name: str, key: str) -> bool:
+    """Whether THIS (session, attempt, round) already had a report DELIVERED. A file nobody can
+    read answers False: an unreadable ledger is not evidence that the orchestrator was told."""
     try:
         with open(_expect_mark_path(run_dir, name), encoding="utf-8", errors="replace") as fh:
             return key in {line.strip() for line in fh}
     except OSError:
         return False
+
+def _expect_recordable(run_dir: str, name: str) -> bool:
+    """Whether a report COULD be recorded, probed WITHOUT recording anything (no bytes are
+    written). An unrecordable report is not made at all — a state that repeats every poll would
+    wake the orchestrator forever, and firing exactly once is this state's whole value.
+    Accepted hole, and the only one left: if the path becomes unwritable between this probe and
+    the append below, that report is delivered but unrecorded and the next arm may repeat it
+    once. The alternative — recording first — is what made a failed publish silence the round
+    forever (review R1 B1)."""
+    try:
+        with open(_expect_mark_path(run_dir, name), "a", encoding="utf-8"):
+            pass
+    except OSError:
+        return False
+    return True
 
 def _expect_record(run_dir: str, name: str, key: str) -> bool:
     """Append-only, like the idle-marks sidecar. False = the report was NOT recorded."""
@@ -1100,23 +1130,40 @@ def _expect_record(run_dir: str, name: str, key: str) -> bool:
 def _report_over_budget(args: argparse.Namespace, rnd: str) -> None:
     """Conclude OVER-BUDGET at THIS sampling point, or return and keep sensing.
 
-    ONE report per (sessionId, attemptId, round). The mark is written BEFORE the conclusion is
-    published, so re-attaching to the same round is not told twice: that waiter goes back to
-    waiting under the session's ordinary exits (a terminal class, or the poll budget running
-    out as WATCH-TIMEOUT). A plain steer opens a new round and `--interrupt` a new attempt —
-    either may report again, because the budget is per round and so is the estimate behind it.
-
-    A mark that cannot be persisted means NO report: a state that repeats every poll would
-    wake the orchestrator forever, and firing exactly once is this state's whole value."""
+    ONE report per (sessionId, attemptId, round), and the whole decision — read the ledger,
+    deliver the conclusion, record it — runs under the LANE'S SINGLE-WRITER LOCK, the same
+    flock `send` serializes steers on. Two properties come from that, and neither survives a
+    lock-free check-then-append (review R1 B1):
+      * two observers of the same round cannot both publish. The loser reads the winner's
+        record and returns to ordinary sensing (a terminal class, or the poll budget running
+        out as WATCH-TIMEOUT);
+      * a steer that opens the next round cannot interleave with a claim about the old one.
+    The ledger records what was DELIVERED, never what was attempted: a publish refused by the
+    identity fence, an unwritable terminal surface or a crash in that window records nothing,
+    so a re-armed waiter may report the same round again. A plain steer opens a new round and
+    `--interrupt` a new attempt — either may report again, because the budget is per round and
+    so is the estimate behind it.
+    A lock we cannot even open is not a fence, and an unfenced report is not made."""
     run, name = args.run_dir, args.session
     sess = Session(run, name)
     over, used, expect = wait_budget(sess)
     if not over:
         return
-    key = _expect_mark_key(run, name, rnd)
-    if not key or _expect_reported(run, name, key) or not _expect_record(run, name, key):
+    try:
+        lock = open(sess.wlock, "a", encoding="utf-8")
+    except OSError:
         return
-    _sense_conclude(args, rnd, EXIT_OVER_BUDGET, over_budget_line(sess, used, expect))
+    try:
+        # blocking, exactly as every other writer on this lane takes it: the only holders are
+        # `send` and a peer observer, both bounded by their own watchdogs
+        acquire_writer_lock(lock)
+        key = _expect_mark_key(run, name, rnd)
+        if not key or _expect_reported(run, name, key) or not _expect_recordable(run, name):
+            return
+        _sense_conclude(args, rnd, EXIT_OVER_BUDGET, over_budget_line(sess, used, expect),
+                        on_delivered=lambda: _expect_record(run, name, key))
+    finally:
+        lock.close()
 
 def cmd_sense_loop(args: argparse.Namespace) -> int:
     run, name = args.run_dir, args.session

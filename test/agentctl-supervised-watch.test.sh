@@ -2400,6 +2400,120 @@ chk_eq "ob-tail-bounded-600: every surviving row is WHOLE (never cut mid-row)" 0
   "$(printf '%s\n' "$rows6" | grep -cv '^  --:--:-- tool_use Bash pytest -q ')"
 chk_eq "ob-tail-bounded-600: and the newest row survived" 1 \
   "$(printf '%s\n' "$rows6" | tail -1 | grep -c 'case-12')"
+
+# ── ob-tail-tolerates-list-params: a legal-JSON frame of the WRONG SHAPE may not kill 19 ───
+# Review R1 M1: `params` arriving as a LIST is decodable JSON, the integrity layer passes it,
+# and the evidence tail then took the sensing loop out with an AttributeError — the budget had
+# already fired, so the crash cost the verdict the caller was owed.
+ob_seed obSHAPE 0.02
+ev obSHAPE '{"method":"item/started","params":[1,2]}'
+ev obSHAPE '{"type":"assistant","message":[1,2]}'
+ev obSHAPE '{"method":"item/started","params":{"item":{"type":"commandExecution","command":["not","a","string"]}}}'
+out7="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obSHAPE --inline 2>&1)"; rc7=$?
+chk_eq "ob-tail-tolerates-list-params: the typed verdict still forms" 19 "$rc7"
+chk_contains "ob-tail-tolerates-list-params: and the odd shapes are MARKED, not dropped" \
+  "[unparsed item]" "$out7"
+chk_not_contains "ob-tail-tolerates-list-params: no traceback reached the surface" \
+  "AttributeError" "$out7"
+chk_eq "ob-tail-tolerates-list-params: three odd frames, three marked rows" 3 \
+  "$(printf '%s\n' "$out7" | grep -c '\[unparsed item\]')"
+
+# ── ob-neg-set-but-under-budget-still-running: an INDEPENDENT under-budget time point ──────
+# The "set but not over" cell may not be filled by a session that is over the threshold and
+# merely suppressed by the ledger (review R1 B3): a threshold wrongly moved to 0 would still
+# pass that. This session declares a 60min budget on a round that just opened.
+ob_seed obUNDER 60
+st="$(bash "$AGENTCTL" status obUNDER 2>&1)"; strc=$?
+chk_eq "ob-neg-set-but-under-budget-still-running: status is plain RUNNING" 10 "$strc"
+chk_not_contains "ob-neg-set-but-under-budget-still-running: and prints no budget note" \
+  "over budget" "$st"
+outu="$(AGENT_WATCH_MAX_POLLS=2 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obUNDER 2>&1)"
+rcu=$?
+chk_eq "ob-neg-set-but-under-budget-still-running: the waiter takes the ordinary exit" 7 "$rcu"
+chk_not_contains "ob-neg-set-but-under-budget-still-running: never the typed 19" \
+  "OVER-BUDGET" "$outu"
+chk_eq "ob-neg-set-but-under-budget-still-running: and nothing was recorded as reported" 0 \
+  "$([ -s "$WATCH_RUN_DIR/obUNDER.duplex.expect-report" ] && echo 1 || echo 0)"
+
+# ── the ledger's three states, each pinned in BOTH directions ──────────────────────────────
+# MISSING ⇒ eligible: the ledger is the only thing that suppresses a report, so removing it
+# must make the SAME round reportable again (and prove the suppression above was the ledger's
+# doing, not a spent budget).
+ob_seed obMARK 0.02
+outm="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obMARK 2>&1)"; rcm=$?
+chk_eq "ob-doc-marker-missing-eligible: the first report is delivered" 19 "$rcm"
+chk_eq "ob-doc-marker-missing-eligible: and it was recorded exactly once" 1 \
+  "$(grep -c . "$WATCH_RUN_DIR/obMARK.duplex.expect-report")"
+rm -f "$WATCH_RUN_DIR/obMARK.duplex.expect-report"
+outm2="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obMARK 2>&1)"; rcm2=$?
+chk_eq "ob-doc-marker-missing-eligible: with the ledger gone the same round reports again" \
+  19 "$rcm2"
+# CORRUPT ⇒ eligible: garbage lines are not this key, so they suppress nothing, and reading
+# them may not break sensing either
+printf 'not-a-key\n\x00\xff garbage\n' > "$WATCH_RUN_DIR/obMARK.duplex.expect-report"
+outm3="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obMARK 2>&1)"; rcm3=$?
+chk_eq "ob-doc-marker-corrupt-eligible: a garbage ledger suppresses nothing" 19 "$rcm3"
+chk_eq "ob-doc-marker-corrupt-eligible: and the real key was appended beside the garbage" 1 \
+  "$(grep -c "/1$" "$WATCH_RUN_DIR/obMARK.duplex.expect-report")"
+# UNWRITABLE ⇒ suppressed, and ordinary sensing CONTINUES (a directory in the ledger's place
+# is the portable spelling of "this append can never succeed" — no uid can write it)
+ob_seed obNOMARK 0.02
+mkdir -p "$WATCH_RUN_DIR/obNOMARK.duplex.expect-report"
+outn="$(AGENT_WATCH_MAX_POLLS=3 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obNOMARK 2>&1)"
+rcn=$?
+chk_eq "ob-doc-marker-unwritable-suppressed: no report, and sensing runs to its own budget" \
+  7 "$rcn"
+chk_not_contains "ob-doc-marker-unwritable-suppressed: the verdict never formed" \
+  "OVER-BUDGET" "$outn"
+rmdir "$WATCH_RUN_DIR/obNOMARK.duplex.expect-report"
+outn2="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obNOMARK 2>&1)"; rcn2=$?
+chk_eq "ob-doc-marker-unwritable-suppressed: once recordable again, the round reports" 19 \
+  "$rcn2"
+
+# ── ob-neg-concurrent-single-publisher: two observers of one round, ONE publisher ──────────
+# Review R1 B1: `_expect_reported` + `_expect_record` used to be a lock-free check-then-append,
+# so two sensing loops could both see "not reported" and both publish. The claim now runs
+# under the lane's single-writer flock, which makes the OUTCOME deterministic even though the
+# winner is not: exactly one 19, exactly one ledger line, and the loser keeps sensing.
+ob_seed obRACE 0.02
+ob_age obRACE 5                          # already over budget at the first poll of both
+AGENT_WATCH_MAX_POLLS=4 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obRACE --inline \
+  > "$SANDBOX/obRACE.a.log" 2>&1 &
+RA=$!
+AGENT_WATCH_MAX_POLLS=4 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obRACE --inline \
+  > "$SANDBOX/obRACE.b.log" 2>&1 &
+RB=$!
+wait "$RA"; rca=$?
+wait "$RB"; rcb=$?
+chk_eq "ob-neg-concurrent-single-publisher: exactly one of the two observers reported 19" 1 \
+  "$(( (rca == 19 ? 1 : 0) + (rcb == 19 ? 1 : 0) ))"
+chk_eq "ob-neg-concurrent-single-publisher: the loser kept sensing to its own exit (7)" 1 \
+  "$(( (rca == 7 ? 1 : 0) + (rcb == 7 ? 1 : 0) ))"
+chk_eq "ob-neg-concurrent-single-publisher: one delivered report, one ledger line" 1 \
+  "$(grep -c . "$WATCH_RUN_DIR/obRACE.duplex.expect-report")"
+chk_eq "ob-neg-concurrent-single-publisher: the verdict was printed exactly once" 1 \
+  "$(cat "$SANDBOX/obRACE.a.log" "$SANDBOX/obRACE.b.log" | grep -c 'OVER-BUDGET: this round')"
+
+# ── ob-pos-publish-failure-retries-after-reattach: nothing delivered ⇒ nothing recorded ────
+# The publish barrier is identity.py's own test seam: it SIGKILLs the publisher inside the
+# os.replace window of the terminal record — the exact "marker written, conclusion lost" case
+# the old order could not survive.
+ob_seed obPUB 0.02
+ob_age obPUB 5
+BARRIER="$SANDBOX/obPUB.barrier"
+outp="$(AGENTCTL_PUBLISH_BARRIER="$BARRIER" AGENT_WATCH_MAX_POLLS=6 AGENT_WATCH_FOLLOW_MAX=0 \
+        bash "$AGENTCTL" watch obPUB 2>&1)"; rcp=$?
+chk_eq "ob-pos-publish-failure-retries-after-reattach: the publish window really was hit" 1 \
+  "$([ -s "$BARRIER" ] && echo 1 || echo 0)"
+chk_eq "ob-pos-publish-failure-retries-after-reattach: no 19 reached the waiter" 0 \
+  "$(printf '%s\n' "$outp" | grep -c '^EXIT=19$')"
+chk_eq "ob-pos-publish-failure-retries-after-reattach: and NOTHING was recorded as delivered" \
+  0 "$([ -s "$WATCH_RUN_DIR/obPUB.duplex.expect-report" ] && echo 1 || echo 0)"
+outp2="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obPUB 2>&1)"; rcp2=$?
+chk_eq "ob-pos-publish-failure-retries-after-reattach: the re-armed waiter still gets 19" 19 \
+  "$rcp2"
+chk_eq "ob-pos-publish-failure-retries-after-reattach: recorded once, now that it landed" 1 \
+  "$(grep -c . "$WATCH_RUN_DIR/obPUB.duplex.expect-report")"
 unset AGENT_WATCH_MAX_POLLS
 sw_clean
 
@@ -2555,7 +2669,11 @@ chk_eq "prog-claude-other-tool-counts: a Bash frame with no readable command cou
 # hand-seeded (classify's omp projector asks the LIVE engine for its turn state), and that
 # suite is where the fake omp duplex engine already runs.
 
-# ── the verb table is ONE table: it may not drift from the CLI's own dispatch ──────────────
+# ── PARITY, not single-source: two definitions, ONE mechanical gate ────────────────────────
+# Review R1 B2 (accept-documented): `agentctl`'s public surface is still dispatched by its own
+# bash `case`, so this asserts the two definitions AGREE in both directions — a verb added to
+# either side reds here. Generating the dispatch FROM AGENTCTL_VERBS is the real single source
+# and is a separate batch: it rewrites the entry script's whole front door.
 pg_verbs="$(python3 - "$AW_DIR" <<'VBPY'
 import ast, os, re, sys
 
@@ -2587,7 +2705,7 @@ print(" ".join(bad) if bad else "AGREES %d observe=%d"
       % (len(table), sum(1 for v in table.values() if v)))
 VBPY
 )"
-chk_eq "prog-neg-codex-inventory-silent: the verb table IS the CLI's dispatch, no second copy" \
+chk_eq "prog-neg-codex-inventory-silent: parity: bash dispatch == AGENTCTL_VERBS (two definitions, one gate)" \
   "AGREES 8 observe=5" "$pg_verbs"
 unset AGENT_WATCH_STALL_MINS
 sw_clean

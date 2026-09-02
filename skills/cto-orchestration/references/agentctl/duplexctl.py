@@ -1804,7 +1804,14 @@ def progress_fingerprint(sess: Session, budget: ProbeBudget) -> tuple[str | None
 # command frames like any other — so a seat that only observes (its own session, or a child's)
 # kept the progress clock alive forever. Field 2026-09-02: a review seat's whole 2h03m of
 # "tool activity" was ten `agentctl status`/`watch` invocations on itself.
-# THE VERB SET IS A TABLE, ONCE (below), and the boundary is deliberately narrow:
+# THE VERB SET IS A TABLE (below) with a PARITY GATE, and that is the honest description:
+# `agentctl`'s public surface is still dispatched by its own bash `case`, so there are TWO
+# definitions and one mechanical gate that they agree (test/agentctl-supervised-watch.test.sh,
+# `parity: bash dispatch == AGENTCTL_VERBS` — it reds on drift in either direction, including a
+# verb added to the CLI and forgotten here). Generating the dispatch FROM this table is the
+# real single source and is a separate batch: it rewrites the entry script's whole front door,
+# which this batch's ownership boundary does not include (review R1 B2, accept-documented).
+# The boundary of what this filter covers is deliberately narrow:
 #   * only the PUBLIC OBSERVATION verbs — read-only about the WORK (they still write lane
 #     control state: a waiter pid, a lease, a terminal record);
 #   * only when EVERY segment of the command line is one of them, so `agentctl status s &&
@@ -1826,6 +1833,15 @@ SHELL_HOSTS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 SHELL_DEPTH = 4
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _DURATION = re.compile(r"^[0-9]+(\.[0-9]+)?[smhd]?$")
+
+
+def _dict(value: object) -> dict:
+    """`value` when it is a JSON object, else {} — the ONE guard every nested frame read in the
+    progress/tail path goes through. `complete_frames_integrity` proves each line DECODES, and
+    nothing more: a `params` or a `message` that arrived as a list is legal JSON, and calling
+    `.get()` on it took the sensing loop out with an AttributeError instead of producing the
+    typed verdict the caller was owed (review R1 M1)."""
+    return value if isinstance(value, dict) else {}
 
 
 def _segments(command: str) -> list[list[str]] | None:
@@ -1908,13 +1924,14 @@ def claude_tool_events(sess: Session, frames: list[dict]) -> int | None:
         if ftype == "command_lifecycle":
             count += 1
         elif ftype in ("assistant", "user"):
-            for item in (frame.get("message") or {}).get("content") or []:
+            content = _dict(frame.get("message")).get("content")
+            for item in content if isinstance(content, list) else []:
                 if not isinstance(item, dict):
                     continue
                 kind = item.get("type")
                 if kind == "tool_use":
-                    argv = item.get("input")
-                    if item.get("name") == "Bash" and isinstance(argv, dict) \
+                    argv = _dict(item.get("input"))
+                    if item.get("name") == "Bash" \
                             and agentctl_observe_command(argv.get("command")):
                         if isinstance(item.get("id"), str):
                             observed.add(item["id"])
@@ -1940,7 +1957,7 @@ def codex_tool_events(sess: Session, frames: list[dict]) -> int | None:
     for frame in frames:
         if frame.get("method") not in ("item/started", "item/completed"):
             continue
-        params = frame.get("params") or {}
+        params = _dict(frame.get("params"))
         tid = params.get("threadId")
         if ours and tid is not None and tid != ours:
             continue
@@ -2449,23 +2466,35 @@ def _tail_items(frame: dict) -> list[tuple[str, str]]:
     item. Shape-driven, not engine-keyed: the three vocabularies are DISJOINT wire shapes
     (codex `method`+`params.item`, claude `type`+`message.content`, omp bare protocol frames),
     so each frame selects its own reader and a per-engine table here would only be a second
-    place to forget one."""
+    place to forget one.
+
+    Every nested read goes through `_dict` (review R1 M1): the integrity layer proves each line
+    is DECODABLE JSON, never that it has the shape its vocabulary implies, and a `params` that
+    arrived as a LIST took the whole sensing loop out with an AttributeError — the budget had
+    already fired, and the evidence tail is what killed the verdict. An unexpected shape is
+    published as `[unparsed item]` rather than dropped: a frame that exists is evidence, and
+    silently skipping it would make the tail claim the engine emitted less than it did."""
     method = frame.get("method")
     if isinstance(method, str) and method.startswith("item/"):
-        item = (frame.get("params") or {}).get("item")
+        item = _dict(frame.get("params")).get("item")
+        verb = method.split("/")[-1]
         if not isinstance(item, dict):
-            return []
+            return [(f"{verb}:[unparsed item]", "")]
         text = item.get("command") or item.get("text") or item.get("summary") or ""
-        return [(f"{method.split('/')[-1]}:{item.get('type') or 'item'}", str(text))]
+        return [(f"{verb}:{item.get('type') or 'item'}",
+                 text if isinstance(text, str) else "[unparsed item]")]
     ftype = frame.get("type")
     if ftype in ("assistant", "user"):
         rows = []
-        for item in (frame.get("message") or {}).get("content") or []:
+        content = _dict(frame.get("message")).get("content")
+        if not isinstance(content, list):
+            return [(str(ftype), "[unparsed item]")]
+        for item in content:
             if not isinstance(item, dict):
+                rows.append((str(ftype), "[unparsed item]"))
                 continue
             if item.get("type") == "tool_use":
-                argv = item.get("input")
-                cmd = argv.get("command") if isinstance(argv, dict) else None
+                cmd = _dict(item.get("input")).get("command")
                 rows.append(("tool_use", f"{item.get('name') or '?'} "
                                          f"{cmd if isinstance(cmd, str) else ''}"))
             elif item.get("type") == "tool_result":

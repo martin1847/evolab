@@ -1466,9 +1466,60 @@ chk_not_contains "self-neg-unparseable-target-not-self: never the self refusal" 
   "own session" "$out"
 out="$(AGENTCTL_SESSION= bash "$AGENTCTL" status slfA 2>&1)"; rc=$?
 chk_eq "self-neg-unparseable-target-not-self: an EMPTY variable refuses nothing" 0 "$rc"
-bash "$AGENTCTL" stop slfA >/dev/null 2>&1
-chk_eq "self: the session really was stoppable once the seat was not the caller" 0 \
+
+# ── the other EIGHT cells of the 5x3 matrix, per verb, on this same live session ───────────
+# Review R1 B4: `status` alone cannot show that watch/steer/stop/start keep THEIR OWN rc and
+# side effects when the guard does not fire — the success faces differ (watch concludes off a
+# terminal read, steer delivers a frame, stop reaps, start refuses a duplicate name). Each
+# cell below asserts that verb's own behaviour, not merely the absence of the refusal text.
+# steer: DELIVERY is the side effect, so the PAYLOAD in the engine's own frame log is the
+# oracle (a frame count would also count the live turn-state probe this route takes first)
+out="$(bash "$AGENTCTL" steer slfA -m "unset-cell ruling" 2>&1)"; rc=$?
+chk_eq "self-neg-unset-steer: the steer really delivered (rc 0)" 0 "$rc"
+chk_eq "self-neg-unset-steer: and its text reached the engine exactly once" 1 \
+  "$(grep -c 'unset-cell ruling' "$SANDBOX/self-omp.log")"
+chk_not_contains "self-neg-unset-steer: no refusal text" "own session" "$out"
+out="$(AGENTCTL_SESSION=some-other-seat bash "$AGENTCTL" steer slfA -m "different-cell ruling" 2>&1)"
+rc=$?
+chk_eq "self-neg-different-steer: a different seat may steer this session (rc 0)" 0 "$rc"
+chk_eq "self-neg-different-steer: and its text reached the engine too" 1 \
+  "$(grep -c 'different-cell ruling' "$SANDBOX/self-omp.log")"
+chk_not_contains "self-neg-different-steer: no refusal text" "own session" "$out"
+# start: the verb's own collision semantics must be what answers, not the guard
+out="$(bash "$AGENTCTL" start omp slfA "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "self-neg-unset-start: a duplicate start is refused by the COLLISION check (rc 1)" 1 "$rc"
+chk_contains "self-neg-unset-start: and says so in its own words" "already exists" "$out"
+chk_not_contains "self-neg-unset-start: never the self refusal" "own session" "$out"
+out="$(AGENTCTL_SESSION=some-other-seat bash "$AGENTCTL" start omp slfA "$WT" \
+        --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "self-neg-different-start: same collision refusal for a different seat (rc 1)" 1 "$rc"
+chk_contains "self-neg-different-start: still the collision, not the guard" "already exists" "$out"
+# watch: its success face is a REAL conclusion read off the fenced record (this fake engine is
+# idle with no deliverable declared, so the terminal class is DONE 0)
+out="$(AGENT_WATCH_MAX_POLLS=4 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch slfA 2>&1)"; rc=$?
+chk_eq "self-neg-unset-watch: the waiter really waited and concluded (rc 0)" 0 "$rc"
+chk_contains "self-neg-unset-watch: on a typed verdict line" "DONE" "$out"
+chk_eq "self-neg-unset-watch: and the machine tail is that verdict" "EXIT=0" \
+  "$(printf '%s\n' "$out" | tail -1)"
+chk_not_contains "self-neg-unset-watch: no refusal text" "own session" "$out"
+out="$(AGENT_WATCH_MAX_POLLS=4 AGENT_WATCH_FOLLOW_MAX=0 AGENTCTL_SESSION=some-other-seat \
+        bash "$AGENTCTL" watch slfA 2>&1)"; rc=$?
+chk_eq "self-neg-different-watch: another seat's waiter concludes the same way (rc 0)" 0 "$rc"
+chk_eq "self-neg-different-watch: same machine tail" "EXIT=0" "$(printf '%s\n' "$out" | tail -1)"
+# stop: the side effect IS the teardown, so each cell needs its own session
+out="$(bash "$AGENTCTL" stop slfA 2>&1)"; rc=$?
+chk_eq "self-neg-unset-stop: stop really reaped the session (rc 0)" 0 "$rc"
+chk_eq "self-neg-unset-stop: and its control state is gone" 0 \
   "$([ -e "$WATCH_RUN_DIR/slfA.duplex.meta" ] && echo 1 || echo 0)"
+chk_not_contains "self-neg-unset-stop: no refusal text" "own session" "$out"
+bash "$AGENTCTL" start omp slfC "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+chk_eq "self-neg-different-stop: (fixture) the second session is up" 1 \
+  "$([ -e "$WATCH_RUN_DIR/slfC.duplex.meta" ] && echo 1 || echo 0)"
+out="$(AGENTCTL_SESSION=some-other-seat bash "$AGENTCTL" stop slfC 2>&1)"; rc=$?
+chk_eq "self-neg-different-stop: a different seat may stop it (rc 0)" 0 "$rc"
+chk_eq "self-neg-different-stop: and its control state is gone too" 0 \
+  "$([ -e "$WATCH_RUN_DIR/slfC.duplex.meta" ] && echo 1 || echo 0)"
+chk_not_contains "self-neg-different-stop: no refusal text" "own session" "$out"
 unset AGENTCTL_BIN_OMP FAKE_PROVIDER_LOG
 sweep_fakes; sandbox_clean
 

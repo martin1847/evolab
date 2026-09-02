@@ -492,9 +492,25 @@ cd "$(dirname "$0")"
 # sentences were eating the tail rows out of the 600-char record clip (the line is the
 # measurement + the evidence now; disposition is the README's column), and the status note
 # printed a real 3-second overrun as "0.0min".
+# duplexctl.py 3986→4015 / watchctl.py 1574→1621 (2026-09-02, R1 评审修复 commit): +76, all of
+# it correctness on surfaces this batch already shipped — no new state, no new flag, no new verb.
+# watchctl +47: the OVER-BUDGET claim became a real fence (B1). `_report_over_budget` now runs
+# read-ledger → deliver → record under the LANE'S single-writer flock (the one `send` already
+# serializes steers on, so no second lock discipline appeared), `_sense_conclude` grew an
+# `on_delivered` hook so the ledger records what was DELIVERED instead of what was attempted,
+# and `_expect_recordable` probes writability without writing (which is what keeps the
+# "unrecordable ⇒ suppressed" direction while a failed publish stays retryable). The weight is
+# the doctrine those three invariants owe a reader — two concurrent observers, a publish killed
+# inside its os.replace window, and the one accepted hole between probe and append.
+# duplexctl +29: `_dict()` — ONE shape guard for every nested frame read in the tail and both
+# tool counters (M1: a `params` that arrived as a LIST is legal JSON, and calling `.get()` on it
+# took the sensing loop out with an AttributeError at the exact moment the budget had fired), an
+# unexpected shape now publishing as `[unparsed item]` rather than vanishing, plus the B2
+# accept-documented paragraph that renames the claim over AGENTCTL_VERBS from "single source" to
+# "two definitions, one parity gate; generated dispatch is a separate batch".
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 3986
-skills/cto-orchestration/references/agentctl/watchctl.py 1574
+skills/cto-orchestration/references/agentctl/duplexctl.py 4015
+skills/cto-orchestration/references/agentctl/watchctl.py 1621
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 658
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431
