@@ -581,41 +581,11 @@ cd "$(dirname "$0")"
 #    `batch_span` and `seat_wall`, without tripping `clock_regressed`.
 # The rest is the doctrine each fix carries: what the wrong answer WAS, and why the cheaper
 # repair (clamp, default, guess by name) is the one that reintroduces it.
-# duplexctl.py 4103→4120 / watchctl.py 2129→2228 / agentctl 670→722, identity.py still 1671
-# (2026-09-03, D10PHASE R2 评审修复: 1 blocking). +116 python, +52 bash. This is the ONE place
-# in the batch where the entry script grew materially, and the reason is structural rather than
-# a flag: the thing being fixed IS a shell-level sequence.
-# R2's finding: the stop captured the lane identity BEFORE `lane_of`, so the token and the lane
-# it went on to kill/clean had no common fence. Two concurrent stops plus a same-name restart
-# then diverged — one killed the NEW lane and recorded the OLD seat, leaving the killed seat
-# reading `open` forever. What the lines buy:
-#  * the fence itself (~40 lines in watchctl `cmd_lane_fence` + 12 in duplexctl's parser): a
-#    blocking, SIGALRM-bounded flock on a descriptor the SHELL holds open. `flock(2)` belongs
-#    to the open file description, so a child that locks an inherited fd leaves the hold with
-#    the parent — that is what lets ONE lock span a sequence of shell steps and python verbs
-#    with no daemon, no new lock file and no new state. Most of those lines are the argument
-#    for why this is the lane's EXISTING single-writer lock and why nothing inside either
-#    fenced sequence may take it (`wait-ready`, `send`, `classify` all do, all run outside).
-#  * the two fenced sequences (~52 lines in agentctl): `fence_take`/`fence_drop` plus the
-#    doctrine block, the fence around start's whole CLAIM, the fence around stop's whole
-#    teardown, the stop token moved INSIDE it and read after the lane is located, and `9>&-`
-#    on the pane launch — a tmux that runs the pane as its own child would otherwise leak the
-#    fence fd into the ENGINE, whose open file description then holds the lock for the life of
-#    the session (probed: every later steer/classify/stop blocked until its watchdog fired).
-#  * the drift verdict (~35 lines in watchctl): `_phase_same_seat`, the `<mtime>|<ok|drift>`
-#    handoff on the EXISTING sentinel sample, and the sentinel's three-condition gate. Cleanup
-#    re-reads the lane's identity right before clearing it and stamps agreement; missing or
-#    disagreeing evidence costs the ledger row, never its accuracy. Belt and braces on top of
-#    the fence, kept because a row naming the wrong seat is invisible to every reader.
-#  * `duplex.wlock` left out of BOTH teardown removal sets (2 lines + doctrine): unlinking a
-#    lock a live critical section holds does not end the section, it just lets the next caller
-#    create a fresh inode and walk in. Same rule `IdentityStore.clear` already applies to the
-#    identity lock.
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 4120
-skills/cto-orchestration/references/agentctl/watchctl.py 2228
+skills/cto-orchestration/references/agentctl/duplexctl.py 4103
+skills/cto-orchestration/references/agentctl/watchctl.py 2129
 skills/cto-orchestration/references/agentctl/identity.py 1671
-skills/cto-orchestration/references/agentctl/agentctl 722
+skills/cto-orchestration/references/agentctl/agentctl 670
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 skills/cto-orchestration/references/agentctl/cto-guard-stop.py 129

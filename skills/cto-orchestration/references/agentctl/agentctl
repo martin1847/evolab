@@ -184,31 +184,6 @@ refuse_self() { # $1 verb  $2 target session
   exit 1
 }
 
-# ── the lane fence ────────────────────────────────────────────────────────────────────
-# `start`'s CLAIM and `stop`'s TEARDOWN are each a sequence — tmux, process-group signals and
-# python verbs interleaved — and both mutate the same lane by NAME. Unfenced, two of them
-# interleave: a stop that read one lane's identity can go on to kill the lane a same-name start
-# created behind it, and then hand the OLD identity to the ledger. The killed seat then reads
-# `open` forever while the old one is recorded stopped a second time (review R2, reproduced).
-# The fence is the lane's EXISTING single-writer lock — the one `send` serializes on — so there
-# is no new lock file, no new state and no new layer. `flock(2)` belongs to the open file
-# DESCRIPTION, so the shell holds fd 9 and `ctl lane-fence` locks it: the hold outlives that
-# child and ends when fd 9 closes (explicitly, or when this process exits).
-# NOTHING inside either fenced sequence may take this lock, and nothing does: `wait-ready`,
-# `send` and `classify` all do, and all three run OUTSIDE the fence — start releases before its
-# handshake, and stop never reaches them.
-FENCE_SECS="${AGENTCTL_FENCE_SECS:-30}"
-fence_take() { # $1 session  $2 gate label — rc 1 = refused, and the caller must NOT proceed
-  local f="$DIR/$1.duplex.wlock"
-  : >> "$f" 2>/dev/null || {
-    echo "ERR: cannot open the lane fence $f — a lane that cannot be fenced must not be claimed or torn down" >&2
-    return 1
-  }
-  exec 9>>"$f"
-  ctl lane-fence "$1" --fd 9 --timeout "$FENCE_SECS" --gate "$2" || return 1
-}
-fence_drop() { exec 9>&-; }
-
 cmd_start() {
   ENG="${1:?usage}" ; S="${2:?session}" ; CWD="${3:?cwd}"; shift 3
   refuse_self start "$S"
@@ -301,11 +276,6 @@ cmd_start() {
      --deliverable "$DELIV" --model "$MODEL" --resume-thread "$RESUME_THREAD" \
      --workflow "$WORKFLOW" --expect "$EXPECT" || exit 1
   mkdir -p "$DIR"
-  # THE CLAIM IS FENCED. Everything from the collision checks to the lane record being complete
-  # runs under the lane fence, so a concurrent `stop` cannot locate this lane half-built. It is
-  # released before the handshake below, because `wait-ready`, `send` and `classify` all take
-  # this same lock and holding it across them would deadlock the start against itself.
-  fence_take "$S" start || exit 1
 
   # collisions: refuse ANY prior lane state or live tmux session BEFORE branching to an engine
   [ "$(lane_of "$S")" = none ] || { echo "ERR: session '$S' already exists ($(lane_of "$S") lane) — agentctl stop $S or pick a new name" >&2; exit 1; }
@@ -330,7 +300,6 @@ cmd_start() {
     echo "HINT: another process may hold the identity lock, or $DIR/$S.identity.lock is unreadable" >&2
     rm -f "$FIFO"; exit 1
   fi
-
 
   EXTRA_Q=""  # zero args to `printf ' %q'` would still format once → a literal '' engine arg
   [ "${#EXTRA[@]}" -gt 0 ] && EXTRA_Q="$(printf ' %q' "${EXTRA[@]}")"
@@ -360,13 +329,7 @@ cmd_start() {
   # because a seat cannot otherwise know its own session name: the goal frame never carries it
   # and the engine has no lane state of its own. It is the whole input to refuse_self.
   PANE="export AGENTCTL_SESSION=$(q "$S"); exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); e=\$?; echo \$e > $(q "$RC").tmp && mv $(q "$RC").tmp $(q "$RC")"
-  # `9>&-` closes the LANE FENCE for this command and everything it spawns. Real tmux hands the
-  # pane to its own daemon, which never sees our fds — but a tmux that runs the pane as its own
-  # child (the test fake, and any tmux-less shim) would leak the fence fd into the ENGINE, whose
-  # open file description would then hold the lock for the entire life of the session: every
-  # later steer, classify and stop would block on it until the watchdog fired. The fence must
-  # not outlive the claim, so it does not travel.
-  if ! tmux new-session -d -s "$S" -c "$CWD" "$PANE" 9>&-; then
+  if ! tmux new-session -d -s "$S" -c "$CWD" "$PANE"; then
     rm -f "$FIFO" "$DIR/$S.duplex.meta"
     echo "ERR: tmux new-session failed for '$S' (nothing started)" >&2; exit 1
   fi
@@ -379,7 +342,6 @@ cmd_start() {
   # pin remain-on-exit off: inherited "on" outlives a DEAD pane and stop's live #{pane_pid}
   # read would hand reap an exited, recyclable pid (review S1)
   tmux set-option -w -t "=$S:" remain-on-exit off 2>/dev/null || true
-  fence_drop
 
   if ! ctl wait-ready "$S" --wait 20; then
     echo "ERR: engine handshake failed — cleaning up. stderr tail:" >&2
@@ -629,22 +591,15 @@ cmd_watch_daemon() { # INTERNAL — the sensing loop, launched by ensure_supervi
 cmd_stop() {
   S="${1:?usage: agentctl stop <session>}"
   refuse_self stop "$S"
-  mkdir -p "$DIR" 2>/dev/null
-  # THE TEARDOWN IS FENCED, and the fence comes FIRST: locating the lane, reading its identity,
-  # killing it, cleaning it and recording the stop are one critical section. Without it, two
-  # concurrent stops interleave — the second one locates the lane a same-name start created
-  # after the first finished, kills THAT lane, and hands the ledger the identity it read before
-  # any of it (review R2). A refused fence is a refused stop: nothing is killed and nothing is
-  # recorded, because proceeding unfenced is the failure itself.
-  fence_take "$S" stop || exit 1
+  # WHO this stop is ending, captured NOW — before the supervisor is retired, before cleanup
+  # clears the identity record, and therefore before the name is free for a same-name start to
+  # claim. Opaque here: the shell never parses it, it only carries it to the verb that records
+  # the ledger's stop row. Resolving the identity AFTER cleanup used to mean looking up "the
+  # newest ledger row for this name", and a restart that got its `start` row in first stole the
+  # old stop and closed a seat that had just begun (review R1 B3).
+  STOP_ID="$(ctl identity token "$S" 2>/dev/null)"
   case "$(lane_of "$S")" in
     duplex)
-      # WHO this stop is ending, read INSIDE the fence and AFTER the lane was located, from
-      # that lane's own identity file. Read before the fence it would describe whichever lane
-      # happened to own the name a moment earlier; read after cleanup there is nothing left to
-      # read and the old code guessed from the ledger by name (review R1 B3, R2). Opaque here:
-      # the shell only carries it to the verbs that judge and record.
-      STOP_ID="$(ctl identity token "$S" 2>/dev/null)"
       # Read the reap identity BEFORE the kill: the live pane pid is only trustworthy while the
       # pane is ALIVE (review S1); a dead pane falls back to the meta pid+lstart fingerprint. The
       # supervisor goes down FIRST — it must not publish for a session being torn down.
@@ -658,23 +613,17 @@ cmd_stop() {
       # Cleanup precedes the reap: the marker guard prices in a µs kill→cleanup gap, a grace-long
       # reap would stretch it to seconds (S3). The sentinel brackets the reap from INSIDE these two
       # verbs — no timestamp in this shell, only an opaque token fencing part 2 to part 1's sample.
-      STOP_TOK="$$-$RANDOM"
-      ctl stop-cleanup "$S" --token "$STOP_TOK" --identity "$STOP_ID"; ID_RC=$?
+      STOP_TOK="$$-$RANDOM"; ctl stop-cleanup "$S" --token "$STOP_TOK"; ID_RC=$?
       if [ -n "$live_pg" ]; then reap_tree "$live_pg" ""
       else reap_tree "$meta_pg" "$meta_ls"; fi
       REAP_RC=$?
       survivor_advise "$S"
       ctl stop-sentinel "$S" --token "$STOP_TOK" --reap-rc "$REAP_RC" --identity "$STOP_ID"
-      # the fence's job ends the instant the ledger row is decided
-      fence_drop
       # a refused identity clear fails stop's contract: the name is not free to reuse
       [ "$ID_RC" = 0 ] || exit 1
       exit "$REAP_RC" ;;
     none)
       # no lane meta: clean bare tmux AND orphan duplex claims — the recovery path start advertises
-      # A no-lane stop usually has no identity to read at all; the token is captured all the
-      # same, inside the fence, so the residue branch records `unknown` rather than a guess.
-      STOP_ID="$(ctl identity token "$S" 2>/dev/null)"
       cleaned=0; reap_rc=0
       retire_supervisor "$S"
       if tmux has-session -t "=$S" 2>/dev/null; then
@@ -685,8 +634,7 @@ cmd_stop() {
         survivor_advise "$S"
         echo "killed bare tmux session $S"; cleaned=1
       fi
-      ctl stop-residue "$S" --killed "$cleaned" --reap-rc "$reap_rc" --identity "$STOP_ID"
-      RES_RC=$?; fence_drop; exit "$RES_RC" ;;
+      ctl stop-residue "$S" --killed "$cleaned" --reap-rc "$reap_rc" --identity "$STOP_ID"; exit $? ;;
   esac
 }
 
