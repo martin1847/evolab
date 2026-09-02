@@ -207,24 +207,13 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   带接管旗标（CDP / 浏览器扩展）→ 默认 DENY，主理人批后 `touch /tmp/cto-allow-browser-attach` 一次性放行；正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
   见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）位于管道**非末端** → DENY（末端放行；rc 被末命令吞、帧被截）；⑫ 门命令段以 `;` 结束且其后接 `git commit` → DENY（commit 不再依赖门 rc；`&&` 链放行）；⑬ 直接派 `agentctl start codex --goal <brief>` 时扫该 brief 的六个字面攻击词 → WARN（brief 读不到也 WARN）；⑭ `agentctl start … <cwd>` 且 `git -C <cwd> status --porcelain` 非空 → DENY（先 seed commit）；⑮ `<cwd>/BLOCKED.md` 存在 → DENY（先收割）。
   ⑳ 编排位经 bash **三类可解析字面文本写入**触及源码/测试路径 → DENY（= edit 侧 E1 同一条规则的 bash 通道：
-  auto mode 下 harness 优先用 Bash 改文件，E1 挂在 Edit|Write 上对这条路径是纸门——2026-09-02 编排位与冷评审
-  各自实测 heredoc / 追加重定向 / `tee` / `sed -i` 四形态全 rc=0）。**覆盖面就是这三类，别读成"bash 写文件都拦"**：
-  重定向族 `>` `>>` `&>` `&>>` `N>` `N>>` 指向一个路径（`>&N` / `N>&M` 是复制不是写文件；`/dev/null` 之类不带
-  源码扩展的目标本来就过不了源码面，不另设特例）；`tee` 的**每个**
-  路径参数（含 `-a` / `--`，任一命中即 DENY）；`sed` 就地（`-i` / `-iSUF` / `-i SUF` / `--in-place[=SUF]`，命中后该段
-  所有位置参数逐个过源码面）。**带空格的字面路径也算字面**：`> "…/a b/x.py"` 与 `> …/a\ b/y.py` 都判（判定读
-  操作符偏移处的**原始字节**再按 shell 规则去引号/去转义，不读会把 quoted span 抹成 `ARG` 的通用视图）。
-  判定在 shell **执行面**做：引号内、`#` 注释后与 heredoc 正文里的 `>` 是 DATA。**accepted-uncovered，
-  不声称覆盖**：`cp` / `mv` / `install` / `dd of=` / `rsync` / `git apply` / `patch` / 编辑器 / 解释器内写文件
-  （`python - <<EOF` 里的 `open().write`）；目标含 `$`、反引号、`$(`、glob（`* ? [`）或前导 `~` → 不可判，
-  ALLOW + 一行 WARN 且**不消费** override；目标缺失（行尾裸 `>`）→ 静默。席位归属、override、降级方向与 E1 同源
-  （代码 import 复用，不复制）：活体席位写自己 worktree 放行、`touch /tmp/cto-allow-direct-write` 一次性放行、
-  run dir 不可读或目标不属任何受管 work tree → ALLOW+WARN。铁律出处见 [SKILL §0 铁律①](../../SKILL.md)。
-  **另一条已知未覆盖**：注释文本里出现的 heredoc opener（`echo ok # <<EOF`）会被**共享**的 heredoc 剥离面
-  （`_heredoc_scan`）当成真 opener，其后行对**读该面「非 quoted-only 视图」（源码里的 `raw_hd`）的那几条规则**
-  不可见——即源码规则 (8)/(18)/(19)/(20)，包括下一行的真实源码写入；只读 quoted-only 视图的规则不受影响
-  （那一遍只剥 `<<'TAG'` / `<<"TAG"`）。修它要动共享面，另批处理；当前行为钉在断言
-  `r20-doc-comment-heredoc-opener-uncovered`（谁修共享面，那条会翻红，必须有意识地改断言）。
+  auto mode 下 harness 优先用 Bash 改文件，E1 挂在 Edit|Write 上对这条路径是纸门）。**拦什么**：重定向族指向
+  一个路径、`tee` 的每个路径参数、`sed` 就地——**覆盖面就是这三类，别读成"bash 写文件都拦"**。**不拦什么**：
+  `cp` / `mv` / `install` / `dd of=` / `rsync` / `git apply` / `patch` / 编辑器 / 解释器内写（accepted-uncovered，
+  不声称覆盖）；另有一条已知漏面——注释文本里的 heredoc opener 会让**共享**剥离面漏看其后行（含下一行的真实
+  源码写入），修它要动共享面，另批处理。目标含展开或 glob → 不可判，ALLOW + 一行 WARN 且**不消费** override；
+  目标缺失（行尾裸 `>`）→ 静默。席位归属、override、降级方向与 E1 同源（代码 import 复用，不复制）；铁律出处见
+  [SKILL §0 铁律①](../../SKILL.md)。拼写与边界见规则 (20) 注释与 `test/cto-guard-bash.test.sh` 的 `r20-*` 断言。
   git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：编排位对源码/测试文件的写入 → DENY
   （活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir 不可读 → ALLOW+WARN）。
@@ -248,18 +237,8 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 
 ## cwd 锚定（多仓工作区）
 
-伞形多仓里 shell cwd 跨调用漂移会让 git/gh 打错仓——每段含 git/gh 的命令自带锚（`cd /abs/<repo> && …`
-或 `git -C <path>` / `gh -R <owner>/<repo>`）；guard ⑧ 在伞形根硬拦无锚 git/gh，单仓永不触发。
-
-guard ⑧ 的判据（2026-09-02 收窄；两机 728 次真实 DENY 里 598 条是这条规则，按 hook cwd 归因最大的桶全是
-session 自己的项目根——那种 cwd 打不到别的仓）：**只在 cwd 或 5 层祖先内存在多仓伞形时评估**（扫描语义不变，
-单仓永不触发）；评估时 **cwd 所在 git 顶层 == 本 session 项目根 → 不触发**（Claude Code 里 shell cwd 在项目树内
-跨调用持久、`cd` 出项目根后下一条被拉回，所以这种 cwd 不可能是漂到兄弟仓的 cwd；session 根从 hook payload 的
-`transcript_path` 父目录名反解：目录名 = 项目根路径把每个非 `[A-Za-z0-9]` 字符换成 `-`——**实测归纳、非官方契约**，
-所以只用一个方向：相等才放行）。**照拦**：session 根本身就是伞形（2026-07-26「PR 开错仓」的形态）、cwd 落在伞形内
-另一个仓（含该仓之下的嵌套仓）、payload 无 `transcript_path`（codex 席位）。**cwd 不存在 / 不可列**不在照拦面上：
-`_umbrella_near` 直接返回 None，规则从不评估（fail-open，oracle = 断言 `unreadable cwd fails open`）。三条 accepted 边界：
-① 外层仓 + 单个嵌套仓且 5 层祖先内无伞形 → 规则从不评估（现状，不变；钉成断言
-`r8-doc-nested-no-umbrella-never-evaluates` + 加一个直接子仓即翻成 DENY 的对照）；② slug 编码非单射，同一伞形下仅以标点
-区分的兄弟仓（`a.b` / `a-b`）会互认 → 放行，accept-documented（钉成断言 `r8-doc-slug-collision`，要改方向先改
-那条断言与本节）；③ cwd 经 symlink 指到仓根时按 realpath 判，slug 不等 → 照拦（保守方向）。
+伞形多仓里 shell cwd 跨调用漂移会让 git/gh 打错仓——每段含 git/gh 的命令自带锚：`cd /abs/<repo> && …`、
+`git -C <path>`、`gh -R <owner>/<repo>`。guard ⑧ 只拦两种形态：**session 根本身就是伞形**（2026-07-26
+「PR 开错仓」的形态）、**cwd 落在伞形内另一个仓**（含该仓之下的嵌套仓）；**cwd 所在仓就是本 session 项目根
+时不拦**（Claude Code 的 cwd 不漂出项目树），payload 无 `transcript_path` 的席位（codex）照旧拦，单仓永不触发。
+判据、fail-open 面与三条 accepted 边界见 `cto-guard-bash.py` 规则 (8) 注释与 `test/cto-guard-bash.test.sh` 的 `r8-*` 断言。

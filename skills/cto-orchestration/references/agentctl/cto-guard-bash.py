@@ -842,13 +842,26 @@ def _umbrella_near(path):
 # an empirical regularity (27 project dirs on this machine: 26 matched slug(the recorded cwd of
 # their newest transcript), the 1 miss being a directory whose repo had MOVED). So the test is
 # used in exactly ONE direction: equality ALLOWS, everything else keeps the existing DENY —
-# a codex seat (whose payload carries no `transcript_path`), an unreadable cwd, a nested repo,
+# a codex seat (whose payload carries no `transcript_path`), a repo NESTED inside the umbrella,
 # a sibling repo and an umbrella session root all stay denied.
+# FAIL-OPEN, the one shape that is NOT on that list (an earlier revision of this comment claimed
+# an unreadable cwd stayed denied; the implementation and its oracle both say otherwise): an
+# unreadable cwd never reaches this test at all, because the scope gate ahead of it —
+# `_umbrella_near` — cannot list the directory and returns None, so rule (8) NEVER EVALUATES.
+# Oracle: assertion `unreadable cwd fails open`.
+# SAME FAIL-OPEN DIRECTION, scope-gate shape: an outer repo holding a SINGLE nested repo, with no
+# umbrella within 5 ancestors, never has >=2 git children on the scan path, so the rule does not
+# evaluate there either. Accept-documented and pinned as
+# `r8-doc-nested-no-umbrella-never-evaluates`, with a control that adds one more direct child and
+# flips the same workspace back to DENY.
+# A SYMLINKED cwd is judged by realpath (`_git_top` and `_umbrella_near` share that 口径): the
+# slug is compared against the RESOLVED repo root, so a cwd that reaches a repo root through a
+# link whose own path slugs differently keeps the DENY — the conservative direction, pinned as
+# `r8-neg-symlinked-cwd`.
 # The encoding is also NOT injective (`/tmp/a.b` and `/tmp/a-b` share a slug), so two sibling
-# repos differing only in punctuation would license each other. Accept-DOCUMENTED (README
-# §cwd 锚定) and pinned as a test, not defended by machinery: it takes a hand-built pair of
-# repo names inside one umbrella, and the direction is ALLOW on a workspace the orchestrator
-# built itself.
+# repos differing only in punctuation would license each other. Accept-DOCUMENTED and pinned as
+# `r8-doc-slug-collision`, not defended by machinery: it takes a hand-built pair of repo names
+# inside one umbrella, and the direction is ALLOW on a workspace the orchestrator built itself.
 _SLUG = re.compile(r"[^A-Za-z0-9]")
 
 
@@ -946,12 +959,28 @@ def _cwd_drift(raw, repos, base):
 # so E1 is a paper door there. Measured 2026-09-02, by the orchestrator and again by a cold
 # review: a heredoc write, an append redirect, a `tee` and a `sed -i` onto a repo `.py` all
 # returned rc=0 with zero output from this guard.
-# THE CLOSED SET, and it is a set of SPELLINGS this file can parse rather than a claim about
-# shell writes in general: (a) redirections `> >> &> &>> N> N>>` naming a path, (b) `tee`'s
-# path arguments (every one of them), (c) `sed` with an in-place flag. `cp` / `mv` / `install` /
-# `dd of=` / `rsync` / `git apply` / `patch` / an editor / a write from INSIDE an interpreter
-# (`python - <<EOF` … `open().write`) are accept-UNCOVERED and said so out loud in README
-# §强制层 — a gate that implied coverage it does not have would be worse than the gap.
+# THE CLOSED SET, enumerated HERE because README §强制层 keeps only the reader's three sentences —
+# it is a set of SPELLINGS this file can parse, never a claim about shell writes in general:
+#  (a) REDIRECTIONS naming a path: `>` `>>` `&>` `&>>` `N>` `N>>`. `_R20_OP` locates every
+#      operator and `_R20_WRITE_OP` picks the writing ones; `>&N` / `N>&M` is fd DUPLICATION and
+#      not a write (`_R20_DUP` below).
+#  (b) EVERY path argument of `tee`, not just the first — `-a` and `--` are handled by
+#      `_positionals`, and one match anywhere in that argv denies.
+#  (c) `sed` rewriting in place, all five spellings `_sed_in_place` accepts: `-i`, `-i.bak`
+#      (attached suffix), `-i SUF` (BSD separated suffix), `--in-place`, `--in-place=SUF`, plus
+#      short-flag clusters carrying `i` (`-ni`). With `-i SUF` the suffix token is judged like
+#      every other positional of that segment, which is correct under either parse: a suffix
+#      (`.bak`) and a script (`s/a/b/`) both fail the source face harmlessly.
+# ACCEPT-UNCOVERED, said out loud instead of implied: `cp` / `mv` / `install` / `dd of=` /
+# `rsync` / `git apply` / `patch` / an editor / a write from INSIDE an interpreter
+# (`python - <<EOF` … `open().write`). A gate that implied coverage it does not have would be
+# worse than the gap. ONE more uncovered shape, with an oracle of its own: a heredoc opener
+# sitting in COMMENT text (`echo ok # <<EOF`) is taken for a real opener by the SHARED
+# `_heredoc_scan`, so every line after it is invisible to the rules reading that scan's
+# non-quoted-only view (`raw_hd`: rules (8)/(18)/(19)/(20)) — including a real source write on
+# the next line. The quoted-only readers are unaffected (that pass strips `<<'TAG'` / `<<"TAG"`
+# only). Fixing it means moving the shared face, i.e. another batch; today's behaviour is pinned
+# as `r20-doc-comment-heredoc-opener-uncovered`, so whoever moves that face sees it go red.
 # JUDGED ON AN EXECUTION FACE OF THIS RULE'S OWN, and `_pipe_view` could not be it (cold review
 # R1 F1, both spellings counter-probed at rc=0): that view BLANKS a multi-word quoted span to
 # `ARG` and STRIPS backslashes, so `> "/a b/x.py"` and `> /a\ b/x.py` — two ordinary spellings of
@@ -959,10 +988,20 @@ def _cwd_drift(raw, repos, base):
 # be read the way the SHELL reads it. The idiom is the one rules (14)/(17) already established
 # for exactly this problem: a LENGTH-PRESERVING blind decides WHERE the operators are, and the
 # ORIGINAL bytes at those offsets are then unquoted to recover the path — one face, two reads,
-# no third parser. Two properties fall out and both are load-bearing: a `>` inside quotes or a
-# heredoc BODY can never be an operator (`echo "a > b.py"`, and a brief that documents a
-# redirect, stay silent), and `2>&1` / `>&2` are matched as duplication operators in their own
-# right, so the word behind them is never read as a file.
+# no third parser. `_write_face` IS that blind: the content of a QUOTED span, a backslash-ESCAPED
+# byte and an unquoted `#` comment each collapse to a sentinel, which is what lets a space-bearing
+# literal path still be recovered from the original bytes — `> "…/a b/x.py"` and `> …/a\ b/y.py`
+# name one real file and both DENY (`r20-recall-quoted-space` / `r20-recall-escaped-space`).
+# Three properties fall out and all three are load-bearing: a `>` inside quotes, behind a `#`
+# comment, or in a heredoc BODY is DATA and can never be an operator (`echo "a > b.py"`,
+# `echo ok # > x.py`, and a brief that documents a redirect, all stay silent); `2>&1` / `>&2` are
+# matched as duplication operators in their own right, so the word behind them is never read as a
+# file; and a MISSING target (a bare trailing `>`) is not a write, so the rule stays SILENT
+# instead of guessing at one.
+# VERDICT DIRECTION WHEN THE PATH IS NOT LITERAL: a target carrying an expansion (`$x`, a
+# backtick, `$(`), a glob (`* ? [`) or a leading `~` is OPAQUE — the shell would open a file this
+# guard never read — so it is ALLOW + one WARN, and the one-shot override marker is NOT consumed.
+# Spending an approval on a verdict nobody reached would retire it silently.
 _R20_BLIND = "\x01"
 # A COMMENT is not data inside a word — it is text the shell never hands to any program, so it
 # gets its OWN sentinel and `_seg_tokens` drops it like whitespace (R2-1: sharing `_R20_BLIND`

@@ -123,45 +123,37 @@ EOF
 # THIS shipped file: it is the goal contract's own OUTPUT-side counterpart to the Value gate
 # line — a depth nobody declares is re-run as "全量, 保险起见" by the seat (3x11min of pure
 # re-run in one batch), and a pointer to another page is read after the proof has been run.
-# agentctl/README.md 230→241 (2026-09-02, guard ⑧ 收窄): +11 lines — the ⑧ 判据 paragraph under
-# §cwd 锚定. The words had to go into THIS shipped file: rule ⑧'s DENY carries
-# `Read: …/agentctl/README.md §cwd 锚定` as its pointer (hook-deny-pointer gates that it
-# resolves), and this page is the declared SINGLE SOURCE for what the rule now evaluates and for
-# its three accepted boundaries. A pointer to a second page is read only after the DENY has
-# already been re-sent.
-# agentctl/README.md 241→253 (2026-09-02, 新规则 ⑳): +12 lines — ⑳'s entry in the rule list.
-# Same reason, same page: rule ⑳'s DENY points at `…/agentctl/README.md §强制层`, and that entry
-# is the single source for the three write channels it covers, the channels it explicitly does
-# NOT (`cp` / `mv` / `dd of=` / `git apply` / interpreter writes …), and the unjudgeable-target
-# WARN. A gate that implies coverage it does not have is worse than the gap it hides.
-# agentctl/README.md 253→257 (2026-09-02, R1 评审 F1/F2/F3 修复轮): +4 lines, all three of them
-# CORRECTIONS to承诺面 this page is the single source of: the covered-channel list now says a
-# space-bearing literal path (`> "…/a b/x.py"` / `> …/a\ b/y.py`) IS judged (F1 was a real
-# miss, not an accepted gap), the ⑧ 照拦 list no longer claims an unreadable cwd is denied
-# (`_umbrella_near` returns None there — the rule never evaluates), and accepted boundary ①
-# now names the assertion that pins it. A承诺面 that overstates coverage is the failure mode
-# this ratchet's obligation clause exists for, so the words belong here, next to the claim.
-# agentctl/README.md 257→261 (2026-09-02, R2 评审修复轮): +4 lines, one accepted-uncovered
-# BOUNDARY the reader has to be able to find: a heredoc opener sitting in COMMENT text is taken
-# for a real opener by the SHARED `_heredoc_scan`, so every line after it is invisible to every
-# rule. Fixing that means changing the face rules ⑧/⑩/⑪ read, which is another batch — and an
-# undeclared blind spot in a DENY's own `Read:` target is exactly what this ratchet's obligation
-# clause exists to price. The paired oracle is `r20-doc-comment-heredoc-opener-uncovered`.
-# agentctl/README.md 261→262 (2026-09-02, R3-1 minor): +1 line, a CORRECTION of that same
-# boundary's blast radius — "invisible to every rule" was wider than the truth. Only the rules
-# reading `_heredoc_scan`'s non-quoted-only view are affected ((8)/(18)/(19)/(20) in the source's
-# own numbering), and the quoted-only readers are not. An overstated blind spot is as much a
-# wrong承诺面 as an understated one, and it is stated where the DENY's `Read:` lands.
-# agentctl/README.md 262→265 (2026-09-02, 新规则 (21)): +3 lines — the `-m` 正文禁命令替换 clause
-# in the §agentctl —— 当前命令面 steer bullet. The words had to go into THIS shipped file: rule
-# (21)'s DENY carries `Read: …/agentctl/README.md §agentctl —— 当前命令面` as its pointer
-# (hook-deny-pointer gates that it resolves), and a seat that just had a steer denied needs the
-# 正路 (`-f <file>`) and the byte-ban direction at the pointer's landing spot, not one page away.
+# agentctl/README.md 262→265→244 (2026-09-02). TWO governed acts in one batch, and the second
+# one REVERSES the premise every earlier README row on this page was argued under.
+#  +3 (新规则 (21)): the `-m` 正文禁命令替换 clause in the §agentctl —— 当前命令面 steer bullet.
+#    Rule (21)'s DENY points there (`Read: …/agentctl/README.md §agentctl —— 当前命令面`, and
+#    hook-deny-pointer gates that it resolves), so the denied seat meets the 正路 (`-f <file>`)
+#    and the byte-ban direction AT the pointer's landing spot rather than one page away.
+#  -21 (README 产品面瘦身, owner ruling 2026-09-02): §cwd 锚定 and the ⑳ entry had accreted
+#    制造细节 — every operator/flag spelling, assertion names, internal function names
+#    (`_umbrella_near` / `_heredoc_scan`), field DENY counts, review-round bookkeeping. THE
+#    RULING: this page owes the reader three things — 何时拦 / 怎么办 / 为什么我碰不到 — and
+#    边界目录 is not one of them, because whoever needs the enumeration is already in the source.
+#    THE SINGLE SOURCE MOVED, it was not deleted: every fact cut from those two sections now sits
+#    in the guard's own comment beside the code that implements it (rule (8)'s fail-open scope
+#    gate and its three accepted boundaries; rule (20)'s closed set of spellings, its
+#    accepted-uncovered list and the comment-heredoc-opener gap), with the `r8-*` / `r20-*`
+#    assertions as the oracles, and README keeps ONE pointer per section instead of a copy.
+#    That is the stricter arrangement, not the looser one: a承诺面 stated twice drifts, and this
+#    page proved it — two of the rows this text replaces were themselves CORRECTIONS of claims
+#    it had made (an unreadable cwd said to be denied when the rule never evaluates; a blind
+#    spot said to hide a write from every rule when only the `raw_hd` readers are affected).
+#    The obligation clause is unchanged and still bites, it just points elsewhere: a boundary
+#    that moves must move in the SAME commit as the source comment that receives it, and the
+#    DENY pointers must still resolve — §cwd 锚定 and §强制层 both survive as sections, which is
+#    all hook-deny-pointer asks of them.
+#    Baseline locked at the measured 244 instead of left at 265: the floor arm would have
+#    tolerated 239, and 21 untaken lines is exactly the slack the next batch re-spends silently.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 265
+skills/cto-orchestration/references/agentctl/README.md 244
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42

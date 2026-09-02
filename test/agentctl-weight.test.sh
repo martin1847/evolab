@@ -422,12 +422,25 @@ cd "$(dirname "$0")"
 # accepted FN a mention-is-not-a-command anchor buys. A ban whose边界 is not written down is a
 # rule the next batch narrows by accident; the kill criterion (hits=0 for a year) is recorded
 # where the retro GATE-AUDIT reads it.
+# cto-guard-bash.py 2373→2412 (2026-09-02, README 产品面瘦身): +39, ZERO behaviour change — the
+# weight is a承诺面 MOVING, not growing. Owner ruling 2026-09-02: README §cwd 锚定 and the ⑳
+# entry owe the reader 何时拦 / 怎么办 / 为什么我碰不到, and 边界目录 is not one of those, so the
+# enumerations that page carried (-21 lines there, see skill-face) now sit next to the code that
+# implements them: rule (8)'s fail-open scope gate — including the CORRECTION of a comment that
+# claimed an unreadable cwd stays denied when `_umbrella_near` returns None and the rule never
+# evaluates — plus its nested-repo / symlink-realpath / slug-collision boundaries with the
+# `r8-*` oracles that pin each; and rule (20)'s closed set spelled out per channel (redirect
+# family, EVERY `tee` path incl. `-a` / `--`, all five in-place `sed` spellings), its
+# accepted-uncovered list, the quoted/escaped space-bearing path recovery, the
+# comment-heredoc-opener gap, and the opaque-target / missing-target verdict directions.
+# This is the cheaper place for those bytes: a承诺面 stated twice drifts, and the README rows
+# this replaces included two corrections of exactly that drift.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2373
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2412
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked
