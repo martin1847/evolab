@@ -1,5 +1,5 @@
 {
-  "//": "cto-guard wiring 真源（canonical entries）。接入=把 command 前缀替换为本 skill 安装根的绝对路径（hooks 不展开 ~、不加 python3/bash 前缀——脚本自带 shebang 直接 exec），按 event 并进项目 settings（CC .claude/settings.json / Codex .codex/hooks.json 同格式）。matcher 与脚本实现同包维护，一致性由发布门校验（skill-polish-check #4）。",
+  "//": "cto-guard wiring 真源（canonical entries）。接入=把 command 前缀替换为本 skill 安装根的绝对路径（hooks 不展开 ~、不加 python3/bash 前缀——脚本自带 shebang 直接 exec），按 event 并进项目 settings。**事件名与 stdin/stdout 契约在 CC / Codex 同构，但配置文件结构不同构**：CC 直接并进 .claude/settings.json 的 hooks 节；Codex 的 .codex/hooks.json 要顶层 hooks 对象 + 每个 matcher group 内嵌 hooks 数组（每项 type=command），结构以各家官方文档为准，别把本文件原样拷过去（README §Wiring 给了 codex 形态的片段）。matcher 与脚本实现同包维护，一致性由发布门校验（skill-polish-check #4）。",
   "PreToolUse": [
     { "matcher": "Bash", "command": "references/agentctl/cto-guard-bash.py" },
     { "matcher": "Edit|Write|MultiEdit", "command": "references/agentctl/cto-guard-edit.py" },

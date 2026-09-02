@@ -28,6 +28,12 @@ Wiring: entry in `guard-hooks.json` (Stop). Same script serves Claude Code and c
 `stop_hook_active` on stdin and both read `{"decision":"block","reason":…}` on stdout; codex needs
 the hook trusted once via `/hooks` (README §Wiring).
 
+PYTHON FLOOR 3.9: the shebang is `#!/usr/bin/env python3`, which on a stock macOS host is
+/usr/bin/python3 3.9.6, so annotations use `typing.Optional` and never PEP 604 `X | None` — a
+module-level `|` raises TypeError at LOAD time, i.e. the gate is silently disabled (R1 B1: the
+sibling failed to import and every turn end got the "could not be loaded" WARN instead of a
+verdict). `test/cto-guard-stop.test.sh` pins both scripts against /usr/bin/python3 when present.
+
 KILL CRITERION (slug `s1-stop-unwatched-seat`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill —
 "false" here is a block raised over a seat that was not this repo's business or was already being
 supervised, because a gate that argues with a correct turn end burns one round every time.
@@ -35,6 +41,8 @@ supervised, because a gate that argues with a correct turn end burns one round e
 import json
 import os
 import sys
+from types import ModuleType
+from typing import Optional
 
 _LIVENESS = "seat-liveness.py"
 
@@ -55,7 +63,7 @@ _WARN = (
 )
 
 
-def _liveness():
+def _liveness() -> Optional[ModuleType]:
     """The seat census from the sibling script, or None when it cannot be loaded at all. A
     missing / unreadable sibling degrades to ALLOW+WARN like every other unanswerable case rather
     than taking every turn end down with it. importlib because the filename is hyphenated;
@@ -78,7 +86,7 @@ def main() -> int:
     the single emit below. Four `print(json.dumps(...))` copies would each be weighed separately
     by the injected-text meter (test/context-budget.test.sh resolves literals AT the sink), so
     the same sentence would be charged four times and the ratchet would stop meaning anything."""
-    blind: str | None = None
+    blind: Optional[str] = None
     try:
         data = json.load(sys.stdin)
     except Exception:
@@ -100,8 +108,8 @@ def main() -> int:
             if blind is None:
                 if not seen.seats:
                     return 0
-                cap_note = (f" (+{seen.overflow} seat(s) past the census cap were not checked — "
-                            "there may be more) " if seen.overflow else "")
+                cap_note = (f" (+{seen.overflow} owned seat(s) past the census cap were not "
+                            "checked — there may be more) " if seen.overflow else "")
                 own_note = (" [UNKNOWN-ownership: this cwd has no decidable git top level, so a "
                             "seat listed here may belong to another checkout] "
                             if seen.unowned else "")

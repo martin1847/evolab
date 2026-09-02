@@ -27,7 +27,17 @@ announces its blindness instead, because there silence reads as approval.
 Wiring: entries in `guard-hooks.json` (SessionStart + UserPromptSubmit). Both events add plain
 stdout to the model's context, which is why this speaks in plain text and never JSON.
 Exit 0 always. 0 bytes = nothing to say.
+Throttle: the SAME seat set is reported at most once per `SEAT_LIVENESS_NAG_INTERVAL_SECS`
+(default 600) on UserPromptSubmit; SessionStart is NEVER throttled, because a new / resumed /
+compacted context has no memory of the previous reminder and the stamp it would consult was
+written for a conversation it cannot see (owner ruling 2026-09-02, accept-documented).
 Env: AGENT_WATCH_DIR (run dir), SEAT_LIVENESS_NAG_INTERVAL_SECS (default 600).
+
+PYTHON FLOOR 3.9, and it is load-bearing: the shipped entry is `#!/usr/bin/env python3`, which on
+a stock macOS host resolves to /usr/bin/python3 3.9.6. PEP 604 (`str | None`) is evaluated at
+class/module level and raises TypeError THERE, i.e. the hook dies before `main()` and the Stop
+gate degrades to "sibling could not be loaded" — a silently disabled gate. Annotations here use
+`typing.Optional`; PEP 585 (`list[str]`) is fine, it landed in 3.9.
 
 KILL CRITERION (slug `seat-liveness-nag`, retro GATE-AUDIT): four weeks with zero hits ⇒ delete
 it — a reminder that never names a seat is measuring nothing.
@@ -38,13 +48,15 @@ import os
 import subprocess
 import sys
 import time
-from typing import NamedTuple
+from typing import List, NamedTuple, Optional
 
 _RUN_DEFAULT = "/tmp/agent-watch-run"      # duplexctl's own default for --run-dir
 _META = ".duplex.meta"
-_SEAT_CAP = 20                             # metas consulted per census, alphabetical
+_SEAT_CAP = 20                             # OWNED seats consulted per census, alphabetical
 _CALL_TIMEOUT = 5.0                        # per `agentctl status` / `git rev-parse`
-_CENSUS_BUDGET = 20.0                      # whole census, so a Stop hook can never hang a turn
+_CENSUS_BUDGET = 20.0                      # ownership probe + every status, so a Stop hook can
+                                           # never hang a turn end. The deadline is taken BEFORE
+                                           # the git call, which is inside it, not beside it.
 _NAG_DEFAULT = 600
 
 # The reminder text, as a module literal spent AT the sink below. Not a style choice: the
@@ -57,20 +69,20 @@ _NAG = ("RUNNING seats without a live watcher: %s%s%s — arm `agentctl watch <S
 
 class Census(NamedTuple):
     """seats: owned sessions that are RUNNING with no live watcher.
-    overflow: metas past `_SEAT_CAP` that were never consulted.
+    overflow: OWNED metas past `_SEAT_CAP` that were never consulted.
     unowned: True = the ownership question went unanswered, so `seats` is unfiltered.
     blind: None = the census answered; otherwise why it could not, in one clause."""
-    seats: list[str]
+    seats: List[str]
     overflow: int
     unowned: bool
-    blind: str | None
+    blind: Optional[str]
 
 
 def run_dir() -> str:
     return os.environ.get("AGENT_WATCH_DIR") or _RUN_DEFAULT
 
 
-def _meta_cwd(path: str) -> str | None:
+def _meta_cwd(path: str) -> Optional[str]:
     """The seat's `cwd=`, or None when the meta cannot be read or carries none. Same `key=value`
     format identity.py:_meta_read consumes; first occurrence wins, exactly as it does there."""
     try:
@@ -84,14 +96,15 @@ def _meta_cwd(path: str) -> str | None:
     return None
 
 
-def _git_top(path: str) -> str | None:
+def _git_top(path: str, timeout: float) -> Optional[str]:
     """realpath of the work tree enclosing `path`, or None when nobody can attribute it to a
-    repo (no git, no such directory, not a work tree). None is the undecidable answer, never a
-    softer 'no': the caller reports it instead of quietly filtering on a root it never had."""
+    repo (no git, no such directory, not a work tree, or the probe outran the census budget it
+    SHARES with every status call). None is the undecidable answer, never a softer 'no': the
+    caller reports it instead of quietly filtering on a root it never had."""
     try:
         proc = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              timeout=_CALL_TIMEOUT)
+                              timeout=timeout)
     except Exception:
         return None
     if proc.returncode != 0:
@@ -115,7 +128,7 @@ def _under(child: str, parent: str) -> bool:
     return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
 
 
-def _status(agentctl: str, session: str, run: str, timeout: float) -> str | None:
+def _status(agentctl: str, session: str, run: str, timeout: float) -> Optional[str]:
     """`agentctl status <session>` stdout, or None when the question was never answered (missing
     binary, timeout, spawn failure). None must not be read as 'watched': the caller treats it as
     a blind census and degrades."""
@@ -137,12 +150,20 @@ def _unwatched(out: str) -> bool:
     return bool(lines) and lines[0].startswith("RUNNING") and "no watcher armed" in out
 
 
-def census(cwd: str | None, run: str) -> Census:
-    """The shared enumeration. Bounded three ways so a Stop hook can never hang a turn: at most
-    `_SEAT_CAP` metas, `_CALL_TIMEOUT` per status, `_CENSUS_BUDGET` overall. The FIRST status
-    that does not answer ends the census as blind rather than reporting a set it knows is short —
-    a partial census would let a real unwatched seat read as 'nothing to report'."""
+def census(cwd: Optional[str], run: str) -> Census:
+    """The shared enumeration. Bounded three ways so a Stop hook can never hang a turn end: at
+    most `_SEAT_CAP` OWNED seats, `_CALL_TIMEOUT` per subprocess, `_CENSUS_BUDGET` for the whole
+    path — deadline first, ownership probe INSIDE it (R1 M2: taking the deadline after the git
+    call made the real worst case 25s while the file advertised 20s). The FIRST status that does
+    not answer ends the census as blind rather than reporting a set it knows is short — a partial
+    census would let a real unwatched seat read as 'nothing to report'.
+
+    OWNERSHIP IS APPLIED BEFORE THE CAP (R1 B3): capping the raw meta list first meant 20
+    alphabetically-earlier FOREIGN seats could evict this repo's own unwatched seat to position
+    21, and the gate then reported an answered EMPTY census and let the turn end. Foreign metas
+    now cost one file read each and nothing else — no status call, no cap slot."""
     agentctl = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agentctl")
+    deadline = time.monotonic() + _CENSUS_BUDGET
     try:
         names = sorted(n for n in os.listdir(run) if n.endswith(_META))
     except OSError:
@@ -151,16 +172,21 @@ def census(cwd: str | None, run: str) -> Census:
         return Census([], 0, False, None)
     if not os.access(agentctl, os.X_OK):
         return Census([], 0, False, f"{agentctl} is not executable")
-    overflow = max(0, len(names) - _SEAT_CAP)
-    owner = _git_top(cwd) if cwd else None
-    seats: list[str] = []
-    deadline = time.monotonic() + _CENSUS_BUDGET
-    for name in names[:_SEAT_CAP]:
-        session = name[: -len(_META)]
+    owner = _git_top(cwd, min(_CALL_TIMEOUT, max(0.0, deadline - time.monotonic()))) if cwd \
+        else None
+    mine: List[str] = []
+    for name in names:
         if owner is not None:
+            # An empty / unreadable `cwd=` is NOT ours: `_under("", owner)` would realpath the
+            # empty string to the HOOK PROCESS's own cwd and hand a cwd-less meta ownership
+            # whenever the hook runs inside this repo.
             seat_cwd = _meta_cwd(os.path.join(run, name))
             if not seat_cwd or not _under(seat_cwd, owner):
-                continue                   # another seat's session, or unattributable: not ours
+                continue                   # another seat's session: one file read, nothing more
+        mine.append(name[: -len(_META)])   # owner unanswered -> unfiltered, and said so below
+    overflow = max(0, len(mine) - _SEAT_CAP)
+    seats: List[str] = []
+    for session in mine[:_SEAT_CAP]:
         left = deadline - time.monotonic()
         if left <= 0:
             return Census([], overflow, False,
@@ -180,7 +206,7 @@ def _nag_interval() -> int:
         return _NAG_DEFAULT
 
 
-def _throttled(run: str, cwd: str | None, seats: list[str]) -> bool:
+def _throttled(run: str, cwd: Optional[str], seats: List[str]) -> bool:
     """True = this exact seat set was already reported for this cwd inside the interval. Keyed on
     the SET, so a seat appearing or being armed speaks immediately instead of waiting out the
     window. An unwritable stamp over-reminds and never silences: the stamp is a noise brake, and
@@ -217,13 +243,14 @@ def main() -> int:
     seen = census(cwd if isinstance(cwd, str) else None, run)
     if seen.blind or not seen.seats:
         return 0
-    # A new / resumed / compacted context must always be told what is running; mid-session
-    # prompts are rate-limited (same split queue-freshness.py makes, same reason).
+    # A new / resumed / compacted context has no memory of the previous reminder, so SessionStart
+    # is never throttled; mid-session prompts are rate-limited by the SAME-SET stamp (same split
+    # queue-freshness.py makes, same reason; owner ruling 2026-09-02 kept it as accept-documented).
     if event != "SessionStart" and _throttled(run, cwd if isinstance(cwd, str) else None,
                                               seen.seats):
         return 0
-    cap_nag = (f" (+{seen.overflow} seat(s) past the {_SEAT_CAP}-meta census cap were not checked)"
-               if seen.overflow else "")
+    cap_nag = (f" (+{seen.overflow} owned seat(s) past the {_SEAT_CAP}-seat census cap were not"
+               " checked)" if seen.overflow else "")
     own_nag = (" [UNKNOWN-ownership: this cwd has no decidable git top level, so seats from other"
                " checkouts may be listed]" if seen.unowned else "")
     print(_NAG % (", ".join(seen.seats), cap_nag, own_nag))

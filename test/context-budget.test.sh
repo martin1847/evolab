@@ -50,7 +50,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=17302   # all injected text across the FIVE guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=17314   # all injected text across the FIVE guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -207,6 +207,11 @@ BUDGET_GUARD_TOTAL=17302   # all injected text across the FIVE guards (raised 74
                            #    Could not come from cutting elsewhere: it is the only text on the
                            #    prompt-time channel, and one line has to carry the seat names,
                            #    both actions and why an unwatched RUNNING seat costs anything.
+                           #  R1 R2 fix round, same day, +12 B and no new sink: both cap notes
+                           #    now say "owned seat(s)" and the reminder's says "-seat" instead
+                           #    of "-meta", because the cap counts OWNED seats since B3 — a
+                           #    number that says "metas" while counting seats is a wrong
+                           #    diagnosis, not a shorter one.
 BUDGET_GUARD_SINGLE=2012   # the longest single message a worker can be handed at once. Raised
                            # 754→893 on 2026-08-28: the worst case is now the (3)+(13)+(14)+(15)
                            # assembled response, i.e. every instrument in this dispatch failing
@@ -288,7 +293,6 @@ EXTRACT="$(mktemp)"; trap 'rm -f "$EXTRACT"' EXIT
 cat > "$EXTRACT" <<'PY'
 import ast, os, sys
 
-
 # Fields whose value is handed to the agent verbatim by the harness.
 # `reason` is the Stop block's channel; `systemMessage` is the fail-open WARN's (shown to the
 # user, and delivered as an SDKInformationalMessage headless) — text this repo emits either way.
@@ -317,7 +321,7 @@ KNOWN_POSITIVE = ("[browser/long subagent launched]",          # bare Name sink 
                   "may belong to another checkout",            # stop gate: own_note
                   "RUNNING-seat liveness went UNJUDGED",       # stop gate: _WARN (fail-open)
                   "RUNNING seats without a live watcher",      # seat-liveness: _NAG
-                  "-meta census cap were not checked",         # seat-liveness: cap_nag
+                  "-seat census cap were not checked",         # seat-liveness: cap_nag
                   "checkouts may be listed")                   # seat-liveness: own_nag
 # Mutation switch for the recall probe below: comma-separated local names resolve() must ignore.
 # Test-only; the real invocation passes nothing.

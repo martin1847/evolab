@@ -223,15 +223,9 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   120s 内还在长 = 活的 → DENY（Agent 型 `.output` 常是静态 stub，判活主要靠 transcript）（**完成通知黑洞**与"零截图≠卡死"实证；override =
   `touch /tmp/cto-allow-kill-<id>`，适用于**任何经核实的杀单动机**——含"派错前提"，P0b）；
   Post·Agent：browser 派发注入 deadline-watch 提醒（必须 JSON `additionalContext`，纯 stdout 黑洞）。
-- **`cto-guard-stop.py`（Stop）** — S1：结束 turn 时本仓有 RUNNING 席位且 `agentctl status` 附
-  `no watcher armed` → `{"decision":"block"}` 挡住这次结束（reason 带三件套）。**fail-open 是设计**：
-  `stop_hook_active` 为真、payload 读不懂、run dir 不可读、agentctl 缺失或 `status` 超时，一律 exit 0
-  + 一行 `systemMessage` WARN，绝不 block——Stop 门误判的代价是这个 session 每次都结束不了。
-  归属只算 meta `cwd=` 在本 payload `cwd` 的 git 顶层之下的席位（run dir 全席位共享，他人的不管）；
-  顶层判不出则不过滤并在 reason 标 `UNKNOWN-ownership`。
-- **`seat-liveness.py`（SessionStart + UserPromptSubmit）** — 同一份席位普查的提醒面（Stop 门 import
-  它，判据单源、两个通道不会互相打脸）：命中出一行纯文本进上下文，无命中 0 字节，普查判不出则静默
-  （提醒不是门）；同一席位集合 10 分钟只提醒一次，SessionStart 不节流。
+- **`cto-guard-stop.py`（Stop）+ `seat-liveness.py`（SessionStart|UserPromptSubmit）** — 本仓席位 `agentctl status` 说 RUNNING 且附
+  `no watcher armed`：结束 turn 时 block（reason 三件套）；prompt-time 出一行提醒（UserPromptSubmit 节流 10 分钟，SessionStart 不节流）。
+  **判不出一律 exit 0 + 一行 `systemMessage` WARN，绝不 block**；fail-open / 归属过滤 / 有界细则见两脚本头注与 `test/cto-guard-stop.test.sh`。
 
 ### Wiring（CC / Codex / omp 都能坐编排位）
 
@@ -245,10 +239,12 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 不另造 settings 脚手架——并进 `repo-governance-bootstrap` §11 已建的那份。**不靠 skill frontmatter
 `hooks:` 自注册**（mid-session 经 Skill 工具激活不注册 → 显式 wiring 才可靠）。
 
-Codex 的 Stop 片段（`<repo>/.codex/hooks.json`，形态与 CC 逐字同构；`~/.codex/hooks.json` 与两层
-`config.toml` 内联 `[hooks]` 也认）：`{"Stop":[{"matcher":"","command":"/abs/<安装根>/references/agentctl/cto-guard-stop.py"}]}`。
-**非托管 hook 必须先由用户 `/hooks` 审阅并信任那份精确定义**（按 hash 记账，脚本一改就要重新信任；
-自动化才用 `--dangerously-bypass-hook-trust`）——所以 codex 侧只给片段，活体验证归主理人信任后那一次。
+Codex 的 Stop 片段（`<repo>/.codex/hooks.json`；`~/.codex/hooks.json` 与两层 `config.toml` 内联
+`[hooks]` 也认）——**结构以 codex 官方文档为准，不是 CC 那份的拷贝**：
+`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/abs/<安装根>/references/agentctl/cto-guard-stop.py"}]}]}}`
+（`UserPromptSubmit` / `SessionStart` 同形，换 `seat-liveness.py`）。**非托管 hook 必须先由用户
+`/hooks` 审阅并信任那份精确定义**（按 hash 记账，脚本一改就要重新信任；自动化才用
+`--dangerously-bypass-hook-trust`）——一份结构不合法的定义信任不了，本批也未做 codex 活体验证。
 
 ## cwd 锚定（多仓工作区）
 

@@ -49,12 +49,15 @@ cp "$SRC/cto-guard-stop.py" "$SRC/seat-liveness.py" "$PKG/"
 STOP="$PKG/cto-guard-stop.py"
 NAG="$PKG/seat-liveness.py"
 
-# The fake `agentctl`: `status <s>` prints the fixture for that session, sleeps first when told
-# to, and records the call so the census cap can be counted.
+# The fake `agentctl`: `status <s>` prints the fixture for that session, records the call so the
+# census cap can be counted, and delays when told to — `<s>.sleep` is the "never answers" shape
+# (8s against the 5s per-call timeout, deliberately far from the boundary), `delay` is a shared
+# sub-timeout pause used by the scaled budget arm.
 cat > "$PKG/agentctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$2" >> "$FAKE_DIR/calls"
-[ -f "$FAKE_DIR/$2.sleep" ] && sleep 6
+[ -f "$FAKE_DIR/$2.sleep" ] && sleep 8
+[ -f "$FAKE_DIR/delay" ] && sleep "$(cat "$FAKE_DIR/delay")"
 [ -f "$FAKE_DIR/$2.out" ] && cat "$FAKE_DIR/$2.out"
 exit 0
 EOF
@@ -192,8 +195,11 @@ chk_eq "S1 an unusable agentctl allows the turn end (exit 0)" 0 "$RC"
 chk_eq "S1 and never blocks on it" "" "$(field decision "$OUT")"
 chk_contains "S1 the missing instrument is announced" "is not executable" "$(field systemMessage "$OUT")"
 
-# a status that hangs must be abandoned BEFORE the fake would have answered (6s), so the gate
-# cannot become the thing that stalls a turn end
+# a status that hangs must be abandoned BEFORE the fake would have answered, so the gate cannot
+# become the thing that stalls a turn end. The fake sleeps 8s against a 5s per-call timeout and
+# the assertion is `< 7`: the first version slept 6 and asserted `< 6`, which is a BOUNDARY
+# EQUALITY — under load the 5s timeout plus interpreter startup measured exactly 6.0s and the
+# orchestrator's re-run went red on a correct implementation.
 reset_seats
 seat s1 "$ORCH" stale
 : > "$FAKE/s1.sleep"
@@ -204,8 +210,8 @@ rm -f "$FAKE/s1.sleep"
 chk_eq "S1 a hung status allows the turn end (exit 0)" 0 "$RC"
 chk_eq "S1 and never blocks on an unanswered census" "" "$(field decision "$OUT")"
 chk_contains "S1 the unanswered status is announced" "never answered" "$(field systemMessage "$OUT")"
-chk_eq "S1 the census is abandoned before the call would have returned (${EL}s < 6s)" 1 \
-  "$([ "$EL" -lt 6 ] && echo 1 || echo 0)"
+chk_eq "S1 the census is abandoned before the call would have returned (${EL}s < 7s)" 1 \
+  "$([ "$EL" -lt 7 ] && echo 1 || echo 0)"
 
 for bad in 'not json' '[1,2,3]' ''; do
   tmpe="$(mktemp)"
@@ -239,15 +245,30 @@ run_stop "$(stop_payload - false)"
 chk_eq "S1 a payload with no cwd judges unfiltered too" "block" "$(field decision "$OUT")"
 chk_contains "S1 and marks it the same way" "UNKNOWN-ownership" "$(field reason "$OUT")"
 
-# ── S1 BOUNDED CENSUS: 25 metas cost 20 status calls and the remainder is declared ──────────
+# ── S1 BOUNDED CENSUS: the cap counts OWNED seats, and it is applied AFTER ownership ───────
 reset_seats
 for i in $(seq -f '%02g' 1 25); do seat "s$i" "$ORCH" stale; done
 run_stop "$(stop_payload "$ORCH" false)"
-chk_eq "S1 25 metas are censused at the 20-seat cap" 20 "$(grep -c . "$FAKE/calls")"
+chk_eq "S1 25 owned metas are censused at the 20-seat cap" 20 "$(grep -c . "$FAKE/calls")"
 R="$(field reason "$OUT")"
-chk_contains "S1 the unchecked remainder is declared, not swallowed" "+5 seat(s) past the census cap" "$R"
+chk_contains "S1 the unchecked remainder is declared, not swallowed" \
+  "+5 owned seat(s) past the census cap" "$R"
 chk_contains "S1 the first alphabetical seat is judged" "s01" "$R"
 chk_not_contains "S1 the 21st meta was never consulted" "s21" "$R"
+
+# R1 B3: the run dir is shared and sorted alphabetically, so capping the RAW meta list first let
+# 20 alphabetically-earlier FOREIGN seats evict this repo's own unwatched seat to position 21 —
+# the gate then reported an answered EMPTY census and let the turn end. Foreign seats must cost a
+# file read and NOTHING else: no status call, no cap slot.
+reset_seats
+for i in $(seq -f '%02g' 1 20); do seat "a$i" "$OTHER" stale; done
+seat z-own "$ORCH" stale
+run_stop "$(stop_payload "$ORCH" false)"
+chk_eq "S1 B3 20 foreign metas do not evict this repo's seat" "block" "$(field decision "$OUT")"
+chk_contains "S1 B3 and the block names the owned seat" "z-own" "$(field reason "$OUT")"
+chk_eq "S1 B3 the 20 foreign seats cost zero status calls" "z-own" "$(cat "$FAKE/calls")"
+chk_not_contains "S1 B3 no phantom overflow is claimed for foreign metas" \
+  "past the census cap" "$(field reason "$OUT")"
 
 # ── L1 THE REMINDER: same census, plain-text channel, silent when there is nothing to say ──
 reset_seats
@@ -293,5 +314,72 @@ run_nag "$(nag_payload UserPromptSubmit "$ORCH")"
 chk_eq "L1 throttle: and then holds again" "" "$OUT"
 run_nag "$(nag_payload UserPromptSubmit "$ORCH")" "$RUN" 0
 chk_contains "L1 throttle: the window is a real interval, not a one-shot latch" "s1" "$OUT"
+
+# ── R1 B1 THE SHEBANG'S PYTHON: stock interpreter on a clean PATH ──────────────────────────
+# The shipped entry is `#!/usr/bin/env python3`, and on a stock macOS host that is
+# /usr/bin/python3 3.9.6. A PEP 604 annotation (`str | None`) evaluated at module/class level
+# raises TypeError at LOAD time, so the reminder dies before `main()` and the Stop gate degrades
+# to "sibling could not be loaded" — a gate that reads as installed and never judges anything.
+# Asserting rc=0 alone would not have caught it either: the Stop script exits 0 on a load
+# failure BY DESIGN, so this arm demands the real verdict on both scripts.
+if [ -x /usr/bin/python3 ]; then
+  PYV="$(/usr/bin/python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
+  reset_seats
+  seat s1 "$ORCH" stale
+  tmpe="$(mktemp)"
+  out="$(printf '%s' "$(nag_payload UserPromptSubmit "$ORCH")" | PATH=/usr/bin:/bin \
+        AGENT_WATCH_DIR="$RUN" FAKE_DIR="$FAKE" /usr/bin/python3 "$NAG" 2>"$tmpe")"; rc=$?
+  err="$(cat "$tmpe")"; rm -f "$tmpe"
+  chk_eq "B1 seat-liveness runs under the stock python $PYV (rc)" 0 "$rc"
+  chk_eq "B1 and raises nothing (a load error would be here)" "" "$err"
+  chk_contains "B1 and still reports the seat there" \
+    "RUNNING seats without a live watcher: s1" "$out"
+  rm -f "$RUN/seat-liveness.nag"
+  tmpe="$(mktemp)"
+  out="$(printf '%s' "$(stop_payload "$ORCH" false)" | PATH=/usr/bin:/bin \
+        AGENT_WATCH_DIR="$RUN" FAKE_DIR="$FAKE" /usr/bin/python3 "$STOP" 2>"$tmpe")"; rc=$?
+  err="$(cat "$tmpe")"; rm -f "$tmpe"
+  chk_eq "B1 the Stop gate runs under the stock python $PYV (rc)" 0 "$rc"
+  chk_eq "B1 and raises nothing there either" "" "$err"
+  chk_eq "B1 and reaches a VERDICT, not a load failure" "block" "$(field decision "$out")"
+  chk_eq "B1 so no fail-open WARN is emitted" "" "$(field systemMessage "$out")"
+else
+  echo "    /usr/bin/python3 absent — the stock-python pin is skipped on this host"
+fi
+
+# ── R1 M2 ONE BUDGET: the ownership probe is INSIDE the census budget, not beside it ───────
+# Scaled time model, patched into a SECOND package copy — the shipped constants are never
+# touched: per-call 1.0s, whole census 1.0s. Fixture: a `git` that never answers (sleeps past the
+# per-call timeout) plus four owned seats whose status would answer after 0.5s each.
+#
+# The discriminator is STRUCTURAL, not a stopwatch: an earlier version asserted wall time and
+# the machine's load moved it 1.5s→2.6s across two runs of the same correct code — a gate that
+# reds under load is worse than no gate. With ONE shared deadline, the ownership probe consumes
+# the whole budget and the status loop must therefore make ZERO calls and say the budget ran out.
+# With the deadline taken after the git call (the R1 shape, reproduced by mutation while fixing
+# this: 3.235s vs 1.042s wall), the loop got a FRESH full budget and really did call `status`.
+# So: zero recorded calls + the budget message = the git call was inside the budget.
+SCALED="$FIX/scaled"; SLOWBIN="$FIX/slowbin"
+mkdir -p "$SCALED" "$SLOWBIN"
+cp "$PKG/cto-guard-stop.py" "$PKG/seat-liveness.py" "$PKG/agentctl" "$SCALED/"
+sed -i '' -e 's/^_CALL_TIMEOUT = 5\.0/_CALL_TIMEOUT = 1.0/' \
+          -e 's/^_CENSUS_BUDGET = 20\.0/_CENSUS_BUDGET = 1.0/' "$SCALED/seat-liveness.py"
+chk_eq "M2 the scaled copy really carries the scaled constants" 2 \
+  "$(grep -c '^_CALL_TIMEOUT = 1\.0 \|^_CENSUS_BUDGET = 1\.0 ' "$SCALED/seat-liveness.py")"
+printf '#!/usr/bin/env bash\nsleep 4\nexec /usr/bin/git "$@"\n' > "$SLOWBIN/git"
+chmod +x "$SLOWBIN/git"
+reset_seats
+for i in 1 2 3 4; do seat "s$i" "$ORCH" stale; done
+printf '0.5' > "$FAKE/delay"
+tmpe="$(mktemp)"
+out="$(printf '%s' "$(stop_payload "$ORCH" false)" | PATH="$SLOWBIN:$PATH" \
+      AGENT_WATCH_DIR="$RUN" python3 "$SCALED/cto-guard-stop.py" 2>"$tmpe")"; rc=$?
+err="$(cat "$tmpe")"; rm -f "$tmpe" "$FAKE/delay"
+chk_eq "M2 a hung ownership probe allows the turn end (exit 0)" 0 "$rc"
+chk_eq "M2 and never blocks" "" "$(field decision "$out")"
+chk_eq "M2 and never writes stderr" "" "$err"
+chk_contains "M2 the exhausted budget is what is reported" "ran past its 1s budget" \
+  "$(field systemMessage "$out")"
+chk_eq "M2 git spent the census budget, so ZERO status calls were made" "" "$(cat "$FAKE/calls")"
 
 summary
