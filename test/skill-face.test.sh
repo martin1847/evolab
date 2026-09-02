@@ -190,7 +190,7 @@ PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 146
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 258
+skills/cto-orchestration/references/agentctl/README.md 260
 skills/cto-orchestration/references/agents-md-orchestration-section.md 55
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42
