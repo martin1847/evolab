@@ -1385,4 +1385,91 @@ chk_not_contains "prog-doc-omp-unchanged: and tools is never named as a broken g
 unset FAKE_OMP_STATE_FILE
 sweep_fakes; sandbox_clean
 
+echo "== self: a seat may not watch / steer / stop / start ITSELF =="
+# Field 2026-09-02: a review seat ran `agentctl watch <itself>` inside its own turn and waited
+# 2h03m for a deliverable only that turn could write. Nothing in the typed face can see it —
+# status was RUNNING with live tool frames throughout — so the refusal has to be at the
+# PARAMETER SURFACE, where the seat's own pane-exported session name makes the request
+# recognizable. Every probe below drives a LIVE session, so a refusal cannot be confused with
+# "unknown session", and the mutating verbs are checked for having changed nothing.
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wt"; mkdir -p "$WT"
+printf 'investigate the thing\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' \
+  > "$SANDBOX/goal.md"
+# the engine wrapper publishes the ONE variable the refusal reads, then becomes the real fake
+cat > "$SANDBOX/env-dump-omp" <<EOF
+#!/usr/bin/env bash
+printenv AGENTCTL_SESSION > "$SANDBOX/pane-env.txt" || : > "$SANDBOX/pane-env.txt"
+exec python3 "$FIX/fake_omp_duplex.py"
+EOF
+chmod +x "$SANDBOX/env-dump-omp"
+export AGENTCTL_BIN_OMP="$SANDBOX/env-dump-omp"
+export FAKE_PROVIDER_LOG="$SANDBOX/self-omp.log"
+out="$(bash "$AGENTCTL" start omp slfA "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "self-env-visible-in-pane: the session started" 0 "$rc"
+chk_eq "self-env-visible-in-pane: the pane exports the seat's OWN session name" 1 \
+  "$(seen "$SANDBOX/pane-env.txt" "slfA")"
+chk_eq "self-env-visible-in-pane: and nothing else — the value IS the session name" "slfA" \
+  "$(cat "$SANDBOX/pane-env.txt" 2>/dev/null)"
+
+# ── the five refusals, each with the DENY three-piece (why / the way out / doc pointer) ─────
+self_refusal() { # $1 assertion name  $2 rc  $3 output
+  chk_eq "$1: refused at the parameter surface (rc 1)" 1 "$2"
+  chk_contains "$1: why — the seat would wait on itself" "waits on itself deadlocks" "$3"
+  chk_contains "$1: the way out — BLOCKED.md, or write the deliverable" \
+    "write <cwd>/BLOCKED.md" "$3"
+  chk_contains "$1: and the doc pointer" "README.md §Launch" "$3"
+  chk_not_contains "$1: NOT a verdict — no EXIT= tail line" "EXIT=" "$3"
+  chk_not_contains "$1: and not confused with an unknown session" "unknown session" "$3"
+}
+out="$(AGENTCTL_SESSION=slfA bash "$AGENTCTL" watch slfA 2>&1)"; rc=$?
+self_refusal "self-pos-equal-refused-watch" "$rc" "$out"
+chk_eq "self-pos-equal-refused-watch: it armed no waiter" 0 \
+  "$([ -e "$WATCH_RUN_DIR/slfA.duplex.watch.pid" ] && echo 1 || echo 0)"
+out="$(AGENTCTL_SESSION=slfA bash "$AGENTCTL" status slfA 2>&1)"; rc=$?
+self_refusal "self-pos-equal-refused-status" "$rc" "$out"
+before="$(grep -c . "$SANDBOX/self-omp.log" 2>/dev/null || echo 0)"
+out="$(AGENTCTL_SESSION=slfA bash "$AGENTCTL" steer slfA -m "answer yourself" 2>&1)"; rc=$?
+self_refusal "self-pos-equal-refused-steer" "$rc" "$out"
+chk_eq "self-pos-equal-refused-steer: and no frame reached the engine" "$before" \
+  "$(grep -c . "$SANDBOX/self-omp.log" 2>/dev/null || echo 0)"
+out="$(AGENTCTL_SESSION=slfA bash "$AGENTCTL" stop slfA 2>&1)"; rc=$?
+self_refusal "self-pos-equal-refused-stop" "$rc" "$out"
+chk_eq "self-pos-equal-refused-stop: the session it tried to kill is untouched" 1 \
+  "$([ -e "$WATCH_RUN_DIR/slfA.duplex.meta" ] && echo 1 || echo 0)"
+out="$(AGENTCTL_SESSION=slfA bash "$AGENTCTL" start omp slfA "$WT" \
+        --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+self_refusal "self-pos-equal-refused-start" "$rc" "$out"
+chk_not_contains "self-pos-equal-refused-start: refused as SELF, before the collision check" \
+  "already exists" "$out"
+
+# ── the negatives: the refusal reads ONE variable and compares it to ONE target ──────────────
+out="$(bash "$AGENTCTL" status slfA 2>&1)"; rc=$?
+chk_eq "self-neg-unset-normal: with no AGENTCTL_SESSION the same command runs" 0 "$rc"
+chk_not_contains "self-neg-unset-normal: and never mentions the refusal" "own session" "$out"
+out="$(AGENTCTL_SESSION=some-other-seat bash "$AGENTCTL" status slfA 2>&1)"; rc=$?
+chk_eq "self-neg-different-normal: another seat may observe this session" 0 "$rc"
+chk_not_contains "self-neg-different-normal: no refusal for a different name" \
+  "own session" "$out"
+# ACCEPTED BOUNDARY, pinned so it cannot be mistaken for a security control: a seat that
+# unsets the variable gets through. The refusal exists for the seat that does this BY MISTAKE.
+out="$(AGENTCTL_SESSION=slfA env -u AGENTCTL_SESSION bash "$AGENTCTL" status slfA 2>&1)"; rc=$?
+chk_eq "self-doc-unset-in-pane-bypasses: unsetting the variable bypasses it (accepted)" 0 "$rc"
+chk_not_contains "self-doc-unset-in-pane-bypasses: no refusal once the seat hides its name" \
+  "own session" "$out"
+# an unparsable target is a USAGE error: nothing may be judged self on a target that was
+# never read (a `[ "$S" = "$AGENTCTL_SESSION" ]` on an empty S would refuse an empty target)
+out="$(AGENTCTL_SESSION=slfA bash "$AGENTCTL" watch --inline 2>&1)"; rc=$?
+chk_eq "self-neg-unparseable-target-not-self: no session at all is usage (rc 1)" 1 "$rc"
+chk_contains "self-neg-unparseable-target-not-self: and it says usage" "usage: agentctl" "$out"
+chk_not_contains "self-neg-unparseable-target-not-self: never the self refusal" \
+  "own session" "$out"
+out="$(AGENTCTL_SESSION= bash "$AGENTCTL" status slfA 2>&1)"; rc=$?
+chk_eq "self-neg-unparseable-target-not-self: an EMPTY variable refuses nothing" 0 "$rc"
+bash "$AGENTCTL" stop slfA >/dev/null 2>&1
+chk_eq "self: the session really was stoppable once the seat was not the caller" 0 \
+  "$([ -e "$WATCH_RUN_DIR/slfA.duplex.meta" ] && echo 1 || echo 0)"
+unset AGENTCTL_BIN_OMP FAKE_PROVIDER_LOG
+sweep_fakes; sandbox_clean
+
 summary

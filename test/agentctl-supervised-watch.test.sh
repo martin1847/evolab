@@ -2338,6 +2338,18 @@ chk_eq "ob-neg-same-round-no-repeat: a re-attached waiter falls back to the ordi
 chk_not_contains "ob-neg-same-round-no-repeat: no second OVER-BUDGET for that round" \
   "OVER-BUDGET" "$out2"
 
+# ── the budget is ENGINE-INDEPENDENT, and one live codex cell proves it ───────────────────
+# The clock is the round epoch and the report key is identity+round; neither reads `engine`.
+# Only the evidence TAIL is engine-shaped, which is why one non-claude cell is enough here.
+ob_seed obCX 0.02
+printf 'engine=codex\ncwd=%s\nround=1\npane_pid=70000\nthread=t-fixture\nexpect_min=0.02\n' \
+  "$WT" > "$WATCH_RUN_DIR/obCX.duplex.meta"
+outcx="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obCX 2>&1)"; rccx=$?
+chk_eq "ob-pos-first-over-budget: a codex-engine session reports the same typed code" 19 \
+  "$rccx"
+chk_contains "ob-pos-first-over-budget: (codex) same measurement line" \
+  "OVER-BUDGET: this round has been running" "$outcx"
+
 # ── ob-pos-new-round-after-steer: a steer opens a new round and a new budget ──────────────
 # The round rotation itself is `commit_round_state`'s (covered by the duplex suite); what is
 # under test here is that the REPORT KEY moves with it.

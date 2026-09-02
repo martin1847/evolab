@@ -163,8 +163,28 @@ provider_names() { "$PY" "$CTL" providers | tr '\n' '|' | sed 's/|$//'; }
 # properties this shell does not own — the meta file format and the deliverable fence. Called
 # before the start owns a fifo / meta / tmux session, so a refusal leaves nothing behind.
 
+# A seat that watches / steers / stops ITSELF is a deadlock, and the typed face cannot see it:
+# the seat's own turn can never end while that turn is blocked waiting for the seat's own
+# deliverable, so `status` reads RUNNING with live tool frames for as long as the wait lasts
+# (2026-09-02: a review seat burned 2h03m in `agentctl watch <itself>`). The pane exports
+# AGENTCTL_SESSION, which makes the seat the one process that can recognize the request as
+# self-directed. This is a PARAMETER-SURFACE refusal — rc 1, the same shape as an unknown
+# session, decided before any verdict machinery runs, so it prints no `EXIT=` line, publishes
+# nothing and is not a state-machine verdict.
+# ACCEPTED BOUNDARY, not an adversary model: a seat that unsets the variable gets through. The
+# refusal exists to stop the seat that does this BY MISTAKE, which is every observed case.
+refuse_self() { # $1 verb  $2 target session
+  [ -n "${AGENTCTL_SESSION:-}" ] || return 0
+  [ "$2" = "$AGENTCTL_SESSION" ] || return 0
+  echo "ERR: refusing 'agentctl $1 $2' — that is THIS seat's own session, and a seat that waits on itself deadlocks: your turn cannot end while it is blocked on your own deliverable (field 2026-09-02: one review seat spent 2h03m here, typed state RUNNING and tool frames live the whole time)" >&2
+  echo "Instead: to stop and wait for a ruling, write <cwd>/BLOCKED.md and END your turn (that is exit 4 to the orchestrator); to report progress, write it INTO the declared deliverable. Neither needs you to observe yourself." >&2
+  echo "Read: cto-orchestration/references/agentctl/README.md §Launch" >&2
+  exit 1
+}
+
 cmd_start() {
   ENG="${1:?usage}" ; S="${2:?session}" ; CWD="${3:?cwd}"; shift 3
+  refuse_self start "$S"
   PROW="$(provider_row "$ENG")" || { echo "ERR: unknown engine '$ENG' ($(provider_names)) — see agentctl capabilities" >&2; exit 1; }
   P_BIN_ENV="${PROW#*|}"; P_BIN_ENV="${P_BIN_ENV%%|*}"
   P_REST="${PROW#*|*|}"; P_BIN="${P_REST%%|*}"
@@ -302,8 +322,11 @@ cmd_start() {
     [ -n "$EXPECT" ] && printf 'expect_min=%s\n' "$EXPECT"
     [ -n "$WORKFLOW" ] && printf 'workflow=%s\nmax_rounds=%s\n' "$WORKFLOW" "$MAX_ROUNDS"; } > "$DIR/$S.duplex.meta"
 
-  # exec 3<> holds the fifo read-write so stdin NEVER sees EOF; rc goes out tmp+rename
-  PANE="exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); e=\$?; echo \$e > $(q "$RC").tmp && mv $(q "$RC").tmp $(q "$RC")"
+  # exec 3<> holds the fifo read-write so stdin NEVER sees EOF; rc goes out tmp+rename.
+  # AGENTCTL_SESSION is exported here — the ONE pane assembly point all three engines share —
+  # because a seat cannot otherwise know its own session name: the goal frame never carries it
+  # and the engine has no lane state of its own. It is the whole input to refuse_self.
+  PANE="export AGENTCTL_SESSION=$(q "$S"); exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); e=\$?; echo \$e > $(q "$RC").tmp && mv $(q "$RC").tmp $(q "$RC")"
   if ! tmux new-session -d -s "$S" -c "$CWD" "$PANE"; then
     rm -f "$FIFO" "$DIR/$S.duplex.meta"
     echo "ERR: tmux new-session failed for '$S' (nothing started)" >&2; exit 1
@@ -344,6 +367,7 @@ cmd_start() {
 
 cmd_steer() {
   S="${1:?usage: agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]}"; shift
+  refuse_self steer "$S"
   MODE=""; ARG=""; VERB="steer"; NEWDELIV=""
   while [ "$#" -gt 0 ]; do case "$1" in
     -m|-f) MODE="$1"; ARG="${2:?$1 needs a value}"; shift 2;;
@@ -383,6 +407,7 @@ cmd_steer() {
 
 cmd_status() {
   S="${1:?usage: agentctl status <session>}"
+  refuse_self status "$S"
   case "$(lane_of "$S")" in
     duplex) exec "$PY" "$CTL" --run-dir "$DIR" status "$S" ;;
     none)   echo "ERR: unknown session '$S'" >&2; exit 1 ;;
@@ -497,6 +522,9 @@ cmd_watch() {
     *) [ -n "$S" ] && { echo "ERR: watch takes exactly one session" >&2; usage; }; S="$1"; shift;;
   esac; done
   [ -n "$S" ] || usage
+  # AFTER the target is parsed and BEFORE anything else: a watch with no parsable session is a
+  # usage error (above), never a self-request — nothing may be judged self on an empty target
+  refuse_self watch "$S"
   [ "$(lane_of "$S")" = duplex ] || { echo "ERR: unknown session '$S'" >&2; exit 1; }
   # OVERRIDES the session's budget for every round from here on, before this waiter arms: the
   # value is judged and written by duplexctl (the single meta writer), a refusal ends the watch
@@ -560,6 +588,7 @@ cmd_watch_daemon() { # INTERNAL — the sensing loop, launched by ensure_supervi
 
 cmd_stop() {
   S="${1:?usage: agentctl stop <session>}"
+  refuse_self stop "$S"
   case "$(lane_of "$S")" in
     duplex)
       # Read the reap identity BEFORE the kill: the live pane pid is only trustworthy while the

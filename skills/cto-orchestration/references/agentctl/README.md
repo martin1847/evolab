@@ -102,6 +102,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   `Preflight: <probe> => <observed result>` 存在且已解占位，未过即拒发、不起引擎；
   `--no-preflight` 显式豁免（豁免类别的判据归 SKILL.md §1）。
 - **`--expect <分钟>` = 本轮等待预算**（`start` 声明、`watch --expect` 覆盖；不给 = 关闭，行为逐字不变）：超 1.5× 且引擎还在跑 → waiter 出 typed `OVER-BUDGET`（每 attempt+round 只报一次，带有界事件尾；普通 steer 开新轮即重新计时），`status` 在 RUNNING 上打一行 `note: over budget by …min`——只说等待超了，不说工作没进展。
+- **席位不能观测/操作自己**：pane 注入 `AGENTCTL_SESSION`，`watch/status/steer/stop/start` 目标等于它即参数面拒（rc=1，非 typed 判决、不打 `EXIT=` 尾行）——席位在自己 turn 里等自己的交付物是死锁（2026-09-02 一席 2h03m）；要停下等裁决写 `BLOCKED.md` 并结束本轮，要报进度写进交付物。席位自行 unset 该变量可绕过 = accepted 边界（防手滑，非对手模型）。
 - **watcher 被外部杀（TERM）= 预期可恢复态**：收到 killed 通知即重挂——supervised 模式下感知环在
   tmux 里没被碰过，重挂只是重新读记录，连本轮结论都不丢（下线期间算出的终态照样在盘上等着）。
   归因看 tombstone：trap 在退出前落 `$RUN/<s>.watch.tombstone.jsonl`（ts / signal / ppid /

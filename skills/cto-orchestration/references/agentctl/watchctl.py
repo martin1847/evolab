@@ -770,7 +770,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     if rc == EXIT_RUNNING:
         over, used, expect = wait_budget(Session(run, name))
         if over:
-            print(f"note: over budget by {used - expect:.1f}min (expect {expect:g}min) — the "
+            # `.1f` printed a real 3-second overrun as "0.0min" (live probe 2026-09-02): a
+            # number that reads as zero makes the note look broken, so a sub-minute delta
+            # keeps two decimals and anything larger stays at one
+            over_by = f"{used - expect:.2f}" if used - expect < 1 else f"{used - expect:.1f}"
+            print(f"note: over budget by {over_by}min (expect {expect:g}min) — the "
                   f"WAIT is over budget past {expect * OVER_BUDGET_FACTOR:g}min, the work is "
                   "not judged; an armed watcher reports OVER-BUDGET once for this round")
     # RUNNING with nobody watching is the field's most expensive omission. Advisory only: the

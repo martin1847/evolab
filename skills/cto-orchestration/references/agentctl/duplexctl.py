@@ -2517,13 +2517,16 @@ def events_tail(sess: Session) -> str:
 def over_budget_line(sess: Session, used: float, expect: float) -> str:
     """The typed OVER-BUDGET verdict plus its bounded evidence tail. The WAIT is what ran out —
     this line never claims the seat did nothing, which is STALLED-PROGRESS's job and has its
-    own three-source instrument."""
+    own three-source instrument.
+
+    Deliberately SHORT (live probe 2026-09-02): the published record clips its detail to
+    identity.DETAIL_MAX line-wise, so every sentence of disposition here is a tail row the
+    waiter's replay does not get. Disposition is the README's column; the runtime's line is the
+    measurement plus the evidence."""
     return (f"OVER-BUDGET: this round has been running {used:.1f}min against an expected "
             f"{expect:g}min (budget {expect * OVER_BUDGET_FACTOR:g}min) and the engine is "
-            "still working — the WAIT is over budget, the work is not judged: read the tail, "
-            "then steer a concrete next step, interrupt the turn, or re-arm with a bigger "
-            "--expect. Reported once per attempt+round; a steer opens a new round and a new "
-            f"budget.\n{events_tail(sess)}")
+            "still working — the WAIT is over budget, the work is not judged. Read the tail:\n"
+            + events_tail(sess))
 
 
 def classify(sess: Session) -> int:

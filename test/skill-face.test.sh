@@ -163,11 +163,22 @@ EOF
 # cannot even be trusted, so those bytes are the difference between a documented gate and a
 # silently absent one. Baseline locked at the measured 255, not left at 259: the floor arm would
 # have tolerated 234, and 4 untaken lines is slack the next batch re-spends silently.
+# agentctl/README.md 255→258 (2026-09-02, D10 运行时批；集成时基线：叠加 D10-1 后的读数): +3 for
+# three runtime facts a seat or an orchestrator cannot get from the CLI, all in the two sections
+# this batch owns. §Launch +2: `--expect <分钟>` (the wait budget and its 1.5x report threshold —
+# `agentctl states` publishes the CODE, never the knob that arms it) and the seat self-observation
+# refusal (rc=1 on watch/status/steer/stop/start of your own session, with the BLOCKED.md 正路 and
+# the accepted `unset` bypass — that refusal's own DENY text points HERE, `Read: …/README.md
+# §Launch`, so the refused seat has to land on a section that explains it). §typed 状态：处置 +1:
+# the OVER-BUDGET disposition row, which is the column `agentctl states` deliberately does not
+# publish. The STALLED-PROGRESS half-sentence (only-read verbs' frames are not counted) went
+# INSIDE the existing row, +0 lines. Measured on the rebased tip: this batch's +3 sits on top of
+# D10-1's 244→255, and 258 is the measured value, not a rounded-up allowance.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 255
+skills/cto-orchestration/references/agentctl/README.md 258
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42

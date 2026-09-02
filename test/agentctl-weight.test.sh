@@ -478,11 +478,25 @@ cd "$(dirname "$0")"
 # self-poll as work), the claude side's paired tool_result suppression, and the doctrine
 # paragraph declaring the three boundaries this rule refuses to cross (observation verbs only,
 # every segment or none, hand-reads of `$RUN/<s>.*` still count).
+# agentctl 629→658 (2026-09-02, seat self-observation refusal): +29 in the ENTRY script, and
+# this one belongs there by construction — it is argument-surface plumbing on the two things
+# only this file owns: the pane command it assembles (one `export AGENTCTL_SESSION=<s>`, the
+# single point all three engines share) and the argv of its own five public verbs (one
+# `refuse_self` call each). No judgement moved back into bash: the predicate is a string
+# comparison between an env var and a positional the shell already parsed, with no file, no
+# state and no exit-code semantics beyond rc 1. 21 of the 29 lines are the DENY three-piece
+# text and the doctrine comment (the deadlock, the way out, the accepted unset bypass); the
+# C10 share ratchet still measures 61/1000 against its 76 ceiling.
+# duplexctl.py 3983→3986 / watchctl.py 1570→1574 (2026-09-02, same batch, live-probe 收口): +7
+# for two cosmetic correctness fixes the live run found — the OVER-BUDGET line's disposition
+# sentences were eating the tail rows out of the 600-char record clip (the line is the
+# measurement + the evidence now; disposition is the README's column), and the status note
+# printed a real 3-second overrun as "0.0min".
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 3983
-skills/cto-orchestration/references/agentctl/watchctl.py 1570
+skills/cto-orchestration/references/agentctl/duplexctl.py 3986
+skills/cto-orchestration/references/agentctl/watchctl.py 1574
 skills/cto-orchestration/references/agentctl/identity.py 1509
-skills/cto-orchestration/references/agentctl/agentctl 629
+skills/cto-orchestration/references/agentctl/agentctl 658
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
