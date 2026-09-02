@@ -391,12 +391,27 @@ cd "$(dirname "$0")"
 #    the per-decision counter-probe record this file carries per rule. The uncovered list is
 #    load-bearing prose: a gate that implied coverage it does not have would be worse than the
 #    gap, and README §强制层 carries the reader-facing twin.
+# cto-guard-bash.py 2298→2319 (2026-09-02, R2 封闭性复审修复轮): +21, four findings, ALL
+# correctness on the execution face the previous row bought — no new rule, no new surface, and
+# the shared faces (`_pipe_view` / `_quote_blind` / `_cmd_segments` / `_heredoc_scan` /
+# `_umbrella_near`) are byte-equal, verified per function. Where the 21 went:
+#  * the comment sentinel (~9, R2-1): a comment got its OWN sentinel and `_seg_tokens` now drops
+#    it like whitespace. Sharing the quote blind left it a same-length WORD that was read back
+#    off the raw text, so `tee #comment.py` was DENIED for a file no shell opens.
+#  * duplication arity (~5, R2-2): `_R20_DUP` + `after_op = not _R20_DUP.fullmatch(op)`. A
+#    duplication's operand is INSIDE the operator, so consuming a word too swallowed the real
+#    argv behind it (`tee 2>&1 <repo>/x.py` walked). Tightening the fd side to `\d+|-` also made
+#    bash's `>&word` spelling fall through to the plain `>` arm, where the word IS the target.
+#  * shell word recovery (~7, R2-3): the dquote scan now decides expansion on the ORIGINAL bytes
+#    (`"\$literal.py"` is a filename with a dollar, not an expansion), and the line-continuation
+#    fold moved AHEAD of word splitting with rule (8)'s own backslash PARITY.
+# The remaining lines are the per-finding counter-probe comments this file carries.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2298
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2319
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

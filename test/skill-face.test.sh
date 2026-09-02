@@ -141,11 +141,17 @@ EOF
 # (`_umbrella_near` returns None there — the rule never evaluates), and accepted boundary ①
 # now names the assertion that pins it. A承诺面 that overstates coverage is the failure mode
 # this ratchet's obligation clause exists for, so the words belong here, next to the claim.
+# agentctl/README.md 257→261 (2026-09-02, R2 评审修复轮): +4 lines, one accepted-uncovered
+# BOUNDARY the reader has to be able to find: a heredoc opener sitting in COMMENT text is taken
+# for a real opener by the SHARED `_heredoc_scan`, so every line after it is invisible to every
+# rule. Fixing that means changing the face rules ⑧/⑩/⑪ read, which is another batch — and an
+# undeclared blind spot in a DENY's own `Read:` target is exactly what this ratchet's obligation
+# clause exists to price. The paired oracle is `r20-doc-comment-heredoc-opener-uncovered`.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 257
+skills/cto-orchestration/references/agentctl/README.md 261
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42

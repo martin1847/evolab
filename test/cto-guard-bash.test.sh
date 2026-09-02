@@ -1810,6 +1810,36 @@ run20 "echo x | tee \"$R20/space dir/t.sh\""
 chk_eq "r20-recall-tee quoted-space target denied" 2 "$RC"
 run20 "sed -i '' 's/a/b/' \"$R20/space dir/m.py\""
 chk_eq "r20-recall-sed quoted-space target denied" 2 "$RC"
+# R2-2 (BLOCKING): a DUPLICATION (`2>&1`, `>&2`) carries its operand inside the operator, so it
+# consumes no word — treating it like every other redirect swallowed the real argv behind it and
+# let a `tee`/`sed` source target through. The `ls`-only negatives could not see this: the
+# duplication has to sit in FRONT of a real write target for the arm to be exercised.
+run20 "tee 2>&1 $R20/dup-tee.py"
+chk_eq "r20-recall-dup-before-tee target denied" 2 "$RC"
+chk_contains "r20-recall-dup-before-tee names the target" "$R20/dup-tee.py" "$ERR"
+chk_contains "r20-recall-dup-before-tee carries the doc pointer" "agentctl/README.md §强制层" "$ERR"
+run20 "sed 2>&1 -i s/a/b/ $R20/dup-sed.py"
+chk_eq "r20-recall-dup-before-sed target denied" 2 "$RC"
+chk_contains "r20-recall-dup-before-sed names the target" "$R20/dup-sed.py" "$ERR"
+run20 "tee >&2 $R20/dup-bare.py"
+chk_eq "r20-recall-dup-bare-fd before tee target denied" 2 "$RC"
+chk_contains "r20-recall-dup-bare-fd hands over the override" "/tmp/cto-allow-direct-write" "$ERR"
+# R2-3 (BLOCKING): the word recovery must be the SHELL's. Inside double quotes a backslash
+# escapes `$`, so `"\$literal.py"` is an ordinary filename that happens to contain a dollar —
+# recovering the body first and then searching it for `$` downgraded a real target to a WARN.
+run20 "echo x > \"$R20/\\\$literal.py\""
+chk_eq "r20-recall-escaped-dollar is a literal name, denied" 2 "$RC"
+chk_contains "r20-recall-escaped-dollar names the path with its dollar" "$R20/\$literal.py" "$ERR"
+# PAIRED CONTROL, the other direction: an UNESCAPED `$` inside the same quotes really does
+# expand, and that stays 不可判 (WARN, never a DENY about a path nobody read).
+run20 "echo x > \"$R20/\$literal.py\""
+chk_eq "r20-opaque an unescaped dollar inside dquotes stays unjudgeable" 0 "$RC"
+chk_contains "r20-opaque and warns about it" "not literal" "$(ctx "$OUT")"
+# …and a backslash-NEWLINE is a line continuation the shell removes before it lexes anything, so
+# the two halves are ONE word naming one file (parity: only an odd run of backslashes continues).
+run20 "$(printf 'echo x > %s\\\n/probe.py' "$R20")"
+chk_eq "r20-recall-line-continuation target denied" 2 "$RC"
+chk_contains "r20-recall-line-continuation names the folded path" "$R20/probe.py" "$ERR"
 # …and the same spelling on a NON-source path stays silent: the space is not what decides
 run20 "echo x > \"/tmp/some dir/out.log\""
 chk_eq "r20-neg a quoted space path with no source extension is allowed" 0 "$RC"
@@ -1875,6 +1905,27 @@ run20 "echo ok # > $R20/commented.py"
 chk_eq "r20-neg a redirect behind a shell comment is not executed" 0 "$RC"
 chk_eq "r20-neg the commented redirect is silent on stdout" "" "$OUT"
 chk_eq "r20-neg the commented redirect is silent on stderr" "" "$ERR"
+# R2-1 (BLOCKING): the comment SENTINEL is not a word either. Sharing the quote blind left it as
+# a same-length token that was read back off the raw text, so a comment became `tee`/`sed` argv
+# or a redirect's operand — `tee #comment.py` was DENIED for a file no shell ever opens, and
+# `echo x > #comment.py`, which the shell itself rejects for a missing operand, was denied too.
+run20 'tee #comment.py'
+chk_eq "r20-neg-comment-not-argv: a comment is not a tee argument" 0 "$RC"
+chk_eq "r20-neg-comment-not-argv is silent on stdout" "" "$OUT"
+chk_eq "r20-neg-comment-not-argv is silent on stderr" "" "$ERR"
+run20 'echo x > #comment.py'
+chk_eq "r20-neg-comment-not-operand: a comment is not a redirect operand" 0 "$RC"
+chk_eq "r20-neg-comment-not-operand is silent on stdout" "" "$OUT"
+chk_eq "r20-neg-comment-not-operand is silent on stderr" "" "$ERR"
+# ACCEPTED-UNCOVERED, PINNED (owner ruling this round; README §强制层 ⑳ 覆盖边界): a heredoc
+# opener that appears inside COMMENT TEXT is taken for a real opener by the SHARED heredoc
+# stripper (`_heredoc_scan`, which rules (8)/(11)/(12) read too), so the lines after it are
+# invisible to EVERY rule — including a real write on the next line. Fixing that means changing
+# the shared face, which is out of this batch's scope. This assertion pins today's rc=0 so the
+# batch that does fix `_heredoc_scan` sees it go red and must change it DELIBERATELY.
+run20 "$(printf 'echo ok # <<EOF\necho x > %s/comment-hidden.py\nEOF' "$R20")"
+chk_eq "r20-doc-comment-heredoc-opener-uncovered: pinned at rc 0 (known gap, another batch)" 0 "$RC"
+chk_eq "r20-doc-comment-heredoc-opener-uncovered writes nothing to stderr" "" "$ERR"
 
 # UNJUDGEABLE TARGETS — the shell expands them, so this guard does not know the path. ALLOW and
 # say so; a silent pass would hide the blind spot and a DENY would be an accusation about a path
@@ -1887,6 +1938,7 @@ chk_contains "r20-opaque quotes the token verbatim" '($dst)' "$(ctx "$OUT")"
 run20 "echo x > $R20/*.py"
 chk_eq "r20-opaque a glob target is allowed" 0 "$RC"
 chk_contains "r20-opaque the glob warns too" "not literal" "$(ctx "$OUT")"
+chk_eq "r20-opaque the glob writes nothing to stderr" "" "$ERR"
 touch /tmp/cto-allow-direct-write
 run20 'dst=/x/y.py; echo x > "$dst"'
 chk_eq "r20-opaque does NOT consume the override marker" 1 "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"

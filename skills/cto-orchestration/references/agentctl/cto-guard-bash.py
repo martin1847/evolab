@@ -959,6 +959,12 @@ def _cwd_drift(raw, repos, base):
 # redirect, stay silent), and `2>&1` / `>&2` are matched as duplication operators in their own
 # right, so the word behind them is never read as a file.
 _R20_BLIND = "\x01"
+# A COMMENT is not data inside a word — it is text the shell never hands to any program, so it
+# gets its OWN sentinel and `_seg_tokens` drops it like whitespace (R2-1: sharing `_R20_BLIND`
+# left the comment as a same-length WORD, which was then read back off the raw text and became a
+# `tee`/`sed` argv — `tee #comment.py` was DENIED for a file no shell ever opens, and
+# `echo x > #comment.py`, which the shell rejects for a missing operand, was denied too).
+_R20_COMMENT = "\x02"
 
 
 def _write_face(text):
@@ -976,7 +982,7 @@ def _write_face(text):
         if c == "#" and (i == 0 or text[i - 1] in " \t\n;|&()"):
             j = text.find("\n", i)
             j = n if j < 0 else j
-            out[i:j] = _R20_BLIND * (j - i)
+            out[i:j] = _R20_COMMENT * (j - i)
             i = j
             continue
         if c not in "'\"":
@@ -1013,20 +1019,26 @@ def _write_segments(face):
     return segs
 
 
-# Redirect operators, longest alternative first. A duplication (`2>&1`, `>&2`) is its own
-# operator so its operand is never a file; `&>` / `&>>` send BOTH streams to a file; the
-# `<`-family is matched only to CONSUME its operand — a heredoc tag, an input file and
-# `_strip_heredocs`'s own `<<<HEREDOC-BODY-STRIPPED>>>` marker are not write targets.
-_R20_OP = re.compile(r"\d*>&\d*|&>>|&>|\d*>>|\d*>|<<-|<<<|<<|<&\d*|<")
+# Redirect operators, longest alternative first. A DUPLICATION carries its operand INSIDE the
+# operator (`2>&1`, `>&2`, `<&0`, `>&-`), so it neither writes a file nor consumes the next word
+# — R2-2: treating it like every other operator swallowed the real argv behind it and
+# `tee 2>&1 <repo>/x.py` sailed through. The right side must therefore be a FD or `-`: bash
+# reads `>&word` with a non-numeric word as "both streams to that FILE", and that spelling falls
+# through to the plain `>` arm below, where the word IS read as the target. `&>` / `&>>` send
+# both streams to a file; the `<`-family is matched only to CONSUME its operand — a heredoc tag,
+# an input file and `_strip_heredocs`'s `<<<HEREDOC-BODY-STRIPPED>>>` marker are not writes.
+_R20_DUP = re.compile(r"\d*[<>]&(?:\d+|-)")
+_R20_OP = re.compile(r"\d*[<>]&(?:\d+|-)|&>>|&>|\d*>>|\d*>|<<-|<<<|<<|<")
 _R20_WRITE_OP = re.compile(r"(?:\d*|&)>{1,2}")
 
 
 def _seg_tokens(face, lo, hi):
     """[(operator or None, start, end)] for one segment of the blinded face; a word token has
-    `None` and the caller reads the ORIGINAL bytes at [start, end)."""
+    `None` and the caller reads the ORIGINAL bytes at [start, end). A COMMENT run is dropped
+    exactly like whitespace: it is neither a word nor anything's operand."""
     toks, i = [], lo
     while i < hi:
-        if face[i] in " \t":
+        if face[i] in " \t" or face[i] == _R20_COMMENT:
             i += 1
             continue
         m = _R20_OP.match(face, i, hi)
@@ -1038,7 +1050,7 @@ def _seg_tokens(face, lo, hi):
             i += 1
             continue
         j = i
-        while j < hi and face[j] not in " \t<>&":
+        while j < hi and face[j] not in " \t<>&" and face[j] != _R20_COMMENT:
             j += 1
         toks.append((None, i, j))
         i = j
@@ -1065,18 +1077,20 @@ def _unquote_word(word):
             i = j + 1
             continue
         if c == '"':
-            j, buf = i + 1, []
+            # Inside double quotes a backslash escapes `$` `` ` `` `"` `\` and NOTHING else, so
+            # the expansion test has to run on the ORIGINAL bytes as they are consumed — R2-3:
+            # recovering the body first and then searching it for `$` read the LITERAL `$` of
+            # `"…/\$literal.py"` as an expansion and downgraded a real target to a WARN.
+            j = i + 1
             while j < n and word[j] != '"':
-                if word[j] == "\\" and j + 1 < n:
-                    buf.append(word[j + 1])
+                if word[j] == "\\" and j + 1 < n and word[j + 1] in "$`\"\\":
+                    out.append(word[j + 1])
                     j += 2
                     continue
-                buf.append(word[j])
+                if word[j] in "$`":
+                    expands = True
+                out.append(word[j])
                 j += 1
-            body = "".join(buf)
-            out.append(body)
-            if re.search(r"[$`]", body):     # `"$x"` / `"`x`"` still expand inside dquotes
-                expands = True
             if j >= n:
                 return "".join(out), True
             i = j + 1
@@ -1154,6 +1168,12 @@ def _write_targets(text):
     An absent target (a bare trailing `>`) is not a write. `/dev/null` is deliberately NOT
     special-cased: it carries no source extension, so the source face already passes it, and a
     branch the suite cannot turn red is worse than no branch."""
+    # A backslash-newline is REMOVED by the shell before it lexes anything, so the fold has to
+    # happen before this rule splits words — R2-3: keeping it made `> /repo\<newline>/x.py` one
+    # word containing a newline, which no source face can match. Same PARITY as rule (8)'s own
+    # fold and for the same reason: only an ODD run of backslashes continues a line, so `x\\`
+    # ends the command and the next line is new text.
+    text = re.sub(r"(^|[^\\])((?:\\\\)*)\\\r?\n", r"\g<1>\g<2>", text)
     face = _write_face(text)
     lit, expanding = [], []
 
@@ -1168,7 +1188,8 @@ def _write_targets(text):
         words, after_op = [], False
         for k, (op, start, end) in enumerate(toks):
             if op is not None:
-                after_op = True
+                # a DUPLICATION's operand is inside the operator, so it consumes no word
+                after_op = not _R20_DUP.fullmatch(op)
                 if _R20_WRITE_OP.fullmatch(op):
                     nxt = toks[k + 1] if k + 1 < len(toks) else None
                     if nxt and nxt[0] is None:
