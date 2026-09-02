@@ -893,6 +893,87 @@ chk_eq "R2-M1 known-positive: widen now past it and the seat closes at 1500s" "s
 chk_eq "R2-M1 known-positive: with nothing dropped" "0" \
   "$(report_py "$M1RUN" 1000 4000 future_dropped)"
 
+# ── §DOC the accepted concurrency boundary ───────────────────────────────────────────
+# This is a `doc-` assertion: it does NOT claim the behaviour below is right. It pins the
+# CURRENT direction so the day it changes — deliberately or by accident — the assertion that
+# documents it fails and somebody re-reads the paragraph that explains why it was accepted
+# (`_phase_record_stop`'s ACCEPTED BOUNDARY block in watchctl.py).
+#
+# The boundary (review R2, ruled 2026-09-03): `agentctl stop` captures the identity triple
+# before it locates the lane, so two concurrent same-name stops plus a restart can squeeze into
+# that window — the surviving stop kills the lane the RESTART created while recording the row
+# with the identity it captured earlier. The fix (fence the whole sequence on the lane's
+# single-writer lock) was implemented and reverted the same day: it blocked `classify`, so
+# status/watch during a stop reported a false ENGINE-SILENT, and its bound could be switched
+# off. A correct fix needs a lock with a lifecycle separate from the writer lock plus a
+# parameter gate — a reconciliation batch, not a patch inside a reading tool.
+# What keeps the damage to a READING: the reader never closes a live seat on a stop row it
+# cannot attribute, so the misnamed row leaves the new seat `open` (reads as "still running")
+# instead of manufacturing a false ending. The last two assertions here pin exactly that.
+echo "== DOC: the accepted concurrent stop/restart misattribution =="
+DOCRUN="$SANDBOX/doc-reentry"; rm -rf "$DOCRUN"; mkdir -p "$DOCRUN"
+# fake tmux: the lane it reports is the RESTART's pane (pgid 424242), which is what this stop
+# goes on to kill. pgid 424242 is above every reachable pid here, so the TERM/KILL can never
+# reach a real process group — the fake `pgrep` is the only thing that "sees" it.
+cat > "$BIN/tmux" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  display-message) echo "0 424242" ;;
+  has-session)     exit 1 ;;
+  *)               exit 0 ;;
+esac
+EOF
+# one survivor report, then clean: the reap succeeds AND names the group it reaped, so stdout
+# proves WHICH lane this teardown actually ended
+cat > "$BIN/pgrep" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$DOCRUN/.pgrep" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "$DOCRUN/.pgrep"
+[ "\$n" -lt 1 ] && exit 0 || exit 1
+EOF
+chmod +x "$BIN/tmux" "$BIN/pgrep"
+# the OLD seat's identity — what stop A captured before the restart replaced the lane
+printf 'engine=omp\ncwd=%s\npane_pid=424242\n' "$SANDBOX" > "$DOCRUN/seat.duplex.meta"
+python3 "$CTL" --run-dir "$DOCRUN" identity start seat >/dev/null 2>&1
+DOC_OLD="$(python3 "$CTL" --run-dir "$DOCRUN" identity token seat | cut -d/ -f1)"
+# the restart already appended its own start row, and the lane on disk is now ITS lane
+python3 - "$DOCRUN" <<'PY'
+import json, os, sys, time
+run = sys.argv[1]
+base = float(int(time.time())) - 300
+row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(base))) + ".000Z",
+       "event": "start", "name": "seat", "session_id": "new-sid", "attempt": "new-att",
+       "engine": "omp", "cwd": run, "review": 0, "launcher_ppid": 1}
+day = time.strftime("%Y%m%d", time.gmtime(int(base)))
+with open(os.path.join(run, "phase-ledger-%s.jsonl" % day), "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(row) + "\n")
+for delta in (-86400, 86400):
+    other = time.strftime("%Y%m%d", time.gmtime(int(base) + delta))
+    open(os.path.join(run, "phase-ledger-%s.jsonl" % other), "a", encoding="utf-8").close()
+PY
+doc_out="$(AGENT_WATCH_DIR="$DOCRUN" AGENTCTL_REAP_GRACE=1 bash "$AGENTCTL" stop seat 2>&1)"
+doc_rc=$?
+chk_eq "phase-doc-concurrent-stop-restart-misattributes: the stop itself succeeds" 0 "$doc_rc"
+chk_contains "phase-doc-concurrent-stop-restart-misattributes: it really ended the restart's lane" \
+  "reaped process group 424242" "$doc_out"
+chk_eq "phase-doc-concurrent-stop-restart-misattributes: but the ledger names the OLD seat" \
+  "$DOC_OLD" "$(ledger_field_in "$DOCRUN" stop session_id 1)"
+chk_eq "phase-doc-concurrent-stop-restart-misattributes: which is not the killed lane's seat" 1 \
+  "$([ "$(ledger_field_in "$DOCRUN" stop session_id 1)" != "new-sid" ] && echo 1 || echo 0)"
+doc_json="$(AGENT_WATCH_DIR="$DOCRUN" bash "$AGENTCTL" phases --json --since 1h)"
+chk_eq "phase-doc-concurrent-stop-restart-misattributes: the reader leaves the killed seat open, never falsely ended" \
+  "open" "$(printf '%s' "$doc_json" | python3 -c '
+import json, sys
+seats = {s["session_id"]: s["state"] for s in json.load(sys.stdin)["sessions"]}
+print(seats.get("new-sid", "MISSING"))')"
+chk_eq "phase-doc-concurrent-stop-restart-misattributes: and the row it did name reads stopped" \
+  "stopped" "$(printf '%s' "$doc_json" | python3 -c "
+import json, sys
+seats = {s['session_id']: s['state'] for s in json.load(sys.stdin)['sessions']}
+print(seats.get('$DOC_OLD', 'MISSING'))")"
+rm -f "$BIN/pgrep"
+install_running_tmux
+
 # ── §V the verb is a reading, and stays one ─────────────────────────────────────────
 echo "== V: numbers only — the verb never renders a verdict =="
 ph_case two-terminals /repo/one

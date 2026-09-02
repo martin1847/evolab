@@ -1408,7 +1408,32 @@ def _phase_record_stop(run: str, name: str, token: str, reason: str, lane: int) 
         could inherit the row (review R1 B3). The triple is captured before cleanup now; when
         it is genuinely unobtainable the row is written under the reserved
         PHASE_SESSION_UNKNOWN key, which the reader refuses to treat as a seat — an
-        unattributable ending is reported as unattributable, never applied by elimination."""
+        unattributable ending is reported as unattributable, never applied by elimination.
+
+    ACCEPTED BOUNDARY — concurrent same-name stop + restart (review R2, ruled 2026-09-03).
+    The triple is captured at the top of `agentctl stop`, which is BEFORE that stop locates the
+    lane. Two concurrent stops plus a same-name start can therefore squeeze into the window
+    between the capture and `lane_of`: the second stop finds the lane the restart created, kills
+    THAT lane, and records the row with the identity it captured earlier. The ledger then says
+    `(stop, old-sid)` while the seat that actually ended is the new one.
+    WHY THIS IS ACCEPTED rather than fixed here: this is a READING instrument, and the reader
+    is built so the damage stays a reading error — `agentctl phases` never closes a live seat on
+    the strength of a stop row it cannot attribute (a row it cannot attribute carries
+    PHASE_SESSION_UNKNOWN and is refused as a seat, and a row for the wrong sid leaves the new
+    seat `open`, which reads as "still running" rather than as a false ending). No dispatch, no
+    kill and no exit code depends on it.
+    WHY NOT FIXED NOW: the obvious repair — fence the whole locate→kill→clean→record sequence —
+    was implemented and REVERTED (commit 17b90c5, reverted the same day). Reusing this lane's
+    single-writer lock for it blocks `classify`, so `agentctl status`/`watch` during a stop
+    report a false ENGINE-SILENT; and the fence needs a bound that cannot be switched off. A
+    correct fix needs a lock with a LIFECYCLE SEPARATE from the writer lock plus a parameter
+    gate on its timeout — a reconciliation batch, not a patch inside a reading tool.
+    KILL CRITERION (slug `phase-stop-misattribution`): one live occurrence in 4 weeks of a stop
+    row whose sid differs from the lane that was actually killed ⇒ do the reconciliation batch.
+    The current direction is pinned by `phase-doc-concurrent-stop-restart-misattributes` in
+    test/agentctl-phases.test.sh — a doc- assertion, so the day the behaviour changes, the
+    assertion that documents it fails and this paragraph gets re-read.
+    """
     session_id, attempt = _phase_stop_triple(token)
     identity.phase_event(run, name, "stop",
                          session_id or identity.PHASE_SESSION_UNKNOWN, attempt,

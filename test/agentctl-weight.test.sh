@@ -581,9 +581,25 @@ cd "$(dirname "$0")"
 #    `batch_span` and `seat_wall`, without tripping `clock_regressed`.
 # The rest is the doctrine each fix carries: what the wrong answer WAS, and why the cheaper
 # repair (clamp, default, guess by name) is the one that reintroduces it.
+# duplexctl.py 4120→4103 / agentctl 722→670 / watchctl.py 2129→2154 (2026-09-03, D10PHASE R3:
+# lane fence REVERTED, boundary registered). Three of the four rows go BACK: `git revert` of
+# 17b90c5 removed the fence wholesale after review R3 found two new blockers in it — reusing
+# this lane's single-writer lock blocks `classify`, so `agentctl status`/`watch` during a stop
+# reported a false ENGINE-SILENT, and `AGENTCTL_FENCE_SECS=0` disabled the itimer and turned
+# the bound into an unbounded wait. The stop-loss clause applied: revert, register the residual
+# as an accepted boundary, move the real repair to a reconciliation batch.
+# watchctl.py is the one row that goes UP (2129→2154, +25) and every line of it is the
+# ACCEPTED BOUNDARY paragraph inside `_phase_record_stop` — no machinery changed. That weight
+# is the point of the ruling: a boundary recorded only in a review file is a boundary the next
+# batch re-derives from scratch (the same argument the OVER-BUDGET ruling row above makes).
+# It carries what the window is, why the damage stays a READING (the reader never closes a live
+# seat on a row it cannot attribute), why the obvious fix was reverted rather than kept, what a
+# correct fix needs (a lock whose lifecycle is separate from the writer lock, plus a parameter
+# gate on its timeout), the KILL CRITERION, and the name of the doc- assertion that pins the
+# current direction so a silent change reds.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 4103
-skills/cto-orchestration/references/agentctl/watchctl.py 2129
+skills/cto-orchestration/references/agentctl/watchctl.py 2154
 skills/cto-orchestration/references/agentctl/identity.py 1671
 skills/cto-orchestration/references/agentctl/agentctl 670
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431
