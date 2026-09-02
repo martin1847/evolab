@@ -382,4 +382,51 @@ chk_contains "M2 the exhausted budget is what is reported" "ran past its 1s budg
   "$(field systemMessage "$out")"
 chk_eq "M2 git spent the census budget, so ZERO status calls were made" "" "$(cat "$FAKE/calls")"
 
+# ── R2 MAJOR: the OWNERSHIP SCAN is metered too, not just the subprocesses ─────────────────
+# One `open` + one `realpath` per meta is trivial per entry and unbounded in the aggregate: on a
+# large or slow run dir the scan could walk past the whole budget before the first deadline check
+# (which used to sit in the STATUS loop) ever ran. Scaled model, second copy again: budget 0.6s
+# with a 0.2s delay injected into every `*.duplex.meta` read and six metas, so the scan needs
+# 1.2s of reads to finish and MUST stop early. Elapsed is measured INSIDE the harness (a
+# subprocess stopwatch would be mostly interpreter startup at this scale) and the ceiling is
+# budget + one read: an unmetered scan pays all six.
+# 0.6s rather than the reviewer's 0.10s on purpose: at 0.10s the real `git rev-parse` fork/exec
+# and normal machine noise are the same order as the budget itself, which is how the first M2
+# arm became a load-dependent flake (§R2.3 of the findings).
+sed -i '' -e 's/^_CALL_TIMEOUT = 1\.0/_CALL_TIMEOUT = 0.6/' \
+          -e 's/^_CENSUS_BUDGET = 1\.0/_CENSUS_BUDGET = 0.6/' "$SCALED/seat-liveness.py"
+chk_eq "R2 the scan model carries the 0.6s budget" 1 \
+  "$(grep -c '^_CENSUS_BUDGET = 0\.6 ' "$SCALED/seat-liveness.py")"
+reset_seats
+for i in 1 2 3 4 5 6; do seat "m$i" "$ORCH" stale; done
+SCAN_EL="$FIX/scan-elapsed"
+tmpe="$(mktemp)"
+out="$(printf '%s' "$(stop_payload "$ORCH" false)" | AGENT_WATCH_DIR="$RUN" python3 -c '
+import builtins, runpy, sys, time
+_open = builtins.open
+def slow(path, *a, **k):                      # 0.2s per meta read, nothing else touched
+    if str(path).endswith(".duplex.meta"):
+        time.sleep(0.2)
+    return _open(path, *a, **k)
+builtins.open = slow
+t = time.monotonic()
+try:
+    runpy.run_path(sys.argv[1], run_name="__main__")
+except SystemExit:
+    pass
+el = time.monotonic() - t
+builtins.open = _open
+with _open(sys.argv[2], "w") as fh:
+    fh.write("%.3f" % el)' "$SCALED/cto-guard-stop.py" "$SCAN_EL" 2>"$tmpe")"; rc=$?
+err="$(cat "$tmpe")"; rm -f "$tmpe"
+EL="$(cat "$SCAN_EL")"
+chk_eq "R2 a slow ownership scan allows the turn end (exit 0)" 0 "$rc"
+chk_eq "R2 and never blocks" "" "$(field decision "$out")"
+chk_eq "R2 and never writes stderr" "" "$err"
+chk_contains "R2 the WARN says the budget went in the ownership scan" \
+  "budget during the ownership scan" "$(field systemMessage "$out")"
+chk_eq "R2 the scan stops inside budget + one read (${EL}s <= 0.8s; 6 unmetered reads = 1.2s)" 1 \
+  "$(python3 -c 'import sys; print(1 if float(sys.argv[1]) <= 0.8 else 0)' "$EL")"
+chk_eq "R2 an abandoned scan makes ZERO status calls" "" "$(cat "$FAKE/calls")"
+
 summary

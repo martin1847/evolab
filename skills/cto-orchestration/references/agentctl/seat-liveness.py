@@ -151,12 +151,14 @@ def _unwatched(out: str) -> bool:
 
 
 def census(cwd: Optional[str], run: str) -> Census:
-    """The shared enumeration. Bounded three ways so a Stop hook can never hang a turn end: at
+    """The shared enumeration. Bounded four ways so a Stop hook can never hang a turn end: at
     most `_SEAT_CAP` OWNED seats, `_CALL_TIMEOUT` per subprocess, `_CENSUS_BUDGET` for the whole
     path — deadline first, ownership probe INSIDE it (R1 M2: taking the deadline after the git
-    call made the real worst case 25s while the file advertised 20s). The FIRST status that does
-    not answer ends the census as blind rather than reporting a set it knows is short — a partial
-    census would let a real unwatched seat read as 'nothing to report'.
+    call made the real worst case 25s while the file advertised 20s) — and the ownership SCAN
+    metered per meta (R2 major: the per-entry cost is trivial, the aggregate over a large or slow
+    run dir is not). The FIRST status that does not answer ends the census as blind rather than
+    reporting a set it knows is short — a partial census would let a real unwatched seat read as
+    'nothing to report'.
 
     OWNERSHIP IS APPLIED BEFORE THE CAP (R1 B3): capping the raw meta list first meant 20
     alphabetically-earlier FOREIGN seats could evict this repo's own unwatched seat to position
@@ -176,6 +178,16 @@ def census(cwd: Optional[str], run: str) -> Census:
         else None
     mine: List[str] = []
     for name in names:
+        # The scan itself is metered (R2 major): one `open` + one `realpath` per meta is cheap
+        # per entry and unbounded in the AGGREGATE — a large or slow (network / contended) run
+        # dir could walk the whole census past its budget before the first deadline check ever
+        # ran, which is precisely the "the gate becomes the thing that stalls a turn end" failure
+        # the budget exists to prevent. Stopping here reports a blind census, which is the same
+        # fail-open exit every other unanswerable case takes.
+        if time.monotonic() >= deadline:
+            return Census([], 0, False,
+                          f"the seat census ran past its {int(_CENSUS_BUDGET)}s budget during "
+                          "the ownership scan")
         if owner is not None:
             # An empty / unreadable `cwd=` is NOT ours: `_under("", owner)` would realpath the
             # empty string to the HOOK PROCESS's own cwd and hand a cwd-less meta ownership
