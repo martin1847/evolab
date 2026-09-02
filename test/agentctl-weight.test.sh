@@ -458,11 +458,22 @@ cd "$(dirname "$0")"
 # one paragraph declared as the stop line, with the oracle
 # `r21-doc-subst-separator-before-dash-m-uncovered` and its separator-free control named there.
 # An undeclared miss is the one the next batch either re-widens by accident or discovers twice.
+# duplexctl.py 3654→3861 / watchctl.py 1508→1570 / agentctl 620→629 (2026-09-02, wait budget =
+# `--expect` + typed 19 OVER-BUDGET): the weight HAD to land in these three. The JUDGEMENT is
+# duplexctl's by the thin-entry contract (+207: the `--expect` value gate reused by both the
+# start parameter surface and the `set-expect` override, the round-epoch budget arithmetic, the
+# bounded evidence tail with its row/byte caps, one EXIT_* + one TYPED_STATES row, and the
+# doctrine comments this file requires per decision — no second clock and no second frame
+# reader: the tail rides `complete_frames_integrity`, the clock rides the round epoch every
+# other fence already reads). The REPORT-ONCE key is patrol state, so its four helpers +
+# `_report_over_budget` + the status note sit in watchctl (+62). agentctl grew 9 lines of pure
+# plumbing (one flag in two verbs, one meta line, one `set-expect` call) and the bash SHARE
+# ratchet in agentctl-capabilities.test.sh C10 still measures 60/1000 against its 76 ceiling.
 BASELINES='
-skills/cto-orchestration/references/agentctl/duplexctl.py 3654
-skills/cto-orchestration/references/agentctl/watchctl.py 1508
+skills/cto-orchestration/references/agentctl/duplexctl.py 3861
+skills/cto-orchestration/references/agentctl/watchctl.py 1570
 skills/cto-orchestration/references/agentctl/identity.py 1509
-skills/cto-orchestration/references/agentctl/agentctl 620
+skills/cto-orchestration/references/agentctl/agentctl 629
 skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '

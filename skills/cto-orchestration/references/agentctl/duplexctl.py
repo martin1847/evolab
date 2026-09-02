@@ -33,6 +33,7 @@ import fnmatch
 import glob as globmod
 import hashlib
 import json
+import math
 import os
 import re
 import select
@@ -89,6 +90,11 @@ EXIT_SUPERVISOR_LOST = 12
 # 13 is the waiter-internal arm handshake (plumbing, see above), so the next typed code is 14
 EXIT_STALLED_PROGRESS = 14
 EXIT_DELIVERED_NEXT_TURN = 15
+# 16/17/18 are the waiter's PRIVATE continuation codes (watchctl's FOLLOW_ROTATED /
+# FOLLOW_REARM / FOLLOW_DEAD): occupied without ever being published, and the driving shell
+# CONSUMES them instead of exiting, so a typed state minted on one of them would be swallowed
+# by the follow loop rather than reaching the orchestrator. The next free code is 19.
+EXIT_OVER_BUDGET = 19
 
 # BUMPED 1 -> 2 by the progress-source batch: the document gained a SECOND published
 # vocabulary (`subReasons`). A consumer that read `{schemaVersion, states}` as the whole
@@ -132,6 +138,10 @@ TYPED_STATES: tuple[tuple[int, str, str], ...] = (
      "lands at the turn boundary, not inside that turn: the engine declares no mid-turn "
      "route (reason=capability), or the live turn state could not be judged "
      "(reason=undecidable)"),
+    (EXIT_OVER_BUDGET, "OVER-BUDGET",
+     "the wait budget declared for this round (`--expect <minutes>`, times the runtime's own "
+     "slack factor) ran out while the engine was still working — reported ONCE per "
+     "attempt+round, and never on a session that declared no budget"),
 )
 
 
@@ -2236,6 +2246,164 @@ def _idle_marks_reset(sess: Session) -> None:
             pass
 
 
+# ── wait budget ───────────────────────────────────────────────────────────────
+# Waiting had no budget at all, so a pathological turn reads RUNNING forever and only an
+# operator ASKING ever notices (field 2026-09-02: a review seat sat in `agentctl watch` on its
+# own deliverable for 2h03m, typed state RUNNING / tools-active the whole way). `--expect
+# <minutes>` is the dispatcher's own estimate of the round; it is OFF unless declared, and a
+# session that never named a budget does not change by one byte.
+# The FACTOR is SLACK, not a second estimate: an estimate is wrong by construction, and waking
+# an orchestrator at 1.0x would cost a round on every honest under-estimate.
+OVER_BUDGET_FACTOR = 1.5
+# a month of minutes: past this the value is a typo, not a plan
+EXPECT_MAX_MINS = 60 * 24 * 30
+# Evidence, not a transcript. The verdict carries the LAST few items the engine emitted so the
+# orchestrator can dispose of it without opening the raw stream (100s of KB — the token bomb
+# this control plane's whole output discipline exists for).
+TAIL_ROWS = 8
+TAIL_TEXT = 60          # per row: enough to identify a command or a tool, never its payload
+TAIL_BYTES = 600        # the WHOLE tail, whole rows only — the discipline clip_detail applies
+
+
+def expect_problem(value: str) -> str | None:
+    """"" when `value` is a usable `--expect`, else why not — the ONE gate every caller goes
+    through, so a budget that cannot be compared never reaches meta or a verdict. Minutes are
+    fractional on purpose (a 30s probe is a legal expectation), but a non-number, a
+    non-positive one, NaN/inf (`float("inf")` parses happily and would make every round
+    in-budget forever) and an absurd one are all refusals."""
+    try:
+        minutes = float(value)
+    except (TypeError, ValueError):
+        return f"--expect takes a number of minutes, got {value!r}"
+    if not math.isfinite(minutes) or minutes <= 0:
+        return f"--expect takes a positive finite number of minutes, got {value!r}"
+    if minutes > EXPECT_MAX_MINS:
+        return (f"--expect {minutes:g}min is past the {EXPECT_MAX_MINS}min ceiling — a round "
+                "that long is not a wait budget")
+    return ""
+
+
+def expect_minutes(sess: Session) -> float:
+    """The declared wait budget in minutes; 0.0 = none declared, which turns the state OFF.
+    A meta value that does not pass the gate reads as 0.0 rather than as a verdict: the state
+    exists to report an over-run, never to report its own knob."""
+    raw = str(sess.meta.get("expect_min", "")).strip()
+    return 0.0 if not raw or expect_problem(raw) else float(raw)
+
+
+def wait_budget(sess: Session) -> tuple[bool, float, float]:
+    """(over budget?, minutes used by this attempt+round, declared minutes).
+
+    The clock is the round-epoch file's mtime — the SAME instant every other round fence in
+    this lane reads (`commit_round_state` touches it as the round counter moves), so a steer
+    restarts the budget and an `--interrupt` does too. No epoch file is not an over-run: it is
+    a session with no round clock to measure, and this state never guesses one."""
+    expect = expect_minutes(sess)
+    if expect <= 0:
+        return False, 0.0, 0.0
+    try:
+        started = os.path.getmtime(sess.epoch)
+    except OSError:
+        return False, 0.0, expect
+    used = max(0.0, (time.time() - started) / 60.0)
+    return used > expect * OVER_BUDGET_FACTOR, used, expect
+
+
+def _frame_stamp(frame: dict) -> str:
+    """HH:MM:SS from the frame's OWN timestamp, else `--:--:--`. Only codex's app-server stamps
+    its frames (`emittedAtMs`); this tail never invents a clock for an engine that does not,
+    because a fabricated one would be read as when the item ran."""
+    ms = frame.get("emittedAtMs")
+    if isinstance(ms, (int, float)) and not isinstance(ms, bool) and ms > 0:
+        try:
+            return time.strftime("%H:%M:%S", time.localtime(ms / 1000.0))
+        except (OSError, OverflowError, ValueError):
+            return "--:--:--"
+    return "--:--:--"
+
+
+def _tail_items(frame: dict) -> list[tuple[str, str]]:
+    """[(kind, text)] this frame contributes to the evidence tail, [] for a frame that names no
+    item. Shape-driven, not engine-keyed: the three vocabularies are DISJOINT wire shapes
+    (codex `method`+`params.item`, claude `type`+`message.content`, omp bare protocol frames),
+    so each frame selects its own reader and a per-engine table here would only be a second
+    place to forget one."""
+    method = frame.get("method")
+    if isinstance(method, str) and method.startswith("item/"):
+        item = (frame.get("params") or {}).get("item")
+        if not isinstance(item, dict):
+            return []
+        text = item.get("command") or item.get("text") or item.get("summary") or ""
+        return [(f"{method.split('/')[-1]}:{item.get('type') or 'item'}", str(text))]
+    ftype = frame.get("type")
+    if ftype in ("assistant", "user"):
+        rows = []
+        for item in (frame.get("message") or {}).get("content") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "tool_use":
+                argv = item.get("input")
+                cmd = argv.get("command") if isinstance(argv, dict) else None
+                rows.append(("tool_use", f"{item.get('name') or '?'} "
+                                         f"{cmd if isinstance(cmd, str) else ''}"))
+            elif item.get("type") == "tool_result":
+                rows.append(("tool_result", str(item.get("tool_use_id") or "")))
+        return rows
+    if isinstance(ftype, str) and ftype:
+        return [(ftype, str(frame.get("state") or frame.get("subtype") or ""))]
+    if isinstance(method, str) and method:
+        return [(method, "")]
+    return []
+
+
+def events_tail(sess: Session) -> str:
+    """The bounded evidence tail: at most TAIL_ROWS `<stamp> <kind> <text>` rows, oldest first,
+    the whole block under TAIL_BYTES with WHOLE rows dropped from the OLDEST end — half a
+    command line is evidence nobody can read, which is why clip_detail cuts line-wise too.
+
+    A stream with nothing countable in it yields ONE honest row saying so: silence here would
+    be read as "the engine emitted nothing", and an unreadable stream cannot claim that."""
+    frames, clean, _partial = complete_frames_integrity(sess)
+    rows: list[str] = []
+    for frame in reversed(frames):
+        if len(rows) >= TAIL_ROWS:
+            break
+        if not isinstance(frame, dict):
+            continue
+        stamp = _frame_stamp(frame)
+        for kind, text in reversed(_tail_items(frame)):
+            if len(rows) >= TAIL_ROWS:
+                break
+            flat = " ".join(str(text).split())[:TAIL_TEXT]
+            rows.append(f"  {stamp} {kind}{' ' + flat if flat else ''}")
+    rows.reverse()
+    if not rows:
+        rows = ["  (no engine item frame in this stream"
+                + ("" if clean else "; it carries an undecodable line") + ")"]
+    kept: list[str] = []
+    size = 0
+    for row in reversed(rows):          # the NEWEST rows win the byte budget
+        cost = len(row.encode("utf-8")) + 1
+        if size + cost > TAIL_BYTES:
+            break
+        kept.append(row)
+        size += cost
+    kept.reverse()
+    return "\n".join(kept)
+
+
+def over_budget_line(sess: Session, used: float, expect: float) -> str:
+    """The typed OVER-BUDGET verdict plus its bounded evidence tail. The WAIT is what ran out —
+    this line never claims the seat did nothing, which is STALLED-PROGRESS's job and has its
+    own three-source instrument."""
+    return (f"OVER-BUDGET: this round has been running {used:.1f}min against an expected "
+            f"{expect:g}min (budget {expect * OVER_BUDGET_FACTOR:g}min) and the engine is "
+            "still working — the WAIT is over budget, the work is not judged: read the tail, "
+            "then steer a concrete next step, interrupt the turn, or re-arm with a bigger "
+            "--expect. Reported once per attempt+round; a steer opens a new round and a new "
+            f"budget.\n{events_tail(sess)}")
+
+
 def classify(sess: Session) -> int:
     sess.require_meta()
     engine = sess.meta.get("engine", "")
@@ -2820,7 +2988,17 @@ def cmd_check_params(args: argparse.Namespace) -> int:
     newline injected keys past the gate (review R2 F3). Deliberately absent, with reasons:
     `engine` is a PROVIDERS key (a closed set this process owns), `review` is the literal `1`,
     and `max_rounds` is already digits-only by the time it gets here. `thread` and the
-    `steer -d` deliverable never pass through this verb at all — meta_update backstops those."""
+    `steer -d` deliverable never pass through this verb at all — meta_update backstops those.
+
+    `--expect` is judged here too, and by VALUE rather than by line shape: a budget nothing can
+    compare is not a softer budget (`float("inf")` parses happily and would make every round
+    in-budget forever), and the refusal has to land at the parameter surface where the operator
+    can still fix the number."""
+    if args.expect:
+        problem = expect_problem(args.expect)
+        if problem:
+            print(f"ERR: {args.gate} refused: {problem}", file=sys.stderr)
+            return 1
     for flag, value in (("--cwd", args.cwd), ("--deliverable", args.deliverable),
                         ("--model", args.model), ("--resume-thread", args.resume_thread),
                         ("--workflow", args.workflow)):
@@ -2841,6 +3019,26 @@ def cmd_check_params(args: argparse.Namespace) -> int:
               "physically (symlinks out of cwd refused); no existing ancestor = ambiguous, "
               "refused.", file=sys.stderr)
         return 1
+    return 0
+
+
+def cmd_set_expect(args: argparse.Namespace) -> int:
+    """`agentctl watch <s> --expect <minutes>` — move an EXISTING session's wait budget.
+
+    Its own verb, not a second meta writer: the value is judged by the same gate `start` uses
+    and then written through `meta_update`, the single write point that keeps the file's
+    one-key-per-line invariant. A waiter may raise the budget it is about to wait under
+    (re-arming after an OVER-BUDGET with a bigger number is the whole disposition), which is
+    why this is an override and not a start-only value."""
+    sess = Session(args.run_dir, args.session)
+    sess.require_meta()
+    problem = expect_problem(args.minutes)
+    if problem:
+        die(problem)
+    meta_update(sess, "expect_min", str(float(args.minutes)))
+    print(f"expect: {float(args.minutes):g}min per round for '{args.session}' — the waiter "
+          f"reports OVER-BUDGET past {float(args.minutes) * OVER_BUDGET_FACTOR:g}min, once "
+          "per attempt+round")
     return 0
 
 
@@ -3501,7 +3699,16 @@ def main() -> None:
     p_cp.add_argument("--model", default="")
     p_cp.add_argument("--resume-thread", default="", dest="resume_thread")
     p_cp.add_argument("--workflow", default="")
+    p_cp.add_argument("--expect", default="",
+                      help="the round's wait budget in minutes (`agentctl start --expect`); "
+                           "empty = no budget declared, which leaves the state off")
     p_cp.set_defaults(func=cmd_check_params)
+
+    p_exp = sub.add_parser("set-expect", help="move an existing session's wait budget "
+                                              "(agentctl watch --expect)")
+    p_exp.add_argument("session")
+    p_exp.add_argument("--minutes", required=True, help="wait budget for this round, minutes")
+    p_exp.set_defaults(func=cmd_set_expect)
 
     p_cap = sub.add_parser("capabilities", help="runtime-generated provider capability contract")
     p_cap.add_argument("--json", action="store_true", help="stable machine shape")

@@ -32,12 +32,12 @@ if _HERE not in sys.path:
 import duplexctl  # noqa: E402  (needs the path above)
 import identity  # noqa: E402  (needs the path above)
 from duplexctl import (  # noqa: E402  (needs the path above)
-    EXIT_DONE, EXIT_ENGINE_SILENT, EXIT_FAILED, EXIT_IDLE_NO_DELIVERABLE, EXIT_RUNNING,
-    EXIT_STALLED_EXTERNAL, EXIT_STALLED_PROGRESS, EXIT_STALLED_STREAM, EXIT_SUPERVISOR_LOST,
-    EXIT_WAITING_INPUT, EXIT_WATCH_TIMEOUT, PANE_GONE_WHY, PROVIDERS, SUB_REASON_CHANGED,
-    SUB_REASON_UNCHANGED, SUB_REASON_UNKNOWN, Session, arm_watchdog, classify, die,
-    escaped_descendants, progress_state, ps_identity_rows, status_timeout, sub_reason,
-    tmux_alive,
+    EXIT_DONE, EXIT_ENGINE_SILENT, EXIT_FAILED, EXIT_IDLE_NO_DELIVERABLE, EXIT_OVER_BUDGET,
+    EXIT_RUNNING, EXIT_STALLED_EXTERNAL, EXIT_STALLED_PROGRESS, EXIT_STALLED_STREAM,
+    EXIT_SUPERVISOR_LOST, EXIT_WAITING_INPUT, EXIT_WATCH_TIMEOUT, OVER_BUDGET_FACTOR,
+    PANE_GONE_WHY, PROVIDERS, SUB_REASON_CHANGED, SUB_REASON_UNCHANGED, SUB_REASON_UNKNOWN,
+    Session, arm_watchdog, classify, die, escaped_descendants, over_budget_line,
+    progress_state, ps_identity_rows, status_timeout, sub_reason, tmux_alive, wait_budget,
 )
 
 
@@ -63,7 +63,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
 # published vocabulary does not have
 SUPERVISOR_EXITS = {EXIT_DONE, EXIT_FAILED, EXIT_WAITING_INPUT, EXIT_STALLED_EXTERNAL,
                     EXIT_IDLE_NO_DELIVERABLE, EXIT_WATCH_TIMEOUT, EXIT_ENGINE_SILENT,
-                    EXIT_STALLED_STREAM, EXIT_STALLED_PROGRESS}
+                    EXIT_STALLED_STREAM, EXIT_STALLED_PROGRESS, EXIT_OVER_BUDGET}
 PROCEED_TO_ARM = 13                             # arm-mode only, never leaves the waiter
 # ── follow mode: the waiter's LIFETIME, never a verdict ──────────────────────────────
 # `agentctl watch` FOLLOWS its session by default. The waiter used to hand one round's verdict
@@ -726,7 +726,7 @@ def deliver_conclusion(run_dir: str, name: str, rc: int, armed_seq: int | None,
     Only a class this waiter actually read OFF the record is deliverable. 12 SUPERVISOR-LOST
     and 1 SESSION-GONE are verdicts about the ABSENCE of an adoptable record — rotating one
     away would delete evidence the waiter explicitly refused to trust."""
-    if rc not in (2, 4, 5, 6, 7, 8, 11):
+    if rc not in (2, 4, 5, 6, 7, 8, 11, EXIT_OVER_BUDGET):
         return
     marker = os.path.join(run_dir, f"{name}.terminal.json")
     if not os.path.isfile(marker):
@@ -764,6 +764,15 @@ def cmd_status(args: argparse.Namespace) -> int:
             print(pmsg)
         if prc != 0:
             rc = 2                              # not ours to publish: never report OK
+    # The wait budget, on the ONE surface an orchestrator polls by hand. Advisory exactly like
+    # the no-watcher line below it: the typed line and the exit code are untouched, because a
+    # one-shot read is not the round's conclusion and `status` publishes no non-DONE class.
+    if rc == EXIT_RUNNING:
+        over, used, expect = wait_budget(Session(run, name))
+        if over:
+            print(f"note: over budget by {used - expect:.1f}min (expect {expect:g}min) — the "
+                  f"WAIT is over budget past {expect * OVER_BUDGET_FACTOR:g}min, the work is "
+                  "not judged; an armed watcher reports OVER-BUDGET once for this round")
     # RUNNING with nobody watching is the field's most expensive omission. Advisory only: the
     # typed line and the exit code are untouched.
     if rc == 10 and not watcher_alive(run, name):
@@ -1056,6 +1065,55 @@ def _sense_conclude(args: argparse.Namespace, rnd: str, rc: int, msg: str) -> No
     print(f"=== [{name}] {msg} ===")
     _watch_exit(rc)
 
+def _expect_mark_path(run_dir: str, name: str) -> str:
+    return os.path.join(run_dir, f"{name}.duplex.expect-report")
+
+def _expect_mark_key(run_dir: str, name: str, rnd: str) -> str:
+    """(sessionId, attemptId, round) — the identity of ONE wait-budget report, or "" when the
+    active identity cannot be established (nothing to key a report to, and classify already
+    answers such a session with IDENTITY-UNKNOWN)."""
+    rec, status = identity.IdentityStore(run_dir, name).load()
+    if status != identity.STATUS_OK or rec is None:
+        return ""
+    return f"{rec.get('sessionId')}/{rec.get('attemptId')}/{rnd}"
+
+def _expect_reported(run_dir: str, name: str, key: str) -> bool:
+    try:
+        with open(_expect_mark_path(run_dir, name), encoding="utf-8", errors="replace") as fh:
+            return key in {line.strip() for line in fh}
+    except OSError:
+        return False
+
+def _expect_record(run_dir: str, name: str, key: str) -> bool:
+    """Append-only, like the idle-marks sidecar. False = the report was NOT recorded."""
+    try:
+        with open(_expect_mark_path(run_dir, name), "a", encoding="utf-8") as fh:
+            fh.write(key + "\n")
+    except OSError:
+        return False
+    return True
+
+def _report_over_budget(args: argparse.Namespace, rnd: str) -> None:
+    """Conclude OVER-BUDGET at THIS sampling point, or return and keep sensing.
+
+    ONE report per (sessionId, attemptId, round). The mark is written BEFORE the conclusion is
+    published, so re-attaching to the same round is not told twice: that waiter goes back to
+    waiting under the session's ordinary exits (a terminal class, or the poll budget running
+    out as WATCH-TIMEOUT). A plain steer opens a new round and `--interrupt` a new attempt —
+    either may report again, because the budget is per round and so is the estimate behind it.
+
+    A mark that cannot be persisted means NO report: a state that repeats every poll would
+    wake the orchestrator forever, and firing exactly once is this state's whole value."""
+    run, name = args.run_dir, args.session
+    sess = Session(run, name)
+    over, used, expect = wait_budget(sess)
+    if not over:
+        return
+    key = _expect_mark_key(run, name, rnd)
+    if not key or _expect_reported(run, name, key) or not _expect_record(run, name, key):
+        return
+    _sense_conclude(args, rnd, EXIT_OVER_BUDGET, over_budget_line(sess, used, expect))
+
 def cmd_sense_loop(args: argparse.Namespace) -> int:
     run, name = args.run_dir, args.session
     poll, maxp, silent_max = args.poll, args.max_polls, args.silent_polls
@@ -1109,6 +1167,10 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
                                 f"ENGINE-SILENT at {_clock()} — steer delivered but no engine "
                                 f"output ~2min; inspect {run}/{name}.duplex.stderr.log")
             idle = tmo = 0
+            # every sampling point is a budget check, and it is the LAST word of this branch:
+            # ENGINE-SILENT above is a stronger observation about the same round, and a
+            # session that declared no budget cannot reach past this line at all.
+            _report_over_budget(args, rnd)
         elif rc in (EXIT_DONE, EXIT_IDLE_NO_DELIVERABLE):
             # stability: require 2 consecutive terminal reads — a turn boundary right before
             # an auto-consumed queued message must not read as terminal.
@@ -1197,7 +1259,7 @@ def _read_stop_sample(sample: str, token: str) -> str | None:
 _STOP_KEPT = ("duplex.in", "duplex.meta", "duplex.round-started", "duplex.wlock",
               "duplex.prompt", "duplex.sent-offset", "duplex.write-intent",
               "duplex.watch.pid", "duplex.idle-marks", "duplex.progress",
-              "steer-log.jsonl")
+              "duplex.expect-report", "steer-log.jsonl")
 
 def _control_state_paths(run_dir: str, name: str) -> list[str]:
     paths = [os.path.join(run_dir, f"{name}.{suffix}") for suffix in _STOP_KEPT]

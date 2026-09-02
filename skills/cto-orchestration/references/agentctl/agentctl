@@ -2,10 +2,10 @@
 # agentctl — unified control surface for headless worker agents (duplex-lane era).
 #
 #   agentctl start  <omp|codex|claude> <session> <cwd> --goal F [--deliverable G]
-#                   [--no-preflight] [--review] [engine args...]
+#                   [--no-preflight] [--review] [--expect MINUTES] [engine args...]
 #   agentctl steer  <session> (-m TEXT | -f FILE) [--interrupt] [-d|--deliverable G]
 #   agentctl status <session>            # one-shot typed state (exit = verdict)
-#   agentctl watch  <session> [--inline]  # follow until an ACTION verdict; typed exits (below)
+#   agentctl watch  <session> [--inline] [--expect MINUTES]  # follow until an ACTION verdict
 #   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
 #   agentctl states [--json]             # runtime-generated typed state vocabulary
@@ -42,9 +42,9 @@ q() { printf %q "$1"; }
 ctl() { "$PY" "$CTL" --run-dir "$DIR" "$@"; }
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
-  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [engine args...]" >&2
+  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [--expect MINUTES] [engine args...]" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
-  echo "       agentctl status <session> | watch <session> [--inline] | stop <session> [cwd] | capabilities [--json] | states [--json]" >&2
+  echo "       agentctl status <session> | watch <session> [--inline] [--expect MINUTES] | stop <session> [cwd] | capabilities [--json] | states [--json]" >&2
   echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
   exit 1
 }
@@ -179,7 +179,7 @@ cmd_start() {
   # refusal below rather than a flag that quietly does nothing.
   case "$P_REST" in *"|"*) P_REVIEW_SANDBOX="${P_REST#*|}";; *) P_REVIEW_SANDBOX="";; esac
   case "$P_BIN_ENV" in ''|*[!A-Z0-9_]*) echo "ERR: provider spec for '$ENG' is malformed (bin env '$P_BIN_ENV')" >&2; exit 1;; esac
-  GOAL=""; DELIV=""; PREFLIGHT=1; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""; MODEL_TOKENS=0; REVIEW=""
+  GOAL=""; DELIV=""; PREFLIGHT=1; EXTRA=(); WORKFLOW=""; MAX_ROUNDS=""; MODEL=""; RESUME_THREAD=""; MODEL_TOKENS=0; REVIEW=""; EXPECT=""
   while [ "$#" -gt 0 ]; do case "$1" in
     --goal) GOAL="${2:?--goal needs a file}"; shift 2;;
     --deliverable) DELIV="${2:?--deliverable needs a glob}"; shift 2;;
@@ -190,6 +190,9 @@ cmd_start() {
     --max-rounds) MAX_ROUNDS="${2:?--max-rounds needs N}"; shift 2;;
     --resume-thread) RESUME_THREAD="${2:?--resume-thread needs an id}"; shift 2;;
     --review) REVIEW=1; shift;;
+    # the round's wait budget in minutes: the VALUE is judged by check-params below, exactly
+    # like every other value that reaches meta — this shell never decides what a number means
+    --expect) EXPECT="${2:?--expect needs minutes}"; shift 2;;
     --model) MODEL="${2:?--model needs an id}"; EXTRA[${#EXTRA[@]}]="$1"; EXTRA[${#EXTRA[@]}]="$2"; MODEL_TOKENS=$((MODEL_TOKENS+2)); shift 2;;
     # an empty value is not a model: without this the flag zeroes MODEL, meta gets no model=
     # line, the pinned-argv rule drops the token, and the operator is told nothing at all
@@ -249,7 +252,7 @@ cmd_start() {
   # let a symlinked or dot-laden cwd argument decide where the fence boundary is
   ctl check-params --gate start --cwd "$CWD" ${REVIEW:+--review} \
      --deliverable "$DELIV" --model "$MODEL" --resume-thread "$RESUME_THREAD" \
-     --workflow "$WORKFLOW" || exit 1
+     --workflow "$WORKFLOW" --expect "$EXPECT" || exit 1
   mkdir -p "$DIR"
 
   # collisions: refuse ANY prior lane state or live tmux session BEFORE branching to an engine
@@ -296,6 +299,7 @@ cmd_start() {
     [ -n "$MODEL" ] && printf 'model=%s\n' "$MODEL"
     [ -n "$RESUME_THREAD" ] && printf 'resume_thread=%s\n' "$RESUME_THREAD"
     [ -n "$REVIEW" ] && printf 'review=1\n'
+    [ -n "$EXPECT" ] && printf 'expect_min=%s\n' "$EXPECT"
     [ -n "$WORKFLOW" ] && printf 'workflow=%s\nmax_rounds=%s\n' "$WORKFLOW" "$MAX_ROUNDS"; } > "$DIR/$S.duplex.meta"
 
   # exec 3<> holds the fifo read-write so stdin NEVER sees EOF; rc goes out tmp+rename
@@ -485,14 +489,19 @@ sense_inline() { # $1 session — the in-process fallback loop (no supervisor, n
 }
 
 cmd_watch() {
-  S=""; MODE=supervised
+  S=""; MODE=supervised; EXPECT=""
   while [ "$#" -gt 0 ]; do case "$1" in
     --inline) MODE=inline; shift;;
+    --expect) EXPECT="${2:?--expect needs minutes}"; shift 2;;
     -*) echo "ERR: unknown watch option '$1'" >&2; usage;;
     *) [ -n "$S" ] && { echo "ERR: watch takes exactly one session" >&2; usage; }; S="$1"; shift;;
   esac; done
   [ -n "$S" ] || usage
   [ "$(lane_of "$S")" = duplex ] || { echo "ERR: unknown session '$S'" >&2; exit 1; }
+  # OVERRIDES the session's budget for every round from here on, before this waiter arms: the
+  # value is judged and written by duplexctl (the single meta writer), a refusal ends the watch
+  # rather than silently waiting under the old number.
+  [ -n "$EXPECT" ] && { ctl set-expect "$S" --minutes "$EXPECT" || exit 1; }
   WPID="$DIR/$S.duplex.watch.pid"
   trap 'rm -f "$WPID"' EXIT
   trap 'on_sig TERM 143' TERM; trap 'on_sig INT 130' INT

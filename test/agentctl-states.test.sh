@@ -35,7 +35,8 @@ ORACLE="0 DONE
 11 STALLED-STREAM
 12 SUPERVISOR-LOST
 14 STALLED-PROGRESS
-15 DELIVERED-NEXT-TURN"
+15 DELIVERED-NEXT-TURN
+19 OVER-BUDGET"
 
 echo "== S1: the human table publishes every state the orchestrator lane can report =="
 human="$(states)"
@@ -47,7 +48,7 @@ while read -r code name; do
   missing="$missing $code/$name"
 done <<< "$ORACLE"
 chk_eq "every expected state appears in the human table" \
-  "ALL-PUBLISHED 13" "$([ -n "$human" ] && [ -z "$missing" ] && echo "ALL-PUBLISHED 13" \
+  "ALL-PUBLISHED 14" "$([ -n "$human" ] && [ -z "$missing" ] && echo "ALL-PUBLISHED 14" \
                         || echo "MISSING${missing:-:empty-output}")"
 
 echo "== S2: --json parses and carries exactly the human table's rows =="
@@ -65,7 +66,7 @@ print("json=%d human=%d subjson=%d subhuman=%d"
       % (len(doc["states"]), len(states), len(doc["subReasons"]), len(subs)))
 ' "$AGENTCTL")"
 chk_eq "json entries == human rows, in BOTH vocabularies" \
-  "json=13 human=13 subjson=8 subhuman=8" "$counts"
+  "json=14 human=14 subjson=8 subhuman=8" "$counts"
 
 echo "== S3: only two spellings exist; anything else is refused =="
 bogus="$(states --bogus 2>&1)"; rc=$?
@@ -113,7 +114,7 @@ for path, tree in zip(paths, trees):
                 bad.append("bare-literal-verdict:%s:%d:%d" % (base, a.lineno, a.value))
 print(" ".join(bad) if bad else "CONSISTENT %d" % len(published))
 ' "$CTL" "$(dirname "$CTL")/watchctl.py")"
-chk_eq "no unpublished typed code and no bare-literal verdict" "CONSISTENT 13" "$violations"
+chk_eq "no unpublished typed code and no bare-literal verdict" "CONSISTENT 14" "$violations"
 
 # S4b — the SECOND production definition. duplexctl's table is the claimed single source, but
 # identity.py hand-maintains the terminal subset (it gates whether a typed result may be
@@ -133,7 +134,20 @@ bad += [f"name-disagrees:{c}:{tc[c]}!={pub[c]}" for c in sorted(tc)
         if c in pub and tc[c] not in pub[c].split("|")]
 print(" ".join(bad) if bad else "AGREES %d" % len(tc))
 ' "$(dirname "$CTL")/identity.py")"
-chk_eq "S4b identity.py terminal map agrees with the published vocabulary" "AGREES 9" "$id_drift"
+chk_eq "S4b identity.py terminal map agrees with the published vocabulary" "AGREES 10" "$id_drift"
+
+# The wait-budget state's own row: an exit an orchestrator cannot look up is an exit it has to
+# guess at, and 19 was picked precisely because the published set had a HOLE there while the
+# waiter's private continuation codes (16/17/18) did not.
+ob_state="$(states --json | python3 -c '
+import json, sys
+row = next((s for s in json.load(sys.stdin)["states"] if s["code"] == 19), None)
+print("MISSING" if row is None
+      else "%s %s" % (row["name"], "meaning" if row["meaning"].strip() else "EMPTY"))')"
+chk_eq "ob-states-json-has-code: 19 OVER-BUDGET is published with a meaning" \
+  "OVER-BUDGET meaning" "$ob_state"
+chk_contains "ob-states-json-has-code: and the human table prints the row" "OVER-BUDGET" \
+  "$(states)"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
 # S5..S8 — the SECOND published vocabulary: sub-reasons. Same contract, same threat: the words

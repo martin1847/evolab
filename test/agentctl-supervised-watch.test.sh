@@ -2210,4 +2210,184 @@ FLPY
 chk_eq "FL6 internal codes agree across languages and collide with no published exit" \
   "DISJOINT py=3 bash=2" "$fl_codes"
 
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+echo "== OB: the wait budget — --expect turns it on, and it fires ONCE per attempt+round =="
+# Field motive (2026-09-02): waiting had NO budget, so a pathological turn reads RUNNING
+# forever and only an operator ASKING ever notices — one review seat sat in `agentctl watch`
+# on its own deliverable for 2h03m, typed RUNNING / tools-active the whole way. `--expect
+# <minutes>` is the dispatcher's own estimate, 1.5x it is the report threshold, and the report
+# is ONE per attempt+round: a state that repeats every poll would wake the orchestrator
+# forever, and a state that never repeats after a steer would be a one-shot gauge.
+# The clock under test is the ROUND EPOCH file, which is what every other round fence in this
+# lane reads — so the fixtures backdate that file rather than sleeping through a real budget.
+sw_sandbox
+export AGENT_WATCH_MAX_POLLS=1000
+
+ob_age() { # $1 session  $2 minutes to backdate the round clock by
+  python3 -c 'import os, sys, time
+t = time.time() - float(sys.argv[2]) * 60
+os.utime(sys.argv[1], (t, t))' "$WATCH_RUN_DIR/$1.duplex.round-started" "$2"
+}
+ob_seed() { # $1 session  [$2 expect minutes ("" = none declared)]  [$3 round]
+  seed "$1" 70000; running "$1"
+  { printf 'engine=claude\ncwd=%s\nround=%s\npane_pid=70000\n' "$WT" "${3:-1}"
+    [ -n "${2:-}" ] && printf 'expect_min=%s\n' "$2"; } > "$WATCH_RUN_DIR/$1.duplex.meta"
+}
+# the published class, live record or the one this waiter already DELIVERED (rotated)
+ob_class() {
+  local f="$WATCH_RUN_DIR/$1.terminal.json"
+  [ -s "$f" ] || f="$WATCH_RUN_DIR/$1.terminal.consumed.json"
+  python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("class",""))' "$f" \
+    2>/dev/null
+}
+# one Bash tool frame carrying a real command string — claude's own vocabulary
+ob_tool() { # $1 session  $2 command text
+  ev "$1" "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"ob$RANDOM\",\"name\":\"Bash\",\"input\":{\"command\":\"$2\"}}]}}"
+}
+
+# ── ob-neg-no-expect-unchanged: a session that declared no budget does not change ─────────
+ob_seed obNONE ""
+ob_age obNONE 600                        # ten hours into the round: any budget would have fired
+out="$(AGENT_WATCH_MAX_POLLS=1 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obNONE 2>&1)"
+rc=$?
+chk_eq "ob-neg-no-expect-unchanged: ten hours in with no --expect is still WATCH-TIMEOUT" 7 "$rc"
+chk_not_contains "ob-neg-no-expect-unchanged: the word never appears" "OVER-BUDGET" "$out"
+st="$(bash "$AGENTCTL" status obNONE 2>&1)"; strc=$?
+chk_eq "ob-neg-no-expect-unchanged: status still RUNNING" 10 "$strc"
+chk_not_contains "ob-neg-no-expect-unchanged: and status prints no budget note" \
+  "over budget" "$st"
+
+# ── ob-pos-first-over-budget: the real supervised path, publish + waiter exit ─────────────
+ob_seed obFIRE 0.02                      # 1.2s expected ⇒ 1.8s budget, at a 1s poll
+out="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obFIRE 2>&1)"; rc=$?
+chk_eq "ob-pos-first-over-budget: the waiter exits on the typed code" 19 "$rc"
+chk_contains "ob-pos-first-over-budget: with the typed name" "OVER-BUDGET" "$out"
+chk_contains "ob-pos-first-over-budget: naming the budget it blew" "expected 0.02min" "$out"
+chk_contains "ob-pos-first-over-budget: and saying the WAIT is what ran out" \
+  "the work is not judged" "$out"
+chk_eq "ob-pos-first-over-budget: the SUPERVISOR published it as its own class" \
+  "OVER-BUDGET" "$(ob_class obFIRE)"
+st="$(bash "$AGENTCTL" status obFIRE 2>&1)"; strc=$?
+chk_eq "ob-pos-first-over-budget: status stays RUNNING — advisory only" 10 "$strc"
+chk_contains "ob-pos-first-over-budget: and carries the one-shot note" \
+  "note: over budget by" "$st"
+
+# ── ob-exit-not-private-code: 19 is free, and the SHELL really exits on it ────────────────
+# 16/17/18 are watcher-private continuation codes the driving shell CONSUMES: a typed state
+# minted on one of them would be swallowed by the follow loop instead of reaching the seat.
+chk_eq "ob-exit-not-private-code: the shell exited ON that code, never consumed it" \
+  "EXIT=19" "$(printf '%s\n' "$out" | tail -1)"
+chk_not_contains "ob-exit-not-private-code: no re-arm swallowed the verdict" \
+  "following: re-arm" "$out"
+ob_codes="$(python3 - "$AW_DIR" "$AGENTCTL" <<'OBPY'
+import ast, json, os, re, subprocess, sys
+
+d, cli = sys.argv[1], sys.argv[2]
+# the CLI is asked, never a copy of the table: what a consumer can enumerate is the contract
+published = {s["code"] for s in json.loads(
+    subprocess.run(["bash", cli, "states", "--json"], capture_output=True,
+                   text=True).stdout)["states"]}
+
+
+def ints(path, pred):                       # module-level `NAME = <int literal>`, nothing else
+    out = {}
+    for node in ast.parse(open(path, encoding="utf-8").read()).body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+            continue
+        val = node.value.value
+        if isinstance(val, bool) or not isinstance(val, int):
+            continue
+        for tgt in node.targets:
+            if isinstance(tgt, ast.Name) and pred(tgt.id):
+                out[tgt.id] = val
+    return out
+
+
+watchctl = os.path.join(d, "watchctl.py")
+private = ints(watchctl, lambda n: n.startswith("FOLLOW_") or n == "PROCEED_TO_ARM"
+               or n.startswith("ARM_"))
+private.update({"sh:" + m.group(1): int(m.group(2))
+                for m in re.finditer(r"(?m)^(FOLLOW_[A-Z_]+)=([0-9]+)\b",
+                                     open(os.path.join(d, "agentctl"),
+                                          encoding="utf-8").read())})
+code = ints(os.path.join(d, "duplexctl.py"), lambda n: n == "EXIT_OVER_BUDGET").get(
+    "EXIT_OVER_BUDGET")
+bad = []
+if code is None:
+    bad.append("EXIT_OVER_BUDGET-not-found")
+elif code not in published:
+    bad.append("code-not-published:%d" % code)
+else:
+    clash = sorted(n for n, v in private.items() if v == code)
+    if clash:
+        bad.append("collides-with-private:%s" % ",".join(clash))
+if not private:
+    bad.append("private-codes-not-found")
+print(" ".join(bad) if bad else "FREE %d" % code)
+OBPY
+)"
+chk_eq "ob-exit-not-private-code: published, and disjoint from every waiter-internal code" \
+  "FREE 19" "$ob_codes"
+
+# ── ob-neg-same-round-no-repeat: the same round is not reported twice ─────────────────────
+out2="$(AGENT_WATCH_MAX_POLLS=2 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obFIRE 2>&1)"
+rc2=$?
+chk_eq "ob-neg-same-round-no-repeat: a re-attached waiter falls back to the ordinary exit" \
+  7 "$rc2"
+chk_not_contains "ob-neg-same-round-no-repeat: no second OVER-BUDGET for that round" \
+  "OVER-BUDGET" "$out2"
+
+# ── ob-pos-new-round-after-steer: a steer opens a new round and a new budget ──────────────
+# The round rotation itself is `commit_round_state`'s (covered by the duplex suite); what is
+# under test here is that the REPORT KEY moves with it.
+printf 'engine=claude\ncwd=%s\nround=2\npane_pid=70000\nexpect_min=0.02\n' "$WT" \
+  > "$WATCH_RUN_DIR/obFIRE.duplex.meta"
+: > "$WATCH_RUN_DIR/obFIRE.duplex.round-started"
+out3="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obFIRE 2>&1)"; rc3=$?
+chk_eq "ob-pos-new-round-after-steer: the new round may report again" 19 "$rc3"
+chk_contains "ob-pos-new-round-after-steer: as the same typed class" "OVER-BUDGET" "$out3"
+
+# ── ob-pos-new-attempt-after-interrupt: a new attempt may report the SAME round again ─────
+python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity replace obFIRE >/dev/null 2>&1
+out4="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obFIRE 2>&1)"; rc4=$?
+chk_eq "ob-pos-new-attempt-after-interrupt: the new attempt reports round 2 again" 19 "$rc4"
+chk_eq "ob-pos-new-attempt-after-interrupt: three reports, three distinct keys" 3 \
+  "$(grep -c . "$WATCH_RUN_DIR/obFIRE.duplex.expect-report")"
+
+# ── ob-tail-bounded-600: the evidence tail is bounded by ROWS and by BYTES, line-wise ─────
+ob_seed obTAIL 0.02
+i=1
+while [ "$i" -le 20 ]; do ob_tool obTAIL "short-$i"; i=$((i + 1)); done
+out5="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obTAIL --inline 2>&1)"; rc5=$?
+chk_eq "ob-tail-bounded-600: the inline waiter reports the same typed code" 19 "$rc5"
+rows="$(printf '%s\n' "$out5" | grep '^  --:' | sed 's/ ===$//')"
+chk_eq "ob-tail-bounded-600: 20 item frames yield exactly the 8-row cap" 8 \
+  "$(printf '%s\n' "$rows" | grep -c .)"
+chk_eq "ob-tail-bounded-600: and the newest frame is the last row" 1 \
+  "$(printf '%s\n' "$rows" | tail -1 | grep -c 'short-20')"
+chk_eq "ob-tail-bounded-600: rows stay inside the byte bound" 1 \
+  "$([ "$(printf '%s\n' "$rows" | wc -c | tr -d ' ')" -le 600 ] && echo 1 || echo 0)"
+# the BYTE bound now bites: 8 rows of 60-char commands do not fit in 600, so WHOLE rows are
+# dropped from the oldest end and every surviving row still parses
+ob_seed obTAIL2 0.02
+i=1
+while [ "$i" -le 12 ]; do
+  ob_tool obTAIL2 "pytest -q tests/very/long/path/case-$i --maxfail=1 -k selector-$i"
+  i=$((i + 1))
+done
+out6="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obTAIL2 --inline 2>&1)"; rc6=$?
+chk_eq "ob-tail-bounded-600: (long rows) still the typed code" 19 "$rc6"
+rows6="$(printf '%s\n' "$out6" | grep '^  --:' | sed 's/ ===$//')"
+n6="$(printf '%s\n' "$rows6" | grep -c .)"
+chk_eq "ob-tail-bounded-600: the byte bound dropped whole rows (fewer than the 8-row cap)" 1 \
+  "$([ "$n6" -ge 1 ] && [ "$n6" -lt 8 ] && echo 1 || echo 0)"
+chk_eq "ob-tail-bounded-600: total still inside 600 bytes" 1 \
+  "$([ "$(printf '%s\n' "$rows6" | wc -c | tr -d ' ')" -le 600 ] && echo 1 || echo 0)"
+chk_eq "ob-tail-bounded-600: every surviving row is WHOLE (never cut mid-row)" 0 \
+  "$(printf '%s\n' "$rows6" | grep -cv '^  --:--:-- tool_use Bash pytest -q ')"
+chk_eq "ob-tail-bounded-600: and the newest row survived" 1 \
+  "$(printf '%s\n' "$rows6" | tail -1 | grep -c 'case-12')"
+unset AGENT_WATCH_MAX_POLLS
+sw_clean
 summary

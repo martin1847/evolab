@@ -83,7 +83,7 @@ UNKNOWN = "IDENTITY-UNKNOWN"
 # `10 RUNNING` is deliberately absent — it is not a terminal state and can never be published.
 TERMINAL_CLASSES = {0: "DONE", 2: "FAILED", 4: "WAITING-INPUT", 5: "STALLED-EXTERNAL",
                     6: "IDLE-NO-DELIVERABLE", 7: "WATCH-TIMEOUT", 8: "ENGINE-SILENT",
-                    11: "STALLED-STREAM", 14: "STALLED-PROGRESS"}
+                    11: "STALLED-STREAM", 14: "STALLED-PROGRESS", 19: "OVER-BUDGET"}
 # how much of classify's human line the record carries — bounded, diagnostics only
 DETAIL_MAX = 600
 # The bound is enforced LINE-WISE on the WHOLE field, never mid-line. classify's stdout is one
