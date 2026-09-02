@@ -117,6 +117,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 - **stop = 进程组收割**（tmux kill 只碰 pane leader，引擎子孙会被 PID 1 收养泄漏）：有界宽限后
   强杀并复核零残留（宽限由 `AGENTCTL_REAP_GRACE` 调）；防 pid 复用误杀，永不按名字/全局杀。
   终态后**立即 stop 是编排者纪律**，retro-check 第 6 检对"本仓终态未清会话"blocking FAIL 兜底。
+- **`agentctl phases [--since <N>h|RFC3339] [--repo <abs>] [--json]` = 相位账本读数**（只读；账本
+  `$RUN/phase-ledger-YYYYMMDD.jsonl` 由 start/steer/terminal/stop/watch-arm 五个提交点 append，stop 永不删）：出 batch_span / seat_wall（席位机时求和，并行时 > 墙钟）/ review_wall / idle_span / 逐 terminal 的 dispatch_latency（**不求和**）+ `coverage: ok|partial|unknown`——**只出数，不出裁决**，台账的 `wall=` / `avoidable=` 仍是你自己的判断。
 
 ## typed 状态：处置（词表由 `agentctl states` 自述）
 

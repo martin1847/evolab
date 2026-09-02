@@ -11,6 +11,7 @@ inside `main()` only, which is what keeps the import cycle a cycle on paper and 
 from __future__ import annotations
 
 import argparse
+import datetime
 import glob as globmod
 import json
 import math
@@ -1657,3 +1658,398 @@ def cmd_inventory(args: argparse.Namespace) -> int:
             print("\n".join(rows))
     return 0
 
+
+# ── phases: the read side of the phase ledger ────────────────────────────────────────
+# `agentctl phases` is the ONE reader of <run>/phase-ledger-*.jsonl, and it prints READINGS.
+# That word is the entire contract:
+#   * it emits numbers plus the coverage of the data behind them, and it emits no ruling.
+#     There is deliberately NO `wall≈` / `avoidable≈` line anywhere in this file: those two
+#     numbers are the orchestrator's judgement about a batch (which minutes were overhead,
+#     which rework was worth paying for), and a machine suggestion would be copied into the
+#     ledger as if a machine had decided it. The instrument gives the human a floor to argue
+#     from; it does not do the arguing.
+#   * it says what it could NOT see. A window with a missing shard reports coverage `unknown`,
+#     and the retro pane then prints n/a instead of numbers — a reading nobody can vouch for
+#     is worse than a blank, because it looks like a measurement.
+#   * the aggregation key is `session_id`, NEVER the CLI name. Names are reusable by design
+#     (identity.py's opening paragraph), so a restarted `d10phase-omp` is a SECOND seat with
+#     its own span; merging the two would understate the dispatch count and overstate one
+#     seat's wall in the same breath.
+#
+# KILL CRITERION for this reading face (slug `phase-readings`, settled by GATE-AUDIT like every
+# other gate here): four weeks with no retro consuming these numbers ⇒ drop the retro pane and
+# keep the ledger as forensics only. Separately: `dispatch_latency` never once cited in a retro
+# ⇒ that row comes out of the table. A number that is only ever printed is decoration.
+PHASE_SESSION_ROWS = 12         # human table bound — the whole block stays inside 30 lines
+PHASE_IDLE_TOP = 3              # idle segments named individually; the rest is in the total
+PHASE_LATENCY_TOP = 3
+
+
+def _phase_parse_ts(text: object) -> float | None:
+    """Epoch seconds for one ledger `ts`, or None when the field is not the ONE format the
+    writer emits. A row whose instant cannot be read is not placed on the timeline at all."""
+    if not isinstance(text, str) or not text:
+        return None
+    raw = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        stamp = datetime.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        return None
+    return stamp.timestamp()
+
+
+def _phase_since(spec: str, now: float) -> tuple[float, str]:
+    """(epoch, refusal). `<N>m|h|d` is relative to now; anything else must be RFC3339 WITH an
+    offset — a naive timestamp would be read in the host's timezone while every ledger row is
+    UTC, and that skew is invisible in the output, which is the worst place for it."""
+    text = spec.strip()
+    if not text:
+        return now - 86400.0, ""
+    rel = re.fullmatch(r"([0-9]+)([mhd])", text)
+    if rel:
+        unit = {"m": 60.0, "h": 3600.0, "d": 86400.0}[rel.group(2)]
+        return now - int(rel.group(1)) * unit, ""
+    stamp = _phase_parse_ts(text)
+    if stamp is None:
+        return 0.0, (f"--since '{spec}' is neither <N>m/<N>h/<N>d nor an RFC3339 instant "
+                     "carrying a UTC offset (2026-09-02T00:00:00+08:00, 2026-09-02T16:00:00Z)")
+    return stamp, ""
+
+
+def _phase_contains(repo: str, cwd: str) -> bool:
+    """Is `cwd` inside `repo` by PATH COMPONENT? `startswith` answers yes for
+    /Users/x/evolab-wt-d10clauses under /Users/x/evolab — a sibling worktree is a different
+    repo, and folding its seats into this batch's readings is exactly the quietly wrong number
+    this instrument exists to remove. `repo` arrives already realpath'd; `cwd` is resolved
+    here so a symlinked spelling on disk still lands inside."""
+    if not repo or not cwd:
+        return False
+    try:
+        return os.path.commonpath([os.path.realpath(cwd), repo]) == repo
+    except ValueError:      # different drives, or one path relative: no containment to judge
+        return False
+
+
+def _phase_load(run_dir: str) -> tuple[list[dict], int, set[str]]:
+    """(rows in APPEND order, skipped, shard days present).
+
+    Append order — shard day ascending, then line order — is the CAUSAL order, and it is the
+    order the durations and the dispatch scan use. Sorting by `ts` would erase the one thing a
+    regressed clock leaves behind: a row that arrived after another while claiming to be
+    earlier. A line that is not decodable JSON, not an object, carries an event outside the
+    closed set, has no readable `ts` or no `session_id` is COUNTED and dropped: the count is
+    the honest signal, and guessing at a broken row would put invented time in a total."""
+    rows: list[dict] = []
+    skipped = 0
+    days: set[str] = set()
+    for day, path in identity.phase_shards(run_dir):
+        days.add(day)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        for raw in lines:
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+            except ValueError:
+                skipped += 1
+                continue
+            if not isinstance(row, dict):
+                skipped += 1
+                continue
+            stamp = _phase_parse_ts(row.get("ts"))
+            sid = row.get("session_id")
+            if (stamp is None or row.get("event") not in identity.PHASE_EVENTS
+                    or not isinstance(sid, str) or not sid):
+                skipped += 1
+                continue
+            row["_t"] = stamp
+            rows.append(row)
+    return rows, skipped, days
+
+
+def _phase_needed_days(since: float, now: float) -> list[str]:
+    """Every UTC day the window touches, oldest first. A day in this list with no shard on
+    disk is a HOLE, and a hole cannot be told apart from "no seat ran that day" — which is why
+    it reads `unknown` rather than a smaller number."""
+    days: list[str] = []
+    cursor = since
+    while cursor <= now:
+        day = identity.phase_shard_day(cursor)
+        if day not in days:
+            days.append(day)
+        cursor += 86400.0
+    tail = identity.phase_shard_day(now)
+    if tail not in days:
+        days.append(tail)
+    return days
+
+
+def _phase_round_of(row: dict) -> int:
+    """The highest round number this row states, 0 when it states none. `round_after` (steer)
+    and `round` (terminal) are the two spellings, and a terminal record's round arrives as a
+    STRING because that is what the session meta holds."""
+    best = 0
+    for field in ("round_after", "round"):
+        value = row.get(field)
+        if isinstance(value, str) and value.isdigit():
+            value = int(value)
+        if isinstance(value, int) and not isinstance(value, bool) and value > best:
+            best = value
+    return best
+
+
+def _phase_report(run_dir: str, since: float, now: float, repo: str) -> dict:
+    """The whole reading, as data. Every judgement in here is about the DATA (is it covered, is
+    a duration measurable) and never about the work the data describes."""
+    rows, skipped, days_present = _phase_load(run_dir)
+    needed = _phase_needed_days(since, now)
+    missing = [day for day in needed if day not in days_present]
+
+    # Each session's start row, found across ALL shards: a seat that opened before the window
+    # still owns the engine/cwd/review facts, and `--repo` cannot judge a seat whose cwd it
+    # never saw. This is the "跨分片向前找 start" half of the window semantics.
+    starts: dict[str, dict] = {}
+    for row in rows:
+        if row["event"] == "start":
+            starts.setdefault(row["session_id"], row)
+
+    def in_repo(sid: str) -> bool:
+        if not repo:
+            return True
+        start = starts.get(sid)
+        return start is not None and _phase_contains(repo, str(start.get("cwd") or ""))
+
+    window = [row for row in rows if row["_t"] >= since and in_repo(row["session_id"])]
+    clock_regressed = 0
+
+    order: list[str] = []
+    grouped: dict[str, list[dict]] = {}
+    for row in window:
+        seq = grouped.get(row["session_id"])
+        if seq is None:
+            seq = grouped[row["session_id"]] = []
+            order.append(row["session_id"])
+        seq.append(row)
+
+    sessions: list[dict] = []
+    unattributed = 0
+    for sid in order:
+        seq = grouped[sid]
+        start = starts.get(sid)
+        start_t = start["_t"] if start is not None else None
+        if start is None:
+            unattributed += 1
+        # WINDOW INTERSECTION: a seat that opened before `--since` contributes only the part of
+        # itself this window can see, and flags it. An unclipped span would report time the
+        # reading never measured, in a total the retro is about to argue from.
+        begin = max(start_t, since) if start_t is not None else max(seq[0]["_t"], since)
+        last = seq[-1]
+        # THE STATE TRANSITION TABLE, and both halves of the terminal→steer case:
+        #   start            → open (round 1)
+        #   steer            → open (round_after); an --interrupt steer carries a new attempt
+        #   terminal         → closed for THAT round; the row stays in `terminals` forever
+        #   terminal → steer → open again on the next round, WITH the earlier terminal kept
+        #   stop             → stopped, final
+        # `state` therefore reads off the LAST event only, while `terminals` is the full
+        # history: a seat that concluded round 1 and is now working round 2 is honestly both.
+        state = ("stopped" if last["event"] == "stop"
+                 else "closed" if last["event"] == "terminal" else "open")
+        end = last["_t"] if state in ("stopped", "closed") else now
+        duration: float | None = end - begin
+        if end < begin:
+            # a regressed clock, NOT a zero-length seat: clamping to 0 would publish a
+            # measurement of "no time passed" that nobody actually made
+            clock_regressed += 1
+            duration = None
+        terminals = [{"ts": row["ts"], "round": str(row.get("round") or ""),
+                      "class": str(row.get("class") or ""), "rc": row.get("rc")}
+                     for row in seq if row["event"] == "terminal"]
+        rounds = max([_phase_round_of(row) for row in seq] + [1 if start is not None else 0])
+        sessions.append({
+            "session_id": sid,
+            "name": str(seq[0].get("name") or ""),
+            "engine": str((start or {}).get("engine") or ""),
+            "cwd": str((start or {}).get("cwd") or ""),
+            "review": 1 if (start or {}).get("review") == 1 else 0,
+            "start": start["ts"] if start is not None else None,
+            "truncated_start": 0 if (start_t is not None and start_t >= since) else 1,
+            "rounds": rounds,
+            "terminals": terminals,
+            "last_event": last["event"],
+            "last_ts": last["ts"],
+            "state": state,
+            "open_round": rounds if state == "open" else None,
+            "duration_s": duration,
+            "_begin": begin,
+            "_end": end,
+        })
+
+    frame_start = min((row["_t"] for row in window), default=0.0)
+    frame_end = max((row["_t"] for row in window), default=0.0)
+    batch_span = frame_end - frame_start if window else 0.0
+    seat_wall = sum(s["duration_s"] for s in sessions if s["duration_s"] is not None)
+    review_wall = sum(s["duration_s"] for s in sessions
+                      if s["review"] == 1 and s["duration_s"] is not None)
+
+    # idle_span — sweep-line over the UNION of seat intervals, complement taken inside the
+    # observed frame only. Outside the frame there is no evidence of idleness, just no data,
+    # and the two must not print as the same number. KNOWN BOUNDARY: a seat whose duration was
+    # excluded as clock-regressed leaves its interval out of the union, so its time reads as
+    # idle — `clock_regressed` is printed beside the total for exactly that reason.
+    merged: list[list[float]] = []
+    for lo, hi in sorted((s["_begin"], min(s["_end"], frame_end)) for s in sessions
+                         if s["duration_s"] is not None):
+        lo, hi = max(lo, frame_start), min(hi, frame_end)
+        if hi <= lo:
+            continue
+        if merged and lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    gaps: list[tuple[float, float]] = []
+    cursor = frame_start
+    for lo, hi in merged:
+        if lo > cursor:
+            gaps.append((cursor, lo))
+        cursor = max(cursor, hi)
+    if frame_end > cursor:
+        gaps.append((cursor, frame_end))
+    idle_top = [{"from": identity.phase_stamp(lo), "to": identity.phase_stamp(hi),
+                 "seconds": hi - lo}
+                for lo, hi in sorted(gaps, key=lambda g: g[1] - g[0], reverse=True)]
+
+    # dispatch_latency — per terminal, and NEVER summed. Each row is "this seat reached a
+    # terminal state; the next dispatch inside the same repo went out N minutes later". A sum
+    # would be meaningless across overlapping seats and would read as one accumulated delay,
+    # so only the list and its maximum are published.
+    latency: list[dict] = []
+    pending = 0
+    for index, row in enumerate(window):
+        if row["event"] != "terminal":
+            continue
+        nxt = next((later for later in window[index + 1:]
+                    if later["event"] in ("start", "steer")), None)
+        if nxt is None:
+            pending += 1
+            continue
+        gap = nxt["_t"] - row["_t"]
+        if gap < 0:
+            clock_regressed += 1
+            continue
+        latency.append({"terminal_ts": row["ts"], "session_id": row["session_id"],
+                        "name": str(row.get("name") or ""),
+                        "class": str(row.get("class") or ""),
+                        "next_ts": nxt["ts"], "next_event": nxt["event"],
+                        "next_name": str(nxt.get("name") or ""), "seconds": gap})
+
+    if missing:
+        coverage = "unknown"
+    elif unattributed or any(s["truncated_start"] for s in sessions):
+        coverage = "partial"
+    else:
+        coverage = "ok"
+
+    for s in sessions:
+        del s["_begin"], s["_end"]
+    return {
+        "since": identity.phase_stamp(since),
+        "now": identity.phase_stamp(now),
+        "repo": repo or None,
+        "coverage": coverage,
+        "shards_present": sorted(days_present),
+        "shards_needed": needed,
+        "shards_missing": missing,
+        "first_event": identity.phase_stamp(frame_start) if window else None,
+        "last_event": identity.phase_stamp(frame_end) if window else None,
+        "events": len(window),
+        "skipped": skipped,
+        "clock_regressed": clock_regressed,
+        "readings": {
+            "batch_span_s": batch_span,
+            "seat_wall_s": seat_wall,
+            "review_wall_s": review_wall,
+            "idle_span_s": sum(item["seconds"] for item in idle_top),
+            "idle_top": idle_top[:PHASE_IDLE_TOP],
+            "idle_segments": len(idle_top),
+            "dispatch_latency": latency,
+            "dispatch_latency_max_s": max((hop["seconds"] for hop in latency), default=None),
+            "dispatch_pending": pending,
+        },
+        "sessions": sessions,
+        "note": ("readings only — no verdict is derived here; wall/avoidable stay the "
+                 "orchestrator's judgement"),
+    }
+
+
+def _phase_mins(seconds: object) -> str:
+    return "n/a" if not isinstance(seconds, (int, float)) else f"{seconds / 60:.1f}m"
+
+
+def _phase_print(report: dict, run_dir: str) -> None:
+    """The bounded human face: ≤30 lines, and every line is a number or the provenance of
+    one."""
+    read = report["readings"]
+    shards = ",".join(report["shards_present"]) or "-"
+    print("== agentctl phases — READINGS ONLY, no verdict is derived here ==")
+    print(f"ledger  : {run_dir}/{identity.PHASE_LEDGER_PREFIX}*{identity.PHASE_LEDGER_SUFFIX}"
+          f"  since={report['since']}  now={report['now']}"
+          + (f"  repo={report['repo']}" if report["repo"] else ""))
+    print(f"coverage: {report['coverage']}  shards_present={shards}  "
+          f"shards_missing={','.join(report['shards_missing']) or '-'}")
+    print(f"          events={report['events']}  first={report['first_event'] or '-'}  "
+          f"last={report['last_event'] or '-'}  skipped={report['skipped']}  "
+          f"clock_regressed={report['clock_regressed']}")
+    print(f"batch_span       {_phase_mins(read['batch_span_s'])}  (first → last event of the "
+          "window)")
+    print(f"seat_wall        {_phase_mins(read['seat_wall_s'])}  (SUM of per-seat spans = seat "
+          "machine-time; above batch_span means seats overlapped — NOT wall clock)")
+    print(f"review_wall      {_phase_mins(read['review_wall_s'])}  (the review seats' share of "
+          "seat_wall)")
+    idle = "; ".join(f"{_phase_mins(gap['seconds'])} @{gap['from']}"
+                     for gap in read["idle_top"]) or "-"
+    print(f"idle_span        {_phase_mins(read['idle_span_s'])} over "
+          f"{read['idle_segments']} gap(s) with no seat open; top: {idle}")
+    print(f"dispatch_latency max {_phase_mins(read['dispatch_latency_max_s'])} — "
+          f"{len(read['dispatch_latency'])} measured, {read['dispatch_pending']} with no next "
+          "dispatch yet; PER TERMINAL, never summed")
+    for hop in read["dispatch_latency"][:PHASE_LATENCY_TOP]:
+        print(f"  {hop['terminal_ts']} {hop['name']} {hop['class']} → "
+              f"+{_phase_mins(hop['seconds'])} {hop['next_event']} {hop['next_name']}")
+    print("-- seats (key = session_id; a restarted NAME is a new seat) --")
+    for seat in report["sessions"][:PHASE_SESSION_ROWS]:
+        print(f"  {seat['name'][:24]:<24} {seat['state']:<7} r{seat['rounds']:<3}"
+              f"{_phase_mins(seat['duration_s']):>8}"
+              f"{'~' if seat['truncated_start'] else ' '} {seat['engine'][:6]:<6} "
+              f"{'review' if seat['review'] else '-':<6} "
+              f"{','.join(t['class'] for t in seat['terminals']) or '-'}")
+    if len(report["sessions"]) > PHASE_SESSION_ROWS:
+        print(f"  … {len(report['sessions']) - PHASE_SESSION_ROWS} more seat(s) — --json for all")
+    print("(~ = the seat opened before the window; its span is the intersection only)")
+
+
+def cmd_phases(args: argparse.Namespace) -> int:
+    """`agentctl phases` — the entire read side. rc 0 whenever the arguments are legal: an
+    empty ledger is a legitimate reading (no events, coverage unknown), never a failure. The
+    only nonzero exit is a parameter-surface refusal, decided before a byte is read."""
+    now = time.time()
+    since, refusal = _phase_since(args.since, now)
+    if refusal:
+        die(refusal)
+    repo = ""
+    if args.repo:
+        if not os.path.isabs(args.repo):
+            die(f"--repo needs an absolute path (got {args.repo!r}) — containment is judged "
+                "against a resolved root, and a relative spelling has none")
+        repo = os.path.realpath(args.repo)
+    report = _phase_report(args.run_dir, since, now, repo)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+    else:
+        _phase_print(report, args.run_dir)
+    return 0

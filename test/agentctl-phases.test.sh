@@ -270,4 +270,416 @@ else
   echo "  [skip] running as root — an unwritable shard cannot be built"
 fi
 
+# ── §B the read side, on seeded shards with exact numbers ────────────────────────────
+echo "== B: read side — readings, coverage, and the numbers that are NOT summed =="
+sandbox_new
+SEED="$SANDBOX/seed.py"
+cat > "$SEED" <<'PY'
+"""Seed one ledger fixture. Every base instant is a WHOLE second, so `phase_stamp`'s
+millisecond field round-trips exactly and the report's numbers are exact integers."""
+import json
+import os
+import sys
+import time
+
+run, case = sys.argv[1], sys.argv[2]
+rest = sys.argv[3:]
+NOW = time.time()
+BASE = float(int(NOW))
+ROWS = []
+
+
+def stamp(when):
+    whole, millis = int(when), int(round((when - int(when)) * 1000))
+    if millis >= 1000:
+        whole, millis = whole + 1, 0
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(whole)) + ".%03dZ" % millis
+
+
+def day(when):
+    return time.strftime("%Y%m%d", time.gmtime(when))
+
+
+def ev(when, event, name, sid, attempt="at1", ts=None, **extra):
+    row = {"ts": stamp(when if ts is None else ts), "event": event, "name": name,
+           "session_id": sid, "attempt": attempt}
+    row.update(extra)
+    ROWS.append((when, row))
+
+
+def flush(pad=2, raw=()):
+    """One shard per UTC day, plus EMPTY shards for the padding days before the first row: a
+    real run dir accumulates a shard per day the lane ran, and a window reaching back past the
+    ledger's first day is the `unknown` case, tested on its own below."""
+    days = {}
+    for when, row in ROWS:
+        days.setdefault(day(when), []).append(json.dumps(row))
+    for extra_day, line in raw:
+        days.setdefault(extra_day, []).append(line)
+    first = min([when for when, _ in ROWS], default=NOW)
+    cursor = first - pad * 86400.0
+    while cursor <= NOW + 1:
+        days.setdefault(day(cursor), [])
+        cursor += 86400.0
+    days.setdefault(day(NOW), [])
+    for name, lines in days.items():
+        with open(os.path.join(run, "phase-ledger-%s.jsonl" % name), "w",
+                  encoding="utf-8") as fh:
+            for line in lines:
+                fh.write(line + "\n")
+
+
+def out(**fields):
+    for key, value in fields.items():
+        print("%s=%s" % (key, value))
+
+
+T = BASE - 3600.0
+REPO = rest[0] if rest else "/nonexistent"
+
+if case == "restart":
+    # the SAME cli name, twice: two seats, and merging them would understate the dispatch
+    # count and overstate one seat's wall in one stroke
+    ev(T, "start", "seatA", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(T + 600, "terminal", "seatA", "s1", round="1", rc=0, **{"class": "DONE"})
+    ev(T + 700, "stop", "seatA", "s1", reason="stopped", lane=1)
+    ev(T + 800, "start", "seatA", "s2", attempt="at2", cwd=REPO, engine="omp", review=0,
+       launcher_ppid=1)
+    ev(T + 1400, "stop", "seatA", "s2", attempt="at2", reason="stopped", lane=1)
+    flush()
+    out(SINCE=stamp(T))
+elif case == "reopen":
+    ev(T, "start", "seatB", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(T + 300, "terminal", "seatB", "s1", round="1", rc=0, **{"class": "DONE"})
+    ev(T + 400, "steer", "seatB", "s1", round_after=2, interrupt=0)
+    flush()
+    out(SINCE=stamp(T))
+elif case == "reopen-interrupt":
+    ev(T, "start", "seatB", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(T + 300, "terminal", "seatB", "s1", round="1", rc=0, **{"class": "DONE"})
+    ev(T + 400, "steer", "seatB", "s1", attempt="at2", round_after=2, interrupt=1)
+    flush()
+    out(SINCE=stamp(T))
+elif case == "stop-first":
+    ev(T, "start", "seatS", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(T + 500, "stop", "seatS", "s1", reason="stopped", lane=1)
+    flush()
+    out(SINCE=stamp(T))
+elif case == "two-terminals":
+    ev(T, "start", "seatI", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(T, "start", "seatR", "s2", attempt="at2", cwd=REPO, engine="codex", review=1,
+       launcher_ppid=1)
+    ev(T + 300, "terminal", "seatI", "s1", round="1", rc=0, **{"class": "DONE"})
+    ev(T + 400, "terminal", "seatR", "s2", attempt="at2", round="1", rc=0, **{"class": "DONE"})
+    ev(T + 900, "start", "seatN", "s3", attempt="at3", cwd=REPO, engine="omp", review=0,
+       launcher_ppid=1)
+    ev(T + 1000, "stop", "seatN", "s3", attempt="at3", reason="stopped", lane=1)
+    flush()
+    out(SINCE=stamp(T))
+elif case == "review-while-open":
+    ev(T, "start", "seatI", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(T + 100, "start", "seatR", "s2", attempt="at2", cwd=REPO, engine="codex", review=1,
+       launcher_ppid=1)
+    ev(T + 400, "terminal", "seatR", "s2", attempt="at2", round="1", rc=0, **{"class": "DONE"})
+    ev(T + 500, "stop", "seatR", "s2", attempt="at2", reason="stopped", lane=1)
+    flush()
+    out(SINCE=stamp(T))
+elif case == "midnight":
+    early = BASE - 26 * 3600.0
+    ev(early, "start", "seatM", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(early + 3600, "terminal", "seatM", "s1", round="1", rc=0, **{"class": "DONE"})
+    ev(BASE - 60, "stop", "seatM", "s1", reason="stopped", lane=1)
+    flush()
+    out(SINCE="30h", DAY_START=day(early), DAY_STOP=day(BASE - 60),
+        SPAN=int(26 * 3600 - 60))
+elif case == "boundary":
+    ev(BASE - 7200, "start", "seatOld", "sOld", cwd=REPO, engine="omp", review=0,
+       launcher_ppid=1)
+    ev(BASE - 7100, "stop", "seatOld", "sOld", reason="stopped", lane=1)
+    ev(BASE - 3600, "start", "seatAt", "sAt", attempt="at2", cwd=REPO, engine="omp", review=0,
+       launcher_ppid=1)
+    # this seat OUTLIVES the narrow window's start, which is what makes it the intersection
+    # case below: opened before `--since`, still on the clock inside it
+    ev(BASE - 2500, "stop", "seatAt", "sAt", attempt="at2", reason="stopped", lane=1)
+    ev(BASE - 1800, "start", "seatNew", "sNew", attempt="at3", cwd=REPO, engine="omp",
+       review=0, launcher_ppid=1)
+    ev(BASE - 1700, "stop", "seatNew", "sNew", attempt="at3", reason="stopped", lane=1)
+    flush()
+    out(SINCE=stamp(BASE - 3600), WIDE=stamp(BASE - 7200), INSIDE=stamp(BASE - 3000))
+elif case == "clock":
+    ev(BASE - 3600, "start", "seatC", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    # the stop ARRIVED after the start and CLAIMS to precede it: a regressed clock, and the
+    # only place that fact survives is the mismatch between append order and `ts`
+    ev(BASE - 3000, "stop", "seatC", "s1", ts=BASE - 3700, reason="stopped", lane=1)
+    ev(BASE - 2000, "start", "seatOk", "s2", attempt="at2", cwd=REPO, engine="omp", review=0,
+       launcher_ppid=1)
+    ev(BASE - 1700, "stop", "seatOk", "s2", attempt="at2", reason="stopped", lane=1)
+    flush()
+    out(SINCE=stamp(BASE - 4000))
+elif case == "repo":
+    inside, sibling, link = rest[0], rest[1], rest[2]
+    ev(T, "start", "seatIn", "s1", cwd=inside, engine="omp", review=0, launcher_ppid=1)
+    ev(T + 100, "stop", "seatIn", "s1", reason="stopped", lane=1)
+    ev(T + 200, "start", "seatSib", "s2", attempt="at2", cwd=sibling, engine="omp", review=0,
+       launcher_ppid=1)
+    ev(T + 300, "stop", "seatSib", "s2", attempt="at2", reason="stopped", lane=1)
+    ev(T + 400, "start", "seatLink", "s3", attempt="at3", cwd=link, engine="omp", review=0,
+       launcher_ppid=1)
+    ev(T + 500, "stop", "seatLink", "s3", attempt="at3", reason="stopped", lane=1)
+    flush()
+    out(SINCE=stamp(T))
+elif case == "corrupt":
+    ev(T, "start", "seatV", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(T + 100, "stop", "seatV", "s1", reason="stopped", lane=1)
+    bad = [
+        "this is not json at all",
+        json.dumps(["a", "list", "is", "legal", "json"]),
+        json.dumps({"ts": stamp(T + 50), "event": "teleport", "name": "x",
+                    "session_id": "z"}),
+        json.dumps({"ts": "not-a-timestamp", "event": "start", "name": "x",
+                    "session_id": "z"}),
+        json.dumps({"ts": stamp(T + 60), "event": "start", "name": "x"}),
+    ]
+    flush(raw=[(day(T), line) for line in bad])
+    out(SINCE=stamp(T), BAD=len(bad))
+elif case == "empty":
+    out(SINCE=stamp(BASE - 3600))
+elif case == "stale":
+    early = BASE - 3 * 86400.0
+    ev(early, "start", "seatZ", "s1", cwd=REPO, engine="omp", review=0, launcher_ppid=1)
+    ev(early + 600, "stop", "seatZ", "s1", reason="stopped", lane=1)
+    # ONLY the old shard: the window's own days were never written, which is exactly the
+    # "old shards exist, today's is missing" shape
+    with open(os.path.join(run, "phase-ledger-%s.jsonl" % day(early)), "w",
+              encoding="utf-8") as fh:
+        for _when, row in ROWS:
+            fh.write(json.dumps(row) + "\n")
+    out(SINCE="5d")
+else:
+    raise SystemExit("unknown fixture case %r" % case)
+PY
+
+ph_case() { # $1 case, rest = seeder args -> fresh run dir + eval'd anchors
+  export AGENT_WATCH_DIR="$SANDBOX/runs/$1"
+  rm -rf "$AGENT_WATCH_DIR"; mkdir -p "$AGENT_WATCH_DIR"
+  eval "$(python3 "$SEED" "$AGENT_WATCH_DIR" "$@")"
+}
+
+# B1 — a restarted NAME is a second seat
+ph_case restart /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"; rc=$?
+chk_eq "B1 restart rc0" 0 "$rc"
+chk_eq "B1 the same name twice is TWO seats" 2 "$(printf '%s' "$out" | seat_count)"
+chk_eq "B1 both seats keep the shared cli name" "seatA seatA" \
+  "$(printf '%s' "$out" | seats)"
+chk_eq "B1 and are keyed apart by session_id" "s1 s2" \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; print(" ".join(s["session_id"] for s in json.load(sys.stdin)["sessions"]))')"
+chk_eq "B1 seat_wall is the SUM of the two spans" "1300.0" \
+  "$(printf '%s' "$out" | jget readings.seat_wall_s)"
+chk_eq "B1 batch_span is first→last event, not the sum" "1400.0" \
+  "$(printf '%s' "$out" | jget readings.batch_span_s)"
+chk_eq "B1 idle_span is the gap between the two seats" "100.0" \
+  "$(printf '%s' "$out" | jget readings.idle_span_s)"
+chk_eq "B1 dispatch_latency measures terminal → next dispatch" "200.0" \
+  "$(printf '%s' "$out" | jget readings.dispatch_latency.0.seconds)"
+chk_eq "B1 coverage is ok when every window day has a shard" "ok" \
+  "$(printf '%s' "$out" | jget coverage)"
+
+# B2 — terminal then a plain steer: the round reopens AND the terminal is kept
+ph_case reopen /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B2 a steer after a terminal reopens the seat" "open" \
+  "$(printf '%s' "$out" | jget sessions.0.state)"
+chk_eq "B2 on the round the steer opened" "2" "$(printf '%s' "$out" | jget sessions.0.open_round)"
+chk_eq "B2 and the concluded round's terminal is still on the record" "DONE" \
+  "$(printf '%s' "$out" | jget sessions.0.terminals.0.class)"
+chk_eq "B2 exactly one terminal, not one per round" 1 \
+  "$(printf '%s' "$out" | terminal_count 0)"
+
+# B3 — terminal then --interrupt: a new attempt is not a new seat
+ph_case reopen-interrupt /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B3 an --interrupt after a terminal does not split the seat" 1 \
+  "$(printf '%s' "$out" | seat_count)"
+chk_eq "B3 the seat is open again on round 2" "open" \
+  "$(printf '%s' "$out" | jget sessions.0.state)"
+chk_eq "B3 and the earlier conclusion survives the new attempt" 1 \
+  "$(printf '%s' "$out" | terminal_count 0)"
+
+# B4 — stopped without ever concluding
+ph_case stop-first /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B4 a seat stopped before any conclusion reads stopped" "stopped" \
+  "$(printf '%s' "$out" | jget sessions.0.state)"
+chk_eq "B4 with no terminal invented for it" 0 \
+  "$(printf '%s' "$out" | terminal_count 0)"
+chk_eq "B4 and its span is start→stop" "500.0" "$(printf '%s' "$out" | jget sessions.0.duration_s)"
+
+# B5 — two terminals waiting on ONE next dispatch: listed per terminal, never summed
+ph_case two-terminals /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B5 both terminals get their own latency row" 2 \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["readings"]["dispatch_latency"]))')"
+chk_eq "B5 each measured to the SAME next dispatch, not to each other" "600.0 500.0" \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; print(" ".join(str(h["seconds"]) for h in json.load(sys.stdin)["readings"]["dispatch_latency"]))')"
+chk_eq "B5 only the maximum is published — no sum exists to misread" "600.0" \
+  "$(printf '%s' "$out" | jget readings.dispatch_latency_max_s)"
+chk_eq "B5 no summed latency field is published at all" "absent" \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; r=json.load(sys.stdin)["readings"]; print("present" if any("latency" in k and "sum" in k for k in r) else "absent")')"
+chk_eq "B5 idle_span is the union's complement, not per-seat idleness" "500.0" \
+  "$(printf '%s' "$out" | jget readings.idle_span_s)"
+chk_eq "B5 seat_wall sums the three seats" "800.0" \
+  "$(printf '%s' "$out" | jget readings.seat_wall_s)"
+chk_eq "B5 review_wall is the review seat's share only" "400.0" \
+  "$(printf '%s' "$out" | jget readings.review_wall_s)"
+# seat_wall < batch_span here because these three seats barely overlap; the OPPOSITE case (and
+# the reason the label insists it is not wall clock) is asserted on the concurrent fixture B6
+chk_eq "B5 seat_wall is machine-time, so it can sit either side of batch_span" "under" \
+  "$(printf '%s' "$out" | python3 -c '
+import json, sys
+read = json.load(sys.stdin)["readings"]
+print("under" if read["seat_wall_s"] < read["batch_span_s"] else "over")')"
+
+# B6 — an open implementation seat covers the review seat's conclusion: zero idle
+ph_case review-while-open /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B6 a still-open seat leaves no idle gap behind a peer's terminal" "0" \
+  "$(printf '%s' "$out" | jget readings.idle_span_s)"
+chk_eq "B6 and the open seat is reported open, not concluded" "open" \
+  "$(printf '%s' "$out" | jget sessions.0.state)"
+# the concurrency half of the seat_wall label: two seats on the clock at once make the SUM of
+# their spans exceed the batch's own span, which is exactly why the number is announced as seat
+# machine-time and never as wall clock
+chk_eq "B6 concurrent seats push seat_wall past batch_span" "over" \
+  "$(printf '%s' "$out" | python3 -c '
+import json, sys
+read = json.load(sys.stdin)["readings"]
+print("over" if read["seat_wall_s"] > read["batch_span_s"] else "under")')"
+
+# B7 — a seat whose start lives in the PREVIOUS UTC shard
+ph_case midnight /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B7 the start really is in an older shard (known-positive)" 1 \
+  "$([ "$DAY_START" != "$DAY_STOP" ] && echo 1 || echo 0)"
+chk_eq "B7 the reader found it across the shard boundary" 1 \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; print(0 if json.load(sys.stdin)["sessions"][0]["start"] is None else 1)')"
+chk_eq "B7 so the span is the whole seat, not the shard's slice" "$SPAN.0" \
+  "$(printf '%s' "$out" | jget sessions.0.duration_s)"
+chk_eq "B7 and nothing is marked truncated" "0" \
+  "$(printf '%s' "$out" | jget sessions.0.truncated_start)"
+
+# B8 — the --since edge: before / exactly on / after
+ph_case boundary /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B8 a seat exactly ON the window start is inside it" "seatAt seatNew" \
+  "$(printf '%s' "$out" | seats)"
+out="$(bash "$AGENTCTL" phases --json --since "$WIDE")"
+chk_eq "B8 widening the window recovers the earlier seat (known-positive)" 3 \
+  "$(printf '%s' "$out" | seat_count)"
+out="$(bash "$AGENTCTL" phases --json --since "$INSIDE")"
+chk_eq "B8 a seat that opened before the window keeps only the intersection" "500.0" \
+  "$(printf '%s' "$out" | jget sessions.0.duration_s)"
+chk_eq "B8 and says so" "1" "$(printf '%s' "$out" | jget sessions.0.truncated_start)"
+chk_eq "B8 which makes the whole reading partial, never silently ok" "partial" \
+  "$(printf '%s' "$out" | jget coverage)"
+
+# B9 — a regressed clock excludes ONE duration and is counted, never clamped to zero
+ph_case clock /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B9 the inverted edge is counted" "1" "$(printf '%s' "$out" | jget clock_regressed)"
+chk_eq "B9 its duration is excluded, not clamped to 0" "null" \
+  "$(printf '%s' "$out" | jget sessions.0.duration_s)"
+chk_eq "B9 so seat_wall carries only the measurable seat" "300.0" \
+  "$(printf '%s' "$out" | jget readings.seat_wall_s)"
+
+# B10 — --repo containment is by PATH COMPONENT
+mkdir -p "$SANDBOX/repo/sub" "$SANDBOX/repo-sibling"
+ln -sfn "$SANDBOX/repo/sub" "$SANDBOX/spelling"
+ph_case repo "$SANDBOX/repo/sub" "$SANDBOX/repo-sibling" "$SANDBOX/spelling"
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE" --repo "$SANDBOX/repo")"
+chk_eq "B10 a sibling sharing the name PREFIX is not this repo" "seatIn seatLink" \
+  "$(printf '%s' "$out" | seats)"
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B10 known-positive: without --repo all three seats are visible" 3 \
+  "$(printf '%s' "$out" | seat_count)"
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE" --repo "$SANDBOX/repo-sibling")"
+chk_eq "B10 and the sibling root sees only its own seat" "seatSib" \
+  "$(printf '%s' "$out" | seats)"
+rc=$(bash "$AGENTCTL" phases --json --since "$SINCE" --repo "repo" >/dev/null 2>&1; echo $?)
+chk_eq "B10 a relative --repo is refused at the parameter surface" 1 "$rc"
+
+# B11 — corrupt lines are counted and dropped, never guessed at
+ph_case corrupt /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"; rc=$?
+chk_eq "B11 a shard with garbage still reports rc0" 0 "$rc"
+chk_eq "B11 every unusable line is counted" "$BAD" "$(printf '%s' "$out" | jget skipped)"
+chk_eq "B11 and none of them invented a seat" 1 \
+  "$(printf '%s' "$out" | seat_count)"
+
+# B12 — an empty ledger is a legitimate reading, not an error
+ph_case empty /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"; rc=$?
+chk_eq "B12 an empty ledger exits 0" 0 "$rc"
+chk_eq "B12 with no seats" 0 \
+  "$(printf '%s' "$out" | seat_count)"
+chk_eq "B12 no events" "0" "$(printf '%s' "$out" | jget events)"
+chk_eq "B12 a zero span rather than an invented one" "0.0" \
+  "$(printf '%s' "$out" | jget readings.batch_span_s)"
+chk_eq "B12 and coverage that refuses to vouch for the window" "unknown" \
+  "$(printf '%s' "$out" | jget coverage)"
+
+# B13 — old shards but no shard for the window's own days
+ph_case stale /repo/one
+out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+chk_eq "B13 a hole in the window's shards reads unknown" "unknown" \
+  "$(printf '%s' "$out" | jget coverage)"
+chk_eq "B13 and the missing days are named" 1 \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; print(1 if json.load(sys.stdin)["shards_missing"] else 0)')"
+chk_eq "B13 known-positive: the OLD shard is present and was read" 1 \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; print(1 if json.load(sys.stdin)["shards_present"] else 0)')"
+
+# ── §V the verb is a reading, and stays one ─────────────────────────────────────────
+echo "== V: numbers only — the verb never renders a verdict =="
+ph_case two-terminals /repo/one
+json_out="$(bash "$AGENTCTL" phases --json --since "$SINCE")"
+human_out="$(bash "$AGENTCTL" phases --since "$SINCE")"
+# The forbidden thing is a SUGGESTED VALUE, not the words: the json's `note` says out loud that
+# wall/avoidable stay the orchestrator's judgement, and that sentence is the point. What must
+# never appear is either number in a form the ledger's grammar would accept.
+chk_not_contains "V1 the json suggests no wall figure" "wall=" "$json_out"
+chk_not_contains "V1 nor an approximate one" "wall≈" "$json_out"
+chk_not_contains "V1 nor an avoidable figure" "avoidable=" "$json_out"
+chk_not_contains "V1 nor an approximate avoidable one" "avoidable≈" "$json_out"
+chk_contains "V1 and it says whose judgement those two numbers are" \
+  "orchestrator's judgement" "$json_out"
+chk_not_contains "V2 the human face suggests no wall figure" "wall=" "$human_out"
+chk_not_contains "V2 nor an approximate one" "wall≈" "$human_out"
+chk_not_contains "V2 nor an avoidable figure" "avoidable" "$human_out"
+chk_contains "V2 it says what it is" "READINGS ONLY" "$human_out"
+chk_contains "V2 and warns that seat_wall is not wall clock" "NOT wall clock" "$human_out"
+chk_contains "V2 and that latency is never summed" "never summed" "$human_out"
+chk_eq "V3 the human face stays inside its 30-line bound" 1 \
+  "$([ "$(printf '%s\n' "$human_out" | grep -c .)" -le 30 ] && echo 1 || echo 0)"
+chk_eq "V4 --json parses" "ok" \
+  "$(printf '%s' "$json_out" | python3 -c 'import json,sys; json.load(sys.stdin); print("ok")')"
+
+# the verb is registered as a PUBLIC OBSERVATION verb in both definitions the parity gate holds
+chk_eq "V5 phases is declared read-only about the work" "True" \
+  "$(python3 -c "import sys; sys.path.insert(0, '$AW_DIR'); import duplexctl; print('phases' in duplexctl.OBSERVE_VERBS)")"
+chk_eq "V5 and the bash front door dispatches it" 1 \
+  "$(grep -c '^  phases)' "$AGENTCTL")"
+chk_eq "V5 usage names it" 1 "$(bash "$AGENTCTL" 2>&1 | grep -c 'agentctl phases')"
+
+# one accepted spelling per flag, at this level too
+chk_eq "V6 an abbreviated flag is refused" 2 \
+  "$(bash "$AGENTCTL" phases --sinc 1h >/dev/null 2>&1; echo $?)"
+chk_eq "V6 an unparseable --since is refused with a usable message" 1 \
+  "$(bash "$AGENTCTL" phases --since "last tuesday" >/dev/null 2>&1; echo $?)"
+chk_contains "V6 and the message names both accepted grammars" "RFC3339" \
+  "$(bash "$AGENTCTL" phases --since "last tuesday" 2>&1)"
+chk_eq "V7 a naive RFC3339 instant is refused: UTC skew must not hide in the numbers" 1 \
+  "$(bash "$AGENTCTL" phases --since "2026-09-02T00:00:00" >/dev/null 2>&1; echo $?)"
+chk_eq "V8 the relative grammar works in all three units" "0 0 0" \
+  "$(for unit in 30m 2h 1d; do bash "$AGENTCTL" phases --since "$unit" >/dev/null 2>&1; printf '%s ' $?; done | sed 's/ $//')"
+
 summary

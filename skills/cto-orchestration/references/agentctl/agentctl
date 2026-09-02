@@ -10,6 +10,7 @@
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
 #   agentctl states [--json]             # runtime-generated typed state vocabulary
 #   agentctl inventory --dry-run         # read-only candidate overview (never kills anything)
+#   agentctl phases [--since W] [--repo D] [--json]   # phase-ledger readings (no verdict)
 #
 # ONE lane, three engines (unified 2026-07-19): each runs its native duplex stdio protocol
 # long-lived in a tmux supervisor pane; steering is a protocol frame on the session fifo
@@ -45,6 +46,7 @@ usage() {
   echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [--expect MINUTES] [engine args...]" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
   echo "       agentctl status <session> | watch <session> [--inline] [--expect MINUTES] | stop <session> [cwd] | capabilities [--json] | states [--json]" >&2
+  echo "       agentctl phases [--since <N>m|<N>h|<N>d|RFC3339] [--repo <abs>] [--json]   # read-only ledger readings" >&2
   echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
   exit 1
 }
@@ -652,6 +654,9 @@ case "${1:-}" in
                        exec "$PY" "$CTL" --run-dir "$DIR" inventory --dry-run ;;
             *) echo "ERR: inventory is read-only and is spelled 'agentctl inventory --dry-run'${1:+ — got '$1'}; there is no --apply" >&2; exit 1 ;;
           esac ;;
+  # phase-ledger readings. Argument JUDGEMENT is duplexctl's (`--since` grammar, `--repo`
+  # containment): this shell forwards argv untouched and the strict parser refuses the rest.
+  phases) shift; exec "$PY" "$CTL" --run-dir "$DIR" phases "$@" ;;
   stop)   shift; cmd_stop "$@" ;;
   ""|-h|--help) usage ;;
   *) echo "ERR: unknown subcommand '${1}'" >&2; usage ;;

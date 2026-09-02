@@ -1822,7 +1822,7 @@ def progress_fingerprint(sess: Session, budget: ProbeBudget) -> tuple[str | None
 AGENTCTL_VERBS: tuple[tuple[str, bool], ...] = (
     ("start", False), ("steer", False), ("stop", False),           # they change the session
     ("status", True), ("watch", True), ("states", True),           # they only look at it
-    ("capabilities", True), ("inventory", True),
+    ("capabilities", True), ("inventory", True), ("phases", True),
 )
 OBSERVE_VERBS = frozenset(verb for verb, observe in AGENTCTL_VERBS if observe)
 # hosts that merely CARRY a command: the real command is one of their arguments
@@ -4067,6 +4067,19 @@ def main() -> None:
                        help="the ONLY accepted spelling; this verb never acts")
     p_inv.set_defaults(func=watchctl.cmd_inventory)
 
+    # The phase ledger's reader. Read-only about the WORK and about the LANE: it opens no
+    # session state at all, only <run>/phase-ledger-*.jsonl.
+    p_ph = sub.add_parser("phases", help="phase-ledger readings: batch span, seat wall, idle "
+                                         "and dispatch latency (numbers only, no verdict)")
+    p_ph.add_argument("--since", default="",
+                      help="window start: <N>m|<N>h|<N>d relative to now, or an RFC3339 "
+                           "instant WITH a UTC offset (default: 24h)")
+    p_ph.add_argument("--repo", default="",
+                      help="absolute repo root; a seat counts only when its cwd is inside it "
+                           "by path COMPONENT, so a sibling worktree sharing a name prefix "
+                           "does not")
+    p_ph.add_argument("--json", action="store_true", help="stable machine shape")
+    p_ph.set_defaults(func=watchctl.cmd_phases)
 
     args = parser.parse_args()
     sys.exit(args.func(args))
