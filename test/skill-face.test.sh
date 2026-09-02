@@ -152,11 +152,16 @@ EOF
 # reading `_heredoc_scan`'s non-quoted-only view are affected ((8)/(18)/(19)/(20) in the source's
 # own numbering), and the quoted-only readers are not. An overstated blind spot is as much a
 # wrong承诺面 as an understated one, and it is stated where the DENY's `Read:` lands.
+# agentctl/README.md 262→265 (2026-09-02, 新规则 (21)): +3 lines — the `-m` 正文禁命令替换 clause
+# in the §agentctl —— 当前命令面 steer bullet. The words had to go into THIS shipped file: rule
+# (21)'s DENY carries `Read: …/agentctl/README.md §agentctl —— 当前命令面` as its pointer
+# (hook-deny-pointer gates that it resolves), and a seat that just had a steer denied needs the
+# 正路 (`-f <file>`) and the byte-ban direction at the pointer's landing spot, not one page away.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 262
+skills/cto-orchestration/references/agentctl/README.md 265
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42

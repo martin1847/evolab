@@ -406,12 +406,28 @@ cd "$(dirname "$0")"
 #    (`"\$literal.py"` is a filename with a dollar, not an expansion), and the line-continuation
 #    fold moved AHEAD of word splitting with rule (8)'s own backslash PARITY.
 # The remaining lines are the per-finding counter-probe comments this file carries.
+# cto-guard-bash.py 2319→2373 (2026-09-02, 新规则 (21)): +54, and the weight is where a BYTE BAN
+# has to be argued. The rule itself is 3 lines of matcher (`_R21_HEAD` / `_R21_SUBST`) plus a
+# 9-line branch carrying the DENY text: a command-position `agentctl steer … -m` whose body
+# (from `-m` to the END of the command text) holds a backtick or `$(` is denied, because the
+# SHELL expands it before agentctl is exec'd — 2026-08-30 a `gh api …` example inside a steer
+# body ran against the real repo and the `>` in the same text truncated the message, leaving
+# agentctl a parse error as its only report. No new parse face: `_pos_head` / `_AGENTCTL` are the
+# shared command-position anchor, and the judged view is `raw`, the quoted-heredoc-stripped face
+# every general rule already reads.
+# The other ~40 lines are comment, and they are the load-bearing half: this rule DELIBERATELY
+# does not distinguish single quotes, double quotes or `\$(`, so two accepted false positives
+# (`-m 'plain `ls` text'`, `-m "cost \$(x)"`) and one accepted over-reach (a command chained
+# after a clean `-m` is read as body) are stated with their oracle names, together with the
+# accepted FN a mention-is-not-a-command anchor buys. A ban whose边界 is not written down is a
+# rule the next batch narrows by accident; the kill criterion (hits=0 for a year) is recorded
+# where the retro GATE-AUDIT reads it.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2319
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2373
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked

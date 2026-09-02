@@ -26,6 +26,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   判不出按「开下一轮」走（宁钝勿敏：晚一个边界 > 丢一条指令）。三引擎能力矩阵由 runtime 生成，
   `agentctl capabilities` 是唯一真源（同一张表既驱动路由、又出拒绝文案）。投递成功 ≠ 模型照做，
   验收仍看交付物。
+  **`-m` 正文禁命令替换**：反引号 / `$(` 在 shell 阶段就展开——例子命令真被执行（2026-08-30 一条
+  `gh api` 真打了仓）、`>` 把正文截断，agentctl 只剩 parse error 可报；guard (21) 拦，正路 `-f <file>`。
+  单引号里的字面反引号同样拦（字节禁令，一个正路盖所有拼写）；`<<'EOF'` heredoc 正文是 DATA，`<<EOF` 正文照拦。
 - **steer 队列可见**：`queued=N` 只是引擎报的深度，lane 自己记 sidecar `<s>.steer-log.jsonl`；
   `status` 在 N>0 时按深度列出末 N 条，无队列面的引擎零输出。stop 随控制态一起清。
 - **typed exit 三引擎同词汇**（词表 `agentctl states`，处置见下节）；

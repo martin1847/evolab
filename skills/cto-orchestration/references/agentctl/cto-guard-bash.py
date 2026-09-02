@@ -27,6 +27,11 @@
 #       because auto mode prefers Bash over Edit|Write for editing files and E1 is dark there
 #       (four spellings measured at rc=0, 2026-09-02). Seat attribution is IMPORTED from that
 #       guard, never copied; uncovered channels are listed in README §强制层 [DENY]
+#  (21) `agentctl steer … -m <inline text>` carrying a backtick or `$(` -> the shell expands it
+#       BEFORE agentctl sees it: a quoted example command inside the steer body RUNS (2026-08-30
+#       a `gh api …` example hit the real repo; the `>` in the same text truncated the message,
+#       so agentctl could only report a parse error). Body goes in a file: `-f <path>`.
+#       KILL CRITERION (owner 2026-09-02): zero hits in a year -> remove this rule. [DENY]
 # Deny/checker error = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
@@ -1272,6 +1277,38 @@ def _r20_judge(g, lit, cwd):
     return None, unjudged
 
 
+# ── rule (21): inline steer text carrying command substitution (DENY) ─────────────────────
+# KILL CRITERION (slug `g21-steer-inline-substitution`, retro GATE-AUDIT): hits=0 for a year ⇒
+# kill (owner ruling 2026-09-02, the ruling that admitted the rule).
+# FIELD, 2026-08-30: `agentctl steer <s> -m "…`gh api repos/… --jq .status`…"`. The shell ran the
+# example `gh api` for real (a 404, harmless by luck) before agentctl was even exec'd, and the `>`
+# in the same body truncated what was left, so agentctl reported a parse error and could not say
+# why. Two seats have each been bitten once by this exact shape since (2026-09-02).
+# SHAPE: a command-position `agentctl steer` (the wrapper/env chain rules (8)-(20) already share)
+# whose line carries `-m`; the BODY is every byte from that `-m` to the END of the command text.
+# A BYTE BAN, and that is the design decision rather than an oversight: single quotes, double
+# quotes and `\$(` are NOT distinguished. The shell does not expand a backtick inside single
+# quotes, so `-m 'plain `ls` text'` is an ACCEPTED false positive — bought deliberately, because
+# one fix line (`-f <file>`) covers every spelling, while a rule that reasoned about quote nesting
+# inside an argv word the shell has not lexed yet would be guessing at the exact moment it holds a
+# DENY. Pinned as `r21-doc-single-quoted-body-denied` / `r21-doc-escaped-dollar-paren-denied`.
+# BODY ENDS AT END OF TEXT, not end of line: the field case was a MULTI-LINE `-m "…"`, and finding
+# where such a body really ends means parsing the quoting this ban already refuses to reason
+# about. Second accepted over-reach, same recovery: a separate command chained AFTER a clean `-m`
+# is read as body (`r21-doc-tail-after-m-judged`), and its fix is the same `-f` rewrite.
+# NEVER MATCHES: `-f <file>` (there is no `-m`), and a `steer` with no `-m` at all.
+# JUDGED ON `raw`, the quoted-heredoc-stripped face the general rules read — one view, both
+# directions pinned: a `<<'EOF'` body is DATA (the shell expands nothing inside it, so the text
+# reaches agentctl intact), while a BARE `<<EOF` body stays visible because its substitutions
+# really do run before the fed shell sees a thing.
+# A MENTION IS NOT A COMMAND, the discipline every other rule here carries: `echo "agentctl steer
+# s1 -m \`x\`"` is not at command position and is not judged, even though that backtick expands.
+# The rule owns the steer channel, not shell substitution in general.
+_R21_HEAD = re.compile(_pos_head(r";&(|\n") + _AGENTCTL
+                       + r"\s+steer(?![\w-])[^\n]*?\s-m(?=[\s\"'])")
+_R21_SUBST = re.compile(r"`|\$\(")
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -1407,6 +1444,23 @@ def main():
             "`watch` belongs in Bash run_in_background:true, never in a pipeline. A typed "
             "command at the END of a pipeline and `||` chains pass. "
             "Read: cto-orchestration/references/agentctl/README.md §typed 状态.\n"
+        )
+        return 2
+
+    # (21) inline steer text carrying command substitution — placed HERE, directly above (1): a
+    #      body whose backticked example contains an `&` would otherwise take (1)'s orphan
+    #      verdict, and run_in_background does nothing about a substitution that already ran.
+    #      Below (12), which owns the piped shape and whose file-first fix the steer still needs.
+    #      Doctrine, the byte ban and its two accepted over-reaches: `_R21_HEAD` at module level.
+    m21 = _R21_HEAD.search(raw)
+    if m21 and _R21_SUBST.search(raw[m21.end():]):
+        sys.stderr.write(
+            "DENY: `agentctl steer -m` 正文含命令替换 — a backtick or `$(` in the inline body is "
+            "expanded by the SHELL before agentctl sees it: the example command RUNS (2026-08-30: a "
+            "`gh api …` ran for real), a `>` truncates the rest, and agentctl can only report a parse "
+            "error. Fix: body in a file — `agentctl steer <session> -f <file>`; `-m` is one plain "
+            "sentence, no backtick / `$(` / `>`, single quotes included. "
+            "Read: cto-orchestration/references/agentctl/README.md §agentctl —— 当前命令面.\n"
         )
         return 2
 

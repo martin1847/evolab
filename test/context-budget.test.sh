@@ -48,7 +48,7 @@ BUDGET_FOOTER=868          # with-deliverable shape (FIXED bytes — the sentenc
                            # the sentence is conditional (B1: never lie to a legal path).
                            # Raised 791→868: 5/7 cross-seat frame-verified idle cases were
                            # conclusions-in-chat-not-in-file.
-BUDGET_GUARD_TOTAL=15035   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
+BUDGET_GUARD_TOTAL=15542   # all injected text across the three guards (raised 7439→7771 on 2026-08-17:
                            # rule 10b gate;commit weld DENY, +332 B — deliberate, weighed.
                            # Raised 7771→8334 on 2026-08-20: rule (11) bare-codex DENY, +563 B.
                            # Bought: the only route to the review seat's sandbox tier was a
@@ -162,6 +162,25 @@ BUDGET_GUARD_TOTAL=15035   # all injected text across the three guards (raised 7
                            #    (`if opaque20 and not note20`), so this total counts 196 B that
                            #    no single response can carry — a static over-count, kept rather
                            #    than argued away.
+                           # Raised 15035→15542 on 2026-09-02 (新规则 (21)), ONE item weighed:
+                           #  +507 B rule (21)'s inline-steer-substitution DENY, and it is
+                           #    507 B by construction — the reference proposal's wording was
+                           #    508 B and this one had to fit under it while swapping in the
+                           #    真实 section title of its `Read:` target. Bought: a backtick /
+                           #    `$(` in a `steer -m` body is expanded by the SHELL, so the
+                           #    example command RUNS (2026-08-30: a `gh api …` hit the real
+                           #    repo) and the `>` in the same text truncates the message —
+                           #    agentctl can then only report a parse error, i.e. the seat is
+                           #    told the wrong thing about a command that already executed. The
+                           #    text must carry the WHY (expansion happens before agentctl),
+                           #    the `-f <file>` replacement AND the byte-ban note (a
+                           #    single-quoted body is denied too), or the denied seat re-sends
+                           #    the same text with different quotes. Could not come from
+                           #    cutting elsewhere: it is the shortest DENY in the file after
+                           #    rule (1)'s, and no other message covers this channel.
+                           #  Rule (21) adds no WARN and no new local, so BUDGET_GUARD_SINGLE
+                           #    does not move: 507 B is far under the 2012 B assembled worst
+                           #    case, which is still (3)+(13)+(14)+(15)+(16)+(19)+(20)'s.
 BUDGET_GUARD_SINGLE=2012   # the longest single message a worker can be handed at once. Raised
                            # 754→893 on 2026-08-28: the worst case is now the (3)+(13)+(14)+(15)
                            # assembled response, i.e. every instrument in this dispatch failing
@@ -189,15 +208,16 @@ BUDGET_GUARD_SINGLE=2012   # the longest single message a worker can be handed a
                            # one response (`if opaque20 and not note20`), so the reachable worst
                            # case is +313 B; this ceiling carries the meter's static sum instead
                            # of a hand-argued smaller number. Rule (20)'s own DENY is 752 B.
-BUDGET_GUARD_COUNT=33      # sink count: a drop means extraction broke or a sink moved out of
+BUDGET_GUARD_COUNT=34      # sink count: a drop means extraction broke or a sink moved out of
                            # view. 21→23 on 2026-08-20: +1 real sink (rule 12) and +1 the meter
                            # had been blind to (see `resolve` below). 23→30 on 2026-08-28:
                            # +2 (rules 14/15) and +5 (the whole new guard). 31→32 on 2026-09-01:
                            # +1 rule (18)'s DENY — rule (19)'s warn is NOT a new sink, it joins
                            # the existing assembled response. 32→33 on 2026-09-02: +1 rule (20)'s
                            # DENY — its two warns are NOT new sinks either, they join the same
-                           # assembled response. Pinned to the measured number, never carrying
-                           # untracked slack.
+                           # assembled response. 33→34 on 2026-09-02: +1 rule (21)'s DENY, the
+                           # rule's only sink (no WARN, no new local). Pinned to the measured
+                           # number, never carrying untracked slack.
 
 echo "== injected-context budget =="
 

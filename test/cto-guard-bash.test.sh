@@ -1983,5 +1983,82 @@ chk_contains "r20-ungoverned warns instead of accusing" "席位归属未判" "$(
 PATH="$OLDPATH20"; export PATH
 GUARD_CWD="$ISO_REPO"
 
+# ── (21) inline `agentctl steer -m` text carrying command substitution ─────────────────────
+# FIELD 2026-08-30: a backticked `gh api …` example inside a steer body was expanded and RUN by
+# the shell before agentctl was exec'd, and the `>` in the same text truncated what was left —
+# agentctl could only report a parse error. Positives assert the DENY 三件套; negatives assert
+# TOTAL silence, because this rule sits directly above (1) and must not shadow it.
+run 'agentctl steer s1 -m "check `gh api repos/x --jq .status` then report"'
+chk_eq "r21-backtick body denied (exit 2)" 2 "$RC"
+chk_contains "r21 the deny names the channel" "正文含命令替换" "$ERR"
+chk_contains "r21 the deny carries the field case" "2026-08-30" "$ERR"
+chk_contains "r21 the deny hands over the -f fix" "agentctl steer <session> -f <file>" "$ERR"
+chk_contains "r21 the deny carries the doc pointer" "agentctl/README.md §agentctl" "$ERR"
+chk_eq "r21 the deny says nothing on stdout" "" "$OUT"
+run 'agentctl steer s1 -m "run $(date) now"'
+chk_eq "r21-dollar-paren body denied" 2 "$RC"
+run 'agentctl steer s1 --interrupt -m "redo `ls`"'
+chk_eq "r21-interrupt steer is judged the same" 2 "$RC"
+run 'timeout 30 agentctl steer s1 -m "x `y`"'
+chk_eq "r21-wrapper chain does not hide the steer" 2 "$RC"
+run 'agentctl steer s1 -m"x `y`"'
+chk_eq "r21-glued -m spelling is judged too" 2 "$RC"
+r21_multiline="$(printf '%s\n' 'agentctl steer s1 -m "first line is clean' 'second line has `ls` in it"')"
+run "$r21_multiline"
+chk_eq "r21-multiline body: the scan does not stop at end of line" 2 "$RC"
+
+# ACCEPTED FALSE POSITIVES, pinned rather than defended: this is a BYTE ban. The shell expands
+# neither a backtick inside SINGLE quotes nor `\$(` inside double quotes, and both are denied
+# anyway — one fix line (`-f <file>`) covers every spelling, while a rule reasoning about quote
+# nesting inside an argv word the shell has not lexed yet would be guessing while holding a DENY.
+# Whoever narrows the ban must change these two assertions deliberately.
+run "agentctl steer s1 -m 'plain \`ls\` text'"
+chk_eq "r21-doc-single-quoted-body-denied (byte ban, accepted FP)" 2 "$RC"
+run 'agentctl steer s1 -m "cost \$(x) usd"'
+chk_eq "r21-doc-escaped-dollar-paren-denied (byte ban, accepted FP)" 2 "$RC"
+# …and the body runs to the END of the command text, not to end of line: the field case was a
+# multi-line body, and finding where such a body really ends needs the quote parsing this ban
+# refuses to do. So a separate command chained AFTER a clean `-m` is read as body — accepted
+# over-reach, same `-f` recovery.
+run 'agentctl steer s1 -m "plain sentence" ; echo `date`'
+chk_eq "r21-doc-tail-after-m-judged (over-reach, accepted)" 2 "$RC"
+
+# HEREDOC, both directions on ONE view (the quoted-only strip every general rule reads): a
+# `<<'EOF'` body reaches agentctl byte-for-byte because the shell expands nothing inside it, so
+# it is DATA; a bare `<<EOF` body has its substitutions run before the fed shell sees anything.
+r21_quoted_hd="$(printf '%s\n' "cat > brief.md <<'EOF'" 'agentctl steer s1 -m "`x`"' 'EOF')"
+run "$r21_quoted_hd"
+chk_eq "r21-neg quoted-delimiter heredoc body is DATA" 0 "$RC"
+chk_eq "r21-neg the quoted heredoc body is silent on stdout" "" "$OUT"
+chk_eq "r21-neg the quoted heredoc body is silent on stderr" "" "$ERR"
+r21_bare_hd="$(printf '%s\n' 'cat <<EOF | bash' 'agentctl steer s1 -m "redo `ls`"' 'EOF')"
+run "$r21_bare_hd"
+chk_eq "r21-doc-bare-heredoc-body-judged: an unquoted body really executes" 2 "$RC"
+
+# NEGATIVE CONTROLS — the正路, the shapes with no `-m` at all, and the scope fence.
+run 'agentctl steer s1 -m "plain sentence, no substitution"'
+chk_eq "r21-neg a plain -m sentence is allowed" 0 "$RC"
+chk_eq "r21-neg the plain sentence is silent on stdout" "" "$OUT"
+chk_eq "r21-neg the plain sentence is silent on stderr" "" "$ERR"
+run 'agentctl steer s1 -f /tmp/body.md'
+chk_eq "r21-neg the -f 正路 never matches" 0 "$RC"
+chk_eq "r21-neg the -f 正路 is silent on stdout" "" "$OUT"
+chk_eq "r21-neg the -f 正路 is silent on stderr" "" "$ERR"
+run 'agentctl steer s1 --interrupt -f /tmp/b.md && echo `date`'
+chk_eq "r21-neg no -m in the command: nothing to judge" 0 "$RC"
+chk_eq "r21-neg and it stays silent on stderr" "" "$ERR"
+run 'echo "`date`"'
+chk_eq "r21-neg an unrelated substitution is none of this rule's business" 0 "$RC"
+chk_eq "r21-neg the unrelated substitution is silent on stdout" "" "$OUT"
+chk_eq "r21-neg the unrelated substitution is silent on stderr" "" "$ERR"
+run 'agentctl steer s1 -m "note: keep the redirect > out of the body"'
+chk_eq "r21-neg a redirect char in the body is not this rule subject" 0 "$RC"
+chk_eq "r21-neg the redirect char in the body is silent on stdout" "" "$OUT"
+chk_eq "r21-neg the redirect char in the body is silent on stderr" "" "$ERR"
+# a MENTION is not a command — the discipline every other rule here carries. Accepted FN, stated:
+# that backtick does expand, but this rule owns the steer channel, not shell substitution at large.
+run 'echo "agentctl steer s1 -m `x`"'
+chk_eq "r21-doc-mention-is-not-a-command (accepted FN)" 0 "$RC"
+chk_eq "r21-doc-mention-is-not-a-command is silent on stderr" "" "$ERR"
 
 summary
