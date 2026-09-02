@@ -2063,6 +2063,20 @@ chk_contains "r21-the chained steer deny is rule (21)'s" "正文含命令替换"
 # a quoted OPTION VALUE carrying a separator is data, not a segment end (`_quote_blind`)
 run 'agentctl steer s1 -d "out|x.md" -m "x `y`"'
 chk_eq "r21-a quoted separator inside an option value does not end the segment" 2 "$RC"
+# R2 finding, ACCEPTED-UNCOVERED by owner ruling (2026-09-02) rather than fixed: an UNQUOTED
+# command substitution before `-m` whose own body carries a separator stops the head scan at that
+# inner `;`, so the `-m` behind it is not read as this steer's argument — a fail-open MISS of the
+# same family as the escaped-separator one registered beside it in the source. Reaching it means
+# teaching a byte ban to lex substitutions; the stop line is here. This assertion pins today's
+# direction, so whoever widens that parse face sees it go red and must flip it DELIBERATELY.
+run 'agentctl steer s1 -d $(printf a; printf b) -m "x `y`"'
+chk_eq "r21-doc-subst-separator-before-dash-m-uncovered: pinned at rc 0 (known MISS)" 0 "$RC"
+chk_eq "r21-doc-subst-separator-before-dash-m-uncovered is silent on stdout" "" "$OUT"
+chk_eq "r21-doc-subst-separator-before-dash-m-uncovered is silent on stderr" "" "$ERR"
+# …and its control: a substitution with NO separator inside it does not end the segment, so the
+# body is still read. Without this the assertion above could be satisfied by never matching at all.
+run 'agentctl steer s1 -d $(printf ab) -m "x `y`"'
+chk_eq "r21-a separator-free substitution before -m still reaches the body" 2 "$RC"
 run 'echo "`date`"'
 chk_eq "r21-neg an unrelated substitution is none of this rule's business" 0 "$RC"
 chk_eq "r21-neg the unrelated substitution is silent on stdout" "" "$OUT"

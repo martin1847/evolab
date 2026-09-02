@@ -1342,8 +1342,16 @@ def _r20_judge(g, lit, cwd):
 # rule (12)'s (`;` `&` `|`, so `&&` / `||` are covered) plus newline, and WHICH of them count is
 # decided on `_quote_blind` — the length-preserving face rules (14)/(17) already established, so
 # a `;` or `|` inside a quoted OPTION VALUE is data and offsets still map 1:1 back to the raw
-# bytes the body is read from. A backslash-ESCAPED separator stops the scan instead, i.e. a MISS:
-# fail-open, the same class `_pipe_view`'s parked escapes exist for.
+# bytes the body is read from. TWO KNOWN MISSES of that narrowing, registered together because
+# they are one family and this is the STOP LINE — neither buys a wider regex (owner ruling
+# 2026-09-02): (i) a backslash-ESCAPED separator stops the scan, and (ii) an option value BEFORE
+# `-m` holding a command substitution with a separator inside it (`-d $(printf a; printf b) -m
+# "x `y`"`) stops the scan at that inner `;`, so the `-m` is not read as this steer's argument.
+# Both directions are the same fail-open MISS — the same class `_pipe_view`'s parked escapes
+# exist for — and both are cheap to avoid (`-f <file>` is the正路 either way). Reaching them
+# would mean teaching this rule to lex substitutions, i.e. a new parse face inside a byte ban.
+# (ii) is pinned as `r21-doc-subst-separator-before-dash-m-uncovered`, with a control proving a
+# separator-free substitution (`-d $(printf ab) -m …`) still reaches the body.
 # JUDGED ON `raw`, the quoted-heredoc-stripped face the general rules read — one view, both
 # directions pinned: a `<<'EOF'` body is DATA (the shell expands nothing inside it, so the text
 # reaches agentctl intact), while a BARE `<<EOF` body stays visible because its substitutions

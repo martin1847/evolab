@@ -448,12 +448,22 @@ cd "$(dirname "$0")"
 # separator ends the scan = a MISS, fail-open), because a boundary nobody wrote down is the one
 # the next batch re-widens by accident. Oracles: `r21-neg-dash-m-of-next-command-is-not-ours`
 # plus a chained-steer positive control and a quoted-separator positive.
+# cto-guard-bash.py 2423→2431 (2026-09-02, R2 评审 accept-documented): +8, comment ONLY — the
+# matcher is byte-identical. R2 probed `agentctl steer s1 -d $(printf a; printf b) -m "x `y`"`:
+# the separator INSIDE an unquoted command substitution ends the head scan, so that `-m` is not
+# read as this steer's argument and the body goes unjudged (rc=0). Owner ruling: accept-document,
+# do NOT widen the regex — reaching it means teaching a BYTE BAN to lex substitutions, i.e. a new
+# parse face, and `-f <file>` is the 正路 either way. So the weight buys the REGISTRY: the two
+# known misses of the R1 narrowing (escaped separator, substitution-borne separator) now sit in
+# one paragraph declared as the stop line, with the oracle
+# `r21-doc-subst-separator-before-dash-m-uncovered` and its separator-free control named there.
+# An undeclared miss is the one the next batch either re-widens by accident or discovers twice.
 BASELINES='
 skills/cto-orchestration/references/agentctl/duplexctl.py 3654
 skills/cto-orchestration/references/agentctl/watchctl.py 1508
 skills/cto-orchestration/references/agentctl/identity.py 1509
 skills/cto-orchestration/references/agentctl/agentctl 620
-skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2423
+skills/cto-orchestration/references/agentctl/cto-guard-bash.py 2431
 skills/cto-orchestration/references/agentctl/cto-guard-edit.py 286
 '
 LOCK_SLACK=50           # ordinary churn headroom below the baseline before a new low must be locked
