@@ -123,11 +123,17 @@ EOF
 # THIS shipped file: it is the goal contract's own OUTPUT-side counterpart to the Value gate
 # line — a depth nobody declares is re-run as "全量, 保险起见" by the seat (3x11min of pure
 # re-run in one batch), and a pointer to another page is read after the proof has been run.
+# agentctl/README.md 230→241 (2026-09-02, guard ⑧ 收窄): +11 lines — the ⑧ 判据 paragraph under
+# §cwd 锚定. The words had to go into THIS shipped file: rule ⑧'s DENY carries
+# `Read: …/agentctl/README.md §cwd 锚定` as its pointer (hook-deny-pointer gates that it
+# resolves), and this page is the declared SINGLE SOURCE for what the rule now evaluates and for
+# its three accepted boundaries. A pointer to a second page is read only after the DENY has
+# already been re-sent.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
 skills/cto-orchestration/SKILL.md 134
 skills/cto-orchestration/README.md 151
-skills/cto-orchestration/references/agentctl/README.md 230
+skills/cto-orchestration/references/agentctl/README.md 241
 skills/cto-orchestration/references/agents-md-orchestration-section.md 53
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42

@@ -815,6 +815,64 @@ def _umbrella_near(path):
     return None
 
 
+# ── rule (8) scope narrowing: is the cwd's own repo THIS session's project root? ───────────
+# FIELD MEASUREMENT (two machines, 2026-09-02): of 728 real guard DENYs, 598 were rule (8) —
+# and by hook cwd every one of the biggest buckets was the session's OWN project root (~246 of
+# them in the top five alone), i.e. commands that could not have hit the wrong repo. Only ~40
+# sat in a genuinely umbrella (non-repo) directory. Each false DENY costs a tool call + a rewrite.
+# THE DISCRIMINATOR, and why it is sound rather than clever: in Claude Code the shell cwd is
+# PERSISTENT inside the project tree and a `cd` out of the project root is RESET on the next
+# call ("Shell cwd was reset to <dir>"), so a cwd whose own git top level IS the session's
+# project root cannot be a drifted cwd pointing at a sibling repo — the 2026-07-26 accident
+# (session root = umbrella, cwd cd'd into one repo, bare `gh` hit another) keeps its DENY
+# because THERE the session root is the umbrella, not the repo.
+# The session root is read off `transcript_path` (an official PreToolUse common input field):
+# `~/.claude/projects/<slug>/<session>.jsonl`, where <slug> is the project root with every
+# non-[A-Za-z0-9] character replaced by `-`. That encoding is NOT a published contract — it is
+# an empirical regularity (27 project dirs on this machine: 26 matched slug(the recorded cwd of
+# their newest transcript), the 1 miss being a directory whose repo had MOVED). So the test is
+# used in exactly ONE direction: equality ALLOWS, everything else keeps the existing DENY —
+# a codex seat (whose payload carries no `transcript_path`), an unreadable cwd, a nested repo,
+# a sibling repo and an umbrella session root all stay denied.
+# The encoding is also NOT injective (`/tmp/a.b` and `/tmp/a-b` share a slug), so two sibling
+# repos differing only in punctuation would license each other. Accept-DOCUMENTED (README
+# §cwd 锚定) and pinned as a test, not defended by machinery: it takes a hand-built pair of
+# repo names inside one umbrella, and the direction is ALLOW on a workspace the orchestrator
+# built itself.
+_SLUG = re.compile(r"[^A-Za-z0-9]")
+
+
+def _git_top(path):
+    """The nearest ancestor of `path` (symlinks resolved) carrying a `.git` file OR directory,
+    or None. Same realpath口径 as `_umbrella_near`, and NO subprocess: this runs on every
+    umbrella-scoped git/gh command, where `git rev-parse` would add a process spawn to a path
+    that already pays one `listdir` per ancestor."""
+    try:
+        p = os.path.realpath(path)
+    except Exception:
+        return None
+    while True:
+        if os.path.exists(os.path.join(p, ".git")):
+            return p
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+
+
+def _cwd_is_session_root(cwd, transcript):
+    """True when the repo enclosing `cwd` IS the project root this session was started in.
+    False on every unanswerable case (no/odd `transcript_path`, no enclosing repo, unreadable
+    path) — the ALLOW is the narrow claim, the DENY is the default."""
+    if not isinstance(transcript, str) or not transcript:
+        return False
+    slug = os.path.basename(os.path.dirname(transcript))
+    if not slug:
+        return False
+    top = _git_top(cwd)
+    return top is not None and _SLUG.sub("-", top) == slug
+
+
 def _registered_repos(cwd):
     """{repo NAME: absolute repo ROOT} for the umbrella's immediate git children, or {} when the
     register cannot be measured (both cases read the same to the caller: silence)."""
@@ -1212,8 +1270,17 @@ def main():
     def _exec_face(s):
         return _strip_spans(_unq8(s))
     orig8 = ti["command"]  # pre-heredoc-strip: quoted heredoc bodies are data EXCEPT to a shell consumer
+    cwd8 = data.get("cwd") or os.getcwd()
+    # SCOPE GATE, two conjuncts and the second one only ever SUBTRACTS: `_umbrella_near`'s scan
+    # (5 ancestors, >=2 direct git children) is unchanged, and after it fires the rule stands
+    # down for exactly one shape — the cwd's own repo IS this session's project root, where a
+    # drifted cwd cannot be pointing at a sibling (`_cwd_is_session_root`, and the field numbers
+    # that made it worth doing, are documented at module level). Everything else — session root
+    # IS the umbrella, cwd in a sibling repo, cwd in a repo nested inside one, no
+    # `transcript_path` at all (a codex seat) — keeps the DENY it has today.
     if ((re.search(r"\b(?:git|gh)\b", v8) or re.search(r"\b(?:git|gh)\b", orig8))
-            and _umbrella_near(data.get("cwd") or os.getcwd())):
+            and _umbrella_near(cwd8)
+            and not _cwd_is_session_root(cwd8, data.get("transcript_path"))):
         bad8 = _text_unanchored(v8h)
         if not bad8:
             # interpreter payloads execute too: bash -lc 'git status' hid git in a quoted span
@@ -1266,11 +1333,11 @@ def main():
                         break
         if bad8:
             sys.stderr.write(
-                "DENY: unanchored git/gh in a multi-repo umbrella — shell cwd drifts across tool "
-                "calls, so a bare git/gh can act on the WRONG repo. Fix: REWRITE the command (do "
-                "NOT resend the same text): prefix each call `git -C /abs/<repo>` / `gh -R "
-                "<owner>/<repo>`, or lead the line with `cd /abs/<repo> && …`. Repo-insensitive "
-                "forms (git --version, gh auth/api …) pass. "
+                "DENY: unanchored git/gh in a multi-repo umbrella — the session root IS the "
+                "umbrella, or this cwd is another repo in it, so a bare git/gh hits the WRONG "
+                "repo. Fix: REWRITE, do NOT resend: prefix each call `git -C /abs/<repo>` / "
+                "`gh -R <owner>/<repo>`, or lead with `cd /abs/<repo> && …` — a DENIED command "
+                "never ran its `cd`. git --version / gh auth pass. "
                 "Read: cto-orchestration/references/agentctl/README.md §cwd 锚定.\n"
             )
             return 2

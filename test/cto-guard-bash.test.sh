@@ -473,6 +473,69 @@ GUARD_CWD="$ISO_REPO"
 run 'git status'
 chk_eq "single-repo scope gate never fires" 0 "$RC"
 
+# ── (8) SCOPE NARROWING: the cwd's own repo IS this session's project root ───────────────────
+# 598 of 728 real guard DENYs were rule (8), and by hook cwd the biggest buckets were the
+# session's OWN project root — commands that could not have hit the wrong repo. The rule now
+# stands down for exactly that shape, decided by `transcript_path`'s parent directory
+# (`~/.claude/projects/<slug>/`, slug = the project root with every non-alphanumeric byte
+# replaced by `-`). Every payload below CONSTRUCTS that path as a string: nothing here reads or
+# writes the real `~/.claude`, and the umbrella itself is the same synthetic fixture as above.
+# The ALLOW is the narrow claim — the six negatives are the contract.
+mkcmd_tp() { # $1 command  $2 cwd  $3 transcript-project-root ("-" omits transcript_path)
+  python3 -c 'import json,os,re,sys
+ti={"command":sys.argv[1]}
+d={"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":ti,"cwd":sys.argv[2]}
+if sys.argv[3]!="-":
+    slug=re.sub(r"[^A-Za-z0-9]","-",sys.argv[3])
+    d["transcript_path"]="/Users/nobody/.claude/projects/%s/g8-session.jsonl"%slug
+print(json.dumps(d))' "$@"; }
+run_tp() { # $1 command  $2 cwd  $3 transcript-project-root ("-" = no transcript_path)
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(mkcmd_tp "$1" "$2" "$3" | python3 "$GUARD" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+# The slug is built from the REALPATH of the project root, because that is the 口径 the guard
+# resolves the payload cwd with (`mktemp -d` hands out `/var/folders/…`, a symlink to
+# `/private/var/…`, so the two spellings would never match by accident).
+r8_real() { (cd "$1" && pwd -P); }
+run_tp 'git status' "$UMB_ROOT" -
+chk_eq "r8-neg-umbrella-root-no-tp: no transcript_path at the umbrella root still denies" 2 "$RC"
+run_tp 'git status' "$UMB_ROOT/a" "$(r8_real "$UMB_ROOT/a")"
+chk_eq "r8-pos-repo-root-is-session: cwd's repo IS the session root — allowed" 0 "$RC"
+chk_eq "r8-pos-repo-root-is-session writes nothing to stderr" "" "$ERR"
+chk_eq "r8-pos-repo-root-is-session is silent on stdout too" "" "$OUT"
+# Every NEGATIVE below also feeds a REALPATH-based slug, so the only reason it denies is the one
+# named in its assertion — a `/var` vs `/private/var` spelling would deny for a second, unrelated
+# reason and the assertion would pass with the rule mis-wired (mutation A3/A4 measured exactly
+# that: both slipped through until these fixtures were realpath'ed).
+run_tp 'git status' "$UMB_ROOT/a" "$(r8_real "$UMB_ROOT")"
+chk_eq "r8-neg-session-is-umbrella: session root IS the umbrella — the 2026-07-26 shape, denied" 2 "$RC"
+mkdir -p "$UMB_ROOT/b"
+run_tp 'git status' "$UMB_ROOT/b" "$(r8_real "$UMB_ROOT/a")"
+chk_eq "r8-neg-sibling-repo: cwd is a SIBLING of the session root's repo — denied" 2 "$RC"
+mkdir -p "$UMB_ROOT/a/nested/.git"
+run_tp 'git status' "$UMB_ROOT/a/nested" "$(r8_real "$UMB_ROOT/a")"
+chk_eq "r8-neg-nested-in-umbrella-repo: a nested repo's own top level is not the session root" 2 "$RC"
+run_tp 'git status' "$UMB_ROOT/a" -
+chk_eq "r8-neg-no-tp-at-repo-root: a codex-shaped payload (no transcript_path) keeps the DENY" 2 "$RC"
+# ACCEPTED, DOCUMENTED BOUNDARY (README §cwd 锚定): the slug encoding is not injective, so two
+# sibling repos differing only in punctuation license each other. Pinned here so the direction
+# is a decision and not an accident — changing it means changing this assertion AND the README.
+mkdir -p "$G8ROOT/collide/a.b/.git" "$G8ROOT/collide/a-b/.git"
+run_tp 'git status' "$G8ROOT/collide/a-b" "$(r8_real "$G8ROOT/collide/a.b")"
+chk_eq "r8-doc-slug-collision: punctuation-only sibling names share a slug — ALLOWED (accepted)" 0 "$RC"
+# and the same fixture proves the gate is otherwise live in that directory
+run_tp 'git status' "$G8ROOT/collide/a-b" "$(r8_real "$G8ROOT/collide")"
+chk_eq "r8-doc-slug-collision control: the umbrella session root there still denies" 2 "$RC"
+# A SYMLINKED cwd is judged by realpath (the same 口径 `_umbrella_near` uses), so a slug built
+# from the link path does not match: conservative direction, DENY.
+ln -s "$UMB_ROOT/a" "$G8ROOT/link-r8"
+run_tp 'git status' "$G8ROOT/link-r8" "$G8ROOT/link-r8"
+chk_eq "r8-neg-symlinked-cwd: a slug built from the LINK path does not match realpath — denied" 2 "$RC"
+chk_contains "r8 the deny still names the real conditions" "the session root IS the umbrella" "$ERR"
+chk_not_contains "r8 and no longer blames cwd drift across tool calls" "drifts across tool" "$ERR"
+GUARD_CWD="$ISO_REPO"
+
 # non-dispatch command -> silent
 run 'git status'
 chk_eq "non-dispatch silent" "" "$OUT"

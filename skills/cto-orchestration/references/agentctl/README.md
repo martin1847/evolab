@@ -228,3 +228,14 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 
 伞形多仓里 shell cwd 跨调用漂移会让 git/gh 打错仓——每段含 git/gh 的命令自带锚（`cd /abs/<repo> && …`
 或 `git -C <path>` / `gh -R <owner>/<repo>`）；guard ⑧ 在伞形根硬拦无锚 git/gh，单仓永不触发。
+
+guard ⑧ 的判据（2026-09-02 收窄；两机 728 次真实 DENY 里 598 条是这条规则，按 hook cwd 归因最大的桶全是
+session 自己的项目根——那种 cwd 打不到别的仓）：**只在 cwd 或 5 层祖先内存在多仓伞形时评估**（扫描语义不变，
+单仓永不触发）；评估时 **cwd 所在 git 顶层 == 本 session 项目根 → 不触发**（Claude Code 里 shell cwd 在项目树内
+跨调用持久、`cd` 出项目根后下一条被拉回，所以这种 cwd 不可能是漂到兄弟仓的 cwd；session 根从 hook payload 的
+`transcript_path` 父目录名反解：目录名 = 项目根路径把每个非 `[A-Za-z0-9]` 字符换成 `-`——**实测归纳、非官方契约**，
+所以只用一个方向：相等才放行）。**照拦**：session 根本身就是伞形（2026-07-26「PR 开错仓」的形态）、cwd 落在伞形内
+另一个仓（含该仓之下的嵌套仓）、payload 无 `transcript_path`（codex 席位）、cwd 不可读。三条 accepted 边界：
+① 外层仓 + 单个嵌套仓且 5 层祖先内无伞形 → 规则从不评估（现状，不变）；② slug 编码非单射，同一伞形下仅以标点
+区分的兄弟仓（`a.b` / `a-b`）会互认 → 放行，accept-documented（钉成断言 `r8-doc-slug-collision`，要改方向先改
+那条断言与本节）；③ cwd 经 symlink 指到仓根时按 realpath 判，slug 不等 → 照拦（保守方向）。
