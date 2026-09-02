@@ -67,7 +67,7 @@
   且全部是指针类〔路径/URL/对象名/file:line〕，原理散文零腐烂）；文档成规模后配自动指针
   lint——脚本正则抽取指针分档机械核查（路径/符号离线、URL/对象在线），零人工标注。
 - 重复 / 矛盾的 memory 合并或删除；已过时的 workstream 状态更新。
-- MEMORY.md 索引 ≤40 行，按类型分组（iron rules / active / completed / reference）。
+- MEMORY.md 是索引（一行一条，宿主只加载前 200 行 / 25KB，且不进非 fork 子 agent），条目按宿主四类 `user / feedback / project / reference` 落文件；索引行只留指针与一句 hook。
 
 ## session 切换决策（步骤 7 展开）
 

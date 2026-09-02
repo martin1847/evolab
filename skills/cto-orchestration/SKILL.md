@@ -35,6 +35,15 @@ metadata:
 另有 **Agent subagent**（浏览器 / MCP / 隔离主上下文的读密集工作：独立上下文、只回蒸馏结论、显式按任务分档 model）。
 需要人工现场时直接 `tmux attach` 旁观，worker 控制始终走协议。
 
+原生工具与 lane 的边界（选错一次就是一晚，2026-09-02 一席自锁 2h03m）：
+
+| 需求 | 用什么 | 不用什么 |
+|---|---|---|
+| worker 会话终态 / 交付物 freshness | `agentctl watch`（typed exit） | Monitor 之类文件/进程观察器——不产 typed 终态 |
+| 等长外部作业（CI / 部署 / 远端队列） | 宿主长间隔 wakeup（如 ScheduleWakeup / loop） | 反复重挂 watch |
+| 席位间即时提醒（同机在线） | 宿主 SendMessage 类即时通道 | agent-mail（它管跨机 / 跨 harness / 需归档的信） |
+| 读密集、结论小的取证 | Agent subagent（显式 model 档） | 主上下文亲读 |
+
 文件任务必须声明 `--deliverable <glob>`（相对 glob 按会话 cwd 解析），让 runtime 做 freshness gate；非文件结果不带。lane 的完整限制、状态与命令见 `references/agentctl/README.md`。
 
 ## 1. 每次派工闭环
@@ -56,6 +65,9 @@ metadata:
 
 - 按风险定深度：低风险走轻量 review；鉴权、迁移、基建、大重构走 `references/review-dispatch.md` 的完整循环。
 - **goal 评审：白名单免评，其余必评**——命中免评白名单（唯一清单在 `references/review-dispatch.md` §goal-review，共同硬门=不新增任何决策面）→ 跳过；未命中或拿不准 → 派发前 1 轮冷上下文 goal-review（仪器六问 + 契约三问，同节）。
+- **档位按「改动大小 × 是否新增判断面」判，不按文件类型**（guard 文件不自动等于深档）：XS = 轻改车道（下文）；
+  S = ≤50 产品行且不新增判据/门/状态、或有参考实现 → 不做 goal-review、单席实现 + 1 轮冷评审；
+  M = 新增判断面或 50–300 行 → goal-review 1 轮 + 深档 blocking 驱动；L = 新状态机 / 跨模块 → M + 方案预审给主理人。
 - **直写也要合同**：编排位自己直写 shipped 面（教义 / 门 / guard）动手前，同样先写最小合同——
   Done-when + 坏样本来源 + scope 三行即可，评审 brief 随附；无合同的直写单元评审者当 finding 报。
 - brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。

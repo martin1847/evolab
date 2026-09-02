@@ -176,10 +176,10 @@ EOF
 # D10-1's 244→255, and 258 is the measured value, not a rounded-up allowance.
 PROSE_SUBTREE='skills/cto-orchestration'
 PROSE_BASELINES='
-skills/cto-orchestration/SKILL.md 134
+skills/cto-orchestration/SKILL.md 146
 skills/cto-orchestration/README.md 151
 skills/cto-orchestration/references/agentctl/README.md 258
-skills/cto-orchestration/references/agents-md-orchestration-section.md 53
+skills/cto-orchestration/references/agents-md-orchestration-section.md 55
 skills/cto-orchestration/references/decision-queue.md 76
 skills/cto-orchestration/references/dispatch-baseline.md 42
 skills/cto-orchestration/references/frontend-verify.md 104
@@ -190,7 +190,7 @@ skills/cto-orchestration/references/onboarding-checklist.md 23
 skills/cto-orchestration/references/ops-prompt-template.md 43
 skills/cto-orchestration/references/retrospective.md 81
 skills/cto-orchestration/references/review-brief-preamble.md 29
-skills/cto-orchestration/references/review-dispatch.md 208
+skills/cto-orchestration/references/review-dispatch.md 209
 skills/cto-orchestration/references/shock-in-the-loop.md 58
 skills/cto-orchestration/references/stocktake.md 25
 '
@@ -480,7 +480,7 @@ chk_contains "P3 breach names the commit-message obligation" "commit message" "$
 # here would both drift from the rule and hide the arm that matters: the small-file arm below,
 # which a flat constant left permanently dead.
 SK_SLACK="$(prose_slack "$SK_BASE")"
-chk_eq "P4 SKILL.md's slack is max(5, baseline/10) floored" 13 "$SK_SLACK"
+chk_eq "P4 SKILL.md's slack is max(5, baseline/10) floored" 14 "$SK_SLACK"
 
 mk_prosefix "$SANDBOX/newlow" "$SK=$((SK_BASE - SK_SLACK - 1))"
 run_gate --gate-prose "$SANDBOX/newlow"

@@ -15,7 +15,7 @@
 >   `orchestrator-core/references/resident-digest.md`，全局没并入才增补到此层。
 > - **①委派边界 vs goal 合同 Guardrails**：有意重叠的纵深防御——goal = 每任务具体合同（精确
 >   scope / flag 名 / 存疑协议），①= 无合同或合同漏写时的**常驻一句话级兜底**，具体化留给 goal。
-> <!-- canonical: templates/CLAUDE.md.example @sha256:ad146dd714ca -->
+> <!-- canonical: templates/CLAUDE.md.example @sha256:ab381d194232 -->
 
 ```markdown
 ## 委派 Agent 边界（防漂移 anti-drift，常驻兜底；每任务的具体化见 goal 合同）
@@ -48,6 +48,8 @@
   验了什么 / 什么没验 / 剩余风险。依赖“没看到 X”作决策前，先用已知阳性证明看得见 X；否则结论为 `UNKNOWN`。
 - **输出纪律**：动手前一句话意图可以有、禁逐步叙述；不奉承附和（"You're right / Great question"）、
   错了直接说错了就改、不过度道歉；对已批准事项不再次请示。
+- **解释纪律**：主理人的问句 = 要判断与依据，不是执行令；"先讨论"期间零改动；单次否决不外推成常设规则；
+  偏离既定协议（watcher / 评审 / 合并门）必须当场声明理由，不静默换路（下游席位 2026-09-02 n≥4）。
 - **真路径间隔阈值**：<本项目的真实用户路径是哪几条 + 距上次走通超过多久即停下冒泡，含单位；
   未填 = 该闸未装，别默认一个数>。
 ```
