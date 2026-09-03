@@ -43,7 +43,7 @@ q() { printf %q "$1"; }
 ctl() { "$PY" "$CTL" --run-dir "$DIR" "$@"; }
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
-  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [--expect MINUTES] [engine args...]" >&2
+  echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [--expect MINUTES] [engine args...]   # session = <proj>-<task>-<engine>, e.g. shop-cart-omp (prefix = who owns it in tmux ls)" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
   echo "       agentctl status <session> | watch <session> [--inline] [--expect MINUTES] | stop <session> [cwd] | capabilities [--json] | states [--json]" >&2
   echo "       agentctl phases [--since <N>m|<N>h|<N>d|RFC3339] [--repo <abs>] [--json]   # read-only ledger readings" >&2
