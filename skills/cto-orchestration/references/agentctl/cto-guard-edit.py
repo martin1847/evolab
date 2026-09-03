@@ -44,7 +44,7 @@ _OVERRIDE = "/tmp/cto-allow-direct-write"
 _RUN_DEFAULT = "/tmp/agent-watch-run"       # duplexctl's own default for --run-dir
 
 # The three ALLOW+WARN texts, as module-level literals emitted through an INLINE json.dumps at
-# each branch. Not a style choice: the injected-text ratchet (test/context-budget.test.sh)
+# each branch. Not a style choice: the injected-text ratchet (test/loc-budget.test.sh)
 # weighs literals AT the sink and resolves one local per sink, so a message routed through a
 # `warn(text)` helper's parameter would be spent entirely unweighed — the exact blind spot that
 # gate's header warns about. Keeping the literal at the sink keeps every byte on the meter.

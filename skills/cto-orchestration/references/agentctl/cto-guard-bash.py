@@ -456,7 +456,7 @@ def _brief_review(raw, vpipe, cwd):
     """(reason, hits, path) for the first direct `agentctl start codex … --goal <f>`.
     All-None = nothing to say; `reason` = a SHORT why-not, `hits` = matched phrases.
 
-    Returns DATA, never prose: the injected-text ratchet (test/context-budget.test.sh) weighs
+    Returns DATA, never prose: the injected-text ratchet (test/loc-budget.test.sh) weighs
     string literals at the sink, so a message assembled in a helper would be spent unweighed.
     ADVISORY: every failure path yields a reason and the caller still exits 0. The blanket
     except is load-bearing, not laziness — an escaping exception is caught by the __main__

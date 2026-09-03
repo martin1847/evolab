@@ -8,7 +8,7 @@
 #   a) 有套件的文本里出现该文件的**完整 repo-relative 路径** → 选这些套件（path-certain，
 #      路径唯一标识文件，没有同名歧义）；
 #   b) 否则，若该 basename 在仓库树里**恰好只出现在一个路径上** → 退回 basename 匹配
-#      （`grep -lwF`，`-`/`.` 是非 word 字符，所以 `agentctl` 也命中 `agentctl-weight`；
+#      （`grep -lwF`，`-`/`.` 是非 word 字符，所以 `agentctl` 也命中 `agentctl-duplex`；
 #      误宽刻意保留，宁多选不少选）；
 #   c) 否则（basename 在仓内多路径重名，例如 README.md / SKILL.md）→ FULL-FALLBACK。
 #      重名时「某套件提到这个 basename」不能证明它提的是**这个**文件，选择证据失效，全量兜底。

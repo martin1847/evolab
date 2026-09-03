@@ -126,8 +126,8 @@ survivor_advise() { # $1 session — stderr advisory only; never signals, never 
 # wait is decided by what the contract PROMISED, never by who happens to be watching. Silence in
 # the contract means start — the failure cost of a bounded false start beats deadlocking every
 # lane that never promised a handshake.
-# Every byte here is paid once per session and competes with the goal for attention, so the
-# budget is a gate (test/context-budget.test.sh), not a good intention. Two things were cut when
+# Every byte here is paid once per session and competes with the goal for attention (the
+# mechanical footer meter retired with test/context-budget.test.sh). Two things were cut when
 # the write-the-file and stamp-the-file sentences merged: the duplicated "when you write that
 # file" lead-in, and the note that an unstamped blocker still works. The latter is true — the
 # runtime keeps accepting one, and test/agentctl-identity.test.sh N2 holds that behaviour — but

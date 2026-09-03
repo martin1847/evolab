@@ -47,7 +47,7 @@ from typing import Optional
 _LIVENESS = "seat-liveness.py"
 
 # Both texts are module literals spent AT their sink (inline `json.dumps`), which is what keeps
-# them on the injected-text meter (test/context-budget.test.sh weighs literals at the sink and
+# them on the injected-text meter (test/loc-budget.test.sh weighs literals at the sink and
 # resolves one local per name — a message handed through a helper would be spent unweighed).
 _BLOCK = (
     "DENY: 结束 turn 时有 RUNNING 席位没人看 — %s%s%s. Why: 没有活 watcher 的 RUNNING 席位在你收工"
@@ -84,7 +84,7 @@ def _liveness() -> Optional[ModuleType]:
 def main() -> int:
     """ONE warn sink, on purpose: every unanswerable branch assigns `blind` and falls through to
     the single emit below. Four `print(json.dumps(...))` copies would each be weighed separately
-    by the injected-text meter (test/context-budget.test.sh resolves literals AT the sink), so
+    by the injected-text meter (test/loc-budget.test.sh resolves literals AT the sink), so
     the same sentence would be charged four times and the ratchet would stop meaning anything."""
     blind: Optional[str] = None
     try:

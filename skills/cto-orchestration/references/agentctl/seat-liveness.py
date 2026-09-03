@@ -60,7 +60,7 @@ _CENSUS_BUDGET = 20.0                      # ownership probe + every status, so 
 _NAG_DEFAULT = 600
 
 # The reminder text, as a module literal spent AT the sink below. Not a style choice: the
-# injected-text ratchet (test/context-budget.test.sh) weighs literals at the sink and resolves
+# injected-text ratchet (test/loc-budget.test.sh) weighs literals at the sink and resolves
 # one local per name, so text routed through a helper's return value would be spent unweighed.
 _NAG = ("RUNNING seats without a live watcher: %s%s%s — arm `agentctl watch <S>` in the host's "
         "background (never a foreground Bash) or `agentctl stop <S>`. An unwatched RUNNING seat "
