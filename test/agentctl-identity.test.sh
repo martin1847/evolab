@@ -29,7 +29,27 @@ if [ -z "$REAL_TMUX" ]; then
 fi
 
 TMUX_SOCK=""
+
+# tmux does NOT unlink a private server's socket file when that server dies, so minting one
+# socket per sandbox left 1738 dead `ws1id-*` files under the tmux tmpdir on this box (field
+# observation 2026-09-03). Reaping is therefore TWO steps: stop the server, then remove its
+# socket file. The path is asked of the LIVE server instead of hand-built, and only falls back
+# to tmux's own layout once the server has already exited (a dead socket cannot be queried and
+# querying it never creates one). Every call carries -L: a bare kill-server would take the
+# machine's own default server with it.
+reap_socket_tmux() {
+  [ -n "$TMUX_SOCK" ] || return 0
+  local path
+  path="$("$REAL_TMUX" -L "$TMUX_SOCK" display-message -p '#{socket_path}' 2>/dev/null)"
+  "$REAL_TMUX" -L "$TMUX_SOCK" kill-server >/dev/null 2>&1
+  rm -f "${path:-${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$TMUX_SOCK}"
+  return 0
+}
+# a section that dies mid-way (or the whole suite failing under set -u) must not leak either
+trap reap_socket_tmux EXIT
+
 install_socket_tmux() { # every tmux call in agentctl lands on OUR private server
+  reap_socket_tmux                       # the sandbox before this one, if any
   TMUX_SOCK="ws1id-$$-${RANDOM}"
   cat > "$BIN/tmux" <<EOF
 #!/usr/bin/env bash
@@ -40,11 +60,6 @@ EOF
 exec /bin/sleep "$@"
 EOF
   chmod +x "$BIN/tmux" "$BIN/sleep"
-}
-
-kill_socket_tmux() {
-  [ -n "$TMUX_SOCK" ] && "$REAL_TMUX" -L "$TMUX_SOCK" kill-server >/dev/null 2>&1
-  return 0
 }
 
 # PRIVATE engine copies, under names no sibling suite can pattern-match. agentctl-duplex's
@@ -83,7 +98,7 @@ sweep_private_engines() {
 }
 
 teardown() {
-  kill_socket_tmux; sweep_private_engines; unset FAKE_OMP_STATE_FILE FAKE_PROVIDER_LOG
+  reap_socket_tmux; sweep_private_engines; unset FAKE_OMP_STATE_FILE FAKE_PROVIDER_LOG
   # a diagnostic dump asks for the tree to survive: an assertion nobody can explain later is
   # exactly what made the R3 flake UNKNOWN instead of attributable
   if [ "${KEEP_SANDBOX:-0}" = 1 ]; then
@@ -831,7 +846,7 @@ chk_eq "Q1 a legacy record (no flag) still replays, and replays without a rebuil
 # ─────────────────────────────────────────────────────────────────────────────────────────
 echo "== complexity budget: no new long-running process, no out-of-scope file touched =="
 SB="$SANDBOX"; SOCK="$TMUX_SOCK"
-kill_socket_tmux; sweep_private_engines
+reap_socket_tmux; sweep_private_engines
 /bin/sleep 0.5
 resid="$(ps -Ao command= 2>/dev/null | grep -F -e "$SB" -e "$SOCK" | grep -v grep | grep -c . )"
 chk_eq "ps: nothing from this suite outlives it (no daemon, no leaked engine)" 0 "$resid"

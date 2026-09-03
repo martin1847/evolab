@@ -184,8 +184,8 @@ assert_has "$out" "git -C $(printf '%q' "$np") reset --hard origin/main" "Q/rese
 # Case R — a live tmux session in NO record → FOREIGN warn, rc unchanged, session untouched.
 # Real tmux on a private socket (shim on PATH) so the machine's own sessions stay invisible.
 if command -v tmux >/dev/null 2>&1; then
-  rt="$(command -v tmux)"; ftd="$(mktemp -d)"
-  printf '#!/bin/sh\nexec %s -L rc-foreign-%s "$@"\n' "$rt" "$$" > "$ftd/tmux"; chmod +x "$ftd/tmux"
+  rt="$(command -v tmux)"; ftd="$(mktemp -d)"; fsock="rc-foreign-$$"
+  printf '#!/bin/sh\nexec %s -L %s "$@"\n' "$rt" "$fsock" > "$ftd/tmux"; chmod +x "$ftd/tmux"
   r="$(mkrepo)"; aw="$(mkaw)"
   # tmux lists sessions alphabetically: the recorded pair sorts BEFORE the foreign one, so
   # a broken record filter would prepend them and break the exact "FOREIGN: <name>" literal.
@@ -195,7 +195,13 @@ if command -v tmux >/dev/null 2>&1; then
   "$ftd/tmux" new-session -d -s rcf-zforeign sleep 300     # nobody's record → FOREIGN
   out="$(runaw "$r" "$aw" "$ftd")"; rc=$?
   alive="$("$ftd/tmux" has-session -t "=rcf-zforeign" 2>/dev/null && echo ALIVE || echo GONE)"
+  # kill-server stops the private server but tmux never unlinks its socket file, so ask the
+  # still-live server for the real path and remove it after — otherwise every run of this
+  # suite leaves one more dead rc-foreign-* file in the tmux tmpdir. -L only: the machine's
+  # default server is never a target here.
+  fpath="$("$rt" -L "$fsock" display-message -p '#{socket_path}' 2>/dev/null)"
   "$ftd/tmux" kill-server >/dev/null 2>&1
+  rm -f "${fpath:-${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$fsock}"
   assert_rc "$rc" 0 "R/foreign is warn-only"
   assert_has "$out" 'FOREIGN: "rcf-zforeign"' "R/foreign named, recorded session+watchd excluded"
   assert_has "$alive" "ALIVE" "R/foreign session left running (只报不杀)"
