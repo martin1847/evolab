@@ -885,24 +885,6 @@ chk_contains "status surfaces the unresolved death" "previous watcher killed ext
 chk_contains "attribution carries the tombstone record" '"signal":"TERM"' "$out"
 chk_contains "death note keeps the semantic warning" "killed ≠ worker dead" "$out"
 
-# batch reaping: a second gated session TERM'd seconds later = same reap event
-bash "$AGENTCTL" start claude twS "$WT" --goal "$tgoal" >/dev/null 2>&1
-AGENT_WATCH_POLL_SECS=15 bash "$AGENTCTL" watch twS > "$SANDBOX/tws.log" 2>&1 &
-WP2=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$WATCH_RUN_DIR/twS.duplex.watch.pid" ] && break; /bin/sleep 0.2; done
-kill -TERM "$WP2"; wait "$WP2" 2>/dev/null
-out="$(bash "$AGENTCTL" status twR 2>&1)"
-chk_contains "same-event peer named for batch re-arm" "watchers of: twS" "$out"
-chk_contains "peer note prompts re-arming each" "re-arm each" "$out"
-printf '%s\n' "$$" > "$WATCH_RUN_DIR/twS.duplex.watch.pid"   # peer re-armed: live pid
-out="$(bash "$AGENTCTL" status twR 2>&1)"
-chk_not_contains "re-armed peer drops off the reap list" "re-arm each" "$out"
-rm -f "$WATCH_RUN_DIR/twS.duplex.watch.pid"
-touch -t 202601010000 "$WATCH_RUN_DIR/twS.watch.tombstone.jsonl"   # distant death = different event
-out="$(bash "$AGENTCTL" status twR 2>&1)"
-chk_not_contains "old tombstone is not this reap event" "re-arm each" "$out"
-chk_contains "own-death attribution survives without peers" "previous watcher killed externally" "$out"
-
 # arming supersedes the prior death: watch rotates the tombstone into .consumed
 AGENT_WATCH_POLL_SECS=15 bash "$AGENTCTL" watch twR > "$SANDBOX/tw2.log" 2>&1 &
 WP3=$!
@@ -915,6 +897,11 @@ out="$(bash "$AGENTCTL" status twR 2>&1)"
 chk_contains "no active tombstone → plain no-watcher note" "no watcher armed" "$out"
 chk_not_contains "consumed death is never re-reported" "previous watcher killed externally" "$out"
 
+bash "$AGENTCTL" start claude twS "$WT" --goal "$tgoal" >/dev/null 2>&1
+AGENT_WATCH_POLL_SECS=15 bash "$AGENTCTL" watch twS > "$SANDBOX/tws.log" 2>&1 &
+WP2=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$WATCH_RUN_DIR/twS.duplex.watch.pid" ] && break; /bin/sleep 0.2; done
+kill -TERM "$WP2"; wait "$WP2" 2>/dev/null
 bash "$AGENTCTL" stop twS >/dev/null 2>&1
 chk_eq "stop consumes the tombstone (same-name restart safe)" 0 "$([ -e "$WATCH_RUN_DIR/twS.watch.tombstone.jsonl" ] && echo 1 || echo 0)"
 bash "$AGENTCTL" stop twR >/dev/null 2>&1

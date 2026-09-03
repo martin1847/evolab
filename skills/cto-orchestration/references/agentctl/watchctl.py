@@ -799,24 +799,6 @@ def cmd_status(args: argparse.Namespace) -> int:
             if last:
                 print(f"note: previous watcher killed externally — {last} — "
                       "killed ≠ worker dead")
-            # The host reaps background tasks in batches. Correlation here is tombstone-mtime
-            # proximity only — honest wording, no causality claim.
-            peers = ""
-            for peer_tomb in sorted(globmod.glob(os.path.join(run, "*.watch.tombstone.jsonl"))):
-                if not os.path.isfile(peer_tomb) or peer_tomb == tomb:
-                    continue
-                peer = os.path.basename(peer_tomb)[: -len(".watch.tombstone.jsonl")]
-                if watcher_alive(run, peer):
-                    continue
-                try:
-                    close = abs(os.path.getmtime(peer_tomb) - os.path.getmtime(tomb)) <= 120
-                except OSError:
-                    close = False
-                if close:
-                    peers += f" {peer}"
-            if peers:
-                print(f"note: watchers of:{peers} also died within ±120s (likely one reap) "
-                      "— re-arm each")
     return rc
 
 def cmd_watch_tombstone(args: argparse.Namespace) -> int:

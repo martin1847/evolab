@@ -107,9 +107,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   tmux 里没被碰过，重挂只是重新读记录，连本轮结论都不丢（下线期间算出的终态照样在盘上等着）。
   归因看 tombstone：trap 在退出前落 `$RUN/<s>.watch.tombstone.jsonl`（ts / signal / ppid /
   uptime——发送方沙箱内不可见，事后只有这一行可查）。宿主一次事件会成批收割全部后台 watcher，
-  且 killed 通知本身可能随会话一起丢——`status` 对 RUNNING+无 watcher 的会话自动打死亡归因行、
-  并点名 ±120s 邻近窗口内一同死亡的其他 watcher（邻近 ≠ 因果），照单逐个重挂；重挂或 `stop`
-  即消费 tombstone（转 `.consumed` 留取证），已消解的死亡不复报。
+  且 killed 通知本身可能随会话一起丢——`status` 对 RUNNING+无 watcher 的会话自动打死亡归因行；
+  重挂或 `stop` 即消费 tombstone（转 `.consumed` 留取证），已消解的死亡不复报。
 - 引擎二进制可用 env 覆盖（测试缝 + 自定装机位）：`AGENTCTL_BIN_OMP` / `AGENTCTL_BIN_CLAUDE` / `AGENTCTL_BIN_CODEX`。
 - exit 6 `IDLE-NO-DELIVERABLE` 用 `agentctl steer` 补一刀，**不要 stop**；`stop` 只用于收工或明确放弃。
   verdict 行后可能跟 `possible misplaced deliverable: "<abs path>"`（有界扫 cwd 找同名错位产物，
