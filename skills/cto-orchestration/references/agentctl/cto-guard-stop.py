@@ -7,9 +7,8 @@
 Field, 2026-09-02: the orchestrator seat came back from a review round, ran one forensic command
 and ended its turn. A seat was RUNNING, its watcher had been TERM'd with the host's task, and no
 wakeup was armed — 44 minutes of pure idle until a human asked. Prose cannot reach that moment:
-it is the instant the turn ends, and only the Stop event runs there. The prompt-time twin
-(`seat-liveness.py`, SessionStart|UserPromptSubmit) covers "after the fact"; this covers "the
-moment of".
+moment of". The prompt-time twin that used to cover "after the fact" was deleted 2026-09-03
+(减法批); its seat census stayed, as `seat-census.py`.
 
 FAIL-OPEN, ALWAYS. A Stop hook is the only gate whose false positive costs every turn end in the
 session, so every unanswerable case (unparseable payload, unlistable run dir, missing agentctl, a
@@ -20,9 +19,9 @@ Claude Code / codex set it while already continuing because of a stop hook, and 
 how a Stop hook wedges a session (the harness also caps consecutive blocks at 8, which is a fuse,
 not a design).
 
-The seat census, the ownership filter and the "no watcher armed" predicate are IMPORTED from
-`seat-liveness.py` in this directory, never copied: two channels judging the same fact must not
-be able to disagree (same arrangement as cto-guard-bash importing cto-guard-edit's attribution).
+The seat census, the ownership filter and the "no watcher armed" predicate live in
+`seat-census.py` in this directory and are IMPORTED, never copied: the fact and the verdict over
+it stay separately readable, and a second consumer would not have to re-implement the fact.
 
 Wiring: entry in `guard-hooks.json` (Stop). Same script serves Claude Code and codex — both send
 `stop_hook_active` on stdin and both read `{"decision":"block","reason":…}` on stdout; codex needs
@@ -44,7 +43,7 @@ import sys
 from types import ModuleType
 from typing import Optional
 
-_LIVENESS = "seat-liveness.py"
+_CENSUS = "seat-census.py"
 
 # Both texts are module literals spent AT their sink (inline `json.dumps`), which is what keeps
 # them on the injected-text meter (test/loc-budget.test.sh weighs literals at the sink and
@@ -63,15 +62,15 @@ _WARN = (
 )
 
 
-def _liveness() -> Optional[ModuleType]:
-    """The seat census from the sibling script, or None when it cannot be loaded at all. A
+def _census_mod() -> Optional[ModuleType]:
+    """The seat census from the sibling module, or None when it cannot be loaded at all. A
     missing / unreadable sibling degrades to ALLOW+WARN like every other unanswerable case rather
-    than taking every turn end down with it. importlib because the filename is hyphenated;
-    `main()` there is under a `__main__` guard, so loading it has no side effects."""
+    than taking every turn end down with it. importlib because the filename is hyphenated; the
+    module is pure definitions with no entrypoint, so loading it has no side effects."""
     import importlib.util
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), _LIVENESS)
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), _CENSUS)
     try:
-        spec = importlib.util.spec_from_file_location("seat_liveness", path)
+        spec = importlib.util.spec_from_file_location("seat_census", path)
         if spec is None or spec.loader is None:
             return None
         mod = importlib.util.module_from_spec(spec)
@@ -98,9 +97,9 @@ def main() -> int:
             return 0                       # SubagentStop and every other event: not this rule's
         if data.get("stop_hook_active"):
             return 0                       # already continuing from a stop hook: stand down
-        mod = _liveness()
+        mod = _census_mod()
         if mod is None:
-            blind = f"{_LIVENESS} could not be loaded from this script's own directory"
+            blind = f"{_CENSUS} could not be loaded from this script's own directory"
         else:
             cwd = data.get("cwd")
             seen = mod.census(cwd if isinstance(cwd, str) else None, mod.run_dir())

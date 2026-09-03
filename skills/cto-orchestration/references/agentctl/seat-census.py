@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
-"""seat-liveness — SessionStart|UserPromptSubmit reminder: RUNNING seats nobody is watching.
+"""seat-census — which agentctl seats OF THIS REPO are RUNNING with no live watcher.
 
-It answers ONE question, and `cto-guard-stop.py` imports the same answer from here so the two
-channels can never disagree: which agentctl seats OF THIS REPO are RUNNING with no live watcher.
+A LIBRARY, not a hook entrypoint: `cto-guard-stop.py` imports `census()` from here and is its
+only consumer. It stays its own module instead of being inlined into the Stop gate so the FACT
+and the VERDICT over it remain separately readable, and so a second consumer never has to
+re-implement the fact.
 
 WHERE THE FACT COMES FROM. `agentctl status <s>` appends `note: no watcher armed — arm: agentctl
 watch <S>` when classify says RUNNING and the watcher pid is absent or dead (watchctl.py
@@ -19,34 +20,20 @@ seats whose meta `cwd=` sits at or under THIS payload's git top level are ours t
 账内 ≠ 你的). An undecidable top level does NOT widen into silence and does not filter either —
 it reports every seat and says the ownership question went unanswered.
 
-REMINDER, NOT A GATE, and the asymmetry with the Stop gate is deliberate: when the census cannot
-answer (unlistable run dir, missing agentctl, a status that never returned) this script stays
-SILENT, because a reminder that fires on a machine without agentctl is pure noise. The Stop gate
-announces its blindness instead, because there silence reads as approval.
+BLINDNESS IS REPORTED, NEVER SWALLOWED. When the census cannot answer (unlistable run dir,
+missing agentctl, a status that never returned, the budget spent) it returns `Census.blind` with
+the reason in one clause and an EMPTY seat list. Deciding what to do with that is the caller's:
+the Stop gate turns it into a fail-open WARN, because there silence would read as approval.
+Env: AGENT_WATCH_DIR (run dir).
 
-Wiring: entries in `guard-hooks.json` (SessionStart + UserPromptSubmit). Both events add plain
-stdout to the model's context, which is why this speaks in plain text and never JSON.
-Exit 0 always. 0 bytes = nothing to say.
-Throttle: the SAME seat set is reported at most once per `SEAT_LIVENESS_NAG_INTERVAL_SECS`
-(default 600) on UserPromptSubmit; SessionStart is NEVER throttled, because a new / resumed /
-compacted context has no memory of the previous reminder and the stamp it would consult was
-written for a conversation it cannot see (owner ruling 2026-09-02, accept-documented).
-Env: AGENT_WATCH_DIR (run dir), SEAT_LIVENESS_NAG_INTERVAL_SECS (default 600).
-
-PYTHON FLOOR 3.9, and it is load-bearing: the shipped entry is `#!/usr/bin/env python3`, which on
-a stock macOS host resolves to /usr/bin/python3 3.9.6. PEP 604 (`str | None`) is evaluated at
-class/module level and raises TypeError THERE, i.e. the hook dies before `main()` and the Stop
-gate degrades to "sibling could not be loaded" — a silently disabled gate. Annotations here use
-`typing.Optional`; PEP 585 (`list[str]`) is fine, it landed in 3.9.
-
-KILL CRITERION (slug `seat-liveness-nag`, retro GATE-AUDIT): four weeks with zero hits ⇒ delete
-it — a reminder that never names a seat is measuring nothing.
+PYTHON FLOOR 3.9, and it is load-bearing: the importer's shebang is `#!/usr/bin/env python3`,
+which on a stock macOS host resolves to /usr/bin/python3 3.9.6. PEP 604 (`str | None`) is
+evaluated at class/module level and raises TypeError THERE, i.e. this module fails to IMPORT and
+the Stop gate degrades to "census module could not be loaded" — a silently disabled gate.
+Annotations here use `typing.Optional`; PEP 585 (`list[str]`) is fine, it landed in 3.9.
 """
-import hashlib
-import json
 import os
 import subprocess
-import sys
 import time
 from typing import List, NamedTuple, Optional
 
@@ -57,14 +44,6 @@ _CALL_TIMEOUT = 5.0                        # per `agentctl status` / `git rev-pa
 _CENSUS_BUDGET = 20.0                      # ownership probe + every status, so a Stop hook can
                                            # never hang a turn end. The deadline is taken BEFORE
                                            # the git call, which is inside it, not beside it.
-_NAG_DEFAULT = 600
-
-# The reminder text, as a module literal spent AT the sink below. Not a style choice: the
-# injected-text ratchet (test/loc-budget.test.sh) weighs literals at the sink and resolves
-# one local per name, so text routed through a helper's return value would be spent unweighed.
-_NAG = ("RUNNING seats without a live watcher: %s%s%s — arm `agentctl watch <S>` in the host's "
-        "background (never a foreground Bash) or `agentctl stop <S>`. An unwatched RUNNING seat "
-        "is idle time until a human asks (2026-09-02: 44 minutes).")
 
 
 class Census(NamedTuple):
@@ -209,68 +188,3 @@ def census(cwd: Optional[str], run: str) -> Census:
         if _unwatched(out):
             seats.append(session)
     return Census(seats, overflow, owner is None, None)
-
-
-def _nag_interval() -> int:
-    try:
-        return int(os.environ.get("SEAT_LIVENESS_NAG_INTERVAL_SECS", str(_NAG_DEFAULT)))
-    except ValueError:
-        return _NAG_DEFAULT
-
-
-def _throttled(run: str, cwd: Optional[str], seats: List[str]) -> bool:
-    """True = this exact seat set was already reported for this cwd inside the interval. Keyed on
-    the SET, so a seat appearing or being armed speaks immediately instead of waiting out the
-    window. An unwritable stamp over-reminds and never silences: the stamp is a noise brake, and
-    a brake that fails must fail toward saying it."""
-    tag = hashlib.sha256(("\n".join(seats) + "\0" + (cwd or "")).encode("utf-8")).hexdigest()[:16]
-    stamp = os.path.join(run, "seat-liveness.nag")
-    now = time.time()
-    try:
-        with open(stamp, encoding="utf-8") as fh:
-            prev, _, at = fh.read().strip().partition(" ")
-        if prev == tag and now - float(at) < _nag_interval():
-            return True
-    except (OSError, ValueError):
-        pass
-    try:
-        with open(stamp, "w", encoding="utf-8") as fh:
-            fh.write(f"{tag} {int(now)}\n")   # FLOOR: `%.0f` rounds, so a stamp could sit up to
-            # half a second in the FUTURE and a zero/short interval then read as still-throttled
-    except OSError:
-        pass
-    return False
-
-
-def main() -> int:
-    try:
-        data = json.load(sys.stdin)
-    except Exception:
-        return 0
-    if not isinstance(data, dict):
-        return 0
-    event = data.get("hook_event_name")
-    cwd = data.get("cwd")
-    run = run_dir()
-    seen = census(cwd if isinstance(cwd, str) else None, run)
-    if seen.blind or not seen.seats:
-        return 0
-    # A new / resumed / compacted context has no memory of the previous reminder, so SessionStart
-    # is never throttled; mid-session prompts are rate-limited by the SAME-SET stamp (same split
-    # queue-freshness.py makes, same reason; owner ruling 2026-09-02 kept it as accept-documented).
-    if event != "SessionStart" and _throttled(run, cwd if isinstance(cwd, str) else None,
-                                              seen.seats):
-        return 0
-    cap_nag = (f" (+{seen.overflow} owned seat(s) past the {_SEAT_CAP}-seat census cap were not"
-               " checked)" if seen.overflow else "")
-    own_nag = (" [UNKNOWN-ownership: this cwd has no decidable git top level, so seats from other"
-               " checkouts may be listed]" if seen.unowned else "")
-    print(_NAG % (", ".join(seen.seats), cap_nag, own_nag))
-    return 0
-
-
-if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except Exception:
-        sys.exit(0)                        # a reminder must never break a prompt

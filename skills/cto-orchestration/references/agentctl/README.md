@@ -228,9 +228,9 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
   120s 内还在长 = 活的 → DENY（Agent 型 `.output` 常是静态 stub，判活主要靠 transcript）（**完成通知黑洞**与"零截图≠卡死"实证；override =
   `touch /tmp/cto-allow-kill-<id>`，适用于**任何经核实的杀单动机**——含"派错前提"，P0b）；
   Post·Agent：browser 派发注入 deadline-watch 提醒（必须 JSON `additionalContext`，纯 stdout 黑洞）。
-- **`cto-guard-stop.py`（Stop）+ `seat-liveness.py`（SessionStart|UserPromptSubmit）** — 本仓席位 `agentctl status` 说 RUNNING 且附
-  `no watcher armed`：结束 turn 时 block（reason 三件套）；prompt-time 出一行提醒（UserPromptSubmit 节流 10 分钟，SessionStart 不节流）。
-  **判不出一律 exit 0 + 一行 `systemMessage` WARN，绝不 block**；fail-open / 归属过滤 / 有界细则见两脚本头注与 `test/cto-guard-stop.test.sh`。
+- **`cto-guard-stop.py`（Stop）** — 本仓席位 `agentctl status` 说 RUNNING 且附 `no watcher armed`：
+  结束 turn 时 block（reason 三件套）；席位普查 / 归属过滤 / 谓词在同目录 `seat-census.py`（纯库、无 entrypoint），import 复用不复制。
+  **判不出一律 exit 0 + 一行 `systemMessage` WARN，绝不 block**；fail-open / 归属过滤 / 有界细则见两文件头注与 `test/cto-guard-stop.test.sh`。
 
 ### Wiring（CC / Codex / omp 都能坐编排位）
 
@@ -246,8 +246,8 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 
 Codex 的 Stop 片段（`<repo>/.codex/hooks.json`；`~/.codex/hooks.json` 与两层 `config.toml` 内联
 `[hooks]` 也认）——**结构以 codex 官方文档为准，不是 CC 那份的拷贝**：
-`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/abs/<安装根>/references/agentctl/cto-guard-stop.py"}]}]}}`
-（`UserPromptSubmit` / `SessionStart` 同形，换 `seat-liveness.py`）。**非托管 hook 必须先由用户
+`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/abs/<安装根>/references/agentctl/cto-guard-stop.py"}]}]}}`。
+**非托管 hook 必须先由用户
 `/hooks` 审阅并信任那份精确定义**（按 hash 记账，脚本一改就要重新信任；自动化才用
 `--dangerously-bypass-hook-trust`）——一份结构不合法的定义信任不了，本批也未做 codex 活体验证。
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# cto-guard-stop.py (Stop) + seat-liveness.py (SessionStart|UserPromptSubmit) — ONE fact, two
-# channels: a RUNNING agentctl seat of THIS repo with no live watcher. The Stop gate blocks the
-# turn end over it; the prompt-time script reminds about it.
+# cto-guard-stop.py (Stop) — a RUNNING agentctl seat of THIS repo with no live watcher blocks the
+# turn end. The fact itself (census, ownership filter, `no watcher armed` predicate) lives in the
+# `seat-census.py` the gate imports, so both files are exercised through the gate's real contract.
 #
 # Every case drives the REAL hook contract — a JSON payload on stdin, verdict read off stdout /
 # stderr / exit code — never a python-level call into a helper.
@@ -27,7 +27,7 @@ cd "$(dirname "$0")"
 
 SRC="../skills/cto-orchestration/references/agentctl"
 
-echo "== cto-guard-stop.py / seat-liveness.py =="
+echo "== cto-guard-stop.py / seat-census.py =="
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "    python3 not on PATH — stop guard test skipped"; exit 0
@@ -38,16 +38,15 @@ fi
 
 chk_eq "the shipped Stop gate is executable" 1 \
   "$([ -x "$SRC/cto-guard-stop.py" ] && echo 1 || echo 0)"
-chk_eq "the shipped liveness reminder is executable" 1 \
-  "$([ -x "$SRC/seat-liveness.py" ] && echo 1 || echo 0)"
+chk_eq "the census module the gate imports is present" 1 \
+  "$([ -f "$SRC/seat-census.py" ] && echo 1 || echo 0)"
 
 FIX="$(mktemp -d /tmp/ctostop.XXXXXX)"
 PKG="$FIX/pkg"; RUN="$FIX/run"; FAKE="$FIX/fake"
 mkdir -p "$PKG" "$RUN" "$FAKE"
 trap 'rm -rf "$FIX"' EXIT
-cp "$SRC/cto-guard-stop.py" "$SRC/seat-liveness.py" "$PKG/"
+cp "$SRC/cto-guard-stop.py" "$SRC/seat-census.py" "$PKG/"
 STOP="$PKG/cto-guard-stop.py"
-NAG="$PKG/seat-liveness.py"
 
 # The fake `agentctl`: `status <s>` prints the fixture for that session, records the call so the
 # census cap can be counted, and delays when told to — `<s>.sleep` is the "never answers" shape
@@ -82,7 +81,7 @@ seat() { # $1 session  $2 cwd  $3 stale|watched
   fi
 }
 reset_seats() {
-  rm -f "$RUN"/*.duplex.meta "$RUN/seat-liveness.nag" "$FAKE"/*.out "$FAKE"/*.sleep "$FAKE/calls"
+  rm -f "$RUN"/*.duplex.meta "$FAKE"/*.out "$FAKE"/*.sleep "$FAKE/calls"
   : > "$FAKE/calls"
 }
 
@@ -94,22 +93,9 @@ if sys.argv[1] != "-":
     d["cwd"] = sys.argv[1]
 print(json.dumps(d))' "$1" "$2" "${3:-Stop}"
 }
-nag_payload() { # $1 event  $2 cwd ("-" omits the key)
-  python3 -c 'import json,sys
-d = {"hook_event_name": sys.argv[1], "session_id": "abc", "prompt": "carry on"}
-if sys.argv[2] != "-":
-    d["cwd"] = sys.argv[2]
-print(json.dumps(d))' "$1" "$2"
-}
 run_stop() { # $1 payload  [$2 run-dir override]
   local tmpe; tmpe="$(mktemp)"
   OUT="$(printf '%s' "$1" | AGENT_WATCH_DIR="${2:-$RUN}" python3 "$STOP" 2>"$tmpe")"; RC=$?
-  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
-}
-run_nag() { # $1 payload  [$2 run-dir override]  [$3 nag interval]
-  local tmpe; tmpe="$(mktemp)"
-  OUT="$(printf '%s' "$1" | AGENT_WATCH_DIR="${2:-$RUN}" \
-        SEAT_LIVENESS_NAG_INTERVAL_SECS="${3:-600}" python3 "$NAG" 2>"$tmpe")"; RC=$?
   ERR="$(cat "$tmpe")"; rm -f "$tmpe"
 }
 field() { # $1 key  $2 stdout
@@ -270,71 +256,18 @@ chk_eq "S1 B3 the 20 foreign seats cost zero status calls" "z-own" "$(cat "$FAKE
 chk_not_contains "S1 B3 no phantom overflow is claimed for foreign metas" \
   "past the census cap" "$(field reason "$OUT")"
 
-# ── L1 THE REMINDER: same census, plain-text channel, silent when there is nothing to say ──
-reset_seats
-seat s1 "$ORCH" stale
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")"
-chk_eq "L1 an unwatched seat is reported at prompt time (exit 0)" 0 "$RC"
-chk_eq "L1 and nothing goes to stderr" "" "$ERR"
-chk_contains "L1 the line names the seat and the fix" \
-  "RUNNING seats without a live watcher: s1" "$OUT"
-chk_contains "L1 the line hands back the two actions" 'agentctl watch <S>' "$OUT"
-chk_eq "L1 it is ONE line" 1 "$(printf '%s\n' "$OUT" | grep -c .)"
-# the channel contract: UserPromptSubmit/SessionStart add PLAIN stdout as context, and a payload
-# that starts with `{` would be parsed as a hook decision object instead
-chk_eq "L1 the reminder is plain text, not JSON" 0 \
-  "$(printf '%s' "$OUT" | grep -c '^[{]')"
-
-reset_seats
-seat s1 "$ORCH" watched
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")"
-chk_eq "L1 a watched seat says nothing (0 bytes)" "" "$OUT$ERR"
-reset_seats
-seat s1 "$OTHER" stale
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")"
-chk_eq "L1 another checkout's seat says nothing" "" "$OUT$ERR"
-reset_seats
-seat s1 "$ORCH" stale
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")" "$FIX/no-such-run-dir"
-chk_eq "L1 a blind census stays SILENT (a reminder is not a gate)" "" "$OUT$ERR"
-
-# ── L1 THROTTLE: same seat set once per window; a changed set speaks at once ────────────────
-reset_seats
-seat s1 "$ORCH" stale
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")"
-chk_contains "L1 throttle: the first prompt speaks" "s1" "$OUT"
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")"
-chk_eq "L1 throttle: the second prompt with the same set is silent" "" "$OUT"
-run_nag "$(nag_payload SessionStart "$ORCH")"
-chk_contains "L1 throttle: SessionStart is never throttled (fresh context must see it)" "s1" "$OUT"
-seat s2 "$ORCH" stale
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")"
-chk_contains "L1 throttle: a CHANGED seat set speaks immediately" "s2" "$OUT"
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")"
-chk_eq "L1 throttle: and then holds again" "" "$OUT"
-run_nag "$(nag_payload UserPromptSubmit "$ORCH")" "$RUN" 0
-chk_contains "L1 throttle: the window is a real interval, not a one-shot latch" "s1" "$OUT"
-
 # ── R1 B1 THE SHEBANG'S PYTHON: stock interpreter on a clean PATH ──────────────────────────
 # The shipped entry is `#!/usr/bin/env python3`, and on a stock macOS host that is
 # /usr/bin/python3 3.9.6. A PEP 604 annotation (`str | None`) evaluated at module/class level
-# raises TypeError at LOAD time, so the reminder dies before `main()` and the Stop gate degrades
-# to "sibling could not be loaded" — a gate that reads as installed and never judges anything.
-# Asserting rc=0 alone would not have caught it either: the Stop script exits 0 on a load
-# failure BY DESIGN, so this arm demands the real verdict on both scripts.
+# raises TypeError at LOAD time — in the gate itself, or in the `seat-census.py` it imports, in
+# which case the gate degrades to "census module could not be loaded" and reads as installed
+# while judging nothing. Asserting rc=0 alone would not have caught it either: the Stop script
+# exits 0 on a load failure BY DESIGN, so this arm demands the real verdict, which is only
+# reachable when BOTH files loaded.
 if [ -x /usr/bin/python3 ]; then
   PYV="$(/usr/bin/python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
   reset_seats
   seat s1 "$ORCH" stale
-  tmpe="$(mktemp)"
-  out="$(printf '%s' "$(nag_payload UserPromptSubmit "$ORCH")" | PATH=/usr/bin:/bin \
-        AGENT_WATCH_DIR="$RUN" FAKE_DIR="$FAKE" /usr/bin/python3 "$NAG" 2>"$tmpe")"; rc=$?
-  err="$(cat "$tmpe")"; rm -f "$tmpe"
-  chk_eq "B1 seat-liveness runs under the stock python $PYV (rc)" 0 "$rc"
-  chk_eq "B1 and raises nothing (a load error would be here)" "" "$err"
-  chk_contains "B1 and still reports the seat there" \
-    "RUNNING seats without a live watcher: s1" "$out"
-  rm -f "$RUN/seat-liveness.nag"
   tmpe="$(mktemp)"
   out="$(printf '%s' "$(stop_payload "$ORCH" false)" | PATH=/usr/bin:/bin \
         AGENT_WATCH_DIR="$RUN" FAKE_DIR="$FAKE" /usr/bin/python3 "$STOP" 2>"$tmpe")"; rc=$?
@@ -361,11 +294,11 @@ fi
 # So: zero recorded calls + the budget message = the git call was inside the budget.
 SCALED="$FIX/scaled"; SLOWBIN="$FIX/slowbin"
 mkdir -p "$SCALED" "$SLOWBIN"
-cp "$PKG/cto-guard-stop.py" "$PKG/seat-liveness.py" "$PKG/agentctl" "$SCALED/"
+cp "$PKG/cto-guard-stop.py" "$PKG/seat-census.py" "$PKG/agentctl" "$SCALED/"
 sed -i '' -e 's/^_CALL_TIMEOUT = 5\.0/_CALL_TIMEOUT = 1.0/' \
-          -e 's/^_CENSUS_BUDGET = 20\.0/_CENSUS_BUDGET = 1.0/' "$SCALED/seat-liveness.py"
+          -e 's/^_CENSUS_BUDGET = 20\.0/_CENSUS_BUDGET = 1.0/' "$SCALED/seat-census.py"
 chk_eq "M2 the scaled copy really carries the scaled constants" 2 \
-  "$(grep -c '^_CALL_TIMEOUT = 1\.0 \|^_CENSUS_BUDGET = 1\.0 ' "$SCALED/seat-liveness.py")"
+  "$(grep -c '^_CALL_TIMEOUT = 1\.0 \|^_CENSUS_BUDGET = 1\.0 ' "$SCALED/seat-census.py")"
 printf '#!/usr/bin/env bash\nsleep 4\nexec /usr/bin/git "$@"\n' > "$SLOWBIN/git"
 chmod +x "$SLOWBIN/git"
 reset_seats
@@ -394,9 +327,9 @@ chk_eq "M2 git spent the census budget, so ZERO status calls were made" "" "$(ca
 # and normal machine noise are the same order as the budget itself, which is how the first M2
 # arm became a load-dependent flake (§R2.3 of the findings).
 sed -i '' -e 's/^_CALL_TIMEOUT = 1\.0/_CALL_TIMEOUT = 0.6/' \
-          -e 's/^_CENSUS_BUDGET = 1\.0/_CENSUS_BUDGET = 0.6/' "$SCALED/seat-liveness.py"
+          -e 's/^_CENSUS_BUDGET = 1\.0/_CENSUS_BUDGET = 0.6/' "$SCALED/seat-census.py"
 chk_eq "R2 the scan model carries the 0.6s budget" 1 \
-  "$(grep -c '^_CENSUS_BUDGET = 0\.6 ' "$SCALED/seat-liveness.py")"
+  "$(grep -c '^_CENSUS_BUDGET = 0\.6 ' "$SCALED/seat-census.py")"
 reset_seats
 for i in 1 2 3 4 5 6; do seat "m$i" "$ORCH" stale; done
 SCAN_EL="$FIX/scan-elapsed"

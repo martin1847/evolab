@@ -33,9 +33,9 @@ cd "$(dirname "$0")"
 SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 
 # ---- the three ceilings: measured on this tree, 2026-09-03 ------------------------------------
-CODE_MAX=12702      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+CODE_MAX=12615      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
 PROSE_MAX=1585      # every shipped *.md under the skill, summed wc -l
-INJECT_MAX=17314    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
+INJECT_MAX=16913    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 
 # ---- meters ------------------------------------------------------------------------------------
 # `wc -l` per file and summed, which is what the retired ratchets measured: a trailing line with
@@ -51,7 +51,7 @@ prose_lines="$(_sum_lines -name '*.md')"
 # SINK, in UTF-8 bytes. The sinks are where text actually leaves for an agent — sys.stderr.write
 # (a PreToolUse denial reason), the additionalContext / permissionDecisionReason / reason /
 # systemMessage fields of a json.dumps hook response, and a plain `print` (whose stdout the
-# harness adds to context on UserPromptSubmit / SessionStart). Text reaching a sink through one
+# harness adds to context on the two prompt-time events). Text reaching a sink through one
 # local variable is resolved, because that is how the longest messages are written.
 EXTRACT="$(mktemp)"; trap 'rm -f "$EXTRACT"' EXIT
 cat > "$EXTRACT" <<'PY'
@@ -126,12 +126,10 @@ def collect(path):
 print(sum(len(m.encode("utf-8")) for p in sys.argv[1:] for m in collect(p)))
 PY
 
-# Every shipped guard, by glob so a new one joins the meter on arrival (a sink in a file nobody
-# listed is a sink nobody weighs). `seat-liveness.py` is a hook entrypoint too, weighed when
-# present — the glob does not name it, so its removal leaves slack rather than an error.
+# Every shipped hook entrypoint, by glob so a new guard joins the meter on arrival (a sink in a
+# file nobody listed is a sink nobody weighs). `seat-census.py` is deliberately NOT here: it is a
+# pure library the Stop gate imports and has no sink of its own.
 GUARDS=("$SKILL_ROOT"/references/agentctl/cto-guard-*.py)
-[ -f "$SKILL_ROOT/references/agentctl/seat-liveness.py" ] \
-  && GUARDS+=("$SKILL_ROOT/references/agentctl/seat-liveness.py")
 inject_bytes="$(python3 "$EXTRACT" "${GUARDS[@]}" 2>/dev/null || echo 0)"
 
 if [ "${1:-}" = "--measure" ]; then
