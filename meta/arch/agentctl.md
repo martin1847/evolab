@@ -50,10 +50,12 @@
 - `agentctl-supervised-watch.test.sh`：`PROGRESS_BUDGET_*` 四赋值 + `progress_budget`（选中数硬编码 4）。
 - `agentctl-reap.test.sh`：`f"={name}"` 存在 / `"-t", name` 缺席 / `os.kill(` 唯一——三条 grep 面都是
   两文件并集（缺席断言两文件都空，唯一断言两文件合计 `1 1`）。
-- 文件身份门：`agentctl-weight.test.sh` 行数棘轮（拆文件须同 commit 改基线并为新模块加行）；
-  `agentctl-capabilities.test.sh` C10 bash/python 占比分母 = 同目录**全部 `*.py`**（棘轮 76/1000）。
-- 产品面门（`skill-face.test.sh`，两颗牙各自结账）：`skill-face-filename` 判 `skills/` 全树 basename 前缀（ARCHITECTURE/DESIGN/CONTRIBUTING/MAINTAINER/HACKING，大小写与扩展名无关）——维护者文档下沉本目录。
-- `skill-face-prose-ratchet` 判 `skills/cto-orchestration/**/*.md` 的 per-file 行数（基线 fb09bfb 实测；lock-new-low slack = `max(5, baseline/10)` 逐文件算，无死臂；表外新增 md 未登记即红）——bump 基线须同 commit 写理由。
+- 文件身份门：`agentctl-capabilities.test.sh` C10 bash/python 占比分母 = 同目录**全部 `*.py`**（棘轮 76/1000）。
+- 体量门（`loc-budget.test.sh`，2026-09-03 起替代 agentctl-weight / skill-face / context-budget / cto-docs-contract 四套）：
+  四条只升红的总量 ceiling（skill 代码总行 / 散文总行 / guard 注入总字节 / 单条注入消息字节）+ 孤儿文档金丝雀 +
+  三条回收断言（测试 white-box 动态载入禁令、goal-clauses ↔ goal-template 索引单源、量具读 0 判红）；无逐文件基线、
+  无理由字段。放弃项（新低未锁臂 / 注入普查召回探针 / footer 字节门 / 维护者文档文件名门 / docs-contract 其余族）
+  记在该套件头注 KNOWN BOUNDARY，现由评审看 diff 兜。
 - 直连 CLI 子命令的 134 个调用点与内部符号无关，只要 argv 前门不动就不动。
 
 ## 拆分裁决账（kill criterion 读数）

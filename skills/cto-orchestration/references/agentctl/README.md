@@ -191,43 +191,28 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 `.claude/settings.json` / Codex `.codex/hooks.json` 同格式）。**直接 exec 别加 `python3` / `bash`
 前缀**（脚本自带 shebang）；matcher 别手编（与实现同包维护，抄本必漂移）。
 
-**扩展 = 组合，不 fork 不注入**：项目/席位要自己的规则（如构建工具锚定、
-项目特有禁令），在**自己的** settings 里并列再挂一个自己的 hook 脚本——hooks 是列表、逐个都跑、
-任一 exit 2 即 DENY，天然可组合零耦合。本 guard 不提供加载外部规则的扩展点（repo 内代码进 hook
-进程 = 任意仓库可执行代码，红线）；自写 guard 建议沿用 DENY 三件套 + 可解析文档指针的契约。
-「单 SoT」按**规则**算不按文件算：本 guard 已盖的面（git/gh 锚定）别再自建双源，没盖的面自己的
-规则就是唯一正源。
+**扩展 = 组合，不 fork 不注入**：项目/席位要自己的规则，在**自己的** settings 里并列再挂一个 hook 脚本
+（hooks 逐个都跑、任一 exit 2 即 DENY，天然可组合零耦合）；本 guard 不提供加载外部规则的扩展点（repo 内代码进
+hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则**算不按文件算：本 guard 已盖的面别再自建双源。
 
-- **`cto-guard-bash.py`（PreToolUse·Bash）** — ① 拦背景 `&`（剥引号 span 后任意单 `&`；`&&`/重定向/
-  引号内放行）；② DENY 纯 idle-absence 裸轮询（带 git 交付物 / Verdict 正向 grep 才放行）；③
-  `agentctl start` 后同条没 arm watch → 提醒（omission 无法硬 deny）；④ 拦长/CJK 裸 `tmux send-keys`
-  （逼 `agentctl steer`）；⑤ 拦前台阻塞 `agentctl watch`（前台 Bash 超时会连 watcher 一起杀；
-  `AGENT_WATCH_SYNC=1` 显式放行）；⑥ 拦编排者亲跑 live e2e（派便宜模型 runner，命令前缀
-  `E2E_ECONOMY=1` 自 declare）；⑦ worktree 生命周期：非 force `git worktree remove`
-  常设放行（git 自拒脏树、可逆）；`--force`/`-f`/`prune` DENY（force 碾 untracked、prune 按
-  staleness 猜删）——正路 = 先 `git -C <wt> status --porcelain` 独立命令抢救核证再请示，
-  验证与销毁绝不同一命令行；已批销毁走一次性 override `touch /tmp/cto-allow-worktree-destroy`
-  （消费即授权、用后即焚）；纯元数据且 porcelain 证明零文件伤害的单命令 prune 放行。⑧ 伞形多仓工作区拦无锚 `git`/`gh`（cwd 漂移打错仓；
-  判据与正路见 [§cwd 锚定](#cwd-锚定多仓工作区)，单仓项目永不触发）；⑨ 浏览器归属：`playwright-cli attach`
-  带接管旗标（CDP / 浏览器扩展）→ 默认 DENY，主理人批后 `touch /tmp/cto-allow-browser-attach` 一次性放行；正路 = `open` 起隔离浏览器（与 agent 侧 P0a 同一条规则的两个通道，
-  见 [frontend-verify](../frontend-verify.md)）；⑩ 拦裸 `codex exec` / `codex e` / `codex review`（手搓 headless codex 无 typed 状态、同命令 heredoc 必等 stdin EOF 挂死；正路 = lane 评审档 `--review`；`exec-server` / `--version` / `login` / `agentctl start codex` 不拦）；⑪ typed 命令（`agentctl watch/steer/start/stop`、`gh pr checks --watch`、`gh run watch`）位于管道**非末端** → DENY（末端放行；rc 被末命令吞、帧被截）；⑫ 门命令段以 `;` 结束且其后接 `git commit` → DENY（commit 不再依赖门 rc；`&&` 链放行）；⑬ 直接派 `agentctl start codex --goal <brief>` 时扫该 brief 的六个字面攻击词 → WARN（brief 读不到也 WARN）；⑭ `agentctl start … <cwd>` 且 `git -C <cwd> status --porcelain` 非空 → DENY（先 seed commit）；⑮ `<cwd>/BLOCKED.md` 存在 → DENY（先收割）。
-  ⑳ 编排位经 bash **三类可解析字面文本写入**触及源码/测试路径 → DENY（= edit 侧 E1 同一条规则的 bash 通道：
-  auto mode 下 harness 优先用 Bash 改文件，E1 挂在 Edit|Write 上对这条路径是纸门）。**拦什么**：重定向族指向
-  一个路径、`tee` 的每个路径参数、`sed` 就地——**覆盖面就是这三类，别读成"bash 写文件都拦"**。**不拦什么**：
-  `cp` / `mv` / `install` / `dd of=` / `rsync` / `git apply` / `patch` / 编辑器 / 解释器内写（accepted-uncovered，
-  不声称覆盖）；另有一条已知漏面——注释文本里的 heredoc opener 会让**共享**剥离面漏看其后行（含下一行的真实
-  源码写入），修它要动共享面，另批处理。目标含展开或 glob → 不可判，ALLOW + 一行 WARN 且**不消费** override；
-  目标缺失（行尾裸 `>`）→ 静默。席位归属、override、降级方向与 E1 同源（代码 import 复用，不复制）；铁律出处见
-  [SKILL §0 铁律①](../../SKILL.md)。拼写与边界见规则 (20) 注释与 `test/cto-guard-bash.test.sh` 的 `r20-*` 断言。
-  git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
+- **`cto-guard-bash.py`（PreToolUse·Bash）** — 每条规则的判据、正路与边界正源 = 源码文件头 (1)–(21) 注释 +
+  DENY 文案本身（why + 正路 + 指针），本文只留索引：① 背景 `&`（orphan）· ② idle-absence 裸轮询 · ③ `start` 后未
+  arm watch → 提醒 · ④ 长/CJK 裸 `tmux send-keys` · ⑤ 前台阻塞 `agentctl watch` · ⑥ 编排者亲跑 live e2e
+  （`E2E_ECONOMY=1` 自 declare）· ⑦ `git worktree remove --force` / `prune`（先独立命令 `status --porcelain` 核证再请示；
+  已批走一次性 `touch /tmp/cto-allow-worktree-destroy`）· ⑧ 伞形多仓无锚 `git`/`gh`（见 [§cwd 锚定](#cwd-锚定多仓工作区)）·
+  ⑨ `playwright-cli attach` 接管旗标（已批走 `touch /tmp/cto-allow-browser-attach`；正路 `open` 起隔离浏览器，见
+  [frontend-verify](../frontend-verify.md)）· ⑩ 裸 `codex exec|e|review`（正路 lane `--review`）· ⑪ typed 命令在管道非末端 ·
+  ⑫ 门命令 `;` 后接 `git commit` · ⑬ codex brief 含攻击词 → WARN · ⑭ 派工 cwd 脏 · ⑮ `<cwd>/BLOCKED.md` 未收割 ·
+  ⑯ 保姆轮计数 → WARN · ⑰ 评审派发无 `--max-rounds` · ⑱ 历史重写与他步同链 · ⑲ 验证批跨仓 cd → WARN ·
+  ⑳ 编排位经 bash 三类字面写入（重定向族 / `tee` / `sed -i`）触及源码面（= E1 的 bash 通道；`cp`/`mv`/`git apply`
+  等 accepted-uncovered；不可判目标 ALLOW+WARN；一次性 `touch /tmp/cto-allow-direct-write`）· (21) `steer -m` 含反引号或
+  `$(`（正路 `-f`）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
 - **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：编排位对源码/测试文件的写入 → DENY
   （活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir 不可读 → ALLOW+WARN）。
-- **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：
-  browser/E2E 派发含 `mcp__chrome-devtools` → DENY（逼 Playwright，P0a）；派发未显式钉 `model` 档 →
-  DENY（P0c）；e2e-runner 派发 model 非便宜档 → DENY（P0d）；Pre·TaskStop|KillShell：目标 `.output` 与 subagent transcript 取最鲜 mtime，
-  120s 内还在长 = 活的 → DENY（Agent 型 `.output` 常是静态 stub，判活主要靠 transcript）（**完成通知黑洞**与"零截图≠卡死"实证；override =
-  `touch /tmp/cto-allow-kill-<id>`，适用于**任何经核实的杀单动机**——含"派错前提"，P0b）；
-  Post·Agent：browser 派发注入 deadline-watch 提醒（必须 JSON `additionalContext`，纯 stdout 黑洞）。
+- **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：browser/E2E 派发含
+  `mcp__chrome-devtools` → DENY（逼 Playwright）；派发未显式钉 `model` 档 → DENY；e2e-runner 派发 model 非便宜档 → DENY。
+  Pre·TaskStop|KillShell：目标 `.output` 与 subagent transcript 取最鲜 mtime，120s 内还在长 = 活的 → DENY（override
+  `touch /tmp/cto-allow-kill-<id>`，任何经核实的杀单动机都适用）。Post·Agent：browser 派发注入 deadline-watch 提醒。
 - **`cto-guard-stop.py`（Stop）** — 本仓席位 `agentctl status` 说 RUNNING 且附 `no watcher armed`：
   结束 turn 时 block（reason 三件套）；席位普查 / 归属过滤 / 谓词在同目录 `seat-census.py`（纯库、无 entrypoint），import 复用不复制。
   **判不出一律 exit 0 + 一行 `systemMessage` WARN，绝不 block**；fail-open / 归属过滤 / 有界细则见两文件头注与 `test/cto-guard-stop.test.sh`。

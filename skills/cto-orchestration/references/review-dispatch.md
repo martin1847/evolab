@@ -4,25 +4,20 @@
 > 直写合同要求）：每份 brief 首行写 `Read first: <该文件绝对路径>`，brief 本体只写本批
 > scope、per-unit 合同与评审轴——样板不再逐份复制。
 
-> 目录：[首轮评审](#首轮评审) · [复审](#复审第-n-轮) · [收敛准则注入](#收敛准则注入防乒乓第-3-轮左右仍未收敛时) ·
-> [修复派回模板](#修复派回-omp-模板) · [对抗式评审循环展开](#skill-2-对抗式评审循环的展开)（深度分档 / 冷上下文 / 高危轴 / ledger + 收敛）
+> 目录：[goal-review](#goal-review派发前白名单免评--其余必评) · [轮数预算](#轮数预算) · [首轮评审](#首轮评审) · [复审](#复审第-n-轮) ·
+> [收敛准则注入](#收敛准则注入防乒乓第-3-轮左右仍未收敛时) · [修复派回模板](#修复派回-omp-模板) ·
+> [评审轴](#评审轴主干-2-的展开)
 
 > 首轮：brief 写成文件（`docs/orchestration/*_REVIEW_BRIEF.md`），
 > `agentctl start codex <proj>-<task>-codex <同一worktree> --goal <brief.md> --review
 > --deliverable <REVIEW_codex.md> --workflow review-loop --max-rounds <N>`——与 omp 派发同构
-> （`--review` 进评审档、`--deliverable` 给产物 freshness gate，缺一即无 typed 交付）。挂 watch 与复审轮
-> `steer -f` 同 SKILL §1；裸 `tmux new-session` 绕过 durable state 与 lane routing，别用。
-> 初轮计入总轮数；stop-loss 只认 runtime meta（duplex 会话档），GOAL/brief 不复制轮数。到限后 send 返回
-> `BUDGET-EXHAUSTED`（exit 9），不得绕过，转人工裁决。
-> 差分口径统一 **three-dot**（`origin/<base>...HEAD`，对 merge-base 差分）：并发合并环境下 stale base 的
-> 两点差分会把他人 commit 的反向删除混进评审面、误判为回退报 blocking；
-> 评审不因 base 移动而 rebase；rebase 归 push/merge 阶段、由编排者按所在仓的 Git 协作规范收口。
-> 定 `--max-rounds` 时：催写 nudge 也走 steer 计轮——预算 = 内容轮 + 1（max-rounds 1 遇 idle
-> 即死局，连催写都投不进只能重开；上限不是燃料，slack 轮用不到零成本）。
+> （`--review` 进评审档、`--deliverable` 给产物 freshness gate，缺一即无 typed 交付）。
+> 差分口径统一 **three-dot**（`origin/<base>...HEAD`，对 merge-base 差分）：stale base 的两点差分会把
+> 他人 commit 的反向删除混进评审面、误判为回退；评审不因 base 移动而 rebase，rebase 归 push/merge 阶段。
 > - [ ] 写 codex 评审 brief / steer → 用中性工程措辞，避 forged / impostor / attack / probe 类
 >   攻击词汇（对象：投给引擎的 prompt 文本；安全型内容过滤只判 prompt，被读文件不进判定）。
 > - [ ] codex 轮被 cyberPolicy 拦 → 重投前先净化 prompt：敏感细节移入被读文件、prompt 只留
->   中性指针；仍被拦 → 开新会话兜底（对象：该评审任务；失败轮照常计入轮数预算）。
+>   中性指针；仍被拦 → 开新会话兜底（失败轮照常计入轮数预算）。
 > - [ ] 变更集含编排位直写单元（教义 / 门 / guard）→ Context docs 附其最小合同（SKILL §2「直写也要合同」）。
 
 ## goal-review（派发前，白名单免评 + 其余必评）
@@ -66,6 +61,15 @@
 2. 每个判别面 fail-open 还是 fail-closed？两个方向的代价各是什么？
 3. 是否在**枚举自然语言**做判别？枚举即打回——换结构性通道（显式命令 / 结构化握手 / 状态标记）。
 
+## 轮数预算
+
+初轮计入总轮数；stop-loss 只认 runtime meta（duplex 会话档），GOAL/brief 不复制轮数。到限后 send 返回
+`BUDGET-EXHAUSTED`（exit 9），不得绕过，转人工裁决。定 `--max-rounds` 时：催写 nudge 也走 steer 计轮——
+预算 = 内容轮 + 1（max-rounds 1 遇 idle 即死局；上限不是燃料，slack 轮用不到零成本）。
+**深档 / 轻档由 SKILL §2 两档规则定**：深档保留 blocking 驱动续轮；轻档恒一轮（`--max-rounds 1`），
+findings 回编排位裁 fix / accept-documented，机器可验修复即收，轮数耗尽转 owner 裁决。
+裸 `codex review` 子命令由 guard ⑩ 拦，一律走 lane。
+
 ## 首轮评审
 
 > 输出契约 / 证据档 / severity 与 PRE-EXISTING 口径 / 只读纪律**全在 preamble，模板不复制**。
@@ -89,15 +93,13 @@ Read first: <review-brief-preamble.md 绝对路径>（常驻合同）。
 把 "Round <N>" verdict 追加到 <REVIEW_codex.md>，Tally 口径同 preamble。只读。
 ```
 
-- [ ] review-loop 续派任何一轮前 → 先过**杠杆线分诊**（对象：该 review-loop 会话）：①逐轮
-  新增 blocking 计数衰减（内容轮 ≥3 且最近两轮不升、各 ≤1）②本轮 remedy 撤销上轮 remedy
-  引入的行（同一 finding 文本逆转）③同一「评审轴 + 路径簇」连续 ≥3 轮出 finding——任一命中 →
-  本轮不续派，转编排者杠杆账（SKILL §2）；裁定续派 = 显式追加预算并在 ledger 记账。
+- [ ] review-loop 续派任何一轮前 → 先过**杠杆线分诊**：①逐轮新增 blocking 计数衰减（内容轮 ≥3 且
+  最近两轮不升、各 ≤1）②本轮 remedy 撤销上轮 remedy 引入的行 ③同一「评审轴 + 路径簇」连续 ≥3 轮
+  出 finding——任一命中 → 本轮不续派，转编排者杠杆账（SKILL §2）；裁定续派 = 显式追加预算并在 ledger 记账。
 - [ ] 评审 closure-requirement 要求新增/扩大守卫机械（断言 / 变异样本 / manifest / 自证层）→
-  **默认 advisory 不得 blocking**；升 blocking 须编排位显式裁定并记账（对象：吃进 goal/合同
-  的每一条评审修正令——防评审棘轮把合同逐轮加码）。
+  **默认 advisory 不得 blocking**；升 blocking 须编排位显式裁定并记账（防评审棘轮把合同逐轮加码）。
 - **复审轮只审封闭性**（上轮 finding 是否真闭 + 修复引入的新洞 + 无夹带改动），别让同一会话重扫全量——
-  要全新全面评审就起 fresh session。每轮点名"上一轮修复可能引入的新洞"——4 轮抓 4 个真问题是常态。
+  要全新全面评审就起 fresh session。
 
 ## 收敛准则注入（防乒乓，第 3 轮左右仍未收敛时）
 
@@ -119,37 +121,15 @@ codex 第 <N> 轮：request-changes——读 <REVIEW_codex.md>，在本分支一
 修复涉及**资源界限 / 生命周期**（锁、超时、marker、句柄）时，模板必须加一句：先枚举**全部**够得到
 该资源的路径再动手（SKILL §3「病类确认后枚举同模式点」的修复态 fire 点）。
 
-## SKILL §2 对抗式评审循环的展开
+## 评审轴（主干 §2 的展开）
 
-SKILL 主干是判据清单；这里是轴全枚举、ledger 栏目、达标线与模板。
-
-### 评审深度分档
-
-先按风险定评审深度：日常/低风险改动 → 轻量标准 review（brief 让评审者自算 `origin/<base>...HEAD` 差分 + 结构级只读，省 prompt，挡基本质量/回归；裸 `codex review` 子命令由 guard ⑩ 拦，一律走 lane）；高风险（鉴权/迁移/基建脚本/大重构）→ 走完整对抗循环。**深档清单命中优先；未命中时可回滚性与并发量级是定档输入**：可回滚 DEV 面 / 低并发 ToB 面 / dormant 代码 → 默认轻档 1 轮只修 blocker、major 进池，并发轴降为「单 session + 运行期补偿」；证据仪式按「能否抓产品缺陷」取舍（mutant 臂有脚本/用例即可，不写 hunk 文档）。
-**定档同时定轮形态**（下游席位 DEV 级 3 轮/2 轮 overhead 实证，owner 批）：非深档**恒一轮**——
-findings 编排位裁 fix / accept-documented，修复轮不自动回评审（编排位复现抽查闭合，规则本体
-SKILL §2）；深档保留 blocking 循环。**shipped 脚本小改走轻量单轮**：文案/常量/单函数收紧、
-匹配逻辑面未扩 → 单轮冷评审（--max-rounds 1）+ 机器可验修复即收，轮数耗尽转 owner 裁决；碰匹配
-逻辑/新增规则/生命周期 → 完整对抗循环。
-对抗循环**自起会话自控 prompt**（点名轴 + severity/verdict + 多轮收敛）；`codex review` 子命令由 guard ⑩ 拦。
-
-### 冷上下文 + 激进找、出口滤
-
-omp commit+核证后起 codex 于同一 worktree。**只给"查哪些轴 + verify don't trust + 收敛达标线"，不夹带
-自己的结论/倾向**——喂 codex 我的判断 = anchoring，换模型却共享推理链 = 异构去相关价值白费。
-
-**激进找、出口滤（两层分工别选反边）**：brief 鼓励评审者调查一切可疑模式——源头克制型措辞（"只报你
-确定的"）是漏报机器；置信过滤放 verdict 层——低置信也报、标 confidence(0-1)，由证据档杀假阳：
-出口的操作规则（file:line 引用 / 复现要求 / **双面闸**：晋级须复现、删除须证伪）归 preamble
-单源；本节只留分工原理——候选先泛报、再独立复现过滤。
-
-**点名最易翻车的轴**（让 codex 主动写探针复现，命中率远高于泛泛 review）：
+SKILL §2 已定：brief 冷上下文、不喂实现者结论（喂了 = anchoring，异构去相关白费）；激进找、
+出口滤（源头克制型措辞是漏报机器；置信过滤放 verdict 层，规则归 preamble）。这里只留轴的枚举与装配表。
 
 **缺失消费者轴（absence review，diff 评审的结构性盲区）**<!-- trunk:缺失消费者 -->：被评审改动若新增/变更一种**能力或
 运行时语义**（新端点、token/会话寿命、重试契约、降级开关），必须问"**谁必须消费/适配它？
 它们现在消费了吗？**"——缺失的调用方不存在于任何 diff 里，按 diff 划界的评审永远看不见。
-brief 里点名这条轴时给评审者消费者清单的检索起点（前端仓路径/
-调用点 grep 词）。
+brief 里点名这条轴时给评审者消费者清单的检索起点（前端仓路径 / 调用点 grep 词）。
 崩溃恢复、并发竞态、旗标关路径零泄漏、降级语义、安全契约；多租户加租户隔离 + 凭据**间接**泄漏（异常链/URL
 userinfo/日志）；评测报告类加**指标诚实性**（指标虚高/证据越界泛化）。
 
@@ -157,23 +137,20 @@ userinfo/日志）；评测报告类加**指标诚实性**（指标虚高/证据
 引用标记进溯源链），评审必须验证：①有无内容契约（拒收 PII/秘密/编造）；②有无溯源校验（引用/ID 必须能
 对回真实来源集，幻觉条目剥除而非放行）；③测试 fixture 里要有"恶意/幻觉样本"且无防护时必红。
 
-**评审前先枚举执行路径分叉**（provider / mode、live vs rehydrate、suggestion-flow vs direct-save…），点
-codex 核"还有哪些分支没走到"——只覆盖一条分支 ≠ 全覆盖（真实用户可能走另一条独立分支，
-整条功能被绕过仍全绿）。
+**执行路径分叉**（provider / mode、live vs rehydrate、suggestion-flow vs direct-save…）：先枚举，
+点评审者核"还有哪些分支没走到"——只覆盖一条分支 ≠ 全覆盖。
 
-**门控/触发型功能必查 under-fire（"该触发时触发了没"），不只 over-fire**：有触发条件的特性（正则/旗标/阈值
-门控）评审天然盯"会不会误触发"，常漏"真实输入下到底触发没"——触发器检测的输入若在上游已被
+**门控/触发型功能必查 under-fire（"该触发时触发了没"），不只 over-fire**：触发器检测的输入若在上游已被
 改写（如指代被抽取替换），真实场景永不触发，只有真输入验才能看见。
 
 **架构符合性轴（仓库声明了方向文档时必挂）**：若目标仓（或其伞仓）声明了北极星 / constitution /
 ADR 类方向文档，brief 里给出其绝对路径，并要求评审者：①对照改动逐条检查是否触碰任何带 ID 的原则
-（引用原则 ID，如 `NS-3`），tripwire 清单是现成的检查表；②改动若新增结构性约束（gate/lint/门禁），
-反向验证约束真咬得动——"绿因为零覆盖"（规则空转、pattern 不匹配、检查器没跑）是 blocking 级 finding；
-③方向文档与 accepted ADR 冲突时不择边，报编排者升级主理人。没有方向文档的仓跳过本轴，不造假锚点。
+（引用原则 ID，如 `NS-3`）；②改动若新增结构性约束（gate/lint/门禁），反向验证约束真咬得动——
+"绿因为零覆盖"是 blocking 级 finding；③方向文档与 accepted ADR 冲突时不择边，报编排者升级主理人。
+没有方向文档的仓跳过本轴，不造假锚点。
 
 ### 轴装配先查表（path→轴映射表）<!-- trunk:轴映射表 -->
 
-轴选择不能全靠编排者临场判断。装配规则：
 **表命中的轴必进 brief，判断只做增补、不做删减**；多条命中全注入（轴取并集，不是 first-match）。
 默认表（领域通用）：
 
@@ -188,22 +165,16 @@ ADR 类方向文档，brief 里给出其绝对路径，并要求评审者：①�
 | 前端入口 / E2E | 执行路径分叉枚举 + under-fire |
 
 **项目自带增量表**：各仓在自己的治理文档（AGENTS.md Review guidelines 节或 docs/orchestration/）
-维护「本仓路径 → 轴」增量行，装配时默认表 ∪ 项目表。表是活的：每次评审漏轴的 post-mortem 落一行
-新映射——同类漏轴从「下次记得」升为结构。
+维护「本仓路径 → 轴」增量行，装配时默认表 ∪ 项目表。每次评审漏轴的 post-mortem 落一行新映射。
 
 ### ledger 结构 + 收敛准则
 
 写 `docs/orchestration/<NAME>_REVIEW_codex.md`——severity 分级 findings + verdict，维护
-`blocking / queued / advisory / pre-existing / 已修 / stagnation` 栏目逐轮更新，收敛状态一眼可判。
-**pre-existing（存量 bug、非本 diff 引入）单列**：记录、开 follow-up，不进 blocking——治 scope 争议；
-准入口径（干净 base 复现）归 preamble 单源，此处不复制。
+`blocking / queued / advisory / pre-existing / 已修 / stagnation` 栏目逐轮更新。
+**pre-existing（存量 bug、非本 diff 引入）单列**：记录、开 follow-up，不进 blocking；准入口径归 preamble。
+每轮派回时把原 goal 的不可变验收点重贴进 prompt 对照——防多轮改着改着跑题。
 
-**循环回修每轮重贴不可变目标**：request-changes → 派回 omp 修 → codex 复审，循环到 ship。每轮派回时把原
-goal 的不可变验收点重贴进 prompt 对照——防多轮改着改着跑题。
-
-- 质量类无限可挑的项（过滤规则、命名）明确"达标线"：线内必修、线外进 `queued`。例："确定性过滤是兜底、LLM
-  prompt 是主闸；常见形态全覆盖即达标，冷僻算 minor"。
+- 质量类无限可挑的项（过滤规则、命名）明确"达标线"：线内必修、线外进 `queued`。
 - 为一行 advisory fold-before-push 不值得——先 ship 已 Verified 的，nit 攒 follow-up。
 - **裁决沉淀为 skip rules**：收口时把"已判 advisory / 越界 / 不值得报"的 finding **类别**回写项目 AGENTS.md
-  的 Review guidelines 节（codex 官方评审通道原生读最近的 AGENTS.md 该节）——同类噪声下次从源头不进 ledger，
-  "不复提已裁决"从单次记忆升为跨评审结构。
+  的 Review guidelines 节（codex 官方评审通道原生读该节）——同类噪声下次从源头不进 ledger。
