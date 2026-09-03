@@ -53,9 +53,10 @@
 - 文件身份门：`agentctl-capabilities.test.sh` C10 bash/python 占比分母 = 同目录**全部 `*.py`**（棘轮 76/1000）。
 - 体量门（`loc-budget.test.sh`，2026-09-03 起替代 agentctl-weight / skill-face / context-budget / cto-docs-contract 四套）：
   四条只升红的总量 ceiling（skill 代码总行 / 散文总行 / guard 注入总字节 / 单条注入消息字节）+ 孤儿文档金丝雀 +
-  三条回收断言（测试 white-box 动态载入禁令、goal-clauses ↔ goal-template 索引单源、量具读 0 判红）；无逐文件基线、
-  无理由字段。放弃项（新低未锁臂 / 注入普查召回探针 / footer 字节门 / 维护者文档文件名门 / docs-contract 其余族）
-  记在该套件头注 KNOWN BOUNDARY，现由评审看 diff 兜。
+  三条回收断言（测试 white-box 动态载入禁令 + 其精确执行面、goal-clauses ↔ goal-template 条款正文单源、单条注入消息
+  上限）；四条 ceiling 与金丝雀读 0 一律判红。无逐文件基线、无理由字段。放弃项清单（新低未锁臂 / 注入普查召回探针 /
+  footer 字节门 / 维护者文档文件名门 / 模板索引 condition-only 与宽度门 / docs-contract 其余族）在
+  `docs/orchestration` 的 SUB1 findings §3 与 git log，现由评审看 diff 兜。
 - 直连 CLI 子命令的 134 个调用点与内部符号无关，只要 argv 前门不动就不动。
 
 ## 拆分裁决账（kill criterion 读数）

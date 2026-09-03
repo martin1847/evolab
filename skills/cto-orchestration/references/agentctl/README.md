@@ -195,8 +195,9 @@ command 换成安装根绝对路径（hooks 不展开 `~`）、按 event 并进�
 （hooks 逐个都跑、任一 exit 2 即 DENY，天然可组合零耦合）；本 guard 不提供加载外部规则的扩展点（repo 内代码进
 hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则**算不按文件算：本 guard 已盖的面别再自建双源。
 
-- **`cto-guard-bash.py`（PreToolUse·Bash）** — 每条规则的判据、正路与边界正源 = 源码文件头 (1)–(21) 注释 +
-  DENY 文案本身（why + 正路 + 指针），本文只留索引：① 背景 `&`（orphan）· ② idle-absence 裸轮询 · ③ `start` 后未
+- **`cto-guard-bash.py`（PreToolUse·Bash）** — 每条规则的判据、正路与边界正源 = DENY 文案本身（why + 正路 + 指针）+
+  源码里该规则块的注释（源码内序号是实现顺序，与本索引的圈码不同源，按关键词找）。圈码是 SKILL / DENY 指针 / 测试
+  `r<n>-*` 共用的公开身份，本文只留索引：① 背景 `&`（orphan）· ② idle-absence 裸轮询 · ③ `start` 后未
   arm watch → 提醒 · ④ 长/CJK 裸 `tmux send-keys` · ⑤ 前台阻塞 `agentctl watch` · ⑥ 编排者亲跑 live e2e
   （`E2E_ECONOMY=1` 自 declare）· ⑦ `git worktree remove --force` / `prune`（先独立命令 `status --porcelain` 核证再请示；
   已批走一次性 `touch /tmp/cto-allow-worktree-destroy`）· ⑧ 伞形多仓无锚 `git`/`gh`（见 [§cwd 锚定](#cwd-锚定多仓工作区)）·
