@@ -506,6 +506,14 @@ chk_eq  "(f) the labelled process SURVIVED a probe failure" 1 "$(same_proc "$esc
 chk_eq  "(f) inventory exits 0 on a broken probe" 0 "$RC"
 chk_contains "(f) inventory's lineage block is NOT a clean bill" "[unknown] lineage census:" "$OUT"
 chk_not_contains "(f) …and never dresses the failure up as empty" "(none orphaned)" "$OUT"
+# a BROKEN INSTRUMENT and an OPAQUE PROCESS are different facts and must not be merged: this
+# cell is block-level (`lineage probe [unknown]`, fail-closed, planner rc 3 → the caller reads
+# "recognized something"), the (m) cell below is a per-pid readability gap that carries no
+# answer at all and must not move that rc. The pairing is what keeps ③ of the mutation list
+# (a failed probe rendered as "nothing found") red.
+chk_not_contains "(f) a broken instrument is never worded as the opaque-process count" \
+                 "unreadable environment" "$stop_err"
+chk_not_contains "(f) …and the census keeps the two apart too" "unreadable environment" "$OUT"
 reap_fixture "$esc_f" "$esc_f_ls"
 
 # --- (g) identity is re-read BEFORE TERM: a changed start time is a stranger ------------------
@@ -822,6 +830,96 @@ chk_eq  "(k2) the lineage block prints its own empty word exactly once" 1 \
 chk_eq  "(k2) all three blocks report an explicit empty" 3 \
         "$(printf '%s\n' "$OUT" | grep -cE '^\(none\)$|^\(none orphaned\)$')"
 chk_not_contains "(k2) an empty world is never dressed up as [unknown]" "[unknown]" "$OUT"
+
+# --- (m) an OPAQUE process is a candidate of NO session ---------------------------------------
+# The CI Linux red (run 33877707389, ubuntu-latest): a same-uid process whose dumpable flag is
+# cleared has a root-owned /proc/<pid>/environ, so the probe goes blind on it. Those pids used
+# to be printed one `[unknown] pid=` line each AND counted as "this stop recognized something",
+# which turned every unknown session name on such a box into rc 0 — the (i0)/(i2) cells above
+# went red on CI and stayed green on macOS, where SIP binaries yield an EMPTY env segment (a
+# decidable "unlabelled") and nothing ever goes blind.
+# The injection is BLACK BOX in the duplex-misplaced-hint.test.sh sense: a sitecustomize on
+# PYTHONPATH adds one REAL live pid to the blind list at the single seam both platforms' env
+# sources land in (`_env_by_pid`), so the shape is exercised on macOS too and no product knob
+# exists for the test to lean on. The pid is a real process, so the planner's own
+# "did it merely exit mid-probe" re-read keeps it — and its survival is asserted.
+BLINDSHIM="$SANDBOX/blindshim"; mkdir -p "$BLINDSHIM"
+cat > "$BLINDSHIM/sitecustomize.py" <<'PY'
+import builtins, os
+_pid = os.environ.get("FAKE_BLIND_PID")
+if _pid:
+    _real_import = builtins.__import__
+    def _hook(name, *a, **k):
+        mod = _real_import(name, *a, **k)
+        if name == "watchctl" and not getattr(mod, "_BLIND_SHIM", False):
+            mod._BLIND_SHIM = True
+            _real = mod._env_by_pid
+            def _spy(rows):
+                envs, blind = _real(rows)
+                return envs, blind if envs is None else sorted({*blind, int(_pid)})
+            mod._env_by_pid = _spy
+        return mod
+    builtins.__import__ = _hook
+PY
+blind_count() { # $1 stderr text → the N of the one summary line, 0 when there is none
+  local n
+  n="$(printf '%s\n' "$1" \
+       | sed -n 's/.*\[unknown\] \([0-9]*\) process(es) with unreadable environment.*/\1/p' \
+       | head -1)"
+  echo "${n:-0}"
+}
+S_M="lin${NONCE}m"; S_M2="lin${NONCE}m2"
+/bin/sleep 300 & BLIND_PID=$!
+BLIND_LS="$(lstart_of "$BLIND_PID")"
+chk_eq "(m) pre-probe: the process to be made opaque is alive" 1 \
+       "$(same_proc "$BLIND_PID" "$BLIND_LS")"
+# CONTROL first, on the same name: whatever this box's own opaque processes number, N.
+run_stop "$S_M"
+base_n="$(blind_count "$ERR")"
+chk_eq  "(m) CONTROL: a name that owns nothing is an unknown session (rc 1)" 1 "$RC"
+ENVV=(PYTHONPATH="$BLINDSHIM" FAKE_BLIND_PID="$BLIND_PID"); run_stop "$S_M"
+chk_eq "(m) METER POSITIVE: the injected pid really reached the blind reading (N+1)" 1 \
+       "$(( $(blind_count "$ERR") - base_n ))"
+chk_eq  "(m) an opaque process never makes an unknown name look owned (rc 1)" 1 "$RC"
+chk_contains "(m) …with the unchanged error on stderr" "unknown session" "$ERR"
+chk_eq  "(m) the blindness is reported as ONE count line" 1 \
+        "$(printf '%s\n' "$ERR" \
+           | grep -cE '\[unknown\] [0-9]+ process\(es\) with unreadable environment')"
+chk_not_contains "(m) …never one line per pid (a multi-user box would flood)" \
+                 "[unknown] pid=" "$ERR"
+chk_eq  "(m) the count line still prints on stdout, at zero" 1 \
+        "$(printf '%s\n' "$OUT" | grep -c '^reaped 0 lineage process(es)$')"
+chk_eq  "(m) and the blindness never leaks to stdout" 0 \
+        "$(printf '%s\n' "$OUT" | grep -c 'unreadable environment')"
+chk_eq  "(m) the opaque process was never signalled" 1 "$(same_proc "$BLIND_PID" "$BLIND_LS")"
+# the census says it the same way: a count, never a row per pid
+ENVV=(PYTHONPATH="$BLINDSHIM" FAKE_BLIND_PID="$BLIND_PID" AGENT_WATCH_DIR="$WATCH_RUN_DIR")
+run_inv
+chk_eq  "(m) inventory exits 0 beside an opaque process" 0 "$RC"
+chk_eq  "(m) the census prints ONE count row for the opaque processes" 1 \
+        "$(printf '%s\n' "$OUT" \
+           | grep -cE '^lineage-unknown +[0-9]+ process\(es\) with unreadable environment')"
+chk_eq  "(m) …and never a census row per pid" 0 \
+        "$(printf '%s\n' "$OUT" | grep -c '^lineage-unknown.*pid=')"
+
+# --- (m2) blindness beside a RECOGNIZED candidate changes nothing about the candidate ---------
+read -r esc_m2 esc_m2_ls <<EOF
+$(spawn_labelled "$S_M2" "$CWD_A" plain "$SANDBOX/m2.pid")
+EOF
+mkmeta "$S_M2" "$CWD_A"
+ENVV=(PYTHONPATH="$BLINDSHIM" FAKE_BLIND_PID="$BLIND_PID"); run_stop "$S_M2"
+chk_eq  "(m2) stop rc=0" 0 "$RC"
+chk_contains "(m2) the recognized candidate is still reaped by the existing predicate" \
+             "reaped 1 lineage process(es)" "$OUT"
+chk_eq  "(m2) the candidate is GONE" 0 "$(alive "$esc_m2")"
+chk_eq  "(m2) the blindness is STILL one single count line" 1 \
+        "$(printf '%s\n' "$ERR" \
+           | grep -cE '\[unknown\] [0-9]+ process\(es\) with unreadable environment')"
+chk_not_contains "(m2) …and still not one line per pid" "[unknown] pid=" "$ERR"
+chk_eq  "(m2) the opaque process itself survived, unsignalled" 1 \
+        "$(same_proc "$BLIND_PID" "$BLIND_LS")"
+reap_fixture "$esc_m2" "$esc_m2_ls"
+reap_fixture "$BLIND_PID" "$BLIND_LS"
 
 # --- (l) ASSEMBLY: one pane point exports both labels, and a real engine sees them ------------
 unset FAKE_TMUX_DISPLAY_FAIL

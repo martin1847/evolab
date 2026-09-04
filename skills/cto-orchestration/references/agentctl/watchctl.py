@@ -1972,12 +1972,12 @@ def cmd_lineage_plan(args: argparse.Namespace) -> int:
             continue
         print(f"{pid} {row['lstart']}")
         planned += 1
-    for pid in sorted(blind):
-        note(f"[unknown] pid={pid} could not have its environment read, so whether it carries "
-             f"this session's label is undecidable — NOT signalled")
-    # An opaque pid is undecidable FOR EVERY session name, blind being box-wide and not
-    # session-scoped: that is the fail-closed direction, and it only ever converts a claim of
-    # "this name never existed" into the silence the [unknown] line above already printed.
+    # An unreadable ENVIRONMENT is no answer: such a pid is a candidate of NO session and moves
+    # neither counter (one line per pid floods a Linux box — a cleared dumpable flag makes
+    # /proc/<pid>/environ root-owned — and made unknown names read as owned: CI 33877707389).
+    if blind:
+        print(f"ADVISORY: stop {args.session}: [unknown] {len(blind)} process(es) with "
+              f"unreadable environment — not enumerable, none signalled", file=sys.stderr)
     return 3 if refusals and not planned else 0
 
 
@@ -1999,9 +1999,9 @@ def inventory_lineage() -> tuple[list[str], str]:
         out.append(f"{'lineage-orphan':<19}  session={name} "
                    f"cwd={row['env'].get(LABEL_CWD) or '-'}  pid={row['pid']} "
                    f"age={row['etime']} cmd={row['cmd'][:ADVISORY_CMD_CLIP]}")
-    for pid in sorted(blind):
-        out.append(f"{'lineage-unknown':<19}  pid={pid} environment unreadable — whether it "
-                   f"carries a session label is undecidable, NOT a clean bill")
+    if blind:
+        out.append(f"{'lineage-unknown':<19}  {len(blind)} process(es) with unreadable "
+                   f"environment — not enumerable, NOT a clean bill")
     return out, ""
 
 
