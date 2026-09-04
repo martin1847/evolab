@@ -113,8 +113,23 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 - exit 6 `IDLE-NO-DELIVERABLE` 用 `agentctl steer` 补一刀，**不要 stop**；`stop` 只用于收工或明确放弃。
   verdict 行后可能跟 `possible misplaced deliverable: "<abs path>"`（有界扫 cwd 找同名错位产物，
   json 编码防伪造 typed 行；只提示、不改 rc，无命中/扫描退化都零输出）——先看这行再决定 steer 措辞。
-- **stop = 进程组收割**（tmux kill 只碰 pane leader，引擎子孙会被 PID 1 收养泄漏）：有界宽限后
-  强杀并复核零残留（宽限由 `AGENTCTL_REAP_GRACE` 调）；防 pid 复用误杀，永不按名字/全局杀。
+- **stop = 进程组收割 + 按会话标签收割组外进程**（tmux kill 只碰 pane leader，setsid / double-fork 的
+  子孙逃出进程组后会被 PID 1 收养泄漏）：① pane 进程组 TERM → 有界宽限 → 强杀 → 复核零残留
+  （宽限由 `AGENTCTL_REAP_GRACE` 调）；② pane 装配点导出 `AGENTCTL_SESSION` + `AGENTCTL_CWD`，
+  exec 出去的子孙都继承，于是**带本会话标签的组外进程逐个 pid 收割**（判据是**环境成员**精确相等，
+  不是 ps 行里出现字面量；每次 TERM/KILL 前重读 start time，pid 复用即跳过），输出
+  `reaped N lineage process(es)`；③ 候选自己的 `AGENTCTL_CWD` 若是**另一个活会话**的 cwd（共享工具，
+  例如按项目目录复用的 broker）、或任何一格判不出（环境不可读 / 无 cwd 标签 / run dir 不可读 /
+  tmux 探针坏 / 活 peer 的 meta 没 cwd）→ **不收割，只 stderr ADVISORY**；④ 不带标签的组外幸存者
+  仍然只有 ADVISORY，一个信号都不发。防 pid 复用误杀，永不按名字/全局杀。
+  **标签的 FN 边界**（收割不到、ADVISORY 的沉默也不覆盖）：tmux server 派生的进程（环境来自 server）、
+  `env -i` / unset 之后派生的、共享工具替**别的** client 派生的孙进程（带的是首启者的标签）、
+  快照之后新派生的，以及 macOS 上跑 SIP 平台二进制的（内核不给环境区）。
+  无 pane、无 meta 的会话再跑一次 `agentctl stop <s>` 走同一条标签阶段——这是 inventory 报出
+  `lineage-orphan` 之后运维的唯一出口，不需要新命令也不需要新参数。
+- **`agentctl inventory --dry-run` = 三块只读普查**（永不发信号，没有 `--apply`）：控制态 vs tmux 漂移、
+  PID 1 收养的引擎孤儿、以及 `-- lineage census --`（带着 tmux 已经没有的会话标签的进程 →
+  `lineage-orphan` 行，出口就是上面那条 post-mortem stop）。
   终态后**立即 stop 是编排者纪律**，retro-check 第 6 检对"本仓终态未清会话"blocking FAIL 兜底。
 - **`agentctl phases [--since <N>h|RFC3339] [--repo <abs>] [--json]` = 相位账本读数**（只读；账本
   `$RUN/phase-ledger-YYYYMMDD.jsonl` 由 start/steer/terminal/stop/watch-arm 五个提交点 append，stop 永不删）：出 batch_span / seat_wall（席位机时求和，并行时 > 墙钟）/ review_wall / idle_span / 逐 terminal 的 dispatch_latency（**不求和**）+ `coverage: ok|partial|unknown`——**只出数，不出裁决**，台账的 `wall=` / `avoidable=` 仍是你自己的判断。

@@ -91,9 +91,9 @@ EXIT_SUPERVISOR_LOST = 12
 EXIT_STALLED_PROGRESS = 14
 EXIT_DELIVERED_NEXT_TURN = 15
 # 16/17/18 are the waiter's PRIVATE continuation codes (watchctl's FOLLOW_ROTATED /
-# FOLLOW_REARM / FOLLOW_DEAD): occupied without ever being published, and the driving shell
-# CONSUMES them instead of exiting, so a typed state minted on one of them would be swallowed
-# by the follow loop rather than reaching the orchestrator. The next free code is 19.
+# FOLLOW_REARM / FOLLOW_DEAD) and 20 is stop's STOP_RESIDUE_NONE: occupied without ever being
+# published, and the driving shell CONSUMES them instead of exiting, so a typed state minted on
+# one of them would be swallowed rather than reaching the orchestrator. Next free code: 21.
 EXIT_OVER_BUDGET = 19
 
 # BUMPED 1 -> 2 by the progress-source batch: the document gained a SECOND published
@@ -4073,10 +4073,18 @@ def main() -> None:
     p_surv.add_argument("--snapshot", required=True)
     p_surv.set_defaults(func=watchctl.cmd_stop_survivors)
 
+    # The label phase of stop, split the same way stop-probe/stop-survivors are: this verb
+    # JUDGES (environment membership, ownership, every gap fail-closed) and prints
+    # `<pid> <start-time>` lines; the shell signals, because the python lane never does.
+    p_lin = sub.add_parser("lineage-plan", help="which labelled escapees this stop MAY signal; "
+                                                "stdout is pid + start time, stderr the refusals")
+    p_lin.add_argument("session")
+    p_lin.set_defaults(func=watchctl.cmd_lineage_plan)
+
     # --dry-run is REQUIRED, not defaulted: the read-only promise has to be spelled out by the
     # caller, so no future flag can quietly turn this verb into one that acts.
     p_inv = sub.add_parser("inventory", help="read-only candidate overview: control-state drift "
-                                             "+ PPID=1 engine orphans")
+                                             "+ PPID=1 engine orphans + label lineage")
     p_inv.add_argument("--dry-run", action="store_true", required=True, dest="dry_run",
                        help="the ONLY accepted spelling; this verb never acts")
     p_inv.set_defaults(func=watchctl.cmd_inventory)

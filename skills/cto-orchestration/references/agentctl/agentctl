@@ -6,7 +6,7 @@
 #   agentctl steer  <session> (-m TEXT | -f FILE) [--interrupt] [-d|--deliverable G]
 #   agentctl status <session>            # one-shot typed state (exit = verdict)
 #   agentctl watch  <session> [--inline] [--expect MINUTES]  # follow until an ACTION verdict
-#   agentctl stop   <session> [cwd]      # end + clean control state (events kept for post-mortem)
+#   agentctl stop   <session>            # end + clean control state (events kept for post-mortem)
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
 #   agentctl states [--json]             # runtime-generated typed state vocabulary
 #   agentctl inventory --dry-run         # read-only candidate overview (never kills anything)
@@ -45,7 +45,7 @@ meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
 usage() {
   echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [--expect MINUTES] [engine args...]   # session = <proj>-<task>-<engine>, e.g. shop-cart-omp (prefix = who owns it in tmux ls)" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
-  echo "       agentctl status <session> | watch <session> [--inline] [--expect MINUTES] | stop <session> [cwd] | capabilities [--json] | states [--json]" >&2
+  echo "       agentctl status <session> | watch <session> [--inline] [--expect MINUTES] | stop <session> | capabilities [--json] | states [--json]" >&2
   echo "       agentctl phases [--since <N>m|<N>h|<N>d|RFC3339] [--repo <abs>] [--json]   # read-only ledger readings" >&2
   echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
   exit 1
@@ -113,6 +113,82 @@ survivor_advise() { # $1 session — stderr advisory only; never signals, never 
   [ -n "$SURV_SNAP" ] || return 0
   ctl stop-survivors "$1" --snapshot "$SURV_SNAP" || true
   rm -f "$SURV_SNAP"; SURV_SNAP=""
+  return 0
+}
+
+# The advisory above stops at REPORTING because a group-scoped reap has no pgid that would
+# reach an escapee and no right to signal one by name. The pane's exported labels give it a
+# third option: AGENTCTL_SESSION says which seat made the process and AGENTCTL_CWD which
+# directory it serves, both inherited by every exec'd descendant — so an escapee carries its
+# own provenance and can be reaped ONE PID AT A TIME, on evidence it supplies itself.
+# Division of labour: `lineage-plan` decides WHO is reapable (environment membership read from
+# a NUL-delimited source, never a substring of a ps line; a cwd no other live session works
+# in; every gap fail-closed) and prints `<pid> <start-time>`; the signalling is here, because
+# the python lane sends no signals.
+# The plan is a SAMPLE, so the identity is re-read immediately before TERM and again before
+# KILL — same discipline reap_tree applies to its pgid leader, per pid.
+pid_live() { # $1 pid — 0 while it is a LIVE process; a zombie is a corpse, not a survivor
+  local st
+  st="$(ps -o state= -p "$1" 2>/dev/null | tr -d ' ')"
+  [ -n "$st" ] || return 1
+  case "$st" in Z*) return 1;; esac
+  return 0
+}
+lineage_verify() { # $1 pid  $2 recorded start time — 0 only if the pid is STILL that process
+  local have
+  # `tr -s ' '` is load-bearing, not tidying: ps pads a single-digit day ("Sep  4") and the
+  # plan's start time came through a python field split that already collapsed it, so an
+  # un-normalized compare calls EVERY process reaped on days 1-9 a recycled stranger.
+  have="$(ps -p "$1" -o lstart= 2>/dev/null | tr -s ' ' | sed 's/ *$//')"
+  [ -n "$have" ] && [ "$have" = "$2" ]
+}
+LINEAGE_SEEN=0   # what the last lineage_reap RECOGNIZED — sampled or refused; the no-lane stop
+                 # reads it to tell a post-mortem from a name that never existed
+STOP_RESIDUE_NONE=20   # watchctl's private code of the same name: consumed below, never an exit
+lineage_reap() { # $1 session — prints one count line; rc 1 only if a pid survived its KILL
+  local plan prc row pid want i tries seen=0 reaped=0 killed="" left="" refused=0
+  plan="$(ctl lineage-plan "$1")"; prc=$?
+  # rc 3 is the planner's typed "recognized something, signallable nothing": the plan is empty
+  # on PURPOSE, so this stop did attribute processes to the name and only declined to signal.
+  [ "$prc" = 3 ] && { prc=0; refused=1; }
+  # A planner that DIED must not read as an empty plan: the count line would then report an
+  # unenumerated escapee as `reaped 0`, i.e. as a clean box — and a stop that enumerated
+  # nothing has no standing to call the name unknown either.
+  if [ "$prc" != 0 ]; then
+    echo "ADVISORY: stop $1: [unknown] lineage plan failed (rc=$prc) — no process was enumerated and NOTHING was signalled" >&2
+    plan=""; refused=1
+  fi
+  case "${AGENTCTL_REAP_GRACE:-}" in ''|*[!0-9]*) tries=25;; *) tries=$(( AGENTCTL_REAP_GRACE * 5 ));; esac
+  while IFS= read -r row; do
+    pid="${row%% *}"; want="${row#* }"
+    case "$pid" in ''|*[!0-9]*) continue;; esac
+    [ "$want" != "$row" ] || continue          # no start-time half = not a plan line
+    seen=$((seen+1))
+    if ! lineage_verify "$pid" "$want"; then
+      echo "ADVISORY: stop $1: [skipped pid=$pid identity changed] — gone or recycled since the plan was sampled; nothing signalled" >&2
+      continue
+    fi
+    kill -TERM "$pid" 2>/dev/null
+    i=0
+    while [ "$i" -lt "$tries" ]; do
+      pid_live "$pid" || break
+      sleep 0.2; i=$((i+1))
+    done
+    if pid_live "$pid"; then
+      if ! lineage_verify "$pid" "$want"; then
+        echo "ADVISORY: stop $1: [skipped pid=$pid identity changed] — not KILLed" >&2
+        continue
+      fi
+      kill -KILL "$pid" 2>/dev/null; sleep 0.2
+      killed="$killed $pid"
+    fi
+    if pid_live "$pid"; then left="$left $pid"; else reaped=$((reaped+1)); fi
+  done <<EOF
+$plan
+EOF
+  LINEAGE_SEEN=$((seen + refused))
+  echo "reaped $reaped lineage process(es)${killed:+ (KILL:$killed)}"
+  [ -z "$left" ] || { echo "WARN: labelled process(es) survived KILL:$left" >&2; return 1; }
   return 0
 }
 
@@ -328,7 +404,11 @@ cmd_start() {
   # AGENTCTL_SESSION is exported here — the ONE pane assembly point all three engines share —
   # because a seat cannot otherwise know its own session name: the goal frame never carries it
   # and the engine has no lane state of its own. It is the whole input to refuse_self.
-  PANE="export AGENTCTL_SESSION=$(q "$S"); exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); e=\$?; echo \$e > $(q "$RC").tmp && mv $(q "$RC").tmp $(q "$RC")"
+  # AGENTCTL_CWD rides beside it as the OWNERSHIP half of the same label: every exec'd
+  # descendant inherits both, so a child that setsid()s out of the pane's group still carries
+  # which seat made it AND which directory it serves. Both are LABELS, not switches — nothing
+  # branches on their presence, and a process without them is simply unattributable.
+  PANE="export AGENTCTL_SESSION=$(q "$S") AGENTCTL_CWD=$(q "$CWD"); exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); e=\$?; echo \$e > $(q "$RC").tmp && mv $(q "$RC").tmp $(q "$RC")"
   if ! tmux new-session -d -s "$S" -c "$CWD" "$PANE"; then
     rm -f "$FIFO" "$DIR/$S.duplex.meta"
     echo "ERR: tmux new-session failed for '$S' (nothing started)" >&2; exit 1
@@ -618,9 +698,17 @@ cmd_stop() {
       else reap_tree "$meta_pg" "$meta_ls"; fi
       REAP_RC=$?
       survivor_advise "$S"
+      # The label phase runs AFTER the group reap, in BOTH branches and unconditionally: a
+      # session with no pane and no meta left is exactly the post-mortem `agentctl stop <s>`
+      # an `inventory` lineage-orphan row sends an operator to, and it is the only exit.
+      lineage_reap "$S"; LIN_RC=$?
+      # The sentinel keeps the GROUP rc: it decides whether the SEAT ended, and a stray
+      # labelled tool outliving its KILL does not un-end a seat whose pane group is gone.
+      # stop's own exit is the max, so the failure is never silent either.
       ctl stop-sentinel "$S" --token "$STOP_TOK" --reap-rc "$REAP_RC" --identity "$STOP_ID"
       # a refused identity clear fails stop's contract: the name is not free to reuse
       [ "$ID_RC" = 0 ] || exit 1
+      [ "$LIN_RC" -gt "$REAP_RC" ] && REAP_RC="$LIN_RC"
       exit "$REAP_RC" ;;
     none)
       # no lane meta: clean bare tmux AND orphan duplex claims — the recovery path start advertises
@@ -634,7 +722,17 @@ cmd_stop() {
         survivor_advise "$S"
         echo "killed bare tmux session $S"; cleaned=1
       fi
-      ctl stop-residue "$S" --killed "$cleaned" --reap-rc "$reap_rc" --identity "$STOP_ID"; exit $? ;;
+      lineage_reap "$S"; lin_rc=$?
+      ctl stop-residue "$S" --killed "$cleaned" --reap-rc "$reap_rc" --identity "$STOP_ID"; res_rc=$?
+      # STOP_RESIDUE_NONE = the residue verb found nothing of its own: an unknown name, or the
+      # post-mortem exit an `inventory` lineage-orphan row sends an operator to? Only a DECIDED
+      # empty answer reads as a name that never existed — a REFUSED candidate (planner rc 3) counts.
+      if [ "$res_rc" = "$STOP_RESIDUE_NONE" ]; then
+        res_rc=0
+        [ "$LINEAGE_SEEN" != 0 ] || { echo "ERR: unknown session '$S' (no lane state, no tmux session, no residue)" >&2; res_rc=1; }
+      fi
+      [ "$lin_rc" -gt "$res_rc" ] && res_rc="$lin_rc"
+      exit "$res_rc" ;;
   esac
 }
 

@@ -38,9 +38,9 @@ cd "$(dirname "$0")"
 
 SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 
-# ---- the three ceilings: measured on this tree, 2026-09-03 ------------------------------------
-CODE_MAX=12597      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1533      # every shipped *.md under the skill, summed wc -l
+# ---- the three ceilings: measured on this tree, 2026-09-04 ------------------------------------
+CODE_MAX=13114      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+PROSE_MAX=1548      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=16913    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2012  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length

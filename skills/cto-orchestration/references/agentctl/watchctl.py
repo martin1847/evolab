@@ -11,7 +11,9 @@ inside `main()` only, which is what keeps the import cycle a cycle on paper and 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime
+import errno
 import glob as globmod
 import json
 import math
@@ -1473,11 +1475,13 @@ def cmd_stop_sentinel(args: argparse.Namespace) -> int:
               f"{events} and consider the replay corpus", file=sys.stderr)
     return 0
 
+STOP_RESIDUE_NONE = 20   # private: unpublished (the typed vocabulary ends at 19), shell-consumed
+
 def cmd_stop_residue(args: argparse.Namespace) -> int:
     """The no-lane branch of stop: clean orphan duplex claims (crash residue like a stray
     fifo/write-intent) — this IS the recovery path the start error advertises — and return the
-    exit code stop as a whole must report. `--reap-rc` is what the shell's own reap produced, so
-    the combination stays exactly where it was before the split."""
+    exit code stop as a whole must report, or STOP_RESIDUE_NONE when it found nothing at all.
+    `--reap-rc` is what the shell's own reap produced, so the combination stays as before."""
     run, name = args.run_dir, args.session
     cleaned = args.killed == 1
     reap_rc = args.reap_rc
@@ -1524,9 +1528,9 @@ def cmd_stop_residue(args: argparse.Namespace) -> int:
         # idempotent re-stop: session already cleaned, only post-mortem artifacts remain
         print(f"already stopped: only post-mortem artifacts remain for '{name}'")
         return 0
-    print(f"ERR: unknown session '{name}' (no lane state, no tmux session, no residue)",
-          file=sys.stderr)
-    return 1
+    # Nothing OF ITS OWN: an unknown session, or the post-mortem of a seat whose control state
+    # is long gone (wiped run dir, rebooted box)? Only the caller holds the label-phase count.
+    return STOP_RESIDUE_NONE
 
 
 ADVISORY_CMD_CLIP = 120     # advisory lines stay bounded; argv's head is the identifying part
@@ -1597,9 +1601,414 @@ def cmd_stop_survivors(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── lineage: the escapee's OWN label decides who owns it ──────────────────────
+# The advisory above is where a group-scoped reap honestly runs out: an escapee is OUTSIDE the
+# one pgid stop owns, so no pgid signal reaches it, and signalling by NAME is the global kill
+# this lane refuses on principle. The pane's exported labels supply the missing third thing —
+# provenance carried by the process itself. AGENTCTL_SESSION names the seat that made it,
+# AGENTCTL_CWD the directory it serves, and every exec'd descendant inherits both.
+#
+# Two properties are what make this a label rather than a heuristic:
+#   * ENVIRONMENT MEMBERSHIP READ FROM A NUL-DELIMITED SOURCE, on both platforms. Linux reads
+#     /proc/<pid>/environ; macOS reads the same buffer `ps -E` itself reads,
+#     sysctl(CTL_KERN, KERN_PROCARGS2, pid). `ps -E` output is NOT that source: it space-joins
+#     argv and env into one line, where "the next member" and "a ` NAME=` inside the previous
+#     member's VALUE" are indistinguishable: a decoy VALUE walks into a signal plan and a
+#     legitimate cwd containing a space gets truncated. So this code does not read that line.
+#   * OWNERSHIP, never mere labelling. A tool can be SHARED — an omp broker is per project
+#     directory and its label names only whoever launched it first — so the candidate's own
+#     AGENTCTL_CWD is weighed against every OTHER live session's cwd. A hit means the process
+#     is somebody's working tool and gets an advisory, not a signal.
+# Every gap in either judgement is fail-closed and SAID: unreadable environment, absent cwd
+# label, a run dir that is missing or unreadable, a tmux probe that failed, a live peer whose
+# meta has no readable cwd. Not reaping costs one leaked process and one printed line; reaping
+# wrong costs somebody else's live session, and those two prices are not comparable.
+LABEL_SESSION = "AGENTCTL_SESSION"
+LABEL_CWD = "AGENTCTL_CWD"
+LABEL_KEYS = (LABEL_SESSION.encode(), LABEL_CWD.encode())
+PS_LINEAGE_FMT = "pid=,ppid=,uid=,state=,lstart=,etime=,args="
+_CTL_KERN, _KERN_ARGMAX, _KERN_PROCARGS2 = 1, 8, 49
+
+
+def _ps_lines(*argv: str) -> list[str] | None:
+    """Raw stdout lines of one `ps`, or None when the probe itself could not answer. `-ww` is
+    load-bearing: a WIDTH-truncated args column would silently shorten the argv this lane
+    prints in its advisories."""
+    try:
+        probe = subprocess.run(["ps", *argv], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None if probe.returncode != 0 else probe.stdout.splitlines()
+
+
+def _env_members(items: list[bytes]) -> dict[str, str] | None:
+    """NUL-delimited `KEY=VALUE` items → environment. None when one of the TWO labels this lane
+    reads is present but its bytes are not valid UTF-8: an unreadable label is an unreadable
+    environment, never a label that happens not to match. A non-decodable OTHER member is
+    skipped — it cannot be one of ours, whose names are ASCII."""
+    env: dict[str, str] = {}
+    for item in items:
+        key, sep, value = item.partition(b"=")
+        if not sep:
+            continue
+        try:
+            name = key.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        try:
+            env[name] = value.decode("utf-8")
+        except UnicodeDecodeError:
+            if key in LABEL_KEYS:
+                return None
+    return env
+
+
+def parse_procargs2(blob: bytes) -> dict[str, str] | None:
+    """Environment out of one KERN_PROCARGS2 buffer, or None when the buffer is not an image
+    this parser can locate the environment inside of.
+
+    Layout (xnu, `sysctl.h`): `int argc`, the exec path, NUL padding, argc argv strings, NUL
+    padding, then the environment — every string NUL-terminated. Counting past argc is the
+    whole point: it is what makes a VALUE containing spaces, `=` or the literal text
+    `AGENTCTL_SESSION=x` structurally unable to be read as a member boundary.
+
+    An EMPTY environment segment is a legitimate answer, not a failure: macOS withholds the
+    environment region of a process running an SIP-protected platform binary (`/bin/sleep`
+    measured 2026-09-04, argc=2 and zero env members), and such a process is simply
+    unlabelled. Treating that as uncertainty would print an [unknown] line for every system
+    binary on the box, on every stop."""
+    if len(blob) < 4:
+        return None
+    argc = int.from_bytes(blob[:4], sys.byteorder)
+    if argc < 0 or argc > len(blob):
+        return None
+    parts = blob[4:].split(b"\0")
+    if not parts:
+        return None
+    idx = 1                                     # [0] is the exec path
+    while idx < len(parts) and parts[idx] == b"":
+        idx += 1
+    if idx + argc > len(parts):
+        return None                             # truncated argv: the env segment is unlocatable
+    idx += argc
+    while idx < len(parts) and parts[idx] == b"":
+        idx += 1
+    return _env_members([p for p in parts[idx:] if p])
+
+
+def _sysctl_procargs2(pid: int) -> bytes | None:
+    """The macOS environment source, or None when the kernel would not hand it over. errno
+    ESRCH means the process is simply gone, which the caller treats as gone rather than as a
+    gap; every other failure is a gap."""
+    libc = _libc()
+    if libc is None:
+        return None
+    size = ctypes.c_size_t(_ARGMAX)
+    buf = ctypes.create_string_buffer(_ARGMAX)
+    mib = (ctypes.c_int * 3)(_CTL_KERN, _KERN_PROCARGS2, pid)
+    ctypes.set_errno(0)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        return None
+    return buf.raw[: size.value]
+
+
+_LIBC = None
+
+
+def _libc():
+    """libc handle + KERN_ARGMAX, resolved once. A box where this fails has no environment
+    source at all, which is a whole-probe failure and reported as one."""
+    global _LIBC, _ARGMAX
+    if _LIBC is None:
+        try:
+            _LIBC = ctypes.CDLL(None, use_errno=True)
+            val = ctypes.c_int(0)
+            size = ctypes.c_size_t(ctypes.sizeof(val))
+            mib = (ctypes.c_int * 2)(_CTL_KERN, _KERN_ARGMAX)
+            if _LIBC.sysctl(mib, 2, ctypes.byref(val), ctypes.byref(size), None, 0) != 0:
+                _LIBC = False
+            else:
+                _ARGMAX = val.value
+        except OSError:
+            _LIBC = False
+    return _LIBC or None
+
+
+_ARGMAX = 1 << 20
+
+
+def _env_by_pid(rows: list[dict]) -> tuple[dict[int, dict[str, str]] | None, list[int]]:
+    """(pid → environment, pids whose environment could not be READ). The second list is
+    fail-closed material: such a pid may be ours and the probe cannot say, so it is reported
+    rather than dropped.
+
+    A process belonging to ANOTHER uid is skipped outright rather than counted as a gap: a
+    pane's descendants run as the seat that started them, so a foreign uid is a decidable
+    "not ours". A process that has simply exited since the ps snapshot is likewise gone, not
+    a gap — there is nothing left to reap or to report."""
+    if os.path.isdir("/proc/self"):
+        return _env_by_pid_proc(rows)
+    if _libc() is None:
+        return None, []
+    envs: dict[int, dict[str, str]] = {}
+    blind: list[int] = []
+    me = os.getuid()
+    for row in rows:
+        if row["uid"] != me or row["state"].startswith("Z"):
+            continue                            # a zombie has no argv/env region to read
+        pid = row["pid"]
+        ctypes.set_errno(0)
+        blob = _sysctl_procargs2(pid)
+        if blob is None:
+            if ctypes.get_errno() != errno.ESRCH:
+                blind.append(pid)
+            continue
+        env = parse_procargs2(blob)
+        if env is None:
+            blind.append(pid)
+            continue
+        envs[pid] = env
+    return envs, blind
+
+
+def _env_by_pid_proc(rows: list[dict], opener=None,
+                     stater=None) -> tuple[dict[int, dict[str, str]], list[int]]:
+    """The Linux half: /proc/<pid>/environ is NUL-delimited and exact. `opener`/`stater` exist
+    so the failure branches are reachable from a test on a box with no /proc at all."""
+    _open = opener or (lambda path: open(path, "rb"))
+    _stat = stater or os.stat
+    envs: dict[int, dict[str, str]] = {}
+    blind: list[int] = []
+    me = os.getuid()
+    for row in rows:
+        if row.get("state", "").startswith("Z"):
+            continue                            # a zombie has no environ to read
+        pid = row["pid"]
+        try:
+            if _stat(f"/proc/{pid}").st_uid != me:
+                continue                        # another user's process is decidably not ours
+        except FileNotFoundError:
+            continue                            # gone since the snapshot
+        except OSError:
+            blind.append(pid)
+            continue
+        try:
+            with _open(f"/proc/{pid}/environ") as fh:
+                blob = fh.read()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            blind.append(pid)                   # same uid and still unreadable IS a gap
+            continue
+        env = _env_members([p for p in blob.split(b"\0") if p])
+        if env is None:
+            blind.append(pid)
+            continue
+        envs[pid] = env
+    return envs, blind
+
+
+def lineage_rows() -> tuple[list[dict] | None, list[int], str, set[int]]:
+    """(rows whose ENVIRONMENT carries the session label, pids the probe could not read,
+    why-no-answer, this process's own ancestry).
+
+    No session filter here: `cmd_lineage_plan` narrows to its own label, the census wants every
+    label, and a text-needle pre-filter is the very ambiguity this lane refuses to read. None
+    for the rows = no answer at all, same discipline as ps_identity_rows: one unreadable row
+    makes the whole snapshot uncertainty."""
+    lines = _ps_lines("-axwwo", PS_LINEAGE_FMT)
+    if lines is None:
+        return None, [], "ps snapshot failed", set()
+    rows: list[dict] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        parts = line.split(None, 10)     # pid ppid uid state + 5 lstart fields + etime + argv
+        if len(parts) < 10:
+            return None, [], "ps snapshot unparseable", set()
+        lstart = " ".join(parts[4:9])
+        if not duplexctl._LSTART_RE.fullmatch(lstart):
+            return None, [], "ps snapshot unparseable", set()
+        try:
+            pid, ppid, uid = int(parts[0]), int(parts[1]), int(parts[2])
+            duplexctl.parse_etime(parts[9])
+        except ValueError:
+            return None, [], "ps snapshot unparseable", set()
+        rows.append({"pid": pid, "ppid": ppid, "uid": uid, "state": parts[3], "lstart": lstart,
+                     "etime": parts[9], "cmd": parts[10] if len(parts) > 10 else ""})
+    envs, blind = _env_by_pid(rows)
+    if envs is None:
+        return None, [], "no environment source on this platform", set()
+    labelled = [{**row, "env": envs[row["pid"]]} for row in rows
+                if LABEL_SESSION in envs.get(row["pid"], {})]
+    if blind:
+        blind = _still_the_same(blind, {row["pid"]: row["lstart"] for row in rows})
+    return labelled, blind, "", _ancestry(rows)
+
+
+def _still_the_same(pids: list[int], lstarts: dict[int, str]) -> list[int]:
+    """The blind pids that are STILL the process the snapshot saw. A process that merely exited
+    mid-probe is GONE, not a gap — and errno cannot tell the two apart, because macOS answers
+    EINVAL (not ESRCH) for a process on its way out. So a second reading decides, with our own
+    pid along as the known positive, exactly as cmd_stop_survivors does it. One extra `ps`, and
+    only when something actually went blind."""
+    me = str(os.getpid())
+    live = ps_start_times([me, *[str(p) for p in pids]])
+    if live is None or me not in live:
+        return sorted(pids)                     # cannot tell: every gap stays a gap
+    return sorted(p for p in pids
+                  if " ".join(live.get(str(p), "").split()) == lstarts.get(p))
+
+
+def _ancestry(rows: list[dict]) -> set[int]:
+    """This process and every ancestor of it. A seat that stops ANOTHER session from inside a
+    labelled shell hands its own chain the label it is hunting, and signalling one's own
+    ancestry is suicide spelled differently — the same reason reap_tree refuses its own pgid."""
+    by_pid = {row["pid"]: row for row in rows}
+    out: set[int] = set()
+    cur = os.getpid()
+    while cur > 1 and cur not in out:
+        out.add(cur)
+        row = by_pid.get(cur)
+        if row is None:
+            break
+        cur = row["ppid"]
+    return out
+
+
+def _tmux_live_sessions() -> tuple[set[str], str]:
+    """(live tmux session names, why-undecidable). "no server running" is ZERO sessions, not a
+    failure: a box with no tmux at all is a decidable, empty answer."""
+    try:
+        probe = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                               capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return set(), f"tmux probe failed ({exc})"
+    if probe.returncode == 0:
+        return {s.strip() for s in probe.stdout.splitlines() if s.strip()}, ""
+    if "no server running" in probe.stderr:
+        return set(), ""
+    return set(), f"tmux list-sessions rc={probe.returncode}: {probe.stderr.strip()[:120]}"
+
+
+def _live_peer_cwds(run: str, me: str) -> tuple[dict[str, str], str]:
+    """({working directory: session} for every OTHER session with BOTH lane state and a live
+    tmux session, why-undecidable). The question is asked of the CANDIDATE's cwd, never of the
+    stopping session's: a same-name restart in a new worktree must not license reaping the
+    tool the old worktree's still-live neighbour is using."""
+    try:
+        entries = os.listdir(run)
+    except OSError as exc:
+        # A MISSING run dir is a gap here, not an empty one. `inventory` may read "never
+        # created" as zero records because it only prints; this gate AUTHORIZES a TERM, and a
+        # lane-state root that vanished hides exactly the live same-cwd peer that would refuse.
+        return {}, f"run dir {run} unreadable ({exc.strerror or type(exc).__name__})"
+    names = {n[: -len(".duplex.meta")] for n in entries if n.endswith(".duplex.meta")} - {me}
+    live, why = _tmux_live_sessions()
+    if why:
+        return {}, why
+    out: dict[str, str] = {}
+    for name in sorted(names & live):
+        path = os.path.join(run, f"{name}.duplex.meta")
+        try:
+            cwd = identity._meta_read(path).get("cwd", "").strip()
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            # `_meta_read` decodes as UTF-8 and a bad byte escapes as UnicodeDecodeError: an
+            # uncaught one aborts the planner, which the shell then renders as `reaped 0`.
+            return {}, f"live session {name!r} has an unreadable meta ({type(exc).__name__})"
+        if not cwd:
+            return {}, f"live session {name!r} has no readable cwd in its lane state"
+        out.setdefault(cwd, name)
+    return out, ""
+
+
+def cmd_lineage_plan(args: argparse.Namespace) -> int:
+    """stdout: `<pid> <start-time>`, one per process this stop MAY signal. stderr: one line
+    per candidate refused and per gap that could not be closed. NOT a kill list — the shell
+    re-reads each pid's identity immediately before every signal, and this verb sends none.
+
+    rc 3 = "something was refused fail-closed and NOTHING is signallable": the plan is empty
+    on purpose. The caller renders an empty plan in the no-lane cell as `unknown session`,
+    which claims the name owns nothing anywhere — the opposite of what a refusal line just
+    said, and rc 1 makes automation read a safe refusal as a failed stop (review r3 M1)."""
+    refusals = 0
+    planned = 0
+
+    def note(text: str) -> None:
+        nonlocal refusals
+        refusals += 1
+        print(f"ADVISORY: stop {args.session}: {text}", file=sys.stderr)
+
+    rows, blind, why, ancestry = lineage_rows()
+    if rows is None:
+        note(f"lineage probe [unknown] ({why}) — processes carrying this session's label were "
+             f"NOT enumerable and NOTHING was signalled")
+        return 3
+    # the label must name THIS session and no other: `lineage_rows` reads every label on the
+    # box (the census wants that), and a stop that reasoned over all of them would advise
+    # about — and eventually reach for — every other seat's processes.
+    mine = [row for row in rows if row["env"].get(LABEL_SESSION) == args.session]
+    peers: dict[str, str] = {}
+    peer_why = ""
+    if mine:
+        peers, peer_why = _live_peer_cwds(args.run_dir, args.session)
+    for row in sorted(mine, key=lambda r: r["pid"]):
+        pid, cmd = row["pid"], row["cmd"][:ADVISORY_CMD_CLIP]
+        if pid in ancestry:
+            continue                # this stop's own process chain
+        cwd = row["env"].get(LABEL_CWD, "")
+        if not cwd:
+            note(f"[unknown] pid={pid} carries this session's label but no {LABEL_CWD}, so "
+                 f"whether anyone else still needs it is undecidable — NOT signalled: {cmd}")
+            continue
+        if peer_why:
+            note(f"[unknown] pid={pid}: the other live sessions could not be enumerated "
+                 f"({peer_why}), so a shared tool would be unrecognizable — NOT signalled")
+            continue
+        owner = peers.get(cwd)
+        if owner:
+            note(f"pid={pid} wears this session's label, but {cwd} is also the working "
+                 f"directory of {owner!r}, which is LIVE — shared tool, NOT signalled: {cmd}")
+            continue
+        print(f"{pid} {row['lstart']}")
+        planned += 1
+    for pid in sorted(blind):
+        note(f"[unknown] pid={pid} could not have its environment read, so whether it carries "
+             f"this session's label is undecidable — NOT signalled")
+    # An opaque pid is undecidable FOR EVERY session name, blind being box-wide and not
+    # session-scoped: that is the fail-closed direction, and it only ever converts a claim of
+    # "this name never existed" into the silence the [unknown] line above already printed.
+    return 3 if refusals and not planned else 0
+
+
+def inventory_lineage() -> tuple[list[str], str]:
+    """(rows, why-unknown) for the label census: a process wearing the label of a session tmux
+    no longer has. Exactly the class the stop-time advisory says it does NOT cover — an
+    escapee whose seat is long gone, which no pane-rooted probe can reach any more."""
+    rows, blind, why, _ = lineage_rows()
+    if rows is None:
+        return [], why
+    live, tmux_why = _tmux_live_sessions()
+    if tmux_why:
+        return [], tmux_why
+    out = []
+    for row in sorted(rows, key=lambda r: r["pid"]):
+        name = row["env"][LABEL_SESSION]
+        if name in live:
+            continue
+        out.append(f"{'lineage-orphan':<19}  session={name} "
+                   f"cwd={row['env'].get(LABEL_CWD) or '-'}  pid={row['pid']} "
+                   f"age={row['etime']} cmd={row['cmd'][:ADVISORY_CMD_CLIP]}")
+    for pid in sorted(blind):
+        out.append(f"{'lineage-unknown':<19}  pid={pid} environment unreadable — whether it "
+                   f"carries a session label is undecidable, NOT a clean bill")
+    return out, ""
+
+
 # ── inventory ─────────────────────────────────────────────────────────────────
-# Two censuses nothing else owns: control state that drifted from tmux reality, and engine
-# processes PID 1 adopted (field 2026-08: 38 orphans, 12-19 days old, 2.2GiB, found by hand).
+# Three censuses nothing else owns: control state that drifted from tmux reality, engine
+# processes PID 1 adopted (field 2026-08: 38 orphans, 12-19 days old, 2.2GiB, found by hand),
+# and processes still wearing the label of a session tmux no longer has.
 # Every row is a CANDIDATE — something to look at, never something this tool acts on. There is
 # no --apply here or planned, and the verb refuses every spelling but `inventory --dry-run`.
 ENGINE_WRAPPER_HOSTS = ("node", "bun", "python", "python3")
@@ -1641,17 +2050,9 @@ def inventory_control(run: str) -> tuple[list[str], str]:
     except OSError as exc:
         return [], f"run dir {run} unreadable ({exc.strerror})"
     records = {n[: -len(".duplex.meta")] for n in entries if n.endswith(".duplex.meta")}
-    try:
-        probe = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
-                               capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return [], f"tmux probe failed ({exc})"
-    if probe.returncode == 0:
-        live = {s.strip() for s in probe.stdout.splitlines() if s.strip()}
-    elif "no server running" in probe.stderr:
-        live = set()                # a server that was never started IS zero sessions
-    else:
-        return [], f"tmux list-sessions rc={probe.returncode}: {probe.stderr.strip()[:120]}"
+    live, why = _tmux_live_sessions()
+    if why:
+        return [], why
     rows = [f"{'record-without-tmux':<19}  {n}" for n in sorted(records - live)]
     for name in sorted(live - records):
         # attribution is a SIGNAL, not a guess: the name owns files in the run dir, it is a
@@ -1693,13 +2094,23 @@ def cmd_inventory(args: argparse.Namespace) -> int:
           "undeclared wrappers are invisible to this list. FP (control block): a `-watchd`-"
           "suffixed tmux name is attributed by naming convention alone, with no run-dir "
           "cross-check, so it may over-report as tmux-without-record.")
-    for title, (rows, why) in (("control-state reconciliation", inventory_control(args.run_dir)),
-                               ("engine-orphan census (PPID=1)", inventory_orphans())):
+    print("[boundary] lineage FN: a process the tmux SERVER forked (its environment is the "
+          "server's, not a pane's), one started after `env -i` or an unset, a grandchild a "
+          "SHARED tool spawned for another client (it wears the tool's first launcher's "
+          "label), anything created after this snapshot, and — macOS only — anything running "
+          "an SIP-protected platform binary, whose environment the kernel withholds. None of "
+          "those carry a label this census can read, and its silence does not cover them.")
+    for title, empty, (rows, why) in (
+            ("control-state reconciliation", "(none)", inventory_control(args.run_dir)),
+            ("engine-orphan census (PPID=1)", "(none)", inventory_orphans()),
+            ("lineage census", "(none orphaned)", inventory_lineage())):
         print(f"-- {title} --")
         if why:
             print(f"[unknown] {title}: {why} — this block is NOT a clean bill")
         elif not rows:
-            print("(none)")
+            # the third block's empty word is its OWN: `test/agentctl-reap.test.sh` BT9 pins
+            # the count of bare `(none)` lines at two, and that assertion is append-only.
+            print(empty)
         else:
             print("\n".join(rows))
     return 0
