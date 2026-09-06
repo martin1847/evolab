@@ -1814,9 +1814,12 @@ GUARD_CWD="$ISO_REPO"
 # ── (20) 编排位经 bash 直写源码面 (DENY) ─────────────────────────────────────────────────────
 # E1 on the Bash channel. Preflight 2026-09-02: a heredoc write, an append redirect, a `tee` and
 # a `sed -i` onto a repo `.py` all returned rc=0 from this guard — auto mode prefers Bash for
-# editing files, so E1's Edit|Write matcher never saw them. The seat attribution is IMPORTED
-# from cto-guard-edit.py, so the fixture is that guard's: a run dir of `duplex.meta` files, a
-# fake tmux for liveness, and real `git init`ed trees for the work-tree face.
+# editing files, so E1's Edit|Write matcher never saw them. The seat attribution AND the
+# "is this repo being orchestrated" predicate are IMPORTED from cto-guard-edit.py / identity.py,
+# so the fixture is that guard's: a run dir of `duplex.meta` files, a fake tmux for liveness,
+# real `git init`ed trees for the work-tree face — and, since 2026-09-06, a phase-ledger `start`
+# row, without which the rule is silent by design (a repo nobody orchestrates is not its face;
+# that arm is asserted at the end of this battery).
 chk_eq "r20 fixture prerequisite: git on PATH" 1 "$(command -v git >/dev/null 2>&1 && echo 1 || echo 0)"
 G20="$G8ROOT/g20"
 R20="$G20/l1/l2/l3/l4/repo"          # the orchestrator's own checkout, deep enough that the
@@ -1826,6 +1829,14 @@ BIN20="$G20/bin"
 mkdir -p "$R20/docs" "$SEAT20" "$RUN20" "$BIN20"
 git -C "$R20" init -q
 git -C "$SEAT20" init -q
+ledger20() { # $1 cwd — one `start` row in today's shard of the r20 run dir (the premise above)
+  python3 -c 'import json, os, sys
+print(json.dumps({"ts": "2026-09-06T00:00:00.000Z", "event": "start", "name": "fixture",
+                  "session_id": "s", "attempt": "a", "cwd": os.path.realpath(sys.argv[1])}))' \
+    "$1" >> "$RUN20/phase-ledger-$(date -u +%Y%m%d).jsonl"
+}
+ledger20 "$R20"
+ledger20 "$SEAT20"
 # Fake tmux, same shape as cto-guard-edit.test.sh: `has-session -t =<name>` succeeds only for a
 # session named in $TMUX_LIVE. Prepended, so the real `git` this battery needs still resolves.
 cat > "$BIN20/tmux" <<'EOF'
@@ -2069,6 +2080,20 @@ chk_contains "r20-rundir warns that the seat set is unknown" "LIVE seat set is u
 run20 'echo x > /tmp/g20-outside-any-repo.py'
 chk_eq "r20-ungoverned a target no work tree owns is allowed" 0 "$RC"
 chk_contains "r20-ungoverned warns instead of accusing" "席位归属未判" "$(ctx "$OUT")"
+# THE IDENTITY CLAUSE, same as E1's (audit §1): a repo nobody is orchestrating is not this
+# rule's face at all — silent rc 0, no WARN. Otherwise one single-agent edit passes as `Edit`
+# and denies as `sed -i`, which is the same rule contradicting itself across two channels.
+PLAIN20="$G20/plain-checkout"; mkdir -p "$PLAIN20"; git -C "$PLAIN20" init -q
+GUARD20_CWD="$PLAIN20"
+run20 "echo x > $PLAIN20/x.py"
+chk_eq "r20-identity an unorchestrated repo's bash write is allowed" 0 "$RC"
+chk_eq "r20-identity and the gate says nothing at all" "" "$ERR$OUT"
+run20 "sed -i '' -e s/a/b/ $PLAIN20/y.py"
+chk_eq "r20-identity in-place sed there is allowed too" 0 "$RC"
+ledger20 "$PLAIN20"
+run20 "echo x > $PLAIN20/x.py"
+chk_eq "r20-identity PAIRED RED: one ledger start row in that repo restores the DENY" 2 "$RC"
+chk_contains "r20-identity and the deny names the channel" "编排位经 bash 直写源码面" "$ERR"
 PATH="$OLDPATH20"; export PATH
 GUARD_CWD="$ISO_REPO"
 

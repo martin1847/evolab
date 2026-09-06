@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 # cto-guard-edit — PreToolUse·Edit|Write|MultiEdit enforcement for cto-orchestration. ONE rule:
-#   (E1) the ORCHESTRATOR writing product code by hand -> DENY (iron law ①, 车道分工, field n=2:
-#        two batches where the seat hand-coded the very thing it had just briefed a worker for,
-#        and paid for it with the review lane it thereby lost).
-# The rule existed only in prose (SKILL.md §0) and prose does not reach the moment a `Write`
-# tool call is issued — same conclusion as cto-guard-bash/agent, promoted to a tool-call hook.
+#   (E1) the ORCHESTRATOR writing product code by hand, IN A REPO THIS BOX IS ORCHESTRATING
+#        -> DENY (iron law ①, 车道分工, field n=2: two batches where the seat hand-coded the very
+#        thing it had just briefed a worker for, and paid for it with the review lane it thereby
+#        lost). The rule existed only in prose (SKILL.md §0) and prose does not reach the moment
+#        a `Write` tool call is issued — same conclusion as cto-guard-bash/agent, promoted to a
+#        tool-call hook.
+#
+# WHICH REPO IS THIS GATE'S BUSINESS — the clause added 2026-09-06 (audit §1). Until then the
+# rule fired in EVERY git work tree, so a single-agent session editing an unrelated checkout was
+# denied (probed at rc 2) — i.e. the gate dragged exactly the "small single-agent task" the SKILL
+# excludes into the dispatch flow. The target repo must now be one agentctl is ORCHESTRATING
+# (`identity.orchestrated`: a LIVE seat, or a phase-ledger `start` row of today/yesterday, in the
+# SAME repo by git common dir). `not` ⇒ silent allow, zero output: an unrelated session must not
+# even be told a gate exists. `undecidable` ⇒ the same ALLOW+WARN every other blind branch takes.
 #
 # WHAT IS JUDGED: the WRITE TARGET, not the caller's location. `file_path` decides the repo face
 # (the git work tree enclosing it) and the run-dir census decides who owns that face. Judging the
@@ -17,12 +26,11 @@
 # HOW A WORKER IS TOLD APART FROM THE ORCHESTRATOR — the whole difficulty of this gate.
 # A worker seat's worktree is the `cwd=` line of its `<session>.duplex.meta` in the run dir, and a
 # LIVE seat licenses every write inside its own WORK TREE — compared by ROOT, so a seat launched
-# in a subdirectory still covers its repo root (R1 denied that legal worker: review §1.4). Reading
-# the meta ALONE is wrong: `watchctl.py:_STOP_KEPT` keeps `duplex.meta` after `agentctl stop`, so
-# a worktree that finished days ago would hold write rights forever. Liveness must be proved
-# separately — the engine's rc file ABSENT (the pane writes it on engine exit; stop keeps it for
-# post-mortem) AND the tmux session present. Either half undecidable => treated as LIVE:
-# over-allowing costs one un-denied edit, while a wrong DENY brings every edit in the repo down.
+# in a subdirectory still covers its repo root (R1 denied that legal worker: review §1.4), and a
+# SIBLING worktree of the same repo is deliberately NOT covered: that is the orchestrator's own
+# checkout seen from a seat. The seat set, its liveness rule and the repo-identity predicate all
+# live in `identity.py` next to this file and are IMPORTED, never copied — three gates read the
+# same fact (E1, Stop, the compaction reminder) and a second copy would drift on the first move.
 # DEGRADE DIRECTION, deliberately ALLOW+WARN (never checker-error): an unlistable run dir, a meta
 # that cannot be OPENED (a listable directory is not a readable census — review §1.3), or a target
 # no governed work tree owns all mean the question is UNANSWERABLE, and a guard that cannot answer
@@ -30,6 +38,15 @@
 # Deny = exit 2 + stderr (shown to the agent). Warn = exit 0 + JSON
 # hookSpecificOutput.additionalContext (the only channel that reaches the agent at exit 0).
 import sys, json, os, re, subprocess
+
+# The shared seat/identity facts. Loaded from THIS script's own directory, which is what keeps an
+# installed copy self-contained; a module that cannot be loaded at all is one more UNANSWERABLE
+# case, so it degrades to ALLOW+WARN like the others rather than bricking the Edit tool.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import identity
+except Exception:                           # noqa: BLE001 — a broken sibling must not deny
+    identity = None
 
 # The source face, by extension. Docs and data (md/json/yaml/toml/txt/csv/…) are NOT product code
 # and never reach the rule: the orchestrator writes goals, records and briefs all day, and a gate
@@ -41,9 +58,9 @@ import sys, json, os, re, subprocess
 _SRC_EXT = {"py", "sh", "bash", "ts", "js", "tsx", "jsx", "go", "rs", "java", "kt", "rb"}
 _TEST_DIR = re.compile(r"/tests?/")
 _OVERRIDE = "/tmp/cto-allow-direct-write"
-_RUN_DEFAULT = "/tmp/agent-watch-run"       # duplexctl's own default for --run-dir
 
-# The three ALLOW+WARN texts, as module-level literals emitted through an INLINE json.dumps at
+
+# The four ALLOW+WARN texts, as module-level literals emitted through an INLINE json.dumps at
 # each branch. Not a style choice: the injected-text ratchet (test/loc-budget.test.sh)
 # weighs literals AT the sink and resolves one local per sink, so a message routed through a
 # `warn(text)` helper's parameter would be spent entirely unweighed — the exact blind spot that
@@ -54,14 +71,19 @@ _W_NO_CWD = (
     "the edit instead of making it (SKILL.md §0 铁律①)."
 )
 _W_RUN_DIR = (
-    "WARN (cto-guard E1): run dir %s could not be listed, so the LIVE seat set is unknown and "
-    "the write to %s was allowed unjudged. 车道分工 (SKILL.md §0 铁律①) still holds: the "
-    "orchestrator dispatches product code, it does not type it."
+    "WARN (cto-guard E1): run dir %s could not be read as a census, so the LIVE seat set is "
+    "unknown and the write to %s was allowed unjudged. 车道分工 (SKILL.md §0 铁律①) still holds: "
+    "the orchestrator dispatches product code, it does not type it."
 )
 _W_TARGET = (
     "WARN (cto-guard E1): write target %s is not inside a git work tree governed by this call's "
     "cwd %s or by any LIVE seat, so 车道分工 (SKILL.md §0 铁律①) had no repo face to judge and "
     "the write was allowed unjudged."
+)
+_W_IDENTITY = (
+    "WARN (cto-guard E1): whether this repo is being ORCHESTRATED could not be established (%s), "
+    "so the write to %s was allowed unjudged. If a batch is running here, 车道分工 (SKILL.md §0 "
+    "铁律①) holds: dispatch product code, do not type it."
 )
 
 
@@ -76,71 +98,6 @@ def _is_source(path):
     if len(ext) == 2 and ext[1]:
         return ext[1].lower() in _SRC_EXT
     return bool(_TEST_DIR.search(norm))
-
-
-def _meta_cwd(path):
-    """(cwd, readable) for one duplex.meta. `readable` False = the file could not be OPENED or
-    decoded, which is NOT the same as "this seat has no cwd": swallowing it as None dropped a
-    live seat from the census and could DENY its own worker (review §1.3). Same `key=value` line
-    format identity.py:_meta_read consumes; first occurrence wins, exactly as it does there."""
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                key, sep, value = line.rstrip("\n").partition("=")
-                if sep and key.strip() == "cwd":
-                    return value.strip() or None, True
-    except OSError:
-        return None, False
-    except UnicodeDecodeError:
-        return None, False
-    return None, True
-
-
-def _tmux_alive(session):
-    """True / False / None(undecidable). None is NOT a softer False: an absent or broken tmux
-    means the liveness question was never answered, and the caller reads that as live."""
-    try:
-        probe = subprocess.run(["tmux", "has-session", "-t", f"={session}"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
-    except Exception:
-        return None
-    return probe.returncode == 0
-
-
-def live_seat_cwds(run_dir):
-    """(cwds, complete). Every LIVE agentctl seat's cwd. `complete` False = the run dir could not
-    be listed OR one of its metas could not be read, so the seat set is unknown and the caller
-    degrades to ALLOW+WARN rather than judging against a census it knows is short."""
-    try:
-        entries = os.listdir(run_dir)
-    except OSError:
-        return set(), False
-    out, complete = set(), True
-    for name in entries:
-        if not name.endswith(".duplex.meta"):
-            continue
-        session = name[: -len(".duplex.meta")]
-        cwd, readable = _meta_cwd(os.path.join(run_dir, name))
-        if not readable:
-            complete = False
-            continue
-        if not cwd:
-            continue
-        # rc file present = the engine already exited (stop keeps BOTH the meta and the rc for
-        # post-mortem, which is exactly why the meta alone proves nothing). `os.stat`, not
-        # `os.path.exists`: exists() reports a stat ERROR as False, so a permission-denied rc
-        # file read as "engine still running" — the opposite of "rc 不可判按 live" (review §1.3).
-        try:
-            os.stat(os.path.join(run_dir, f"{session}.duplex.rc"))
-            continue
-        except FileNotFoundError:
-            pass                             # absent -> the live half of the predicate holds
-        except OSError:
-            out.add(cwd)                     # undecidable -> live
-            continue
-        if _tmux_alive(session) is not False:
-            out.add(cwd)                     # alive, or undecidable -> live
-    return out, complete
 
 
 def _under(child, parent):
@@ -231,9 +188,14 @@ def main():
             "hookEventName": "PreToolUse", "additionalContext": _W_NO_CWD % path}}))
         return 0
 
-    run_dir = os.environ.get("AGENT_WATCH_DIR") or _RUN_DEFAULT
-    seats, complete = live_seat_cwds(run_dir)
-    if not complete:
+    if identity is None:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "additionalContext": _W_IDENTITY % (
+                "identity.py could not be loaded from this script's own directory", path)}}))
+        return 0
+    run_dir = identity.run_dir()
+    seats, listed, complete = identity.live_seat_cwds(run_dir)
+    if not (listed and complete):
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "additionalContext": _W_RUN_DIR % (run_dir, path)}}))
         return 0
@@ -255,6 +217,19 @@ def main():
             "hookEventName": "PreToolUse", "additionalContext": _W_TARGET % (path, cwd)}}))
         return 0
 
+    # IS THIS REPO EVEN BEING ORCHESTRATED? Asked LAST, because the branches above are the ones
+    # that end in an ALLOW anyway, and asked at all because without it this rule fires in every
+    # git work tree on the box (audit §1: the single-agent lane the SKILL excludes was denied).
+    # The question is about the TARGET's repo, the same face the rule judges — not about the
+    # caller, who may legitimately sit in another checkout.
+    state, why = identity.orchestrated(tdir, run_dir)
+    if state == identity.NOT_ORCHESTRATED:
+        return 0                             # nobody is orchestrating here: not this gate's face
+    if state != identity.ORCHESTRATED:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "additionalContext": _W_IDENTITY % (why, path)}}))
+        return 0
+
     # The override is the LEGITIMATE direct-write path, not a bypass: SKILL.md §2 licenses the
     # orchestrator to write the shipped face (教义 / 门 / guard) itself, with a minimal contract.
     # Consumption IS the approval (same one-shot shape as cto-guard-bash's markers), so it can
@@ -265,16 +240,16 @@ def main():
     except OSError:
         pass
     sys.stderr.write(
-        "DENY: 编排位直写源码面 — %s, a work tree no LIVE agentctl seat holds (call cwd %s), so "
-        "this is the orchestrator typing product code (铁律① 车道分工, n=2: the seat hand-coded "
-        "what it had just briefed and lost the review lane it was paying for). Fix: dispatch it — "
-        "`agentctl start <engine> <session> <cwd> --goal <abs>` — and let the worker edit inside "
-        "its own worktree; writes into a live seat's work tree pass untouched. Directly writing "
-        "the SHIPPED face (教义 / 门 / guard) is a licensed path for ANY verified motive, and "
-        "needs only the minimal contract (Done-when + 坏样本来源 + scope): write it, then `touch "
-        "%s` (one-shot, consumed on use) and re-run. "
-        "Read: cto-orchestration/SKILL.md §0.\n"
-        % (path, cwd, _OVERRIDE)
+        "DENY: 编排位直写源码面 — %s, a work tree that IS being orchestrated (%s) and that no "
+        "LIVE agentctl seat holds (call cwd %s), so this is the orchestrator typing product code "
+        "(铁律① 车道分工, n=2: the seat hand-coded what it had just briefed and lost the review "
+        "lane it was paying for). Fix: dispatch it — `agentctl start <engine> <session> <cwd> "
+        "--goal <abs>` — and let the worker edit inside its own worktree; writes into a live "
+        "seat's work tree pass untouched. Directly writing the SHIPPED face (教义 / 门 / guard) "
+        "is a licensed path for ANY verified motive, and needs only the minimal contract "
+        "(Done-when + 坏样本来源 + scope): write it, then `touch %s` (one-shot, consumed on use) "
+        "and re-run. Read: cto-orchestration/SKILL.md §0.\n"
+        % (path, why, cwd, _OVERRIDE)
     )
     return 2
 

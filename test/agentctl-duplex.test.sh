@@ -58,9 +58,16 @@ sweep_fakes() { # kill any engine/wrapper the fake tmux started (orphans hold th
     pid="$(cat "$pidfile")"
     pkill -P "$pid" 2>/dev/null; kill -9 "$pid" 2>/dev/null
   done
-  pkill -f "duplex-fixtures/fake_omp_duplex" 2>/dev/null
-  pkill -f "duplex-fixtures/fake_claude_duplex" 2>/dev/null
-  pkill -f "duplex-fixtures/fake_codex_duplex" 2>/dev/null
+  # THIS SANDBOX ONLY. The blanket `pkill -f duplex-fixtures/fake_*_duplex` this replaced
+  # matched that name ON THE WHOLE BOX, so two copies of this suite (or a concurrent runner)
+  # shot each other's live engines mid-assertion. The fake engine's own argv carries no
+  # sandbox path, but the pane WRAPPER's does — fifo, events and rc all live under $SANDBOX —
+  # and the engine is its child, so the sandbox is the selector and every other run is safe.
+  for pid in $(pgrep -f "$SANDBOX" 2>/dev/null); do
+    [ "$pid" = "$$" ] && continue
+    pkill -P "$pid" 2>/dev/null
+    kill -9 "$pid" 2>/dev/null
+  done
   return 0
 }
 

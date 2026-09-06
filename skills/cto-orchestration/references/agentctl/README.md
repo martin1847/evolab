@@ -222,14 +222,16 @@ hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则
   ⑳ 编排位经 bash 三类字面写入（重定向族 / `tee` / `sed -i`）触及源码面（= E1 的 bash 通道；`cp`/`mv`/`git apply`
   等 accepted-uncovered；不可判目标 ALLOW+WARN；一次性 `touch /tmp/cto-allow-direct-write`）· (21) `steer -m` 含反引号或
   `$(`（正路 `-f`）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
-- **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：编排位对源码/测试文件的写入 → DENY
-  （活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir 不可读 → ALLOW+WARN）。
+- **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：**本仓正在被编排时**，编排位对源码/测试文件的写入 → DENY
+  （「正在被编排」= 同仓有 LIVE 席位或今/昨相位账本 `start` 行，同仓 = git common dir；判 not 则零输出放行，不打扰单 agent 会话；
+  活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir / 账本不可读 → ALLOW+WARN）。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：browser/E2E 派发含
   `mcp__chrome-devtools` → DENY（逼 Playwright）；派发未显式钉 `model` 档 → DENY；e2e-runner 派发 model 非便宜档 → DENY。
   Pre·TaskStop|KillShell：目标 `.output` 与 subagent transcript 取最鲜 mtime，120s 内还在长 = 活的 → DENY（override
   `touch /tmp/cto-allow-kill-<id>`，任何经核实的杀单动机都适用）。Post·Agent：browser 派发注入 deadline-watch 提醒。
-- **`cto-guard-stop.py`（Stop）** — 本仓席位 `agentctl status` 说 RUNNING 且附 `no watcher armed`：
-  结束 turn 时 block（reason 三件套）；席位普查 / 归属过滤 / 谓词在同目录 `seat-census.py`（纯库、无 entrypoint），import 复用不复制。
+- **`cto-guard-stop.py`（Stop）** — **本仓正在被编排**且本仓席位 `agentctl status` 说 RUNNING 且附 `no watcher armed`：
+  结束 turn 时 block（reason 三件套）。「本仓」= 与 payload cwd 同 git common dir（兄弟 worktree 算本仓，另一 checkout 不算）；
+  席位普查 / 归属过滤 / 谓词在同目录 `seat-census.py`（纯库、无 entrypoint）与 `identity.py`（`orchestrated`，E1 / 压缩提醒共用），import 复用不复制。
   **判不出一律 exit 0 + 一行 `systemMessage` WARN，绝不 block**；fail-open / 归属过滤 / 有界细则见两文件头注与 `test/cto-guard-stop.test.sh`。
 
 ### Wiring（CC / Codex / omp 都能坐编排位）

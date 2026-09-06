@@ -15,7 +15,11 @@
 # Harness: no engines, no real tmux — classify driven on hand-built session state
 # (same stance as duplexctl-timeout.test.sh).
 set -u
-cd "$(dirname "$0")"
+# Script-dir anchored BEFORE the cd: `$0` stays relative (`test/duplex-verdict-gaps.test.sh`),
+# so re-deriving `dirname "$0"` after this cd builds a second `test/` level and the fixtures
+# below vanish for the repo-root entry point the contract names (review M4).
+HERE="$(cd "$(dirname "$0")" && pwd)"
+cd "$HERE"
 . ./lib-testkit.sh
 
 DUPLEXCTL="$AW_DIR/duplexctl.py"
@@ -393,6 +397,437 @@ run_stop snZ "$STATBIN"
 chk_eq "D5 broken stat probes keep stop rc 0" 0 "$s_rc"
 chk_not_contains "D5 broken probes degrade silently, never a false sentinel" "SENTINEL" "$s_err"
 unset FAKE_STAT_MODE
+
+echo "== E. omp: THIS ROUND's error frames are a verdict, not silence =="
+# Field, 2026-09-04, two REAL event streams (trimmed into duplex-fixtures/, home paths
+# redacted, frame shapes untouched): a `402 Insufficient Balance` assistant frame, and a
+# prompt rejected with `No API key found for anthropic` AFTER an earlier success:true on the
+# same request id. Both were projected IDLE and published DONE — the watcher steered into a
+# dead engine twice. classify is driven on hand-built session state as everywhere else here;
+# the ONE thing that cannot be faked with a file is omp's correlated get_state, so a minimal
+# answerer holds the fifo's read end and replies on the real wire.
+# Same sandbox as the sections above (the sleepers they hold are torn down at the end of the
+# file); every session name here is new, so nothing is shared but the run dir itself.
+FIXD="$HERE/duplex-fixtures"
+ANSWERERS=""
+omp_answer() { # $1 session  [$2 "stream" = answer isStreaming=true] — answer get_state on the
+                # wire until the session is torn down
+  python3 - "$WATCH_RUN_DIR/$1.duplex.in" "$WATCH_RUN_DIR/$1.duplex.events.jsonl" \
+           "${2:-idle}" <<'EOF' &
+import json, sys, time
+fifo, events, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+deadline = time.time() + 120
+while time.time() < deadline:
+    try:
+        with open(fifo, "r") as fh:          # blocks for a writer; EOF when it closes again
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                with open(events + ".seen", "a") as sn:
+                    sn.write(line + "\n")    # every frame that reached the wire
+                if msg.get("type") not in ("get_state", "get-state"):
+                    continue
+                with open(events, "a") as ev:
+                    ev.write(json.dumps({
+                        "id": msg.get("id"), "type": "response", "command": "get_state",
+                        "success": True,
+                        "data": {"isStreaming": mode == "stream", "isCompacting": False,
+                                 "sessionId": "fixture", "messageCount": 2,
+                                 "queuedMessageCount": 0}}) + "\n")
+    except OSError:
+        time.sleep(0.05)
+EOF
+  ANSWERERS="$ANSWERERS $!"
+}
+omp_session() { # $1 name  [$2 "stream"] — a seeded omp session with a live get_state answerer
+  seed_session "$1" omp "$WT"
+  omp_answer "$1" "${2:-idle}"
+}
+cut_round() { # $1 name — everything written so far belongs to a PREVIOUS round
+  python3 -c 'import os, sys; print(os.path.getsize(sys.argv[1]))' \
+    "$WATCH_RUN_DIR/$1.duplex.events.jsonl" > "$WATCH_RUN_DIR/$1.duplex.sent-offset"
+}
+cut_round_req() { # $1 name  $2 request id — a round cut WITH the sender's record of it
+  # exactly what `commit_round_state` commits: the new offset, the round number the meta then
+  # carries, and the id of the frame that opened that round. The projector matches on the ROUND
+  # (two rounds can open at the same offset), so a row either provably belongs to the current
+  # round or it is not evidence at all.
+  python3 - "$WATCH_RUN_DIR" "$1" "$2" <<'EOF'
+import json, os, sys
+run, name, req = sys.argv[1], sys.argv[2], sys.argv[3]
+p = lambda ext: os.path.join(run, "%s.duplex.%s" % (name, ext))
+rnd = 0
+keep = []
+for line in open(p("meta")):
+    if line.startswith("round="):
+        rnd = int(line.split("=", 1)[1].strip() or 0)
+    else:
+        keep.append(line)
+open(p("meta"), "w").writelines(keep + ["round=%d\n" % (rnd + 1)])
+off = os.path.getsize(p("events.jsonl"))
+open(p("sent-offset"), "w").write(str(off))
+open(p("sent-journal"), "a").write(
+    json.dumps({"ts": 0, "offset": off, "round": rnd + 1, "req": req}) + "\n")
+EOF
+}
+ERR_FRAME='{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"provider returned 500 internal error"}}'
+OK_FRAME='{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end_turn"}}'
+
+omp_session e1a
+cat "$FIXD/omp-authprobe-402.jsonl" >> "$WATCH_RUN_DIR/e1a.duplex.events.jsonl"
+run_classify e1a
+chk_eq "p1 the real 402 stream → STALLED-EXTERNAL 5, never DONE" 5 "$rc"
+chk_contains "p1 the verdict routes to credentials" "fix credentials" "$out"
+chk_contains "p1 and quotes the evidence it selected" "Insufficient Balance" "$out"
+
+omp_session e1b
+# the trimmed fixture is the engine's half of a round; the sender's half is its journal row,
+# without which this stream carries no id anyone can correlate (see p7d below)
+cut_round_req e1b ctl-fc4adce59f24
+cat "$FIXD/omp-authprobe2-nokey.jsonl" >> "$WATCH_RUN_DIR/e1b.duplex.events.jsonl"
+run_classify e1b
+chk_eq "p2 a success:false AFTER success:true on the same id → STALLED-EXTERNAL 5" 5 "$rc"
+chk_contains "p2 and quotes that rejection" "No API key" "$out"
+
+omp_session e1c
+ev e1c '{"id":"ctl-p3","type":"response","command":"prompt","success":true}'
+ev e1c "$ERR_FRAME"
+run_classify e1c
+chk_eq "p3 an ordinary error frame → FAILED 2 (a turn failed, the engine is alive)" 2 "$rc"
+chk_contains "p3 and the detail is the frame's own message" "500 internal error" "$out"
+chk_not_contains "p3 never a credentials verdict" "STALLED-EXTERNAL" "$out"
+
+omp_session e1d
+ev e1d '{"id":"ctl-p4","type":"response","command":"prompt","success":true}'
+ev e1d "$OK_FRAME"
+run_classify e1d
+chk_eq "p4 PAIRED GREEN: a clean round is still DONE 0" 0 "$rc"
+
+# p5 — the round boundary is what stops an OLD credential failure from colouring a NEW one.
+omp_session e1e
+ev e1e '{"id":"ctl-old","type":"response","command":"prompt","success":false,"error":"No API key found for anthropic."}'
+cut_round e1e
+ev e1e '{"id":"ctl-new","type":"response","command":"prompt","success":true}'
+ev e1e "$ERR_FRAME"
+run_classify e1e
+chk_eq "p5 last round's auth failure does not colour this round → FAILED 2" 2 "$rc"
+chk_not_contains "p5 and the old credential text is not in the verdict" "No API key" "$out"
+# p5b — and the boundary itself: LAST round ended in an error, THIS round has only its ack.
+# Without the sent-offset window that stale frame is the newest evidence in the file and the
+# fresh round is reported FAILED — a seat that was just handed new instructions.
+omp_session e1e2
+ev e1e2 '{"id":"ctl-oldx","type":"response","command":"prompt","success":true}'
+ev e1e2 "$ERR_FRAME"
+cut_round e1e2
+ev e1e2 '{"id":"ctl-newx","type":"response","command":"prompt","success":true}'
+run_classify e1e2
+chk_eq "p5b last round's error frame is not this round's verdict" 0 "$rc"
+chk_not_contains "p5b and its text never reaches this round's verdict" "500 internal error" "$out"
+
+# p6 — recovery after an error inside the SAME round: reporting ERROR there kills a working seat
+omp_session e1f
+ev e1f '{"id":"ctl-p6","type":"response","command":"prompt","success":true}'
+ev e1f "$ERR_FRAME"
+ev e1f "$OK_FRAME"
+run_classify e1f
+chk_eq "p6 an error followed by a completed assistant turn is NOT terminal-failed" 0 "$rc"
+
+# p7 — a PRIOR round's id answering late in this window is not this round's evidence
+omp_session e1g
+cut_round e1g
+ev e1g '{"id":"ctl-new7","type":"response","command":"prompt","success":true}'
+ev e1g '{"id":"ctl-old7","type":"response","command":"prompt","success":false,"error":"stale rejection from the previous round"}'
+run_classify e1g
+chk_eq "p7 a stale correlation id cannot fail this round" 0 "$rc"
+chk_not_contains "p7 and its text never reaches a verdict" "stale rejection" "$out"
+
+# p7b/p7c/p7d — the SENDER's request id, journalled beside the round's offset, is what decides
+# whose response this is. Reachable order (v18.1.5: the RPC layer acks a prompt as soon as the
+# background turn starts, while `abort_and_prompt` waits for the abort first): the OLD round's
+# async setup can still fail, or still ack, INSIDE this round's window. Nothing about the
+# stream's own order rules that out — only the id we actually sent does (review M1).
+# p7b — old round's auth rejection lands BEFORE this round's ack
+omp_session e1g2
+cut_round_req e1g2 ctl-new7b
+ev e1g2 '{"id":"ctl-old7b","type":"response","command":"prompt","success":false,"error":"No API key found for anthropic."}'
+ev e1g2 '{"id":"ctl-new7b","type":"response","command":"prompt","success":true}'
+run_classify e1g2
+chk_eq "p7b a stale rejection arriving BEFORE this round's ack is still not ours" 0 "$rc"
+chk_not_contains "p7b and no credential verdict is fabricated from it" "No API key" "$out"
+# p7c — old true, new true, then THIS round's ordinary failure: FAILED, never auth-coloured
+omp_session e1g3
+ev e1g3 '{"id":"ctl-old7c","type":"response","command":"prompt","success":false,"error":"No API key found for anthropic."}'
+cut_round_req e1g3 ctl-new7c
+ev e1g3 '{"id":"ctl-old7c","type":"response","command":"prompt","success":true}'
+ev e1g3 '{"id":"ctl-new7c","type":"response","command":"prompt","success":true}'
+ev e1g3 '{"id":"ctl-new7c","type":"response","command":"prompt","success":false,"error":"provider returned 500 internal error"}'
+run_classify e1g3
+chk_eq "p7c this round's own rejection after a stale ack → FAILED 2" 2 "$rc"
+chk_not_contains "p7c and last round's auth text never colours it" "No API key" "$out"
+# p7d — the discriminating shape: a stale ack arriving AFTER ours, so "newest ack in the
+# window" is the WRONG id and only the journalled request id gets this right.
+omp_session e1g4
+cut_round_req e1g4 ctl-new7d
+ev e1g4 '{"id":"ctl-new7d","type":"response","command":"prompt","success":true}'
+ev e1g4 '{"id":"ctl-old7d","type":"response","command":"prompt","success":true}'
+ev e1g4 '{"id":"ctl-old7d","type":"response","command":"prompt","success":false,"error":"No API key found for anthropic."}'
+run_classify e1g4
+chk_eq "p7d a stale ack overtaking ours cannot hand the round to its own failure" 0 "$rc"
+chk_not_contains "p7d and that failure text stays out of the verdict" "No API key" "$out"
+# (p7d) — NO row for this round: the request id is UNKNOWN, so no `response` frame is this
+# round's evidence at all. Guessing it from the stream (newest ack in the window — which is the
+# STALE id in exactly this shape) handed the round to that stale id's own failure: an idle
+# session reported as a credentials stall (review R2-M1). Assistant error frames need no id and
+# are unaffected — p5 pins that half.
+omp_session e1g5
+cut_round e1g5
+ev e1g5 '{"id":"ctl-new7e","type":"response","command":"prompt","success":true}'
+ev e1g5 '{"id":"ctl-old7e","type":"response","command":"prompt","success":true}'
+ev e1g5 '{"id":"ctl-old7e","type":"response","command":"prompt","success":false,"error":"No API key found for anthropic."}'
+run_classify e1g5
+chk_eq "(p7d) with no journalled round a stale response cannot fail this round" 0 "$rc"
+chk_not_contains "(p7d) and no credentials verdict is invented without a correlation id" \
+  "No API key" "$out"
+
+# (p7f) — a pre-journal row (offset only, no round, no req) is a legacy fact, not this round's
+omp_session e1g6
+cut_round e1g6
+python3 -c 'import json, sys
+print(json.dumps({"ts": 0, "offset": int(open(sys.argv[1]).read().strip())}))' \
+  "$WATCH_RUN_DIR/e1g6.duplex.sent-offset" >> "$WATCH_RUN_DIR/e1g6.duplex.sent-journal"
+ev e1g6 '{"id":"ctl-new7f","type":"response","command":"prompt","success":true}'
+ev e1g6 '{"id":"ctl-old7f","type":"response","command":"prompt","success":false,"error":"No API key found for anthropic."}'
+run_classify e1g6
+chk_eq "(p7f) a row with no round number proves nothing about this round" 0 "$rc"
+chk_not_contains "(p7f) so its stale failure text stays out of the verdict" "No API key" "$out"
+
+# (p7g) — two rounds at ONE offset (a steer whose engine produced nothing since the last one):
+# the offset cannot tell them apart, the round number can, and the CURRENT round is the row
+# that speaks. The paired arm proves the row is being read, not just ignored.
+omp_session e1g7
+cut_round_req e1g7 ctl-r1g
+cut_round_req e1g7 ctl-r2g
+ev e1g7 '{"id":"ctl-r1g","type":"response","command":"prompt","success":false,"error":"No API key found for anthropic."}'
+ev e1g7 '{"id":"ctl-r2g","type":"response","command":"prompt","success":true}'
+run_classify e1g7
+chk_eq "(p7g) the previous round's row cannot speak for this one" 0 "$rc"
+chk_not_contains "(p7g) and its rejection never becomes this round's verdict" "No API key" "$out"
+ev e1g7 '{"id":"ctl-r2g","type":"response","command":"prompt","success":false,"error":"provider returned 500 internal error"}'
+run_classify e1g7
+chk_eq "(p7g) PAIRED GREEN: this round's OWN rejection still lands → FAILED 2" 2 "$rc"
+
+# (p7e) — THE SENDER's half of the same discipline: a round that cannot be RECORDED is not
+# opened. Best effort left the previous round's row as the newest one while a new round was
+# already in flight, so a reader trusted a dead round's id (review R2-M2). The verb refuses
+# locally instead: rc 3, nothing on the wire, no round rotation. A real permission failure on
+# the journal, not a patched open().
+omp_session e1x
+: > "$WATCH_RUN_DIR/e1x.duplex.sent-journal"
+chmod 0400 "$WATCH_RUN_DIR/e1x.duplex.sent-journal"
+SEEN="$WATCH_RUN_DIR/e1x.duplex.events.jsonl.seen"
+sx="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" send e1x --verb steer --text next 2>&1)"
+sxrc=$?
+chk_eq "(p7e) a steer whose round cannot be journalled refuses locally with rc 3" 3 "$sxrc"
+chk_contains "(p7e) and the refusal names the verb it did not perform" "refusing to steer" "$sx"
+chk_eq "(p7e) no frame carrying a message reached the fifo" "" \
+  "$(grep '"message"' "$SEEN" 2>/dev/null)"
+chk_eq "(p7e) and no row was appended for the round it refused to open" 0 \
+  "$(wc -c < "$WATCH_RUN_DIR/e1x.duplex.sent-journal" | tr -d ' ')"
+chk_eq "(p7e) the round counter did not move either" 0 \
+  "$(grep -c '^round=' "$WATCH_RUN_DIR/e1x.duplex.meta")"
+sy="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" send e1x --verb prompt --text goal 2>&1)"
+syrc=$?
+chk_eq "(p7e) goal delivery refuses on the same fact" 3 "$syrc"
+chk_contains "(p7e) naming that verb in turn" "refusing to prompt" "$sy"
+chk_eq "(p7e) still nothing but the get_state probe on the wire" "" \
+  "$(grep '"message"' "$SEEN" 2>/dev/null)"
+chmod 0600 "$WATCH_RUN_DIR/e1x.duplex.sent-journal"
+
+# (p7h) — the SENDER's IDENTITY half of that same refusal. The replacement frame is what
+# authorises a new attempt, so a frame that was never sent must leave the RUNNING attempt
+# alone. The commit used to happen before the journal: a rc-3 refusal rotated the attempt
+# anyway, and the worker nobody aborted kept producing evidence its own attempt now rejects
+# while the watcher armed on it lost its publish right — for a frame that does not exist
+# (cold review R3-M1). Real CLI, real fifo, a real 0400 journal.
+id_attempt() { # $1 session — the ACTIVE record's attemptId, through the identity CLI only
+  python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity show "$1" 2>/dev/null \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin).get("attemptId", ""))'
+}
+id_token() { # $1 session — the arm-time token a watcher publishes against
+  python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity token "$1" 2>/dev/null
+}
+omp_session e1y
+: > "$WATCH_RUN_DIR/e1y.duplex.sent-journal"
+chmod 0400 "$WATCH_RUN_DIR/e1y.duplex.sent-journal"
+SEENY="$WATCH_RUN_DIR/e1y.duplex.events.jsonl.seen"
+: > "$SEENY"
+A_Y="$(id_attempt e1y)"; T_Y="$(id_token e1y)"
+chk_eq "(p7h) arrange: the session has an attempt to lose" 1 \
+  "$([ -n "$A_Y" ] && echo 1 || echo 0)"
+sz="$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" send e1y --verb interrupt \
+        --text "start over" --wait 1 2>&1)"
+szrc=$?
+chk_eq "(p7h) an interrupt whose round cannot be journalled refuses locally with rc 3" 3 "$szrc"
+chk_contains "(p7h) and the refusal names the verb it did not perform" "refusing to interrupt" "$sz"
+chk_eq "(p7h) not one byte of it reached the fifo" "" "$(cat "$SEENY")"
+chk_eq "(p7h) DAMAGE ORACLE: the refused replacement did NOT rotate the attempt" \
+  "$A_Y" "$(id_attempt e1y)"
+chk_eq "(p7h) so the watcher armed on it can still publish this round's conclusion" 0 \
+  "$(python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" identity publish e1y --armed "$T_Y" \
+       --round 0 --rc 2 --detail "old attempt still running" >/dev/null 2>&1; echo $?)"
+chk_eq "(p7h) and the watcher armed before it keeps its publish right" "$T_Y" "$(id_token e1y)"
+chk_eq "(p7h) the round counter did not move either" 0 \
+  "$(grep -c '^round=' "$WATCH_RUN_DIR/e1y.duplex.meta")"
+
+# (p7h2) PAIRED GREEN — with the journal writable the replacement really happens: frame on the
+# wire, attempt rotated, round opened. (`send` waits for a correlated ack the minimal answerer
+# does not speak, so its rc is the harness's, not the fix's; the facts below are the contract.)
+chmod 0600 "$WATCH_RUN_DIR/e1y.duplex.sent-journal"
+: > "$SEENY"
+python3 "$DUPLEXCTL" --run-dir "$WATCH_RUN_DIR" send e1y --verb interrupt \
+  --text "start over" --wait 1 >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do          # the answerer logs what it reads, asynchronously
+  grep -q abort_and_prompt "$SEENY" 2>/dev/null && break
+  /bin/sleep 0.2
+done
+chk_eq "(p7h2) the replacement frame goes out" 1 "$(grep -c abort_and_prompt "$SEENY")"
+chk_eq "(p7h2) and THEN the attempt rotates" 1 \
+  "$([ -n "$(id_attempt e1y)" ] && [ "$(id_attempt e1y)" != "$A_Y" ] && echo 1 || echo 0)"
+chk_eq "(p7h2) fencing the watcher armed on the previous attempt" 1 \
+  "$([ "$(id_token e1y)" != "$T_Y" ] && echo 1 || echo 0)"
+chk_eq "(p7h2) with the round it opened recorded" 1 \
+  "$(grep -c '^round=1$' "$WATCH_RUN_DIR/e1y.duplex.meta")"
+
+# (p7i) — the PROJECTOR's half of the round fence: the round must come from the SAME sample as
+# the window it selects evidence in. get_state is a round trip that can take seconds and holds
+# no lock while it waits, so a legal steer can complete inside it. The projector then held a NEW
+# window with the OLD round's request id: this round's own rejection was skipped and a
+# just-failed engine read DONE (cold review R3-M2). The answerer below performs that steer —
+# journal row, round bump, sent-offset, this round's frames — BEFORE it answers, so the
+# interleaving is deterministic instead of hoped for.
+omp_answer_midflight_steer() { # $1 session  $2 request id the mid-flight steer opens with
+  python3 - "$WATCH_RUN_DIR" "$1" "$2" <<'EOF' &
+import json, os, sys, time
+run, name, req = sys.argv[1], sys.argv[2], sys.argv[3]
+p = lambda ext: os.path.join(run, "%s.duplex.%s" % (name, ext))
+deadline = time.time() + 120
+while time.time() < deadline:
+    try:
+        with open(p("in")) as fh:            # blocks for a writer, exactly like omp_answer
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                with open(p("events.jsonl") + ".seen", "a") as sn:
+                    sn.write(line + "\n")
+                if msg.get("type") not in ("get_state", "get-state"):
+                    continue
+                # the steer, in commit_round_state's own order, while the caller waits
+                rnd, keep = 0, []
+                for ln in open(p("meta")):
+                    if ln.startswith("round="):
+                        rnd = int(ln.split("=", 1)[1].strip() or 0)
+                    else:
+                        keep.append(ln)
+                off = os.path.getsize(p("events.jsonl"))
+                open(p("sent-journal"), "a").write(json.dumps(
+                    {"ts": 0, "offset": off, "round": rnd + 1, "req": req}) + "\n")
+                open(p("meta"), "w").writelines(keep + ["round=%d\n" % (rnd + 1)])
+                open(p("sent-offset"), "w").write(str(off))
+                with open(p("events.jsonl"), "a") as ev:
+                    for ok in (True, False):
+                        frame = {"id": req, "type": "response", "command": "steer",
+                                 "success": ok}
+                        if not ok:
+                            frame["error"] = "provider returned 500 internal error"
+                        ev.write(json.dumps(frame) + "\n")
+                    ev.write(json.dumps({
+                        "id": msg.get("id"), "type": "response", "command": "get_state",
+                        "success": True,
+                        "data": {"isStreaming": False, "isCompacting": False,
+                                 "sessionId": "fixture", "messageCount": 2,
+                                 "queuedMessageCount": 0}}) + "\n")
+                sys.exit(0)
+    except OSError:
+        time.sleep(0.05)
+EOF
+  ANSWERERS="$ANSWERERS $!"
+}
+seed_session e1z omp "$WT"
+omp_answer_midflight_steer e1z ctl-r2z
+cut_round_req e1z ctl-r1z
+ev e1z '{"id":"ctl-r1z","type":"response","command":"prompt","success":true}'
+run_classify e1z
+chk_eq "(p7i) a steer completing during get_state cannot hide THIS round's failure → FAILED 2" \
+  2 "$rc"
+chk_contains "(p7i) and the verdict quotes the new round's own rejection" \
+  "500 internal error" "$out"
+chk_eq "(p7i) arrange: the steer really did rotate the round on disk" 1 \
+  "$(grep -c '^round=2$' "$WATCH_RUN_DIR/e1z.duplex.meta")"
+
+# (p7i2) PAIRED GREEN — the identical payload with that steer already settled before classify:
+# the verdict is the one this suite already asserted, so the fix moved the mixed-generation
+# sample and nothing else.
+omp_session e1z2
+cut_round_req e1z2 ctl-r1z2
+ev e1z2 '{"id":"ctl-r1z2","type":"response","command":"prompt","success":true}'
+cut_round_req e1z2 ctl-r2z2
+ev e1z2 '{"id":"ctl-r2z2","type":"response","command":"steer","success":true}'
+ev e1z2 '{"id":"ctl-r2z2","type":"response","command":"steer","success":false,"error":"provider returned 500 internal error"}'
+run_classify e1z2
+chk_eq "(p7i2) the same payload with the steer already settled → FAILED 2" 2 "$rc"
+chk_contains "(p7i2) on the same evidence" "500 internal error" "$out"
+
+# p11 — streaming outranks every piece of error evidence in the window (H2: streaming /
+# retrying → RUNNING, always). A live turn must never be concluded from a frame that is
+# already in the file.
+omp_session e1k stream
+ev e1k '{"id":"ctl-p11","type":"response","command":"prompt","success":true}'
+ev e1k "$ERR_FRAME"
+run_classify e1k
+chk_eq "p11 an error frame under isStreaming=true is still RUNNING 10" 10 "$rc"
+chk_not_contains "p11 and no failure is announced mid-stream" "FAILED" "$out"
+
+omp_session e1h
+ev e1h '{"id":"ctl-p8","type":"response","command":"prompt","success":true}'
+ev e1h "$ERR_FRAME"
+ev e1h '{"type":"auto_retry_start","attempt":1}'
+run_classify e1h
+chk_eq "p8 an auto-retry in flight is RUNNING 10, never a failure" 10 "$rc"
+
+omp_session e1i
+ev e1i '{"id":"ctl-p9","type":"response","command":"prompt","success":true}'
+ev e1i '{"type":"auto_retry_start","attempt":1}'
+ev e1i '{"type":"auto_retry_end","success":false,"attempt":1,"finalError":"provider returned 500 internal error after 3 attempts"}'
+run_classify e1i
+chk_eq "p9 auto_retry_end success:false → FAILED 2" 2 "$rc"
+chk_contains "p9 and the finalError is the evidence" "after 3 attempts" "$out"
+omp_session e1i2
+ev e1i2 '{"id":"ctl-p9b","type":"response","command":"prompt","success":true}'
+ev e1i2 "$ERR_FRAME"
+ev e1i2 '{"type":"auto_retry_end","success":true,"attempt":1}'
+run_classify e1i2
+chk_eq "p9 PAIRED GREEN: a retry that LANDED clears the error" 0 "$rc"
+
+# p10 — an ask that arrived AFTER the error is what the engine is waiting on now
+omp_session e1j
+ev e1j '{"id":"ctl-p10","type":"response","command":"prompt","success":true}'
+ev e1j "$ERR_FRAME"
+ev e1j '{"type":"extension_ui_request","id":"ui-q1","method":"confirm","title":"Proceed?"}'
+run_classify e1j
+chk_eq "p10 a pending ask after the error reads WAITING-INPUT 4" 4 "$rc"
+
+{ kill $ANSWERERS; wait $ANSWERERS; } 2>/dev/null
+unset FAKE_TMUX_HASSESSION
 
 { kill "$QPID" "$TPID"; wait "$QPID" "$TPID"; } 2>/dev/null
 rm -rf "$SANDBOX"

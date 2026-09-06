@@ -2740,4 +2740,157 @@ chk_eq "prog-neg-codex-inventory-silent: parity: bash dispatch == AGENTCTL_VERBS
   "AGREES 9 observe=6" "$pg_verbs"
 unset AGENT_WATCH_STALL_MINS
 sw_clean
+
+# ═════════════════════════════════════════════════════════════════════════════════════════
+# w1–w5 — THE ROUND BOUNDARY (audit probe, 2026-09-06). The sensing loop requires TWO
+# consecutive reads of the same class before publishing DONE / IDLE-NO-DELIVERABLE, and the
+# same shape for its own ENGINE-SILENT counters. Those counters did not reset when a steer
+# opened the NEXT round, so one read of the old round plus one of the new published a terminal
+# conclusion after a single look at the round it claims to be about. The progress baseline had
+# the same seam: it was captured once and then compared against a window the next round had
+# already restarted, so a WATCH-TIMEOUT reported movement this round never made.
+#
+# HOW THE ROUND IS ROTATED MID-LOOP, without a python-level poke: the loop's only PATH `sleep`
+# is its own poll pause (every other sleep in this suite is an absolute /bin/sleep), so a
+# `sleep` shim on PATH bumps `round=` in the meta exactly once, between poll 1 and poll 2 —
+# which is what a steer does. `--inline` is used throughout: the conclusion is the process's
+# own exit code, so "did it publish at poll 2" is directly observable.
+echo "== w1–w5: a new round restarts the stability counters and the progress baseline =="
+sw_sandbox
+RBIN="$SANDBOX/rbin"; mkdir -p "$RBIN"
+cat > "$RBIN/sleep" <<'ROUNDSLEEP'
+#!/bin/sh
+if [ -n "${ROUND_BUMP_META:-}" ] && [ ! -e "$ROUND_BUMP_META.bumped" ]; then
+  : > "$ROUND_BUMP_META.bumped"
+  sed -e 's/^round=.*/round=99/' "$ROUND_BUMP_META" > "$ROUND_BUMP_META.new"
+  mv "$ROUND_BUMP_META.new" "$ROUND_BUMP_META"
+fi
+exec /bin/sleep "$@"
+ROUNDSLEEP
+chmod +x "$RBIN/sleep"
+round_watch() { # $1 session  $2 max-polls — inline watch with the round-bump shim on PATH
+  rm -f "$WATCH_RUN_DIR/$1.duplex.meta.bumped"
+  out="$(PATH="$RBIN:$PATH" ROUND_BUMP_META="$WATCH_RUN_DIR/$1.duplex.meta" \
+         AGENT_WATCH_MAX_POLLS="$2" bash "$AGENTCTL" watch "$1" --inline 2>&1)"; rc=$?
+}
+bumped() { # $1 session — the round really rotated during the run (the fixture's own premise)
+  printf '%s' "$(grep -c '^round=99$' "$WATCH_RUN_DIR/$1.duplex.meta")"
+}
+
+# w1 — DONE needs two reads OF THE SAME ROUND
+seed w1 70000
+printf '0\n' > "$WATCH_RUN_DIR/w1.duplex.rc"          # real classify verdict: DONE 0
+round_watch w1 2
+chk_eq "w1 fixture: the round really rotated between the two polls" 1 "$(bumped w1)"
+chk_eq "w1 one DONE read per round never publishes (old 1 + new 1 = not two of either)" 7 "$rc"
+chk_eq "w1 DAMAGE ORACLE: nothing terminal was persisted for that straddling pair" 0 \
+  "$([ -e "$WATCH_RUN_DIR/w1.terminal.json" ] && echo 1 || echo 0)"
+seed w1b 70000
+printf '0\n' > "$WATCH_RUN_DIR/w1b.duplex.rc"
+round_watch w1b 3
+chk_eq "w1 PAIRED GREEN: two reads INSIDE the new round do publish DONE 0" 0 "$rc"
+chk_eq "w1 PAIRED GREEN: and the round had rotated first" 1 "$(bumped w1b)"
+
+# w2 — the ENGINE-SILENT counter is per round too
+seed w2 70000
+printf '0' > "$WATCH_RUN_DIR/w2.duplex.sent-offset"
+: > "$WATCH_RUN_DIR/w2.duplex.events.jsonl"
+export AGENT_WATCH_SILENT_POLLS=2
+round_watch w2 2
+chk_eq "w2 fixture: the round rotated" 1 "$(bumped w2)"
+chk_eq "w2 a silent read of the OLD round does not count toward the new one" 7 "$rc"
+seed w2b 70000
+printf '0' > "$WATCH_RUN_DIR/w2b.duplex.sent-offset"
+: > "$WATCH_RUN_DIR/w2b.duplex.events.jsonl"
+round_watch w2b 3
+chk_eq "w2 PAIRED GREEN: two silent reads inside one round still fire ENGINE-SILENT 8" 8 "$rc"
+unset AGENT_WATCH_SILENT_POLLS
+
+# w3 — and so is the counter over classify's OWN control-plane timeout (rc 8). A real holder
+# sits on the lane's writer flock, which is what makes every classify time out (see
+# duplexctl-timeout.test.sh); the omp projector is the one that needs that lock.
+seed w3 70000
+sed -e 's/^engine=claude$/engine=omp/' "$WATCH_RUN_DIR/w3.duplex.meta" > "$WATCH_RUN_DIR/w3.meta.new"
+mv "$WATCH_RUN_DIR/w3.meta.new" "$WATCH_RUN_DIR/w3.duplex.meta"
+mkfifo "$WATCH_RUN_DIR/w3.duplex.in" 2>/dev/null || true
+python3 - "$WATCH_RUN_DIR/w3.duplex.wlock" "$SANDBOX/w3.held" <<'HOLD' &
+import fcntl, sys, time
+with open(sys.argv[1], "a") as fh:
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    open(sys.argv[2], "w").close()
+    time.sleep(60)
+HOLD
+W3HOLDER=$!
+await "[ -e '$SANDBOX/w3.held' ]" 100
+chk_eq "w3 fixture: the writer lock is really held" 1 \
+  "$([ -e "$SANDBOX/w3.held" ] && echo 1 || echo 0)"
+export AGENT_WATCH_STATUS_TIMEOUT=1
+round_watch w3 2
+chk_eq "w3 fixture: the round rotated" 1 "$(bumped w3)"
+chk_eq "w3 a timed-out classify of the OLD round does not count toward the new one" 7 "$rc"
+kill -9 "$W3HOLDER" 2>/dev/null; wait "$W3HOLDER" 2>/dev/null
+unset AGENT_WATCH_STATUS_TIMEOUT
+
+# w4 — the progress baseline is re-taken, so a new round's window is not compared against the
+# old round's. The session cwd is a real git repo: that is the `repo` progress source, and
+# without a judged source the WATCH-TIMEOUT line says `unknown` and could not discriminate.
+W4WT="$SANDBOX/w4-repo"; mkdir -p "$W4WT"; git -C "$W4WT" init -q
+seed w4 70000
+sed -e "s|^cwd=.*|cwd=$W4WT|" "$WATCH_RUN_DIR/w4.duplex.meta" > "$WATCH_RUN_DIR/w4.meta.new"
+mv "$WATCH_RUN_DIR/w4.meta.new" "$WATCH_RUN_DIR/w4.duplex.meta"
+running w4
+round_watch w4 2
+chk_eq "w4 fixture: the round rotated" 1 "$(bumped w4)"
+chk_contains "w4 the baseline is re-taken, so the new round reports its OWN stillness" \
+  "progress=unchanged" "$out"
+chk_not_contains "w4 never the old round's window read as movement" "progress=changed" "$out"
+
+# w5 — the reset must not slow anything else down: FAILED is published on the FIRST read, as
+# it always was (only DONE / IDLE-NO-DELIVERABLE and the two silence counters need a pair).
+seed w5 70000
+printf '3\n' > "$WATCH_RUN_DIR/w5.duplex.rc"          # real classify verdict: FAILED 2
+round_watch w5 5
+chk_eq "w5 FAILED still publishes on the first read (no stability pair required)" 2 "$rc"
+
+# w6 — the stability PAIR must be the SAME verdict. DONE and IDLE-NO-DELIVERABLE are different
+# conclusions about the same round (work delivered vs. nothing to show for it); sharing one
+# `idle` counter published whichever of them was read second after a SINGLE look at it, which
+# is not what "two consecutive reads of the same class" means (H3, review PRE-EXISTING note).
+# The flip is produced INSIDE one round — the round is never bumped here — by the same PATH
+# `sleep` trick: the shim declares a deliverable glob that matches nothing, which turns the
+# next classify of the very same session from DONE 0 into IDLE-NO-DELIVERABLE 6.
+VBIN="$SANDBOX/vbin"; mkdir -p "$VBIN"
+cat > "$VBIN/sleep" <<'VERDICTSLEEP'
+#!/bin/sh
+if [ -n "${VERDICT_FLIP_META:-}" ] && [ ! -e "$VERDICT_FLIP_META.flipped" ]; then
+  : > "$VERDICT_FLIP_META.flipped"
+  printf 'deliverable=nope-*.md\n' >> "$VERDICT_FLIP_META"
+fi
+exec /bin/sleep "$@"
+VERDICTSLEEP
+chmod +x "$VBIN/sleep"
+verdict_watch() { # $1 session  $2 max-polls — inline watch with the verdict-flip shim on PATH
+  rm -f "$WATCH_RUN_DIR/$1.duplex.meta.flipped"
+  out="$(PATH="$VBIN:$PATH" VERDICT_FLIP_META="$WATCH_RUN_DIR/$1.duplex.meta" \
+         AGENT_WATCH_MAX_POLLS="$2" bash "$AGENTCTL" watch "$1" --inline 2>&1)"; rc=$?
+}
+flipped() { # $1 session — the deliverable really appeared mid-run (the fixture's own premise)
+  printf '%s' "$(grep -c '^deliverable=nope-\*\.md$' "$WATCH_RUN_DIR/$1.duplex.meta")"
+}
+seed w6 70000
+printf '0\n' > "$WATCH_RUN_DIR/w6.duplex.rc"          # real classify verdict: DONE 0
+verdict_watch w6 2
+chk_eq "w6 fixture: the verdict really flipped between the two polls" 1 "$(flipped w6)"
+chk_eq "w6 fixture: and it happened INSIDE one round" 0 "$(grep -c '^round=99$' "$WATCH_RUN_DIR/w6.duplex.meta")"
+chk_eq "w6 one DONE read + one IDLE-NO-DELIVERABLE read publishes NEITHER" 7 "$rc"
+chk_eq "w6 DAMAGE ORACLE: nothing terminal was persisted for that mixed pair" 0 \
+  "$([ -e "$WATCH_RUN_DIR/w6.terminal.json" ] && echo 1 || echo 0)"
+seed w6b 70000
+printf '0\n' > "$WATCH_RUN_DIR/w6b.duplex.rc"
+verdict_watch w6b 3
+chk_eq "w6 PAIRED GREEN: the third poll is the SECOND idle-no-deliverable read → publish 6" \
+  6 "$rc"
+chk_eq "w6 PAIRED GREEN: and the flip is what it counted, not a round rotation" 1 "$(flipped w6b)"
+sw_clean
+
 summary

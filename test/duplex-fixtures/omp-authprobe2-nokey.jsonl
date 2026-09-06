@@ -1,0 +1,2 @@
+{"id":"ctl-fc4adce59f24","type":"response","command":"prompt","success":true}
+{"id":"ctl-fc4adce59f24","type":"response","command":"prompt","success":false,"error":"No API key found for anthropic.\n\nUse /login, set an API key environment variable, or create <HOME>/.omp/agent/agent.db"}

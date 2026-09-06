@@ -21,7 +21,11 @@ not a design).
 
 The seat census, the ownership filter and the "no watcher armed" predicate live in
 `seat-census.py` in this directory and are IMPORTED, never copied: the fact and the verdict over
-it stay separately readable, and a second consumer would not have to re-implement the fact.
+it stay separately readable, and a second consumer would not have to re-implement the fact. The
+"is this repo being orchestrated" predicate comes through the same module from `identity.py`, so
+E1, this gate and the compaction reminder fire on ONE fact instead of three approximations of it
+(audit §2, 2026-09-06: this gate blocked turn ends over seats belonging to other checkouts
+whenever the payload cwd had no decidable git top level).
 
 Wiring: entry in `guard-hooks.json` (Stop). Same script serves Claude Code and codex — both send
 `stop_hook_active` on stdin and both read `{"decision":"block","reason":…}` on stdout; codex needs
@@ -49,16 +53,17 @@ _CENSUS = "seat-census.py"
 # them on the injected-text meter (test/loc-budget.test.sh weighs literals at the sink and
 # resolves one local per name — a message handed through a helper would be spent unweighed).
 _BLOCK = (
-    "DENY: 结束 turn 时有 RUNNING 席位没人看 — %s%s%s. Why: 没有活 watcher 的 RUNNING 席位在你收工"
+    "DENY: 结束 turn 时有 RUNNING 席位没人看 — %s%s. Why: 没有活 watcher 的 RUNNING 席位在你收工"
     "后无人收割，空转到有人来问（2026-09-02 实证 44 分钟：席位 RUNNING、watcher 随宿主任务被 TERM、"
     "编排位跑完一条取证命令即结束 turn）。正路：`agentctl watch <S>` 交宿主后台跑（前台 Bash 超时会"
     "连 watcher 一起杀）；确实要放着不管就 `agentctl stop <S>`，或显式挂一个 wakeup 再结束。"
     "Read: cto-orchestration/references/agentctl/README.md §强制层\n"
 )
 _WARN = (
-    "WARN (cto-guard S1): %s, so RUNNING-seat liveness went UNJUDGED and this turn was allowed to "
-    "end. A gate that cannot answer must not block — but its silence would read as approval, so: "
-    "if a seat is still working, arm `agentctl watch <S>` in the host's background yourself."
+    "WARN (cto-guard S1): %s, so unwatched-seat liveness in THIS repo went UNJUDGED and the turn "
+    "was allowed to end. A gate that cannot answer must not block — but its silence would read "
+    "as approval, so: if a seat is still working, arm `agentctl watch <S>` in the host's "
+    "background yourself."
 )
 
 
@@ -107,14 +112,20 @@ def main() -> int:
             if blind is None:
                 if not seen.seats:
                     return 0
-                cap_note = (f" (+{seen.overflow} owned seat(s) past the census cap were not "
-                            "checked — there may be more) " if seen.overflow else "")
-                own_note = (" [UNKNOWN-ownership: this cwd has no decidable git top level, so a "
-                            "seat listed here may belong to another checkout] "
-                            if seen.unowned else "")
-                print(json.dumps({"decision": "block",
-                                  "reason": _BLOCK % (", ".join(seen.seats), cap_note, own_note)}))
-                return 0
+                # THE SECOND QUESTION (audit §2, 2026-09-06): a RUNNING unwatched seat of this
+                # repo is only this gate's business while the repo is BEING ORCHESTRATED. The
+                # same predicate E1 and the compaction reminder consult answers it, so all three
+                # gates fire on one fact; `undecidable` degrades to the fail-open WARN like every
+                # other unanswerable case, never to a block.
+                state, why = mod.identity.orchestrated(cwd, mod.run_dir())
+                if state != mod.identity.ORCHESTRATED:
+                    blind = why
+                else:
+                    cap_note = (f" (+{seen.overflow} owned seat(s) past the census cap were not "
+                                "checked — there may be more) " if seen.overflow else "")
+                    print(json.dumps({"decision": "block",
+                                      "reason": _BLOCK % (", ".join(seen.seats), cap_note)}))
+                    return 0
     if blind:
         print(json.dumps({"systemMessage": _WARN % blind}))
     return 0

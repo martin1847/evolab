@@ -45,7 +45,9 @@ FIX="$(mktemp -d /tmp/ctostop.XXXXXX)"
 PKG="$FIX/pkg"; RUN="$FIX/run"; FAKE="$FIX/fake"
 mkdir -p "$PKG" "$RUN" "$FAKE"
 trap 'rm -rf "$FIX"' EXIT
-cp "$SRC/cto-guard-stop.py" "$SRC/seat-census.py" "$PKG/"
+# `identity.py` rides along because the census imports the repo-identity predicate from it —
+# the same three files an install puts side by side.
+cp "$SRC/cto-guard-stop.py" "$SRC/seat-census.py" "$SRC/identity.py" "$PKG/"
 STOP="$PKG/cto-guard-stop.py"
 
 # The fake `agentctl`: `status <s>` prints the fixture for that session, records the call so the
@@ -83,6 +85,15 @@ seat() { # $1 session  $2 cwd  $3 stale|watched
 reset_seats() {
   rm -f "$RUN"/*.duplex.meta "$FAKE"/*.out "$FAKE"/*.sleep "$FAKE/calls"
   : > "$FAKE/calls"
+  # THE PREMISE the gate really requires since 2026-09-06: it blocks only while THIS repo is
+  # being orchestrated (a LIVE seat, or a phase-ledger `start` row of today/yesterday, in the
+  # same repo by git common dir). The fixture's seats are `agentctl status` fakes with no tmux
+  # session behind them, so the ledger row is what supplies that premise here — and the arms
+  # that take it away are the UNDECIDABLE ones at the end of this file.
+  python3 -c 'import json, os, sys
+print(json.dumps({"ts": "2026-09-06T00:00:00.000Z", "event": "start", "name": "fixture",
+                  "session_id": "s", "attempt": "a", "cwd": os.path.realpath(sys.argv[1])}))' \
+    "$ORCH" > "$RUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
 }
 
 stop_payload() { # $1 cwd ("-" omits the key)  $2 stop_hook_active(true/false)  [$3 event]
@@ -221,15 +232,59 @@ chk_eq "S1 an internal failure allows the turn end (exit 0)" 0 "$rc"
 chk_eq "S1 and never blocks" "" "$(field decision "$out")"
 chk_contains "S1 the internal failure is announced" "failed internally" "$(field systemMessage "$out")"
 
-# ── S1 UNDECIDABLE OWNERSHIP: report unfiltered and SAY the filter never ran ────────────────
+# ── s1/s4 UNDECIDABLE OWNERSHIP IS NOT A LICENCE (audit §2, 2026-09-06) ────────────────────
+# WAS: a cwd with no decidable git top level reported the whole box's seats unfiltered and
+# BLOCKED, with an "UNKNOWN-ownership" note in the reason — so another project's unwatched seat
+# ended this session's turn. Field cost: a turn end blocked over a seat that was never this
+# repo's business, which is this gate's own kill criterion ("false >= 2 ⇒ kill"). NOW: an
+# unattributable cwd is BLINDNESS — allow + one WARN, exactly like every other unanswerable
+# case here. The two payload shapes that reach it are a cwd outside any work tree and no cwd
+# at all.
 reset_seats
 seat s1 "$OTHER" stale
 run_stop "$(stop_payload "$NOGIT" false)"
-chk_eq "S1 a cwd outside any work tree still judges liveness" "block" "$(field decision "$OUT")"
-chk_contains "S1 and marks the unanswered ownership question" "UNKNOWN-ownership" "$(field reason "$OUT")"
+chk_eq "s1 a cwd outside any work tree allows the turn end (exit 0)" 0 "$RC"
+chk_eq "s1 and never blocks over another checkout's seat" "" "$(field decision "$OUT")"
+chk_contains "s1 the unanswerable ownership is announced" "WARN (cto-guard S1)" \
+  "$(field systemMessage "$OUT")"
+chk_contains "s1 and says WHY it could not judge" "could not be attributed to a repository" \
+  "$(field systemMessage "$OUT")"
+chk_eq "s1 a foreign seat is not even consulted" "" "$(cat "$FAKE/calls")"
 run_stop "$(stop_payload - false)"
-chk_eq "S1 a payload with no cwd judges unfiltered too" "block" "$(field decision "$OUT")"
-chk_contains "S1 and marks it the same way" "UNKNOWN-ownership" "$(field reason "$OUT")"
+chk_eq "s4 a payload with no cwd allows the turn end too (exit 0)" 0 "$RC"
+chk_eq "s4 and never blocks" "" "$(field decision "$OUT")"
+chk_contains "s4 and is announced the same way" "WARN (cto-guard S1)" \
+  "$(field systemMessage "$OUT")"
+
+# s2 — THE SHAPE THIS GATE EXISTS FOR, and the one a top-level comparison called foreign: the
+# orchestrator sits in the MAIN checkout, its seat runs in a SIBLING worktree of the same repo.
+# Ownership is repo identity (git common dir), so this must block; the paired red is the same
+# seat in another CHECKOUT (asserted above), which must not.
+reset_seats
+git -C "$ORCH" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+ORCHWT="$FIX/orch-sibling"
+git -C "$ORCH" worktree add -q "$ORCHWT" 2>/dev/null
+chk_eq "s2 fixture: the sibling worktree really exists" 1 \
+  "$([ -e "$ORCHWT/.git" ] && echo 1 || echo 0)"
+seat wt1 "$ORCHWT" stale
+run_stop "$(stop_payload "$ORCH" false)"
+chk_eq "s2 a seat in a SIBLING worktree of this repo blocks the turn end" "block" \
+  "$(field decision "$OUT")"
+chk_contains "s2 and the block names it" "wt1" "$(field reason "$OUT")"
+
+# s3 — the census answers, the IDENTITY predicate does not: allow + WARN, never a block. The
+# ledger shard exists and cannot be read, and the fixture's seats have no tmux session behind
+# them, so the "is this repo being orchestrated" question has no answer at all.
+reset_seats
+seat s1 "$ORCH" stale
+SHARD="$RUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
+chmod 000 "$SHARD"
+run_stop "$(stop_payload "$ORCH" false)"
+chmod 644 "$SHARD"
+chk_eq "s3 an undecidable orchestration predicate allows the turn end (exit 0)" 0 "$RC"
+chk_eq "s3 and never blocks" "" "$(field decision "$OUT")"
+chk_contains "s3 the undecidable identity is announced" "phase ledger shard" \
+  "$(field systemMessage "$OUT")"
 
 # ── S1 BOUNDED CENSUS: the cap counts OWNED seats, and it is applied AFTER ownership ───────
 reset_seats
@@ -294,7 +349,7 @@ fi
 # So: zero recorded calls + the budget message = the git call was inside the budget.
 SCALED="$FIX/scaled"; SLOWBIN="$FIX/slowbin"
 mkdir -p "$SCALED" "$SLOWBIN"
-cp "$PKG/cto-guard-stop.py" "$PKG/seat-census.py" "$PKG/agentctl" "$SCALED/"
+cp "$PKG/cto-guard-stop.py" "$PKG/seat-census.py" "$PKG/identity.py" "$PKG/agentctl" "$SCALED/"
 sed -i '' -e 's/^_CALL_TIMEOUT = 5\.0/_CALL_TIMEOUT = 1.0/' \
           -e 's/^_CENSUS_BUDGET = 20\.0/_CENSUS_BUDGET = 1.0/' "$SCALED/seat-census.py"
 chk_eq "M2 the scaled copy really carries the scaled constants" 2 \

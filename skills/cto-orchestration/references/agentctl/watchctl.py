@@ -1194,6 +1194,8 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
             return 3
         _install_supervisor_traps(run, name)
     idle = silent = tmo = 0
+    # WHICH verdict the `idle` pair is counting: DONE and IDLE-NO-DELIVERABLE never share it.
+    idle_rc = None
     i = 1
     rnd = _session_round(run, name)   # set before any conclude path (MAX=0 corner)
     # The work-trace window as the FIRST sensing read left it — the only thing that lets a
@@ -1215,7 +1217,19 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
                 return 3
         # the round the verdict below is ABOUT, captured before classify: publish refuses it
         # if a steer opened the next round in between.
-        rnd = _session_round(run, name)
+        prev_rnd, rnd = rnd, _session_round(run, name)
+        if rnd != prev_rnd:
+            # A NEW ROUND IS A NEW QUESTION. The stability counters below require two
+            # CONSECUTIVE reads of the same class before publishing, and without this reset the
+            # pair could straddle a steer: one DONE read of the old round plus one of the new
+            # published a terminal conclusion after a single look at the round it claims to be
+            # about (audit probe). The progress baseline is dropped for the same reason — it is
+            # "where the work trace stood when this round was first sensed", and comparing the
+            # new round's window against the old round's baseline reported movement that this
+            # round never made.
+            idle = silent = tmo = 0
+            idle_rc = None
+            armed_progress = None
         rc, msg = _ctl(run, "classify", name)
         if armed_progress is None:
             armed_progress = progress_state(run, name).get("moved")
@@ -1231,9 +1245,14 @@ def cmd_sense_loop(args: argparse.Namespace) -> int:
             # session that declared no budget cannot reach past this line at all.
             _report_over_budget(args, rnd)
         elif rc in (EXIT_DONE, EXIT_IDLE_NO_DELIVERABLE):
-            # stability: require 2 consecutive terminal reads — a turn boundary right before
-            # an auto-consumed queued message must not read as terminal.
-            idle += 1
+            # stability: require 2 consecutive terminal reads — a turn boundary right before an
+            # auto-consumed queued message must not read as terminal. THE PAIR MUST BE THE SAME
+            # VERDICT (H3): DONE and IDLE-NO-DELIVERABLE are different conclusions about the
+            # round, and one shared counter published whichever was read second after a single
+            # look at it. A flip restarts the count AT this read — this sample is one
+            # observation of the new verdict, not zero.
+            idle = idle + 1 if rc == idle_rc else 1
+            idle_rc = rc
             silent = tmo = 0
             if idle >= 2:
                 _sense_conclude(args, rnd, rc, msg)

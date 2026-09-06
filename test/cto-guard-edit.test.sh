@@ -52,6 +52,21 @@ SEAT="$ORCH/wt-worker"
 mkdir -p "$SEAT"
 git -C "$SEAT" init -q
 
+# THE PREMISE OF EVERY CASE BELOW, and it is a premise the gate really requires since
+# 2026-09-06: E1 judges only a repo THIS BOX IS ORCHESTRATING (a LIVE seat, or a phase-ledger
+# `start` row of today/yesterday, in the same repo by git common dir). A checkout with neither
+# is silently none of the gate's business — asserted as its own arm at the end of this file, so
+# the rows written here are what makes the DENY arms discriminate at all.
+ledger_row() { # $1 cwd — one `start` row in today's shard of THIS fixture's run dir
+  python3 -c 'import json, os, sys
+print(json.dumps({"ts": "2026-09-06T00:00:00.000Z", "event": "start", "name": "fixture",
+                  "session_id": "s", "attempt": "a", "engine": "omp",
+                  "cwd": os.path.realpath(sys.argv[1])}))' "$1" \
+    >> "$RUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
+}
+ledger_row "$ORCH"
+ledger_row "$SEAT"
+
 seat_meta() { # $1 session  $2 cwd  [$3 rc-value → writes the rc file = engine exited]
   printf 'engine=omp\ncwd=%s\nround=1\n' "$2" > "$RUN/$1.duplex.meta"
   if [ $# -ge 3 ]; then printf '%s\n' "$3" > "$RUN/$1.duplex.rc"; else rm -f "$RUN/$1.duplex.rc"; fi
@@ -239,6 +254,7 @@ rm -f "$RUN"/*.duplex.meta "$RUN"/*.duplex.rc /tmp/cto-allow-direct-write
 OTHER="$FIX/other-checkout"
 mkdir -p "$OTHER"
 git -C "$OTHER" init -q
+ledger_row "$OTHER"            # the foreign checkout is orchestrated too — see the premise above
 seat_meta worker "$SEAT"; TMUX_LIVE="worker"
 run Write "$OTHER/src/app.py" "$SEAT"
 chk_eq "R2-1.1 a LIVE seat writing source into ANOTHER checkout is denied" 2 "$RC"
@@ -314,5 +330,231 @@ run Write "$SEAT/src/app.py" "$SEAT"
 chk_eq "R2-1.3 control: a real rc file still means dead (denied)" 2 "$RC"
 rm -f "$RUN"/worker.duplex.* /tmp/cto-e1-outside.py
 TMUX_LIVE=""
+
+# ── THE IDENTITY PREDICATE (audit §1, 2026-09-06): which REPO is this gate's business ───────
+# Every arm below drives the same hook contract; the three-state predicate is observed through
+# the only faces it has — a silent rc 0 (`not`: nobody is orchestrating here), a DENY (`orches-
+# trated`), and the ALLOW+WARN (`undecidable`). No python-level call into the helper.
+SHARD="$RUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
+rm -f "$RUN"/*.duplex.meta "$RUN"/*.duplex.rc /tmp/cto-allow-direct-write
+TMUX_LIVE=""
+
+# i3/e1/i6 — a repo with NO live seat and NO ledger row: the single-agent lane the SKILL
+# excludes. i6 rides the same fixture: BOTH this repo and $ORCH (which IS orchestrated) answer
+# `git rev-parse --git-common-dir` with the literal string `.git`, so a gate comparing that
+# output verbatim would unify them and deny here.
+NOORCH="$FIX/plain-checkout"; mkdir -p "$NOORCH"; git -C "$NOORCH" init -q
+run Edit "$NOORCH/src/app.py" "$NOORCH"
+chk_eq "e1/i3 an unorchestrated repo's .py edit is allowed" 0 "$RC"
+chk_eq "e1/i3 and the gate says NOTHING at all (no WARN, no deny)" "" "$ERR$OUT"
+chk_eq "i6 DAMAGE ORACLE: a literal \`.git\` compare would have denied this (repo id is the "\
+"realpath'd common dir)" 0 "$RC"
+
+# i1/i2/e2/e4 — the normal shape: orchestrator in the main checkout, seat in a SIBLING worktree
+# of the SAME repo. Root equality (the holder test) says "not this seat's tree", repo identity
+# (the predicate) says "this repo is being orchestrated" — so the main checkout is denied while
+# the seat's own worktree passes.
+WTREPO="$FIX/wt-main"; mkdir -p "$WTREPO"; git -C "$WTREPO" init -q
+git -C "$WTREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+WTLINK="$FIX/wt-sibling"
+git -C "$WTREPO" worktree add -q "$WTLINK" 2>/dev/null
+chk_eq "i1 fixture: the sibling worktree really exists" 1 \
+  "$([ -e "$WTLINK/.git" ] && echo 1 || echo 0)"
+seat_meta sib "$WTLINK"; TMUX_LIVE="sib"
+run Write "$WTREPO/src/app.py" "$WTREPO"
+chk_eq "i1 a LIVE seat in a SIBLING worktree makes the repo orchestrated → main checkout denied" \
+  2 "$RC"
+chk_contains "i1 and the deny names the live-seat evidence" "LIVE agentctl seat" "$ERR"
+run Write "$WTLINK/src/app.py" "$WTLINK"
+chk_eq "e4 the same live seat writing inside its OWN worktree still passes" 0 "$RC"
+chk_eq "e4 and silently" "" "$ERR$OUT"
+rm -f "$RUN"/sib.duplex.*; TMUX_LIVE=""
+run Write "$WTREPO/src/app.py" "$WTREPO"
+chk_eq "i1 PAIRED GREEN: with that seat gone and no ledger row, the same write is allowed" 0 "$RC"
+chk_eq "i1 PAIRED GREEN: and silently" "" "$ERR$OUT"
+ledger_row "$WTLINK"
+run Write "$WTREPO/src/app.py" "$WTREPO"
+chk_eq "i2/e2 a ledger \`start\` row in a sibling worktree denies the main checkout" 2 "$RC"
+chk_contains "i2/e2 and the deny names the ledger evidence" "phase ledger" "$ERR"
+
+# i7 — a symlinked spelling of a repo is the same repo (realpath, both sides)
+SYMREPO="$FIX/sym-real"; mkdir -p "$SYMREPO"; git -C "$SYMREPO" init -q
+ln -s "$SYMREPO" "$FIX/sym-link"
+ledger_row "$FIX/sym-link"
+run Write "$SYMREPO/src/app.py" "$SYMREPO"
+chk_eq "i7 a ledger row spelled through a symlink still names this repo" 2 "$RC"
+
+# i8 — a corrupt ledger line is SKIPPED, it does not make the day unanswerable
+JUNK="$FIX/junk-repo"; mkdir -p "$JUNK"; git -C "$JUNK" init -q
+printf '{ this is not json\n\n' >> "$SHARD"
+ledger_row "$JUNK"
+printf 'neither is this\n' >> "$SHARD"
+run Write "$JUNK/src/app.py" "$JUNK"
+chk_eq "i8 a broken JSONL line is skipped, the good row still decides" 2 "$RC"
+chk_eq "i8 and it is a DENY, never the undecidable WARN" "" "$OUT"
+
+# i9 — yesterday's shard counts (the window is today + yesterday, by shard NAME)
+YDAY="$FIX/yday-repo"; mkdir -p "$YDAY"; git -C "$YDAY" init -q
+python3 -c 'import json, os, sys
+print(json.dumps({"ts": "y", "event": "start", "name": "fixture", "session_id": "s",
+                  "attempt": "a", "cwd": os.path.realpath(sys.argv[1])}))' "$YDAY" \
+  > "$RUN/phase-ledger-$(python3 -c 'import time; print(time.strftime("%Y%m%d", time.gmtime(time.time()-86400)))').jsonl"
+run Write "$YDAY/src/app.py" "$YDAY"
+chk_eq "i9 yesterday's shard still names this repo as orchestrated" 2 "$RC"
+
+# e5 — the judged face is the TARGET's repo, not the caller's: a LIVE seat writing source into
+# an UNORCHESTRATED checkout is allowed, while the same write into an orchestrated one denies
+# (the R2-1.1 arm above). A blanket rule satisfies neither.
+seat_meta sib2 "$WTLINK"; TMUX_LIVE="sib2"
+run Write "$NOORCH/src/app.py" "$WTLINK"
+chk_eq "e5 a live seat writing into an UNORCHESTRATED checkout is allowed" 0 "$RC"
+chk_eq "e5 and silently — the caller's own repo does not drag the target in" "" "$ERR$OUT"
+rm -f "$RUN"/sib2.duplex.*; TMUX_LIVE=""
+
+# i4/e3 — a shard that EXISTS and cannot be READ is blindness: ALLOW + WARN, never a silent
+# allow (which would read as "nobody is orchestrating") and never a DENY. Last arm on purpose:
+# it takes the fixture's ledger away.
+chmod 000 "$SHARD"
+run Write "$NOORCH/src/app.py" "$NOORCH"
+E3_RC=$RC; E3_OUT=$OUT; E3_ERR=$ERR
+chmod 644 "$SHARD"
+chk_eq "i4/e3 an unreadable ledger shard allows (exit 0)" 0 "$E3_RC"
+chk_eq "i4/e3 and never denies" "" "$E3_ERR"
+chk_contains "i4/e3 the undecidable identity is announced" "WARN (cto-guard E1)" "$(ctx "$E3_OUT")"
+chk_contains "i4/e3 and the warn names what could not be read" "phase ledger shard" \
+  "$(ctx "$E3_OUT")"
+
+# i10/i11 — a SOURCE cwd whose own repo cannot be resolved is UNDECIDABLE evidence, not a
+# confirmed stranger. `git -C <that cwd>` is made to time out for real (the target's own probes
+# stay live), which is exactly H1's "git unavailable or timed out ⇒ U" on the input side. Its
+# own run dir: the fixture above has positive rows for this repo and would mask both arms.
+TORUN="$FIX/run-timeout"; mkdir -p "$TORUN"
+TOSRC="$FIX/timeout-src"; mkdir -p "$TOSRC"; git -C "$TOSRC" init -q
+TOTGT="$FIX/timeout-target"; mkdir -p "$TOTGT"; git -C "$TOTGT" init -q
+TOREAL="$(cd "$TOSRC" && pwd -P)"
+python3 -c 'import json, os, sys
+print(json.dumps({"ts": "2026-09-06T00:00:00.000Z", "event": "start", "name": "fixture",
+                  "session_id": "s", "attempt": "a", "cwd": os.path.realpath(sys.argv[1])}))' \
+  "$TOSRC" > "$TORUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
+run_gitto() { # $1 tool  $2 target  $3 cwd  $4 run-dir  $5 dir whose `git -C` times out
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(AGENT_WATCH_DIR="$4" python3 -c 'import io, runpy, subprocess, sys
+sys.stdin = io.StringIO(sys.argv[2])
+_run = subprocess.run
+def gate(cmd, *a, **k):
+    if isinstance(cmd, (list, tuple)) and list(cmd[:3]) == ["git", "-C", sys.argv[3]]:
+        raise subprocess.TimeoutExpired(list(cmd), k.get("timeout"))
+    return _run(cmd, *a, **k)
+subprocess.run = gate
+runpy.run_path(sys.argv[1], run_name="__main__")' \
+        "$GUARD" "$(mkpayload "$1" "$2" "$3")" "$5" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+run_gitto Write "$TOTGT/src/app.py" "$TOTGT" "$TORUN" "$TOREAL"
+chk_eq "i11 a ledger cwd whose git times out is undecidable, so the write allows" 0 "$RC"
+chk_eq "i11 and it is never a DENY" "" "$ERR"
+chk_contains "i11 the undecidable identity is announced" "WARN (cto-guard E1)" "$(ctx "$OUT")"
+chk_contains "i11 and the warn names the unattributable work tree" "could not be attributed" \
+  "$(ctx "$OUT")"
+# PAIRED RED-SIDE CONTROL: same fixture, no injected timeout — the row resolves to a DIFFERENT
+# repo, so this really is `not` (silent allow). The WARN above comes from the timeout alone.
+run Write "$TOTGT/src/app.py" "$TOTGT" "$TORUN"
+chk_eq "i11 CONTROL: with that git probe answering, the same write is silently allowed" "0|" \
+  "$RC|$ERR$OUT"
+# i10 — a CONFIRMED positive still wins over an unresolvable second row (T beats U)
+python3 -c 'import json, os, sys
+print(json.dumps({"ts": "2026-09-06T00:00:01.000Z", "event": "start", "name": "fixture2",
+                  "session_id": "s", "attempt": "a", "cwd": os.path.realpath(sys.argv[1])}))' \
+  "$TOTGT" >> "$TORUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
+run_gitto Write "$TOTGT/src/app.py" "$TOTGT" "$TORUN" "$TOREAL"
+chk_eq "i10 an unresolvable row cannot take back a CONFIRMED ledger positive → DENY" 2 "$RC"
+chk_contains "i10 and the deny names the ledger evidence" "phase ledger" "$ERR"
+
+# i12/i13 — THE COST. Liveness is a subprocess per seat, so the predicate must compare repos
+# FIRST (a foreign seat costs zero tmux) and every probe it does start must be bounded by the
+# REMAINING budget. Driven at the helper: "how many subprocesses did it start" has no hook face.
+SLOWBIN="$FIX/slowbin"; mkdir -p "$SLOWBIN"
+cat > "$SLOWBIN/tmux" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$TMUX_CALL_LOG"
+exec /bin/sleep 30
+EOF
+chmod +x "$SLOWBIN/tmux"
+COST="$(PATH="$SLOWBIN:$PATH" python3 - "$(dirname "$GUARD")" "$FIX" <<'EOF'
+import os, subprocess, sys, time
+sys.path.insert(0, sys.argv[1])
+import identity as m
+fix = sys.argv[2]
+
+def repo(path):
+    os.makedirs(path, exist_ok=True)
+    subprocess.run(["git", "-C", path, "init", "-q"], check=True)
+    return path
+
+def probe(run, target, budget=None):
+    if budget is not None:
+        m._PREDICATE_BUDGET = budget
+    log = os.path.join(run, "tmux-calls")
+    os.environ["TMUX_CALL_LOG"] = log
+    start = time.monotonic()
+    state, _why = m.orchestrated(target, run)
+    elapsed = time.monotonic() - start
+    calls = sum(1 for ln in open(log) if ln.strip()) if os.path.exists(log) else 0
+    return state, calls, elapsed
+
+# i12: two seats, both in a FOREIGN repo. Repo identity decides them; tmux is never asked.
+far = repo(os.path.join(fix, "cost-foreign"))
+near = repo(os.path.join(fix, "cost-target"))
+run12 = os.path.join(fix, "cost-run12")
+os.makedirs(run12, exist_ok=True)
+for name in ("one", "two"):
+    open(os.path.join(run12, name + ".duplex.meta"), "w").write("cwd=%s\n" % far)
+state, calls, elapsed = probe(run12, near)
+print("i12 %s %d %s" % (state, calls, "fast" if elapsed < 1.0 else "SLOW:%.1f" % elapsed))
+
+# i13: one seat in the SAME repo, so tmux IS asked — and its timeout is the remaining budget,
+# not its own 10s. An unanswered liveness probe at the deadline is UNDECIDABLE, never a
+# positive nobody proved. The budget is shortened to keep the suite quick; the mechanism under
+# test is the deadline being propagated at all.
+run13 = os.path.join(fix, "cost-run13")
+os.makedirs(run13, exist_ok=True)
+open(os.path.join(run13, "mine.duplex.meta"), "w").write("cwd=%s\n" % near)
+state, calls, elapsed = probe(run13, near, budget=2.0)
+print("i13 %s %d %s" % (state, calls,
+                        "bounded" if elapsed < 4.0 else "OVERRUN:%.1f" % elapsed))
+EOF
+)"
+chk_eq "i12 two FOREIGN seats are not-orchestrated with zero tmux subprocesses, sub-second" \
+  "i12 not 0 fast" "$(printf '%s\n' "$COST" | grep '^i12 ')"
+chk_eq "i13 a same-repo seat whose liveness probe outruns the budget → undecidable, bounded" \
+  "i13 undecidable 1 bounded" "$(printf '%s\n' "$COST" | grep '^i13 ')"
+
+# i14 — a seat whose engine ALREADY EXITED is not the live half of anything, and its meta
+# outlives it by design (`watchctl._STOP_KEPT`) while the work tree it names is routinely
+# removed once the batch ends. Attributing a repo to THAT row made every plain checkout on the
+# box undecidable, so E1 warned on exactly the single-agent edits it must be silent about
+# (review R2-M3). The rc file is the FREE half of the liveness predicate, so a retired row is
+# dropped before even a `git rev-parse` is spent on it.
+rm -f "$RUN"/*.duplex.meta "$RUN"/*.duplex.rc
+RETIRED="$FIX/removed-worktree"          # deliberately never created: the worktree is gone
+seat_meta ended "$RETIRED" 0
+STATE="$(python3 -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import identity as m
+print(m.orchestrated(sys.argv[2], sys.argv[3])[0])' "$(dirname "$GUARD")" "$NOORCH" "$RUN")"
+chk_eq "(i14) an ENDED seat naming a removed work tree is no evidence at all" "not" "$STATE"
+run Edit "$NOORCH/src/app.py" "$NOORCH"
+chk_eq "(i14) so E1 stays silent on the plain repo (exit 0)" 0 "$RC"
+chk_eq "(i14) and says nothing at all" "" "$ERR$OUT"
+# PAIRED RED-SIDE CONTROL: the SAME row with its rc file removed is a seat nobody can rule
+# out, so the unresolvable work tree is undecidable again and the WARN comes back. The rc
+# evidence is what buys the silence above, not the row's shape.
+seat_meta ended "$RETIRED"
+run Edit "$NOORCH/src/app.py" "$NOORCH"
+chk_eq "(i14) CONTROL: with no rc evidence that row is undecidable, so E1 allows and warns" \
+  0 "$RC"
+chk_contains "(i14) CONTROL: and the warn is what the rc evidence removes" \
+  "could not be attributed" "$(ctx "$OUT")"
+rm -f "$RUN"/ended.duplex.*
 
 summary

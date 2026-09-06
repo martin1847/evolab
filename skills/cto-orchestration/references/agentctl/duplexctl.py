@@ -756,8 +756,23 @@ def tail_frames(sess: Session, window: int = 262144) -> list[dict]:
     return frames
 
 
-QUOTA_RE = ("insufficient_quota", "invalid_api_key", "No API key",
-            "credit balance", "billing")
+# The backend-credential vocabulary, matched CASE-INSENSITIVELY (a provider that capitalises
+# "Credit balance" is reporting the same wall). "Insufficient Balance" is here because a real
+# 402 frame carried exactly that and was classified as an ordinary failure (field 2026-09-04,
+# deepseek: the round was read as DONE). The bare status code `402` is deliberately NOT a marker:
+# three digits match far too much prose to be evidence of anything.
+QUOTA_RE = ("insufficient_quota", "invalid_api_key", "no api key",
+            "credit balance", "billing", "insufficient balance")
+
+
+def quota_hit(text: str) -> bool:
+    """Does THIS text name a backend quota/auth wall? One vocabulary, two callers: the process
+    -exit scan below and the round verdict in `classify`. The latter used to scan the last 16KiB
+    of the events/stderr files instead, so a PREVIOUS round's "No API key" coloured this round's
+    ordinary failure STALLED-EXTERNAL — the operator was sent to fix credentials that were
+    already fixed."""
+    low = text.lower()
+    return any(marker in low for marker in QUOTA_RE)
 
 
 def deliverable_fresh(sess: Session) -> tuple[bool, str]:
@@ -912,6 +927,9 @@ def misplaced_hint(sess: Session) -> None:
 
 
 def scan_quota(sess: Session) -> bool:
+    """The PROCESS-EXIT scan: an engine that died rc!=0 leaves its reason in the log tail and
+    nowhere else, so here the tail IS the evidence. A LIVE round's verdict must not use this —
+    see `quota_hit`."""
     for path in (sess.stderr, sess.events):
         try:
             with open(path, "rb") as fh:
@@ -919,7 +937,7 @@ def scan_quota(sess: Session) -> bool:
                 blob = fh.read().decode("utf-8", errors="replace")
         except OSError:
             continue
-        if any(marker in blob for marker in QUOTA_RE):
+        if quota_hit(blob):
             return True
     return False
 
@@ -974,8 +992,121 @@ def omp_get_state(sess: Session) -> tuple[dict | None, str]:
     return reply["data"], ""
 
 
+# ── omp: THIS ROUND's error evidence ─────────────────────────────────────────────────────
+# Field, 2026-09-04 (two probes, both real): a seat whose provider answered `402 Insufficient
+# Balance` — and a second one whose prompt was rejected with `No API key found for anthropic`
+# AFTER an earlier `success:true` for the same request id — were both projected IDLE and
+# published DONE. The projector only ever asked get_state and looked for a pending ask, so an
+# assistant frame carrying `stopReason=error` was invisible: the watcher steered into a dead
+# engine, twice, and the round was reported as work delivered.
+#
+# THE WINDOW IS THIS ROUND, and that is the whole discipline: evidence is read from the events
+# stream AFTER the byte offset the current prompt/steer committed (`sent-offset`), exactly like
+# the claude and codex projectors. A previous round's failure is not this round's verdict.
+#
+# THE CORRELATION ID COMES FROM THE SENDER, AND NOWHERE ELSE: `commit_round_state` journals
+# this round's request id with the ROUND NUMBER the meta then carries, and the projector reads
+# the LAST row of the CURRENT round (offset cannot name a round: a steer whose engine produced
+# nothing opens the next one at the same offset). Only `response.id == req` speaks. NO ROW =
+# the id is UNKNOWN, so no `response` frame is evidence — assistant error frames still are.
+# Guessing it from the stream let a stale ack overtake ours and hand the round to that ack's
+# own failure (R2-M1); the sender refuses to open a round it cannot record (R2-M2).
+#
+# RECOVERY WINS OVER AN EARLIER ERROR. An error followed by a completed assistant turn, or by
+# `auto_retry_end success:true`, is a round that recovered — reporting ERROR there would kill a
+# session that is working. `auto_retry_start` with no end yet is RUNNING for the same reason.
+OMP_PROMPT_COMMANDS = ("prompt", "steer", "follow_up", "abort_and_prompt")
+ERROR_CHARS = 300
+
+
+def omp_round_req(sess: Session) -> str:
+    """This round's request id as the SENDER recorded it, or "" when THIS ROUND has no row.
+    The round number is the fence (see above): rows of other rounds are not this round's, and
+    the last row of the current round is the live one."""
+    try:
+        rnd = int(sess.meta.get("round", "0"))
+    except ValueError:
+        return ""
+    req = ""
+    try:
+        with open(os.path.join(sess.run, f"{sess.name}.duplex.sent-journal"),
+                  encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue                 # a torn append is not evidence, and not fatal
+                if not isinstance(row, dict) or row.get("round") != rnd:
+                    continue                 # another round's row, or a pre-`round` legacy one
+                found = row.get("req")
+                req = found if isinstance(found, str) else ""
+    except OSError:
+        return ""
+    return req
+
+
+def omp_pending_ask(frames: list[dict]) -> tuple[dict | None, int]:
+    """(the unanswered structured ask, its position) over `frames`, or (None, -1). The frame
+    type, the connect-time UI chrome to ignore and the frames that clear a pending ask all come
+    from the structuredAsk capability cell — this projector IS omp's structuredAsk route, so it
+    must not carry its own literals. The POSITION is what lets a verdict order an ask against an
+    error: whichever came last is what the engine is doing now."""
+    ask = capability("omp", "structuredAsk")
+    noise = ask["detect"].get("noise", ())
+    clears = ask["detect"].get("clears", ())
+    pending, at = None, -1
+    for i, frame in enumerate(frames):
+        ftype = frame.get("type")
+        if ftype == ask["route"] and frame.get("method") not in noise:
+            pending, at = frame, i
+        elif ftype in clears:
+            pending, at = None, -1
+    return pending, at
+
+
+def omp_round_error(frames: list[dict], req: str = "") -> tuple[str, str, int]:
+    """(kind, evidence, position) for this round's error evidence — see the block above.
+
+    kind: "error" = a failure with no recovery after it, `evidence` is the text a verdict prints
+    and the ONLY text the quota/auth classification may read; "retrying" = an auto-retry is in
+    flight, which is RUNNING; "" = no error evidence in this round."""
+    err, at, retrying = "", -1, False
+    for i, frame in enumerate(frames):
+        ftype = frame.get("type")
+        if ftype == "response" and frame.get("command") in OMP_PROMPT_COMMANDS:
+            if not req or frame.get("id") != req:
+                continue                     # not the id we sent (or we cannot prove one)
+            if frame.get("success") is not True:
+                err, at = clip(str(frame.get("error") or
+                                   "the engine rejected this round's frame"), ERROR_CHARS), i
+        elif ftype == "auto_retry_start":
+            retrying = True
+        elif ftype == "auto_retry_end":
+            retrying = False
+            if frame.get("success") is True:
+                err, at = "", -1             # recovered: the retry landed
+            else:
+                err, at = clip(str(frame.get("finalError") or
+                                   "auto-retry gave up"), ERROR_CHARS), i
+        elif ftype in ("message_end", "turn_end", "agent_end"):
+            message = frame.get("message")
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue                     # the user echo of our own prompt is not evidence
+            text = message.get("errorMessage")
+            if message.get("stopReason") == "error" or (isinstance(text, str) and text):
+                # turn_end / agent_end repeat the message_end error verbatim; one slot means
+                # they update the same evidence instead of being counted twice
+                err, at = clip(str(text or "the engine reported stopReason=error"),
+                               ERROR_CHARS), i
+            elif ftype == "message_end":
+                err, at = "", -1             # a completed assistant turn after an error
+    if retrying:
+        return "retrying", "", -1
+    return ("error", err, at) if at >= 0 else ("", "", -1)
+
+
 def project_omp(sess: Session) -> tuple[str, str]:
-    """Returns (state, detail): state in RUNNING|IDLE|WAITING."""
+    """Returns (state, detail): state in RUNNING|IDLE|WAITING|ERROR."""
     data, why = omp_get_state(sess)
     if data is None:
         return "RUNNING", why
@@ -997,19 +1128,33 @@ def project_omp(sess: Session) -> tuple[str, str]:
         # listing below is indexed by, and an operator reading only the typed line otherwise
         # saw "messages queued" with no idea how many
         return "RUNNING", f"idle but queued={sess.queued}"
-    # idle: is there an unanswered real question? The frame type, the connect-time UI chrome
-    # to ignore and the frames that clear a pending ask all come from the structuredAsk cell —
-    # this projector IS omp's structuredAsk route, so it must not carry its own literals.
-    ask = capability("omp", "structuredAsk")
-    noise = ask["detect"].get("noise", ())
-    clears = ask["detect"].get("clears", ())
-    pending = None
-    for frame in tail_frames(sess):
-        ftype = frame.get("type")
-        if ftype == ask["route"] and frame.get("method") not in noise:
-            pending = frame
-        elif ftype in clears:
-            pending = None
+    # not streaming, nothing queued: what did THIS ROUND end on? An error frame with no
+    # recovery after it is a failed turn (the engine is alive, so this is not AGENT-DEAD), and
+    # an ask that arrived AFTER the error is what the engine is waiting on now — position, not
+    # a fixed precedence, decides between them.
+    # ONE SAMPLE, TAKEN HERE. The get_state round trip above can take seconds and a legal steer
+    # may complete inside it; `sess.meta` is the round this process was CONSTRUCTED with. Pairing
+    # that snapshot with a window read afterwards mixed a NEW round's frames with the OLD round's
+    # request id, so this round's own `success:false` was skipped and an engine that had just
+    # failed read DONE (cold review R3-M2). The round is therefore read off disk together with
+    # the window it selects evidence in, and re-read after it: a sample that straddled a rotation
+    # belongs to neither round and stays non-terminal rather than judging two generations at once.
+    fresh = Session(sess.run, sess.name)
+    try:                                     # the window: frames written since this round went
+        sent = int(open(sess.sent_offset, encoding="utf-8").read().strip())
+    except (OSError, ValueError):            # out, same read as the claude/codex projectors
+        sent = 0
+    frames = complete_frames_from(sess, sent)
+    if Session(sess.run, sess.name).meta.get("round") != fresh.meta.get("round"):
+        return "RUNNING", "a round opened while this verdict was being sampled"
+    kind, evidence, err_at = omp_round_error(frames, omp_round_req(fresh))
+    if kind == "retrying":
+        return "RUNNING", "auto-retry in flight after a recoverable engine error"
+    if kind == "error" and omp_pending_ask(frames)[1] < err_at:
+        return "ERROR", evidence
+    # idle: is there an unanswered real question? Scanned over the tail window rather than this
+    # round's frames — an ask raised before the last steer and never answered is still pending.
+    pending, _at = omp_pending_ask(tail_frames(sess))
     if pending is not None:
         return "WAITING", clip(json.dumps(pending, ensure_ascii=False), 200)
     return "IDLE", "isStreaming=false, queue empty"
@@ -2686,7 +2831,11 @@ def classify(sess: Session) -> int:
         print(f"WAITING-INPUT: {detail}")
         return EXIT_WAITING_INPUT
     if state == "ERROR":
-        if scan_quota(sess):
+        # The credential question is asked of THE EVIDENCE THIS ROUND SELECTED — the same text
+        # printed below — and never of the log tail: an old "No API key" line sitting in the
+        # events file made every later failure read STALLED-EXTERNAL and sent the operator to
+        # fix credentials that were already fixed (audit §4).
+        if quota_hit(detail):
             print(f"STALLED-EXTERNAL: turn failed on backend quota/auth — fix credentials, then steer to retry. {detail}")
             return EXIT_STALLED_EXTERNAL
         print(f"FAILED: engine reported an error result (turn failed, engine still alive) — {detail}")
@@ -2933,9 +3082,10 @@ def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
     # a codex --replace whose interrupt handshake times out is REFUSED, and rotating the
     # attempt for a replacement that never starts made the still-current attempt stale,
     # over-rejecting its own later evidence and invalidating an armed watcher (cold review
-    # R1). So `prompt` commits here, and `replace` commits at its engine's real
-    # replacement-frame commit point (immediately below for a single-frame replace, after the
-    # interrupt handshake for codex). A steer keeps the whole triple.
+    # R1). So `prompt` commits here, `replace` commits at its engine's real replacement-frame
+    # commit point — after the round journal for a single-frame replace (a round that cannot be
+    # recorded refuses the send, and that refusal must leave the running attempt intact, cold
+    # review R3-M1), after the interrupt handshake for codex. A steer keeps the whole triple.
     def commit_identity(kind: str) -> None:
         store = identity.IdentityStore(args.run_dir, args.session)
         try:
@@ -2964,11 +3114,11 @@ def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
 
     if args.verb == "prompt":
         commit_identity("start")
-    elif args.verb == "interrupt" and engine != "codex":
-        # omp's abort_and_prompt IS the replacement frame: there is no separate handshake to
-        # wait for, so the commit point is right here, before write_frame.
-        commit_identity("replace")
 
+    # MINTED BEFORE the round commit, because the round record is what carries it (see "THE
+    # CORRELATION ID COMES FROM THE SENDER"). codex correlates over JSON-RPC and never sees
+    # this frame id, so its rows carry no request id rather than a fabricated one.
+    req_id = f"ctl-{uuid.uuid4().hex[:12]}"
     offset_box = {}
 
     def commit_round_state():
@@ -2982,11 +3132,37 @@ def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
             # senders could both pass it and overrun the hard cap (review S1 2026-07-19)
             fresh = Session(args.run_dir, args.session)
             check_review_budget(fresh, text)
+            round_after = int(fresh.meta.get("round", "0")) + 1
+            offset_box["v"] = events_size(sess)
+            # THE ROUND JOURNAL, written FIRST and FAIL-CLOSED (append-only, no frame bodies:
+            # ts, the offset this round opens at, its round number, its request id). Replay
+            # (test/corpus/) needs the TRUE production offset of each verdict; the projector
+            # needs this round's id to know whose `response` frames speak. Best effort was
+            # wrong both ways: a lost append left the PREVIOUS round's row as the newest one
+            # and the projector guessed from the stream (R2-M1/M2). So a round that cannot be
+            # recorded is not opened: nothing below ran, no byte reached the engine.
+            try:
+                with open(os.path.join(sess.run, f"{sess.name}.duplex.sent-journal"),
+                          "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"ts": time.time(),
+                                         "offset": offset_box["v"],
+                                         "round": round_after,
+                                         "req": "" if engine == "codex" else req_id}) + "\n")
+            except OSError as exc:
+                die(f"cannot record round {round_after} of '{sess.name}' in "
+                    f"{sess.name}.duplex.sent-journal ({exc}) — refusing to {args.verb}: an "
+                    "unrecorded round cannot be correlated with the engine's answers. Nothing "
+                    f"was delivered and the round did not rotate; fix {sess.run} and re-run.", 3)
+            if args.verb == "interrupt" and engine != "codex":
+                # THE single-frame replacement's commit point (see "Identity commit points"):
+                # the round is recorded, so this frame IS going out. Committing it before the
+                # journal let a rc-3 refusal rotate the attempt anyway — the worker that never
+                # got aborted and its armed watcher both went STALE-ATTEMPT for a frame nobody
+                # sent, while the error text spoke only of an unopened round (R3-M1).
+                commit_identity("replace")
             with open(sess.epoch, "a", encoding="utf-8"):
                 os.utime(sess.epoch, None)
-            round_after = int(fresh.meta.get("round", "0")) + 1
             meta_update(fresh, "round", str(round_after))
-            offset_box["v"] = events_size(sess)
             # atomic replace: an in-place truncate gave lock-free classify a window
             # where the offset read as empty → 0 → an old result revived as DONE
             tmp = sess.sent_offset + ".tmp"
@@ -3019,28 +3195,17 @@ def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
                     os.unlink(debris)
                 except OSError:
                     pass
-            # offset journal (append-only, no frame bodies — offsets and timestamps
-            # only): raw events alone cannot reconstruct where a mid-turn steer
-            # rotated the window, so post-mortem replay (test/corpus/) needs this
-            # sidecar to project each verdict at its TRUE production offset. Best
-            # effort: a failed journal write must never fail the steer itself.
-            try:
-                with open(os.path.join(sess.run, f"{sess.name}.duplex.sent-journal"),
-                          "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({"ts": time.time(),
-                                         "offset": offset_box["v"]}) + "\n")
-            except OSError:
-                pass
             # steer delivery log: the queue's contents, since the engine only reports a
-            # depth. Same commit point as the offset journal (delivery is starting) and the
-            # same best-effort rule. `prompt` is goal delivery, not a steer, and is not logged.
+            # depth. Same commit point as the round journal above (delivery is starting), but
+            # best effort: a queue LISTING nobody can write does not make a round unjudgeable.
+            # `prompt` is goal delivery, not a steer, and is not logged.
             if args.verb in ("steer", "interrupt"):
                 steer_log_append(sess, f"{args.verb}:{wire}", text)
                 # THE steer commit point of the phase ledger: the round counter has moved, so
                 # the next round is a durable fact and this steer is what opened it — even if
                 # the frame is later only half-acked (untyped rc 3 "delivered, unconfirmed"),
                 # because a round that opened IS a dispatch the batch paid for. Same
-                # best-effort rule as the two logs above. `prompt` is goal delivery and is
+                # best-effort rule as the steer log above. `prompt` is goal delivery and is
                 # recorded as `start`, not as a steer. `--interrupt` already minted the new
                 # attempt, so `phase_record` reads THAT attempt off the active record.
                 identity.phase_record(
@@ -3082,7 +3247,6 @@ def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
             _deliverable_moved(args.run_dir, args.session, args.deliverable)
         return delivered_rc()
 
-    req_id = f"ctl-{uuid.uuid4().hex[:12]}"
     write_frame(sess, build_frame(engine, args.verb, text, req_id, wire),
                 on_ready=commit_round_state)
     offset = offset_box.get("v", events_size(sess))

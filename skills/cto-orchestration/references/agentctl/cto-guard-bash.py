@@ -1286,17 +1286,21 @@ def _r20_judge(g, lit, cwd):
       * inside a LIVE seat's work tree              -> a worker writing its own repo, ALLOW
       * census incomplete, or no governed work tree
         owns it while the caller is not a seat      -> UNANSWERABLE, ALLOW and say so
+      * the target's repo is NOT being orchestrated -> none of this rule's business, silent
+        (E1's own identity clause, audit §1: rule (20) IS E1, so a single-agent session must be
+        left alone on BOTH channels — otherwise the same edit passes as `Edit` and denies as
+        `sed -i`)
       * whatever is left                            -> the orchestrator typing product code."""
-    if g is None:
+    if g is None or getattr(g, "identity", None) is None:
         return None, "cto-guard-edit.py could not be loaded, so no seat census exists"
     src = [(t, t if os.path.isabs(t) else os.path.join(cwd, t)) for t in lit]
     src = [(t, full) for t, full in src if g._is_source(full)]
     if not src:
         return None, None
-    run_dir = os.environ.get("AGENT_WATCH_DIR") or g._RUN_DEFAULT
-    seats, complete = g.live_seat_cwds(run_dir)
-    if not complete:
-        return None, "run dir %s could not be listed, so the LIVE seat set is unknown" % run_dir
+    run_dir = g.identity.run_dir()
+    seats, listed, complete = g.identity.live_seat_cwds(run_dir)
+    if not (listed and complete):
+        return None, "run dir %s could not be read as a census, so the LIVE seat set is unknown" % run_dir
     croot, cdecided = g._worktree_root(cwd)
     caller_seat = any(g._seat_holds(cwd, s, croot, cdecided) for s in seats)
     unjudged = None
@@ -1307,6 +1311,12 @@ def _r20_judge(g, lit, cwd):
             continue
         if not (tdecided and (caller_seat or (cdecided and croot == troot))):
             unjudged = unjudged or "%s is inside no work tree this call can attribute" % tok
+            continue
+        state, why = g.identity.orchestrated(tdir, run_dir)
+        if state == g.identity.NOT_ORCHESTRATED:
+            continue                       # nobody is orchestrating there: not this rule's face
+        if state != g.identity.ORCHESTRATED:
+            unjudged = unjudged or why
             continue
         return tok, None
     return None, unjudged

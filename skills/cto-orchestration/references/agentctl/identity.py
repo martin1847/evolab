@@ -1669,3 +1669,301 @@ def phase_record(run_dir: str, name: str, event: str, extra: dict | None = None)
     """`phase_event` for the commit points that run while the identity record is live."""
     session_id, attempt = phase_resolve(run_dir, name)
     return phase_event(run_dir, name, event, session_id, attempt, extra=extra)
+
+
+# ── "is THIS repo being orchestrated" — the shared predicate of the three gates ───────
+# WHY IT EXISTS (audit 2026-09-06, §1–§4). Three enforcement surfaces fired on a fact that is
+# NOT "this repo is being orchestrated": E1 denied hand-written source in ANY git work tree (so
+# a single-agent edit in an unrelated checkout — exactly the work the SKILL excludes from the
+# dispatch flow — was DENIED, probed at rc 2), the Stop gate blocked a turn end on a SHARED run
+# dir's foreign seats whenever the payload cwd had no decidable top level, and the compaction
+# reminder pushed the seven-step retro into every compaction of every session. ONE predicate,
+# three consumers, three answers — never a second copy per gate.
+#
+# SAME REPO IS THE GIT COMMON DIR, realpath'd, and both halves are load-bearing:
+#   * `--show-toplevel` makes two sibling worktrees of ONE repo look like strangers, and
+#     "orchestrator in the main checkout, seats in sibling worktrees" is the normal shape;
+#   * a LITERAL compare of `--git-common-dir` output unifies every independent repo on the box,
+#     because git answers a bare `.git` RELATIVE to the directory it was asked about. So the
+#     answer is joined onto that directory before it is realpath'd.
+#
+# THREE ANSWERS, never two. `undecidable` is not a softer `not`: a gate that cannot establish
+# identity must degrade the way it always did (WARN / allow), while `not` is a POSITIVE finding
+# that licenses total silence. Confirmed-positive wins over undecidable — one true source is
+# enough, a blind second source cannot take it back.
+#
+# THE PRICE, stated rather than hidden: the ledger window is today's and yesterday's SHARD (by
+# shard NAME, the same口径 `agentctl phases` reports coverage in), so a repo whose seats all
+# finished yesterday still reads `orchestrated` and one overnight hand edit is denied once. The
+# promise is therefore "a repo with no RECENT orchestration record is not gated", never "the
+# current session is not an orchestrator".
+ORCHESTRATED = "orchestrated"
+NOT_ORCHESTRATED = "not"
+UNDECIDABLE = "undecidable"
+
+RUN_DEFAULT = "/tmp/agent-watch-run"       # duplexctl's own default for --run-dir
+_SEAT_META = ".duplex.meta"
+_GIT_TIMEOUT = 5.0                         # per `git rev-parse`
+_TMUX_TIMEOUT = 10.0                       # per `tmux has-session`, absent a shared deadline
+# The WHOLE predicate, subprocesses included. A hook that hangs is the failure every consumer
+# here fears most (PreToolUse, Stop, PreCompact all sit on a human's critical path), so an
+# exhausted budget is reported as UNDECIDABLE — never as `not`, which would silence a gate.
+# EVERY subprocess this predicate starts is bounded by the REMAINING budget, so the wall-clock
+# cost is the budget plus at most one already-running probe — N seats can no longer stack N
+# ten-second tmux waits on top of it (review M3).
+_PREDICATE_BUDGET = 8.0
+
+
+def _left(deadline: float, cap: float) -> float:
+    """Seconds a subprocess may still take: never past the shared deadline, never past its own
+    cap. Zero or less means the budget is spent and the caller must not start it at all."""
+    return min(cap, deadline - time.monotonic())
+
+
+def run_dir() -> str:
+    """The run dir every gate reads, from the one env var the lane already publishes."""
+    return os.environ.get("AGENT_WATCH_DIR") or RUN_DEFAULT
+
+
+def repo_id(path: str, timeout: float = _GIT_TIMEOUT) -> str | None:
+    """The identity of the repository enclosing `path`: its git COMMON DIR as an absolute
+    realpath, or None when nobody can attribute `path` to a repo (not a work tree, no such
+    directory, git missing, probe outran its timeout). None is the UNDECIDABLE answer and never
+    a softer "different repo": two Nones must not compare equal anywhere. `timeout` is a
+    parameter because the Stop census SHARES one deadline across every subprocess it makes."""
+    try:
+        probe = subprocess.run(["git", "-C", path, "rev-parse", "--git-common-dir"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               timeout=timeout)
+    except Exception:               # noqa: BLE001 — missing binary, timeout, spawn failure
+        return None
+    if probe.returncode != 0:
+        return None
+    common = probe.stdout.decode("utf-8", "replace").strip()
+    if not common:
+        return None
+    if not os.path.isabs(common):
+        # `.git` / `../.git` are relative to the directory git was ASKED about, not to ours
+        common = os.path.join(path, common)
+    try:
+        return os.path.realpath(common)
+    except OSError:
+        return None
+
+
+def _seat_meta_cwd(path: str) -> tuple[str | None, bool]:
+    """(cwd, readable) for one duplex.meta. `readable` False = the file could not be OPENED or
+    decoded, which is NOT the same as "this seat has no cwd": swallowing it as None dropped a
+    live seat from the census and could DENY its own worker (E1 review §1.3). Same `key=value`
+    line format `_meta_read` consumes; first occurrence wins, exactly as it does there."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                key, sep, value = line.rstrip("\n").partition("=")
+                if sep and key.strip() == "cwd":
+                    return value.strip() or None, True
+    except OSError:
+        return None, False
+    except UnicodeDecodeError:
+        return None, False
+    return None, True
+
+
+def _tmux_alive(session: str, timeout: float = _TMUX_TIMEOUT) -> bool | None:
+    """True / False / None(undecidable). None is NOT a softer False: an absent or broken tmux
+    means the liveness question was never answered, and the caller reads that as live.
+    `timeout` is a parameter because the identity predicate shares ONE deadline across every
+    subprocess it makes: a fixed 10s here stacked once per seat, past that whole budget."""
+    try:
+        probe = subprocess.run(["tmux", "has-session", "-t", f"={session}"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=timeout)
+    except Exception:              # noqa: BLE001 — no tmux, timeout, spawn failure
+        return None
+    return probe.returncode == 0
+
+
+def seat_metas(run: str) -> tuple[list[tuple[str, str]], bool, bool]:
+    """([(session, cwd)], listed, complete) for every seat meta in `run` that declares a cwd.
+    ENUMERATION ONLY: liveness costs a subprocess per seat, and the identity predicate needs it
+    only for seats that already share the caller's repo — probing them all first made an
+    unrelated repo's PreToolUse hook wait on every seat on the box (review M3).
+
+    `listed` False = the run dir could not be enumerated, so NOTHING is known about the seat
+    set. `complete` False = it was enumerated but one meta could not be READ, so the list is
+    short (a listable directory is not a readable census — E1 review §1.3). Separate because
+    consumers weigh them differently: E1 degrades to ALLOW+WARN on either, the predicate only
+    on an unlistable run dir (one unseen seat cannot take back another source's positive)."""
+    try:
+        entries = os.listdir(run)
+    except OSError:
+        return [], False, False
+    out, complete = [], True
+    for name in sorted(entries):
+        if not name.endswith(_SEAT_META):
+            continue
+        cwd, readable = _seat_meta_cwd(os.path.join(run, name))
+        if not readable:
+            complete = False
+            continue
+        if cwd:
+            out.append((name[: -len(_SEAT_META)], cwd))
+    return out, True, complete
+
+
+def seat_live(run: str, session: str, timeout: float = _TMUX_TIMEOUT) -> bool:
+    """Is this seat LIVE? Reading the meta ALONE is wrong: `watchctl._STOP_KEPT` keeps
+    `duplex.meta` after `agentctl stop`, so a worktree that finished days ago would look live
+    forever. Liveness is proved separately — engine rc file ABSENT (the pane writes it on
+    engine exit; stop keeps it for post-mortem) AND the tmux session present. Either half
+    undecidable ⇒ treated as LIVE: over-allowing costs one un-denied edit, a wrong DENY brings
+    every edit in the repo down."""
+    # rc file present = the engine already exited. `os.stat`, not `os.path.exists`:
+    # exists() reports a stat ERROR as False, so a permission-denied rc file would read as
+    # "engine still running" — the opposite of "rc 不可判按 live".
+    try:
+        os.stat(os.path.join(run, f"{session}.duplex.rc"))
+        return False
+    except FileNotFoundError:
+        pass                                 # absent -> the live half of the predicate holds
+    except OSError:
+        return True                          # undecidable -> live
+    return _tmux_alive(session, timeout) is not False
+
+
+def live_seat_cwds(run: str) -> tuple[set[str], bool, bool]:
+    """(cwds, listed, complete) for every LIVE agentctl seat in `run` — the WHOLE live set, for
+    the consumers that must answer "does any live seat hold this tree at all" (E1 and bash rule
+    (20)). The identity predicate deliberately does not use this: it filters by repo first."""
+    metas, listed, complete = seat_metas(run)
+    return {cwd for session, cwd in metas if seat_live(run, session)}, listed, complete
+
+
+def _ledger_start_cwds(run: str, deadline: float) -> tuple[list[str], list[str], bool]:
+    """(cwds, unreadable_days, in_budget) from the `start` rows of today's and yesterday's
+    shard. The window is the SHARD NAME's UTC day — no row timestamp is parsed and no timezone
+    is converted, so this reader and `agentctl phases` cover the same days by construction.
+    A shard that is ABSENT is data (nothing ran that day); a shard that exists and cannot be
+    read is blindness and is named. A corrupt JSONL line is skipped: one bad append must not
+    turn a whole day into an unanswerable question."""
+    now = time.time()
+    cwds: list[str] = []
+    unreadable: list[str] = []
+    for day in (phase_shard_day(now), phase_shard_day(now - 86400)):
+        path = os.path.join(run, f"{PHASE_LEDGER_PREFIX}{day}{PHASE_LEDGER_SUFFIX}")
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if time.monotonic() >= deadline:
+                        return cwds, unreadable, False
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(row, dict) or row.get("event") != "start":
+                        continue
+                    cwd = row.get("cwd")
+                    if isinstance(cwd, str) and cwd:
+                        cwds.append(cwd)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            unreadable.append(day)
+    return cwds, unreadable, True
+
+
+def orchestrated(target: str, run: str | None = None) -> tuple[str, str]:
+    """(state, why) for "is the repository enclosing `target` being orchestrated by agentctl":
+    `ORCHESTRATED` / `NOT_ORCHESTRATED` / `UNDECIDABLE`, plus one clause a gate can print.
+
+    TWO SOURCES, both of the SAME repo (git common dir), and the cheap one is asked first:
+      * the phase ledger's `start` rows of today's and yesterday's shard — two file reads, no
+        subprocess per seat, and it survives the seats themselves (a batch that finished an hour
+        ago still means "this repo is in a dispatch flow");
+      * the run dir's LIVE seat metas — the live half, which the ledger cannot give when the
+        ledger write failed open (every ledger write is best-effort by design).
+    `target` is a path, not necessarily a directory: the caller passes the write target's nearest
+    existing directory (E1) or the payload cwd (Stop / reminder).
+
+    BOTH SIDES ARE THREE-VALUED: a candidate cwd whose own repo cannot be resolved is
+    undecidable EVIDENCE, not a confirmed stranger. Folding a source-side git timeout into
+    False reported `not` — the POSITIVE finding that licenses total silence — on exactly the
+    input H1 calls unknown (review M2). Seat-side cost order: the free rc check drops
+    CONFIRMED-exited seats (R2-M3), then repo identity, and only a same-repo candidate is
+    worth a tmux probe — a foreign seat costs one `git rev-parse` and no tmux (review M3)."""
+    run = run_dir() if run is None else run
+    deadline = time.monotonic() + _PREDICATE_BUDGET
+    mine = repo_id(target, timeout=_left(deadline, _GIT_TIMEOUT))
+    if mine is None:
+        return UNDECIDABLE, f"no git work tree could be attributed to {target}"
+    known: dict[str, str | None] = {}
+    blind: list[str] = []
+
+    def same_repo(path: str) -> bool | None:
+        """True / False / None(undecidable) — see THE COMPOSITION above."""
+        if path not in known:
+            known[path] = repo_id(path, timeout=_left(deadline, _GIT_TIMEOUT))
+        return None if known[path] is None else known[path] == mine
+
+    def note_blind(cwd: str) -> None:
+        if cwd not in blind:
+            blind.append(cwd)
+
+    ledger, unreadable, in_budget = _ledger_start_cwds(run, deadline)
+    for cwd in ledger:
+        if time.monotonic() >= deadline:
+            in_budget = False
+            break
+        verdict = same_repo(cwd)
+        if verdict:
+            return ORCHESTRATED, f"the phase ledger has a `start` row in this work tree ({cwd})"
+        if verdict is None:
+            note_blind(cwd)
+    metas, listed, _complete = seat_metas(run)
+    for session, cwd in metas:
+        if time.monotonic() >= deadline:
+            in_budget = False
+            break
+        try:
+            # H1's S1 source is a LIVE seat, and the rc file is the FREE half of that
+            # predicate: present = engine CONFIRMED exited, so the row is neither a positive
+            # nor blindness. A retired meta whose work tree was since removed made every plain
+            # repo undecidable (R2-M3). A stat error proves nothing and falls through below.
+            os.stat(os.path.join(run, f"{session}.duplex.rc"))
+            continue
+        except OSError:
+            pass
+        verdict = same_repo(cwd)
+        if verdict is None:
+            note_blind(cwd)
+            continue
+        if not verdict:
+            continue                         # a FOREIGN work tree costs no liveness probe
+        left = _left(deadline, _TMUX_TIMEOUT)
+        if left <= 0:
+            in_budget = False
+            break
+        live = seat_live(run, session, left)
+        if time.monotonic() >= deadline:
+            # the liveness probe was cut off BY the budget, so it answered nothing: an
+            # unanswered probe must not be spent as the positive that opens a gate
+            in_budget = False
+            break
+        if live:
+            return ORCHESTRATED, f"a LIVE agentctl seat holds this work tree ({cwd})"
+    if not in_budget:
+        return UNDECIDABLE, (f"the orchestration probe ran past its {int(_PREDICATE_BUDGET)}s "
+                             "budget")
+    if not listed:
+        return UNDECIDABLE, f"run dir {run} could not be listed"
+    if unreadable:
+        return UNDECIDABLE, ("phase ledger shard(s) " + ", ".join(unreadable)
+                             + " could not be read")
+    if blind:
+        return UNDECIDABLE, (f"{len(blind)} candidate work tree(s) could not be attributed to a "
+                             f"repository ({blind[0]})")
+    return NOT_ORCHESTRATED, ("no LIVE agentctl seat and no phase-ledger `start` row of today "
+                              "or yesterday names this work tree")
