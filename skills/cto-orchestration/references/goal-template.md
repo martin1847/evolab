@@ -96,9 +96,9 @@ Evidence: 各证明证到 <决策行|单套件|全量> 为止（缺省 = 单套�
   （成功标准"红→绿"最易被 game）。
 - 复述 / 立即开工 / BLOCKED 协议由 runtime 固定追加，本 GOAL 不复制；高风险任务升级为先交
   mini-plan（goal 里显式要求先产出 plan 文件再动手）。
-- **存疑协议**：goal 没写明的事项标 `NEEDS-CLARIFICATION: <具体问题>` 停下问，**禁止合理化猜测**
-  （猜而不问是 goal 执行最常见的静默失败）；需要超 scope 改动、或同一路径连败两次：STOP and
-  report（blocked + 已试过什么），不自行扩权、别硬耕。
+- **存疑协议**：缺失信息**会改变目标 / 权限 / 验收判据**的才标 `NEEDS-CLARIFICATION: <具体问题>` 停下问，
+  **禁止合理化猜测**（猜而不问是 goal 执行最常见的静默失败）；可逆的实现细节自行决定、在 findings 记一行理由；
+  需要超 scope 改动、或同一路径连败两次：STOP and report（blocked + 已试过什么），不自行扩权、别硬耕。
 - **自证止损**（对象：已由本次会话工具结果落定的 Done-when / claim）：落定后允许至多 1 轮
   确认性复跑；确认未改变结论 → 不再启动新一轮重跑，STOP and report。
 - 遵守仓库自身规则（AGENTS.md / 项目声明的影响分析工具等）。

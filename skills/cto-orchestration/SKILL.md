@@ -59,7 +59,7 @@ metadata:
    降级 turn 边界并明说；空闲即刻开新 turn）、`--interrupt` 打断当前 turn 以本条重开；
    引擎能力差异查 `agentctl capabilities`。投递成功 ≠ 模型照做，验收仍看交付物。
    每个后续 turn 都重新挂 `agentctl watch`。
-6. **Implemented → Verified**：必须同时有 fresh 正向交付证据、不同 lineage 的独立评审、真实用户路径 E2E。先本机真路径，再部署，再部署环境 E2E，最后才关单；git 集成与 push 门禁归 Git workflow 标准。
+6. **Implemented → Verified**：fresh 正向交付证据 + 独立评审 + 真实用户路径 E2E 三件齐，**深度按 §2 档位**（轻档 = 1 轮冷评审或编排位抽查 + 子集门；部署与部署环境 E2E 仅当交付物真有部署面）。先本机真路径，再部署，最后才关单；git 集成与 push 门禁归 Git workflow 标准。
 
 ## 2. 对抗式评审循环
 

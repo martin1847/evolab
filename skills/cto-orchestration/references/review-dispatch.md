@@ -66,8 +66,8 @@
 初轮计入总轮数；stop-loss 只认 runtime meta（duplex 会话档），GOAL/brief 不复制轮数。到限后 send 返回
 `BUDGET-EXHAUSTED`（exit 9），不得绕过，转人工裁决。定 `--max-rounds` 时：催写 nudge 也走 steer 计轮——
 预算 = 内容轮 + 1（max-rounds 1 遇 idle 即死局；上限不是燃料，slack 轮用不到零成本）。
-**深档 / 轻档由 SKILL §2 两档规则定**：深档保留 blocking 驱动续轮；轻档恒一轮（`--max-rounds 1`），
-findings 回编排位裁 fix / accept-documented，机器可验修复即收，轮数耗尽转 owner 裁决。
+**深档 / 轻档由 SKILL §2 两档规则定**：深档保留 blocking 驱动续轮；轻档**内容评审恒一轮**，派发写
+`--max-rounds 2`（+1 是协议投递 slack，不是第二轮内容评审），findings 回编排位裁 fix / accept-documented，机器可验修复即收，轮数耗尽转 owner 裁决。
 裸 `codex review` 子命令由 guard ⑩ 拦，一律走 lane。
 
 ## 首轮评审
