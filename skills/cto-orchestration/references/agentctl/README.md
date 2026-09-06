@@ -243,6 +243,9 @@ hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则
 
 不另造 settings 脚手架——并进 `repo-governance-bootstrap` §11 已建的那份。**不靠 skill frontmatter
 `hooks:` 自注册**（mid-session 经 Skill 工具激活不注册 → 显式 wiring 才可靠）。
+**四个 guard 都是角色属性的 DENY 门，只接项目级 settings**：用户级会把「本项目编排位」的角色带进这台机器上的
+每个仓；用户级只放席位属性的提醒（retro-reminder / agent-mail 收信）。用户级已有这四个门 → 挪到项目级。
+接完自检：拿一个**非本项目**的 cwd 喂一条合成载荷，应零输出。
 
 Codex 的 Stop 片段（`<repo>/.codex/hooks.json`；`~/.codex/hooks.json` 与两层 `config.toml` 内联
 `[hooks]` 也认）——**结构以 codex 官方文档为准，不是 CC 那份的拷贝**：
@@ -254,7 +257,12 @@ Codex 的 Stop 片段（`<repo>/.codex/hooks.json`；`~/.codex/hooks.json` 与�
 ## cwd 锚定（多仓工作区）
 
 伞形多仓里 bare git/gh 会打在 cwd 所在的仓——未必是你以为的那个；每段含 git/gh 的命令自带锚：`cd /abs/<repo> && …`、
-`git -C <path>`、`gh -R <owner>/<repo>`。guard ⑧ 只拦两种形态：**session 根本身就是伞形**（2026-07-26
-「PR 开错仓」的形态）、**cwd 落在伞形内另一个仓**（含该仓之下的嵌套仓）；**cwd 所在仓就是本 session 项目根
-时不拦**（Claude Code 的 cwd 不漂出项目树），payload 无 `transcript_path` 的席位（codex）照旧拦，单仓永不触发。
-判据、fail-open 面与三条 accepted 边界见 `cto-guard-bash.py` 规则 (8) 注释与 `test/cto-guard-bash.test.sh` 的 `r8-*` 断言。
+`git -C <path>`、`gh -R <owner>/<repo>`。guard ⑧ 只拦一种形态（owner 裁定 2026-09-06 收窄）：**cwd 就是伞目录本身**
+——自身直接子目录 ≥2 个带 `.git` 的仓，且 cwd 不在任何 git 工作树内，这时 bare git/gh 连自己的仓都没有。
+**cwd 在任一 git 工作树内一律不拦**（判据 = `git -C <cwd> rev-parse --is-inside-work-tree`；与 session 根、
+`transcript_path` 无关，祖先不扫，单仓与派工 worktree 永不触发）。这条判据判不出时（cwd 列不出 / 没装 git /
+探测超时 / 起不来）→ **任何 cwd**（含真实工作树）都是不拦 + 一行 WARN，绝不静默当放行。
+**明示放弃的覆盖**（非零风险，owner 09-06 裁「效率优先」）：伞形 session 里 cwd 漂到兄弟仓后的裸 git、伞仓子仓
+之下再嵌套的仓、单条命令内 `cd ../B && git …`——这三类回到「作用于 cwd 所在仓」的普通语义。理由：下游四席一天
+50/14/4 次 ⑧ 误拦，台账里这三类 0 例；不再声称「零真阳性漏网」。
+判据与 accepted 边界见 `cto-guard-bash.py` 规则 (8) 注释与 `test/cto-guard-bash.test.sh` 的 `r8-*` / `(g1)-(g8)` / `(g5c)-(g5e)` 断言。

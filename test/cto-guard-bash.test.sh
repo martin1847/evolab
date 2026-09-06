@@ -14,13 +14,21 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "    python3 not on PATH — guard test skipped"; exit 0
 fi
 
-# Hermetic cwd: guard (8) scope-gates on the REAL filesystem around payload cwd (umbrella =
-# >=2 sibling .git children within 5 ancestor levels). A dev machine's ~ is often itself an
-# umbrella, so every payload pins an explicit cwd — a deep single-repo dir by default (rules
-# 1-7 unaffected), a constructed umbrella root only in the rule-8 battery.
+# Hermetic cwd: guard (8) scope-gates on the REAL filesystem at payload cwd (umbrella = the cwd
+# ITSELF carrying >=2 direct `.git` children, and the cwd being in no git work tree — v2, owner
+# ruling 2026-09-06). A dev machine's ~ is often itself an umbrella, so every payload pins an
+# explicit cwd — a deep single-repo dir by default (rules 1-7 unaffected), a constructed
+# umbrella root only in the rule-8 battery.
 G8ROOT="$(mktemp -d)"
 trap 'rm -rf "$G8ROOT"' EXIT
-mkdir -p "$G8ROOT/iso/l1/l2/l3/l4/repo/.git" "$G8ROOT/umb/a/.git" "$G8ROOT/umb/b/.git"
+mkdir -p "$G8ROOT/iso/l1/l2/l3/l4/repo/.git"
+# The umbrella's children are REAL repos: v2 asks git (`rev-parse --is-inside-work-tree`)
+# whether a cwd is a work tree, so a `mkdir .git` shell would make every in-tree assertion pass
+# for the wrong reason. `$ISO_REPO` stays a shell on purpose — no assertion claims it is a work
+# tree, and a real repo there would hand rules (14)/(15)/(20) a live `git status` they never
+# expected.
+git init -q "$G8ROOT/umb/a"
+git init -q "$G8ROOT/umb/b"
 ISO_REPO="$G8ROOT/iso/l1/l2/l3/l4/repo"
 UMB_ROOT="$G8ROOT/umb"
 GUARD_CWD="$ISO_REPO"; export GUARD_CWD
@@ -461,11 +469,11 @@ chk_eq "gh extension is repo-insensitive" 0 "$RC"
 mkdir -p "$UMB_ROOT/a/d1/d2/d3/d4"
 GUARD_CWD="$UMB_ROOT/a/d1/d2/d3/d4"
 run 'git status'
-chk_eq "umbrella as 5th ancestor still fires" 2 "$RC"
+chk_eq "a cwd 5 levels inside a work tree no longer fires" 0 "$RC"
 ln -s "$UMB_ROOT/a" "$G8ROOT/link-a"
 GUARD_CWD="$G8ROOT/link-a"
 run 'git status'
-chk_eq "symlinked cwd resolves into umbrella" 2 "$RC"
+chk_eq "symlinked cwd resolving into a work tree is allowed" 0 "$RC"
 GUARD_CWD="/nonexistent-cto-guard-g8"
 run 'git status'
 chk_eq "unreadable cwd fails open" 0 "$RC"
@@ -473,14 +481,13 @@ GUARD_CWD="$ISO_REPO"
 run 'git status'
 chk_eq "single-repo scope gate never fires" 0 "$RC"
 
-# ── (8) SCOPE NARROWING: the cwd's own repo IS this session's project root ───────────────────
-# 598 of 728 real guard DENYs were rule (8), and by hook cwd the biggest buckets were the
-# session's OWN project root — commands that could not have hit the wrong repo. The rule now
-# stands down for exactly that shape, decided by `transcript_path`'s parent directory
-# (`~/.claude/projects/<slug>/`, slug = the project root with every non-alphanumeric byte
-# replaced by `-`). Every payload below CONSTRUCTS that path as a string: nothing here reads or
-# writes the real `~/.claude`, and the umbrella itself is the same synthetic fixture as above.
-# The ALLOW is the narrow claim — the six negatives are the contract.
+# ── (8) SCOPE v2 (owner ruling 2026-09-06): `transcript_path` is NOT read anymore ────────────
+# The 09-02 cut stood the rule down only where the cwd's repo WAS the session project root,
+# decided by `transcript_path`'s slug — a field no codex/omp seat sends, so four downstream
+# seats ate 50/14/4 rule-(8) DENYs in ONE day, every one of them with a cwd inside a work tree.
+# v2 stands the rule down for ANY work-tree cwd, so every payload in this battery — matching
+# slug, mismatched slug, no `transcript_path` at all — must read the SAME. The helpers below
+# still CONSTRUCT that slug path: that is the point, they prove the field changes nothing.
 mkcmd_tp() { # $1 command  $2 cwd  $3 transcript-project-root ("-" omits transcript_path)
   python3 -c 'import json,os,re,sys
 ti={"command":sys.argv[1]}
@@ -504,54 +511,136 @@ run_tp 'git status' "$UMB_ROOT/a" "$(r8_real "$UMB_ROOT/a")"
 chk_eq "r8-pos-repo-root-is-session: cwd's repo IS the session root — allowed" 0 "$RC"
 chk_eq "r8-pos-repo-root-is-session writes nothing to stderr" "" "$ERR"
 chk_eq "r8-pos-repo-root-is-session is silent on stdout too" "" "$OUT"
-# Every NEGATIVE below also feeds a REALPATH-based slug, so the only reason it denies is the one
-# named in its assertion — a `/var` vs `/private/var` spelling would deny for a second, unrelated
-# reason and the assertion would pass with the rule mis-wired (mutation A3/A4 measured exactly
-# that: both slipped through until these fixtures were realpath'ed).
+# Each negative below keeps its old fixture and its old REALPATH-based slug; only the expected
+# direction moved, because the discriminator is no longer the slug but "is this cwd a work
+# tree". Nothing here reads or writes the real `~/.claude`.
 run_tp 'git status' "$UMB_ROOT/a" "$(r8_real "$UMB_ROOT")"
-chk_eq "r8-neg-session-is-umbrella: session root IS the umbrella — the 2026-07-26 shape, denied" 2 "$RC"
+chk_eq "r8-v2-session-is-umbrella: session root IS the umbrella, but the cwd is a work tree — allowed" 0 "$RC"
 mkdir -p "$UMB_ROOT/b"
 run_tp 'git status' "$UMB_ROOT/b" "$(r8_real "$UMB_ROOT/a")"
-chk_eq "r8-neg-sibling-repo: cwd is a SIBLING of the session root's repo — denied" 2 "$RC"
-mkdir -p "$UMB_ROOT/a/nested/.git"
+chk_eq "r8-v2-sibling-repo: a SIBLING of the session root's repo is still a work tree — allowed" 0 "$RC"
+git init -q "$UMB_ROOT/a/nested"
 run_tp 'git status' "$UMB_ROOT/a/nested" "$(r8_real "$UMB_ROOT/a")"
-chk_eq "r8-neg-nested-in-umbrella-repo: a nested repo's own top level is not the session root" 2 "$RC"
+chk_eq "r8-v2-nested-in-umbrella-repo: a really-initialised nested repo is a work tree — allowed" 0 "$RC"
 run_tp 'git status' "$UMB_ROOT/a" -
-chk_eq "r8-neg-no-tp-at-repo-root: a codex-shaped payload (no transcript_path) keeps the DENY" 2 "$RC"
-# ACCEPTED, DOCUMENTED BOUNDARY (README §cwd 锚定): the slug encoding is not injective, so two
-# sibling repos differing only in punctuation license each other. Pinned here so the direction
-# is a decision and not an accident — changing it means changing this assertion AND the README.
-mkdir -p "$G8ROOT/collide/a.b/.git" "$G8ROOT/collide/a-b/.git"
+chk_eq "r8-v2-no-tp-at-repo-root: a codex-shaped payload (no transcript_path) allows too" 0 "$RC"
+# The slug encoding is gone from rule (8), so the non-injective-slug boundary it used to carry
+# is gone with it: BOTH arms of that fixture now allow, for one reason only — each cwd is a
+# work tree. Kept as a regression pin: if the session-root coupling ever returns, the control
+# arm below flips back to DENY and reds here.
+git init -q "$G8ROOT/collide/a.b"
+git init -q "$G8ROOT/collide/a-b"
+chk_eq "r8-doc-slug-collision fixture is REALLY two work trees (review F2)" "true true" \
+  "$(git -C "$G8ROOT/collide/a.b" rev-parse --is-inside-work-tree) $(git -C "$G8ROOT/collide/a-b" rev-parse --is-inside-work-tree)"
 run_tp 'git status' "$G8ROOT/collide/a-b" "$(r8_real "$G8ROOT/collide/a.b")"
 chk_eq "r8-doc-slug-collision: punctuation-only sibling names share a slug — ALLOWED (accepted)" 0 "$RC"
 # and the same fixture proves the gate is otherwise live in that directory
 run_tp 'git status' "$G8ROOT/collide/a-b" "$(r8_real "$G8ROOT/collide")"
-chk_eq "r8-doc-slug-collision control: the umbrella session root there still denies" 2 "$RC"
-# A SYMLINKED cwd is judged by realpath (the same 口径 `_umbrella_near` uses), so a slug built
-# from the link path does not match: conservative direction, DENY.
+chk_eq "r8-v2-slug-collision control: the umbrella session root there allows too now" 0 "$RC"
+# A SYMLINKED cwd is judged by realpath (the same 口径 `_umbrella_self` uses), and the resolved
+# path is a work tree: allowed.
 ln -s "$UMB_ROOT/a" "$G8ROOT/link-r8"
 run_tp 'git status' "$G8ROOT/link-r8" "$G8ROOT/link-r8"
-chk_eq "r8-neg-symlinked-cwd: a slug built from the LINK path does not match realpath — denied" 2 "$RC"
-chk_contains "r8 the deny still names the real conditions" "the session root IS the umbrella" "$ERR"
+chk_eq "r8-v2-symlinked-cwd: the link resolves into a work tree — allowed" 0 "$RC"
+chk_eq "r8-v2-symlinked-cwd writes nothing to stderr" "" "$ERR"
+chk_eq "r8-v2-symlinked-cwd is silent on stdout too" "" "$OUT"
 chk_not_contains "r8 and no longer blames cwd drift across tool calls" "drifts across tool" "$ERR"
-# ACCEPTED BOUNDARY #1 (README §cwd 锚定, R1 F3 BLOCKING): an OUTER repo with a single NESTED
-# repo and no multi-repo umbrella within 5 ancestors is a shape rule (8) never evaluates at all —
-# `_umbrella_near` needs >=2 direct `.git` children somewhere in that window and never finds
-# them. The fixture sits 6 levels below the temp root so the host's own directories cannot
-# supply the second child, and the transcript root is DELIBERATELY mismatched: if the rule were
-# evaluating, that mismatch would deny. Implementation happening to comply is not a pinned
-# boundary — this is the oracle.
+# ACCEPTED BOUNDARY (README §cwd 锚定): an OUTER repo holding a single NESTED repo is a shape
+# rule (8) cannot fire on — the cwd is a real work tree (git says `true`) and it carries no 2
+# direct `.git` children either, so BOTH halves of the deny conjunction fail. The fixture sits 6
+# levels below the temp root so the host's own directories cannot supply a second child, and the
+# transcript root is DELIBERATELY mismatched: under the 09-02 cut that mismatch denied.
+# Implementation happening to comply is not a pinned boundary — this is the oracle. Both repos
+# are really `git init`ed (review F2 2026-09-06): a `mkdir .git` shell answers rc=128 to
+# `rev-parse`, so the old fixture proved the non-umbrella half and nothing about work trees.
 NEST8="$G8ROOT/nest/l1/l2/l3/l4/l5/l6"
-mkdir -p "$NEST8/outer/.git" "$NEST8/outer/nested/.git"
+git init -q "$NEST8/outer"
+git init -q "$NEST8/outer/nested"
+chk_eq "r8-doc-nested fixture is REALLY two work trees (review F2)" "true true" \
+  "$(git -C "$NEST8/outer" rev-parse --is-inside-work-tree) $(git -C "$NEST8/outer/nested" rev-parse --is-inside-work-tree)"
 run_tp 'git status' "$NEST8/outer/nested" "$G8ROOT/definitely-not-the-session-root"
 chk_eq "r8-doc-nested-no-umbrella-never-evaluates: no umbrella in 5 ancestors — never evaluated" 0 "$RC"
 chk_eq "r8-doc-nested-no-umbrella-never-evaluates writes nothing to stderr" "" "$ERR"
 chk_eq "r8-doc-nested-no-umbrella-never-evaluates is silent on stdout" "" "$OUT"
-# PAIRED POSITIVE on the same fixture: add a SECOND direct git child and the window qualifies,
-# so the very same payload denies — the boundary is the umbrella scan, not the nesting.
+# PAIRED ARM on the same fixture: a SECOND direct git child of the umbrella changes nothing for
+# this cwd — `outer/nested` is still not the umbrella directory, and ancestors are not scanned.
 mkdir -p "$NEST8/sibling/.git"
 run_tp 'git status' "$NEST8/outer/nested" "$G8ROOT/definitely-not-the-session-root"
-chk_eq "r8-doc-nested-no-umbrella control: a second direct child makes it an umbrella — denied" 2 "$RC"
+chk_eq "r8-v2-nested-no-umbrella control: a second sibling repo does not reach this cwd — allowed" 0 "$RC"
+
+# ── (8) v2 BATTERY (g1-g8): the new predicate's whole truth table ───────────────────────────
+# Own fixture (the arms above mutate `$UMB_ROOT`) and a REAL one: `git init`, never `mkdir .git`,
+# because the predicate asks git itself.
+G8V2="$G8ROOT/v2"
+mkdir -p "$G8V2/U/plain"
+git init -q "$G8V2/U/A"
+git init -q "$G8V2/U/B"
+run_tp 'git status' "$G8V2/U/A" -
+chk_eq "(g1) cwd is a sub-repo inside the umbrella: bare git allowed" 0 "$RC"
+chk_eq "(g1) and writes nothing to stderr" "" "$ERR"
+chk_eq "(g1) and nothing to stdout" "" "$OUT"
+run_tp 'git status' "$G8V2/U" -
+chk_eq "(g2) cwd IS the umbrella directory: still denied" 2 "$RC"
+chk_contains "(g2) and the deny names that condition" "this cwd IS the umbrella DIRECTORY" "$ERR"
+chk_contains "(g2) and keeps the rewrite-don't-resend fix" "REWRITE, do NOT resend" "$ERR"
+# The git probe is load-bearing, not decoration: the SAME umbrella shape allows as soon as the
+# umbrella directory is itself a checkout (a monorepo holding two repos). A `.git`-existence
+# test cannot tell those two apart — this arm reds if the probe is dropped.
+git init -q "$G8V2/mono"
+git init -q "$G8V2/mono/x"
+git init -q "$G8V2/mono/y"
+run_tp 'git status' "$G8V2/mono" -
+chk_eq "(g2b) an umbrella that is ITSELF a work tree allows" 0 "$RC"
+chk_eq "(g2b) and is silent" "" "$ERR"
+run_tp 'gh pr view' "$G8V2/U/A" -
+chk_eq "(g3) bare gh in a sub-repo allowed" 0 "$RC"
+chk_eq "(g3) and silent" "" "$ERR"
+run_tp "git -C $G8V2/U/A status" "$G8V2/U" -
+chk_eq "(g4) an absolute -C anchor at the umbrella root allowed" 0 "$RC"
+# UNDECIDABLE: nobody to ask (no git), and an unlistable cwd. Neither may deny, and neither may
+# pass SILENTLY — an unknown that reads like an allow is how a broken gauge goes invisible.
+PY3="$(command -v python3)"
+NOGIT="$G8V2/nogit-bin"; mkdir -p "$NOGIT"
+run_nogit() { # $1 command  $2 cwd — same payload, but the guard runs with no `git` on PATH
+  local tmpe payload; tmpe="$(mktemp)"; payload="$(mkcmd_tp "$1" "$2" -)"
+  OUT="$(printf '%s' "$payload" | env PATH="$NOGIT" "$PY3" "$GUARD" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+run_nogit 'git status' "$G8V2/U"
+chk_eq "(g5) git absent: never denies" 0 "$RC"
+chk_eq "(g5) and writes nothing to stderr" "" "$ERR"
+chk_contains "(g5) but says so out loud" "WARN (cto-guard 8)" "$(ctx "$OUT")"
+chk_contains "(g5) naming the undecidable reason" "git 判不出" "$(ctx "$OUT")"
+run_tp 'git status' "/nonexistent-cto-guard-g8-v2" -
+chk_eq "(g5b) an unlistable cwd never denies" 0 "$RC"
+chk_contains "(g5b) and warns instead of passing silently" "⑧ 未评估" "$(ctx "$OUT")"
+# …and the undecidable probe is visible at EVERY cwd class, not just the umbrella one (review F1
+# 2026-09-06: an umbrella-first short-circuit made these three silent, which reads as an allow).
+mkdir -p "$G8V2/outside"
+run_nogit 'git status' "$G8V2/U/plain"
+chk_eq "(g5c) git absent at a plain non-umbrella cwd: never denies" 0 "$RC"
+chk_eq "(g5c) and writes nothing to stderr" "" "$ERR"
+chk_contains "(g5c) but warns instead of passing silently" "⑧ 未评估" "$(ctx "$OUT")"
+run_nogit 'git status' "$G8V2/U/A"
+chk_eq "(g5d) git absent inside a REAL work tree: never denies" 0 "$RC"
+chk_contains "(g5d) and still says the rule went unevaluated" "⑧ 未评估" "$(ctx "$OUT")"
+run_nogit 'gh pr view' "$G8V2/outside"
+chk_eq "(g5e) git absent outside the umbrella entirely: never denies" 0 "$RC"
+chk_contains "(g5e) and warns there too" "⑧ 未评估" "$(ctx "$OUT")"
+run_tp 'git status' "$G8V2/U/A" "$(r8_real "$G8V2/U")"
+chk_eq "(g6) a transcript root pointing at the UMBRELLA changes nothing" 0 "$RC"
+run_tp 'gh pr list' "$G8V2/U/A" -
+chk_eq "(g6) and a payload with no transcript_path at all changes nothing" 0 "$RC"
+run_tp 'git status' "$G8V2/U/plain" -
+chk_eq "(g7) a plain non-repo directory under the umbrella is out of scope" 0 "$RC"
+chk_eq "(g7) and silent — ancestors are not scanned" "" "$OUT"
+chk_eq "(g7) and nothing on stderr" "" "$ERR"
+# ACCEPTED LOSS #3 (owner ruling 2026-09-06), pinned so it cannot creep back unannounced: one
+# command line that cd's into a SIBLING repo is ordinary shell now, judged by the cwd it starts
+# in. Rules (18)/(19) still own their own faces of that shape.
+run_tp "bash -c 'cd ../B && git status'" "$G8V2/U/A" -
+chk_eq "(g8) an in-command cd into a sibling repo is allowed (accepted loss)" 0 "$RC"
+chk_eq "(g8) and silent" "" "$ERR"
 GUARD_CWD="$ISO_REPO"
 
 # non-dispatch command -> silent

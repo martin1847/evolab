@@ -802,7 +802,8 @@ def _rewrite_in_chain(raw):
 # was never in. A name is not a location; the register therefore carries ROOTS, not just names.
 def _umbrella_near(path):
     """The umbrella ROOT at or within 5 ancestors of `path` (>=2 immediate children with .git),
-    or None. Rule (8)'s scope gate; rule (19)'s repo register reads the same root."""
+    or None. Rule (19)'s repo register reads this root; rule (8) does NOT (it never scans
+    ancestors any more — see its own scope note below)."""
     try:
         p = os.path.realpath(path)
     except Exception:
@@ -825,75 +826,70 @@ def _umbrella_near(path):
     return None
 
 
-# ── rule (8) scope narrowing: is the cwd's own repo THIS session's project root? ───────────
-# FIELD MEASUREMENT (two machines, 2026-09-02): of 728 real guard DENYs, 598 were rule (8) —
-# and by hook cwd every one of the biggest buckets was the session's OWN project root (~246 of
-# them in the top five alone), i.e. commands that could not have hit the wrong repo. Only ~40
-# sat in a genuinely umbrella (non-repo) directory. Each false DENY costs a tool call + a rewrite.
-# THE DISCRIMINATOR, and why it is sound rather than clever: in Claude Code the shell cwd is
-# PERSISTENT inside the project tree and a `cd` out of the project root is RESET on the next
-# call ("Shell cwd was reset to <dir>"), so a cwd whose own git top level IS the session's
-# project root cannot be a drifted cwd pointing at a sibling repo — the 2026-07-26 accident
-# (session root = umbrella, cwd cd'd into one repo, bare `gh` hit another) keeps its DENY
-# because THERE the session root is the umbrella, not the repo.
-# The session root is read off `transcript_path` (an official PreToolUse common input field):
-# `~/.claude/projects/<slug>/<session>.jsonl`, where <slug> is the project root with every
-# non-[A-Za-z0-9] character replaced by `-`. That encoding is NOT a published contract — it is
-# an empirical regularity (27 project dirs on this machine: 26 matched slug(the recorded cwd of
-# their newest transcript), the 1 miss being a directory whose repo had MOVED). So the test is
-# used in exactly ONE direction: equality ALLOWS, everything else keeps the existing DENY —
-# a codex seat (whose payload carries no `transcript_path`), a repo NESTED inside the umbrella,
-# a sibling repo and an umbrella session root all stay denied.
-# FAIL-OPEN, the one shape that is NOT on that list (an earlier revision of this comment claimed
-# an unreadable cwd stayed denied; the implementation and its oracle both say otherwise): an
-# unreadable cwd never reaches this test at all, because the scope gate ahead of it —
-# `_umbrella_near` — cannot list the directory and returns None, so rule (8) NEVER EVALUATES.
-# Oracle: assertion `unreadable cwd fails open`.
-# SAME FAIL-OPEN DIRECTION, scope-gate shape: an outer repo holding a SINGLE nested repo, with no
-# umbrella within 5 ancestors, never has >=2 git children on the scan path, so the rule does not
-# evaluate there either. Accept-documented and pinned as
-# `r8-doc-nested-no-umbrella-never-evaluates`, with a control that adds one more direct child and
-# flips the same workspace back to DENY.
-# A SYMLINKED cwd is judged by realpath (`_git_top` and `_umbrella_near` share that 口径): the
-# slug is compared against the RESOLVED repo root, so a cwd that reaches a repo root through a
-# link whose own path slugs differently keeps the DENY — the conservative direction, pinned as
-# `r8-neg-symlinked-cwd`.
-# The encoding is also NOT injective (`/tmp/a.b` and `/tmp/a-b` share a slug), so two sibling
-# repos differing only in punctuation would license each other. Accept-DOCUMENTED and pinned as
-# `r8-doc-slug-collision`, not defended by machinery: it takes a hand-built pair of repo names
-# inside one umbrella, and the direction is ALLOW on a workspace the orchestrator built itself.
-_SLUG = re.compile(r"[^A-Za-z0-9]")
-
-
-def _git_top(path):
-    """The nearest ancestor of `path` (symlinks resolved) carrying a `.git` file OR directory,
-    or None. Same realpath口径 as `_umbrella_near`, and NO subprocess: this runs on every
-    umbrella-scoped git/gh command, where `git rev-parse` would add a process spawn to a path
-    that already pays one `listdir` per ancestor."""
+# ── rule (8) scope: the cwd is an umbrella DIRECTORY, not a work tree ─────────────────────
+# FIELD (four downstream seats, ONE day, 2026-09-06): 36 / 13 / 8 guard DENYs per seat, of which
+# rule (8) was 50 / 14 / 4 — and every one had a cwd INSIDE a git work tree
+# (`/Garden/IAC/infra-gitops`, bare `git status`, rc=2). Zero true positives in that ledger. The
+# 09-02 narrowing (stand down when the cwd's repo IS the session root, off `transcript_path`)
+# could not see them: a codex/omp payload carries no `transcript_path`, and a派工 worktree is
+# not the session's project root anyway.
+# OWNER RULING 2026-09-06 (效率优先, 门只在真面 fire): inside a work tree the rule STANDS DOWN —
+# a bare git/gh there means "this repo", the semantics every single-repo project already has.
+# WHAT THAT GIVES UP, named rather than papered over: (1) an umbrella-rooted session whose cwd
+# drifted into a sibling repo, (2) a repo nested inside an umbrella's repo, (3) one command line
+# doing `cd ../B && git …`. All three now act on the cwd's own repo, and the claim is no longer
+# "no true positive escapes" but "those escapes have zero recorded hits, the误拦 has ~50 a day".
+# THE REMAINING DENY FACE: a bare git/gh with no repo of its own at all, i.e. the cwd IS the
+# umbrella directory. THE PREDICATE, three-valued, and asked in FULL whenever the payload names
+# git/gh (that mention is the only cost gate: an unrelated command spawns nothing):
+#   1. `_umbrella_self(cwd)` — ONE listdir, no subprocess: >=2 direct children carrying `.git`.
+#      It is HALF of the deny conjunction, never a short-circuit over the probe (review F1
+#      2026-09-06: letting a False end the rule turned every non-umbrella cwd whose probe could
+#      not answer into a silent rc 0, the one shape the tri-state exists to forbid). None here —
+#      an unlistable cwd — is already undecidable and needs no subprocess to say so.
+#   2. `_in_work_tree(cwd)` — `git -C <cwd> rev-parse --is-inside-work-tree`, the only authority
+#      on "is this a work tree" (a `.git` file/dir test is not: linked worktrees, submodules and
+#      bare repos all lie to it). `true` ⇒ stand down, so an umbrella that is ITSELF a checkout
+#      (a monorepo holding two repos) allows and only a non-repo umbrella denies.
+#   3. Unanswerable — cwd unlistable, git absent, probe timeout, OSError — is UNDECIDABLE: neither
+#      a deny NOR a silent pass, but exit 0 plus one `additionalContext` WARN line, at ANY cwd.
+#      An unknown that reads exactly like an allow is how a broken gauge goes invisible. PRICE,
+#      named rather than papered over: on a box with no/slow git, every git/gh payload pays one
+#      probe and carries one WARN line — noise whose reduction is a CONTRACT question, not an
+#      implementation liberty.
+# ANCESTORS ARE NOT SCANNED (that walk serves rule (19) only): a cwd deep inside a repo that
+# happens to sit under an umbrella is precisely the false-positive class measured above.
+def _umbrella_self(path):
+    """Tri-state: is `path` ITSELF an umbrella directory (>=2 direct children carrying a
+    `.git`)? None when the directory cannot be listed — undecidable, never a soft False."""
     try:
         p = os.path.realpath(path)
+        kids = os.listdir(p)
     except Exception:
         return None
-    while True:
-        if os.path.exists(os.path.join(p, ".git")):
-            return p
-        parent = os.path.dirname(p)
-        if parent == p:
-            return None
-        p = parent
+    n = 0
+    for k in kids:
+        if os.path.exists(os.path.join(p, k, ".git")):
+            n += 1
+            if n >= 2:
+                return True
+    return False
 
 
-def _cwd_is_session_root(cwd, transcript):
-    """True when the repo enclosing `cwd` IS the project root this session was started in.
-    False on every unanswerable case (no/odd `transcript_path`, no enclosing repo, unreadable
-    path) — the ALLOW is the narrow claim, the DENY is the default."""
-    if not isinstance(transcript, str) or not transcript:
-        return False
-    slug = os.path.basename(os.path.dirname(transcript))
-    if not slug:
-        return False
-    top = _git_top(cwd)
-    return top is not None and _SLUG.sub("-", top) == slug
+def _in_work_tree(path):
+    """Tri-state: True = `path` sits inside a git work tree, False = git answered and it does
+    not, None = nobody could answer (git absent, timeout, OSError, or an rc/stdout pair meaning
+    neither — a bare repo prints `false` at rc 0). Only a `true` stands the rule down and only a
+    NONZERO rc with non-`true` stdout denies; git's error prose is never parsed."""
+    try:
+        proc = subprocess.run(["git", "-C", path, "rev-parse", "--is-inside-work-tree"],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+    except Exception:
+        return None
+    out = (proc.stdout or b"").decode("utf-8", "replace").strip()
+    if proc.returncode == 0:
+        return True if out == "true" else None
+    return None if out == "true" else False
 
 
 def _registered_repos(cwd):
@@ -1588,17 +1584,17 @@ def main():
             )
             return 2
 
-    # (8) cwd anchoring in multi-repo umbrella workspaces (principal ruling 2026-07-26). Shell cwd
-    #     drifts across tool calls (a denied command's cd never ran; parallel calls leave the last
-    #     call's cwd) — in an umbrella of sibling git repos a bare `git`/`gh` then acts on the WRONG
-    #     repo (field hits: 3 bites in one wave 2026-07-24; PR opened in the wrong repo 2026-07-26).
-    #     This is an orchestration slip (cwd discipline), not git policy — see NOTE below.
+    # (8) cwd anchoring in multi-repo umbrella workspaces (principal ruling 2026-07-26, scope
+    #     re-cut by owner ruling 2026-09-06). In an umbrella DIRECTORY holding sibling git repos
+    #     a bare `git`/`gh` has no repo of its own (field hits: 3 bites in one wave 2026-07-24;
+    #     PR opened in the wrong repo 2026-07-26). This is an orchestration slip (cwd
+    #     discipline), not git policy — see NOTE below.
     #     Deny message leads with REWRITE-don't-resend: field hit 2026-07-29, 4 identical resends
     #     in a row (the agent acknowledges the deny then re-emits the same text verbatim).
-    #     Scope gate: only fires when the REAL cwd (symlinks resolved — a symlinked cwd hid the
-    #     umbrella, review probe 2026-07-26) or an ancestor within 5 levels is an umbrella root
-    #     (>=2 immediate children with .git); single-repo projects never see it. That scan is
-    #     `_umbrella_near` at module level — rule (19) reads the same root for its repo register.
+    #     Scope gate: the REAL cwd (symlinks resolved) must itself be an umbrella directory AND
+    #     not be inside a work tree; a cwd inside ANY work tree is out of scope entirely, and
+    #     ancestors are not scanned. Predicate, field numbers and the coverage this gives up:
+    #     `_umbrella_self` / `_in_work_tree` at module level.
 
     # Anchor semantics (two cold-review rounds hardened all of these with live probes 2026-07-26):
     # - leading `cd <ABS> && …` anchors the whole line; `cd X; git`, `cd X || git` and
@@ -1729,16 +1725,34 @@ def main():
         return _strip_spans(_unq8(s))
     orig8 = ti["command"]  # pre-heredoc-strip: quoted heredoc bodies are data EXCEPT to a shell consumer
     cwd8 = data.get("cwd") or os.getcwd()
-    # SCOPE GATE, two conjuncts and the second one only ever SUBTRACTS: `_umbrella_near`'s scan
-    # (5 ancestors, >=2 direct git children) is unchanged, and after it fires the rule stands
-    # down for exactly one shape — the cwd's own repo IS this session's project root, where a
-    # drifted cwd cannot be pointing at a sibling (`_cwd_is_session_root`, and the field numbers
-    # that made it worth doing, are documented at module level). Everything else — session root
-    # IS the umbrella, cwd in a sibling repo, cwd in a repo nested inside one, no
-    # `transcript_path` at all (a codex seat) — keeps the DENY it has today.
-    if ((re.search(r"\b(?:git|gh)\b", v8) or re.search(r"\b(?:git|gh)\b", orig8))
-            and _umbrella_near(cwd8)
-            and not _cwd_is_session_root(cwd8, data.get("transcript_path"))):
+    # SCOPE GATE (owner ruling 2026-09-06): the git/gh mention IS the cost gate — an unrelated
+    # command spawns nothing. Inside it the tri-state is asked in full, cheapest question first
+    # but WITHOUT short-circuiting: `_umbrella_self` is one listdir and alone answers "cwd
+    # unlistable" (undecidable, no subprocess needed), yet its False is only the umbrella HALF of
+    # the deny conjunction and may not skip the probe — review F1 2026-09-06 measured that
+    # short-circuit swallowing every non-umbrella cwd's undecidable probe into a silent rc 0.
+    # DENY = umbrella AND git says "not a work tree"; ALLOW = a `true`, or a decided non-umbrella;
+    # UNDECIDABLE (no git / timeout / OSError / unlistable cwd, at ANY cwd) = neither, it rides
+    # (3)'s additionalContext channel as note8 so a broken gauge cannot read like an allow.
+    note8 = ""
+    fire8 = False
+    if re.search(r"\b(?:git|gh)\b", v8) or re.search(r"\b(?:git|gh)\b", orig8):
+        umb8 = _umbrella_self(cwd8)
+        why8 = ""
+        if umb8 is None:
+            why8 = "cwd 列不出（不存在 / 权限）：%s" % cwd8
+        else:
+            tree8 = _in_work_tree(cwd8)
+            if tree8 is None:
+                why8 = "git 判不出 cwd 在不在工作树里（未装 / 超时 / 起不来）：%s" % cwd8
+            else:
+                fire8 = umb8 and tree8 is False
+        if why8:
+            note8 = (
+                "WARN (cto-guard 8): ⑧ 未评估（%s）— 伞形多仓的无锚 git/gh 这条这次没判，命令照常跑。"
+                "cwd 若是伞目录本身，自己带锚：`git -C /abs/<repo>` / `gh -R <owner>/<repo>`。" % why8
+            )
+    if fire8:
         bad8 = _text_unanchored(v8h)
         if not bad8:
             # interpreter payloads execute too: bash -lc 'git status' hid git in a quoted span
@@ -1791,11 +1805,11 @@ def main():
                         break
         if bad8:
             sys.stderr.write(
-                "DENY: unanchored git/gh in a multi-repo umbrella — the session root IS the "
-                "umbrella, or this cwd is another repo in it, so a bare git/gh hits the WRONG "
-                "repo. Fix: REWRITE, do NOT resend: prefix each call `git -C /abs/<repo>` / "
-                "`gh -R <owner>/<repo>`, or lead with `cd /abs/<repo> && …` — a DENIED command "
-                "never ran its `cd`. git --version / gh auth pass. "
+                "DENY: unanchored git/gh — this cwd IS the umbrella DIRECTORY itself (>=2 "
+                "sibling git repos under it, and the cwd is in no work tree), so a bare git/gh "
+                "has no repo of its own. Fix: REWRITE, do NOT resend: prefix each call "
+                "`git -C /abs/<repo>` / `gh -R <owner>/<repo>`, or lead with `cd /abs/<repo> "
+                "&& …` — a DENIED command never ran its `cd`. git --version / gh auth pass. "
                 "Read: cto-orchestration/references/agentctl/README.md §cwd 锚定.\n"
             )
             return 2
@@ -2259,17 +2273,19 @@ def main():
                 f"signal now: `agentctl watch {session}` via Bash run_in_background:true (NOT "
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
-    # (13), (14)/(15)'s instrument warnings, (16)'s counter, (19)'s drift warn and (20)'s two
-    # unjudged-write warns ride (3)'s channel: on exit 0 only additionalContext reaches the
-    # agent, and two JSON documents on stdout would be one malformed hook response. All eight
-    # strings stay LOCAL to this frame so the injected-text ratchet can weigh what a worker is
-    # actually handed.
-    if reminder or note13 or note14 or note15 or note16 or note19 or note20 or note20b:
+    # (8)'s undecidable-scope warn, (13), (14)/(15)'s instrument warnings, (16)'s counter,
+    # (19)'s drift warn and (20)'s two unjudged-write warns ride (3)'s channel: on exit 0 only
+    # additionalContext reaches the agent, and two JSON documents on stdout would be one
+    # malformed hook response. All nine strings stay LOCAL to this frame so the injected-text
+    # ratchet can weigh what a worker is actually handed. (8) is set far above and can be
+    # swallowed by a later DENY — correct: a denial's stderr is the message that matters.
+    if (reminder or note8 or note13 or note14 or note15 or note16 or note19
+            or note20 or note20b):
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
-                    t for t in (reminder, note13, note14, note15, note16, note19,
+                    t for t in (reminder, note8, note13, note14, note15, note16, note19,
                                 note20, note20b)
                     if t),
             }
