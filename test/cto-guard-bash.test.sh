@@ -329,6 +329,28 @@ run 'git -C "/repo with space" worktree remove --force wt'
 chk_eq "quoted -C path force remove denied" 2 "$RC"
 run 'git -c core.quotePath=false worktree prune'
 chk_eq "-c global-option prune denied" 2 "$RC"
+# hermetic-git precondition for the benign-prune fixture below. lib-testkit.sh exports
+# GIT_CONFIG_GLOBAL=/dev/null so the MACHINE's global hooks never fire for a fixture worktree.
+# Known positive on the maintainer's box: `core.hooksPath=~/.githooks` backgrounds
+# `codegraph init` on every fresh linked worktree and lands a `.codegraph/` ~0.3s later, which
+# RE-CREATES the `gone` dir the fixture deletes and makes the metadata-only prune a real
+# target (suite red there, green in CI, until 2026-09-07). Poll PAST that observed latency:
+# checking once immediately would call a merely-late hook an absence and green out for free.
+# The commit below carries no inline identity on purpose — it also proves the kit's identity
+# export survives losing the global config file.
+HG="$G8ROOT/hermetic"; mkdir -p "$HG"
+( git init -q "$HG/repo" && cd "$HG/repo" && git commit -q --allow-empty -m init \
+  && git worktree add -q "$HG/wt" ) >/dev/null 2>&1
+chk_eq "hermetic probe: fixture worktree exists with a commit behind it" 1 \
+  "$([ -e "$HG/wt/.git" ] && echo 1 || echo 0)"
+hg_polluted=0
+for hg_i in $(seq 1 20); do
+  [ -e "$HG/wt/.codegraph" ] && { hg_polluted=1; break; }
+  /bin/sleep 0.1
+done
+chk_eq "global git hooks leave no trace in a fixture worktree (.codegraph)" 0 "$hg_polluted"
+chk_eq "fixture git reads no global core.hooksPath" "" \
+  "$(git -C "$HG/wt" config --get core.hooksPath 2>/dev/null)"
 # benign prune: metadata-only prune auto-allows, everything unproven keeps the DENY.
 # Fixture: one prunable entry whose dir is GONE (nothing to lose) + one prunable entry
 # whose dir SURVIVES (`.git` removed, files still there = a real target).

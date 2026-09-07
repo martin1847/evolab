@@ -15,6 +15,27 @@ set -u
 # Tests that assert exec routing set the switch INLINE per invocation.
 unset AGENT_WATCH_SYNC 2>/dev/null || true
 
+# Same rule for git: the MACHINE's git config is not the suite's business. This maintainer's
+# box sets `core.hooksPath=~/.githooks`, whose post-checkout backgrounds `codegraph init` for
+# every freshly created linked worktree — so a fixture's `git worktree add` grows a `.codegraph/`
+# ~0.3s later, and cto-guard-bash's "metadata-only prune" fixture (one prunable entry whose dir
+# must be GONE) gets that dir RE-CREATED under it and stops being metadata-only: suite red on
+# that box, green in CI (independent forensics 2026-09-06, REVIEW_AUDIT_A_codex_r2 §F8, which
+# reproduced green under GIT_CONFIG_GLOBAL=/dev/null). Aliases, credential helpers, insteadOf
+# rewrites and init.defaultBranch are the same class of leak, just quieter.
+# It lives HERE and not per suite because the leak is not suite-shaped: every suite reaches git
+# through the scripts under test (the guards run `git rev-parse` / `worktree list --porcelain`
+# on the caller's cwd), so the exposed surface is "any suite, any current or future git call" —
+# exactly the caller-env blast radius the shared kit already owns for AGENT_WATCH_SYNC above.
+# Identity ships with it: with the global file gone a bare `git commit` in a fixture has no
+# user.email and dies (a silent fixture degradation — see cto-guard-bash's 2026-08-10 note), so
+# the kit supplies one instead of asking every fixture to remember, exactly as
+# repo-gov-prepush-template.test.sh already does for itself.
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_AUTHOR_NAME=testkit GIT_AUTHOR_EMAIL=testkit@invalid
+export GIT_COMMITTER_NAME=testkit GIT_COMMITTER_EMAIL=testkit@invalid
+
 # Resolve the agentctl dir. test/ lives at the repo root; the scripts under
 # test live under skills/cto-orchestration/references/agentctl/.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
