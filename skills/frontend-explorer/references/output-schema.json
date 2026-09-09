@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "frontend-explorer findings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run", "findings"],
+  "properties": {
+    "triage": {
+      "type": "object",
+      "description": "由编排者写入，不是探索者。终稿里必有，子代理返回里没有。没有 triage 块的清单分不清是「筛过」还是「什么都没删」。",
+      "additionalProperties": false,
+      "required": ["raw_findings", "survived", "dropped"],
+      "properties": {
+        "raw_findings": { "type": "integer" },
+        "survived": { "type": "integer" },
+        "dropped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["raw_id", "rule", "note"],
+            "properties": {
+              "raw_id": { "type": "string" },
+              "rule": { "type": "string", "description": "触发的是 triage.md 哪条删除规则。" },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_url", "persona", "steps_reached"],
+      "properties": {
+        "base_url": { "type": "string" },
+        "persona": { "type": "string", "description": "配置里的 persona id。" },
+        "steps_reached": {
+          "type": "array",
+          "description": "实际到达的旅程步 id，按顺序。没走到的步报不了；它不在这里就是说明。",
+          "items": { "type": "string" }
+        },
+        "steps_not_reached": {
+          "type": "array",
+          "description": "没走到的旅程步 id 及原因（id 后接自由文本，如 'submit: blocked at compose'）。",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 10,
+      "description": "按挡住旅程的程度排序，最挡路的在前。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "step", "kind", "summary", "expected", "actual", "evidence", "reproduce"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^F[0-9]{2}$" },
+          "step": { "type": "string", "description": "配置 journey 里的步 id，不是自由文本。" },
+          "kind": { "enum": ["blocked", "confused"], "description": "blocked = 走不下去；confused = 走下去了但没明白。" },
+          "summary": { "type": "string", "maxLength": 120, "description": "一行，写发生了什么——不是写修法。" },
+          "expected": { "type": "string", "description": "首访用户那一刻期待什么，用他的话。" },
+          "actual": { "type": "string", "description": "实际发生了什么。只观察；不写原因、不写补救。" },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "quoted_text", "screenshot"],
+            "properties": {
+              "url": { "type": "string" },
+              "quoted_text": { "type": "string", "description": "屏幕原文逐字。转述不是证据。" },
+              "screenshot": { "type": "string", "description": "输出目录内的路径。必须存在。" },
+              "redacted": { "type": "boolean", "default": false, "description": "引用或截图里隐去了命中配置 redact 表的值时为 true。" }
+            }
+          },
+          "reproduce": {
+            "type": "array",
+            "minItems": 1,
+            "description": "从入口 URL 到那一刻的最短点击路径。每项一个用户动作。",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

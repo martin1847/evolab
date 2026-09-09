@@ -35,7 +35,7 @@ Evolab 是 **阳哥进化论** 的 AI 方法论 / skill / 工具栈合集，会�
 
 | 目录 | 是什么 |
 | --- | --- |
-| **`skills/`** | 可直接装进 Claude Code 的 skill。当前：`orchestrator-core`（**编排内核**——领域无关的多智能体编排不变式，cto/总编等皆是它的一张皮）、`cto-orchestration`（**旗舰皮**——多 agent 写码编排）、`repo-governance-bootstrap`（文档治理 + repo 工程门初始化）、`agent-mail`（编排者间信箱总线，cto 的可选伴随）、`observability-standard`（可观测性）、`git-workflow-standard`（Git 协作 SOP）、`agent-backend-standard`（agent/后端工程手册 + 四语言 gate 接口）、`agent-frontend-standard`（agent/前端工程手册——设计系统契约 / 类型端到端 / 视觉验证环）、`source-coding-discipline`（写码纪律的 skill 形态，给不支持条件 rules 的 agent，如 codex）。后续更多。 |
+| **`skills/`** | 可直接装进 Claude Code 的 skill。当前：`orchestrator-core`（**编排内核**——领域无关的多智能体编排不变式，cto/总编等皆是它的一张皮）、`cto-orchestration`（**旗舰皮**——多 agent 写码编排）、`repo-governance-bootstrap`（文档治理 + repo 工程门初始化）、`agent-mail`（编排者间信箱总线，cto 的可选伴随）、`frontend-explorer`（探索型前端测试——首访用户视角找「卡住 / 看不懂」，`playwright-cli` 驱真浏览器，cto 前端验证的可选伴随）、`observability-standard`（可观测性）、`git-workflow-standard`（Git 协作 SOP）、`agent-backend-standard`（agent/后端工程手册 + 四语言 gate 接口）、`agent-frontend-standard`（agent/前端工程手册——设计系统契约 / 类型端到端 / 视觉验证环）、`source-coding-discipline`（写码纪律的 skill 形态，给不支持条件 rules 的 agent，如 codex）。后续更多。 |
 | **`templates/`** | 协作设定模板 `CLAUDE.md.example`（人格 + 方法论）+ `rules/coding.md`（写码纪律真源，`paths:` 条件加载）。项目治理骨架（AGENTS.md / ADR / roadmap）由 `repo-governance-bootstrap` skill 生成，不在此重复。 |
 | **`meta/`** | 元认知：可逆性分配 agency（agency-by-reversibility）、验证诚实性（verification-honesty）、先测再加（measure-before-more）、结构而非自律（structure-not-discipline）、协议而非屏幕（protocol-not-screen）、异构冷评审（heterogeneous-cold-review）、条件先于动作（condition-before-action）、真相≠检查器输出（truth_not_eq_checker_output）、先数面再治点（surface-before-points）、杠杆线（leverage-line）、编排回路（orchestration-loop）、配置接线与治理（wiring）。**灵魂层**——我是怎么想的。 |
 
@@ -49,7 +49,7 @@ skill 本质是 markdown + 几个脚本——**AI-native 装法：把下面这�
 > **必装** `cto-orchestration`（多 agent 编排旗舰皮）+ `orchestrator-core`（其领域无关内核，含常驻
 > digest 与 self-evolution 方法论）+ `repo-governance-bootstrap`（仓库治理）；
 > **写后端 / agent 服务**再加 `observability-standard` + `agent-backend-standard`；**写前端**再加
-> `agent-frontend-standard`；**多人协作仓库**再加 `git-workflow-standard`。装完确认每个 `SKILL.md` frontmatter 有 `name`、`references/` 一并到位、内链能解析。
+> `agent-frontend-standard`（要做探索型 UI 测试再加 `frontend-explorer`）；**多人协作仓库**再加 `git-workflow-standard`。装完确认每个 `SKILL.md` frontmatter 有 `name`、`references/` 一并到位、内链能解析。
 > 再把 `templates/CLAUDE.md.example` 的协作设定**并入（merge、非覆盖）**我的规则文件；
 > 写码纪律 `templates/rules/coding.md` 则**symlink（勿拷贝）**到 `~/.claude/rules/coding.md`——
 > Claude Code 与 omp 共用这一份，`paths:` 条件加载只在碰源码文件时进 context；

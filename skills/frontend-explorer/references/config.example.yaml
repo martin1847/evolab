@@ -1,0 +1,90 @@
+# frontend-explorer 配置 —— 唯一知道项目事实的文件。
+#
+# 复制、填好；含本机路径就别进版本库。下面是一份填好的通用示例（内部报销工具，
+# Django admin 风格，应用已在跑），不是 <TODO> 占位——看一份填好的比看空模板有用。
+
+# ---------------------------------------------------------------- 在哪 -----
+base_url: http://127.0.0.1:8000
+entry_path: /expenses/new
+
+# 硬围栏。探索者不得访问其他 origin；离开这个列表的链接只报不跟。
+# 只放回环地址：一个在公网乱点的探索代理不是测试。
+allowed_origins:
+  - http://127.0.0.1:8000
+
+# ---------------------------------------------------------------- 登录态 -----
+auth:
+  # hold_command : 跑一条命令，把应用带起来、签一个新用户、写出 session_file，并停在前台。
+  # storage_state: 应用已在跑，state 文件已存在。
+  # 只有这两种：登录态只经 storageState 文件 + state-load 进浏览器，探索者自己永不登录。
+  mode: storage_state
+
+  setup:
+    # hold_command 模式：后台跑它并等 ready_line 出现；用例模板见 references/hold-spec.template.ts
+    # command: bash scripts/e2e.sh e2e/explore-hold.spec.ts
+    # cwd: .                     # 仓库根
+    # ready_line: "explore-hold: ready at"
+    # teardown: signal           # Ctrl-C / SIGINT，由项目自己的 teardown 收拾
+    # 由 hold 用例写出：{ baseUrl, storageState, entry, login }
+    session_file: .explore/session.json
+
+  # 编排者派人之前怎么证明登录态生效。
+  signed_in_marker:
+    url: /expenses/new
+    visible_text: "New expense report"
+
+  # 登录态怎么进浏览器（先读再动手）：
+  #   playwright-cli -s=<session> state-load <storageState 文件>
+  # token 只经文件路径，不经模型上下文。禁止 cookie-set / cookie-get / cookie-list /
+  # localstorage-* / sessionstorage-*、禁止 eval 正文碰 cookie——值上命令行或 stdout = 进 transcript，
+  # 一次性 token 正是这样泄漏的。state-save 只许落下面的 output.dir。
+  # 会话名不在这里：每个 persona 自带 session（见下），一个探索者一个浏览器。
+
+# ---------------------------------------------------------------- 旅程 -----
+# 首访用户想按顺序走完的步。`id` 是 finding 引用的唯一合法值。
+journey:
+  - id: start
+    goal: 先找到在哪报销。
+  - id: fill
+    goal: 录一张餐厅发票。
+  - id: attach
+    goal: 附上发票照片。
+  - id: submit
+    goal: 交给审批的人。
+  - id: rework
+    goal: 被退回后弄明白为什么，改对再交一次。
+  - id: track
+    goal: 之后查它怎么样了。
+
+# ---------------------------------------------------------------- 词汇 -----
+# 探索者被告知的词——对它们困惑不算 finding。这份表是本次能发现什么的天花板：
+# 只放真新用户确实被事先告知的；留在表外的每个产品词都得由屏幕来解释——正是要量的东西。
+glossary:
+  cost centre: 费用记到哪个预算头上。
+
+# ---------------------------------------------------------------- 隐去 -----
+# 永不截图、永不引用的值。引用标签、说明值已隐去。子串、忽略大小写匹配屏幕文本。
+redact:
+  - card number
+  - iban
+  - token
+  - invite code
+
+# ---------------------------------------------------------------- 人设 -----
+# 两轮法：第一轮走通路，第二轮专攻返工 / 失败 / 权限切换——产量几乎全在第二轮。
+personas:
+  - id: first-timer
+    session: myapp-explore-first   # playwright-cli -s=<session>；每个 persona 唯一，否则两探索者互相踩
+    goal: >-
+      入职第一周。你垫付了一顿团队晚餐，想趁没忘把钱要回来。你有 15 分钟。
+    max_actions: 40
+  - id: rework
+    session: myapp-explore-rework
+    goal: >-
+      这次故意漏掉发票照片先交一次。被退回后弄明白为什么、改对、再交一次，
+      直到看见它进了审批。你有 20 分钟。
+    max_actions: 50
+
+# ---------------------------------------------------------------- 输出 -----
+output:
+  dir: .explore/run             # findings.json、findings.md、shots/
