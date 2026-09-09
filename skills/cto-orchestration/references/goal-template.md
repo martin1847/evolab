@@ -35,11 +35,11 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
 > 仅当本 goal 依赖 upstream audit / scout 结论、**或从正典（ADR / NORTH_STAR / 基建文档类）
 > 继承硬约束**时填写。编排者必须抽出每条承重 premise；candidate evidence is not a verdict。
 > 任何 premise 为假 → **STOP AND REPORT**，不得在错误基础上继续实现。
+> `=> <observed>` 只抄自派发前在目标 base 干净树上**实跑**的输出：全部 verify 命令逐字落一份可复跑脚本
+> 随 goal 交付，席位 / 评审席复跑同一份；侦察报告只供找命令、不供数值。
 
-- [ ] **Claim**: <承重前提> — **Verify by**: <独立证明命令 / runtime evidence + 预期结果>
-- [ ] **Claim**: <...> — **Verify by**: <...>
-- [ ] 继承的硬约束 = 也是 premise，写成 `PREMISE: <claim> verify=<cmd|live-probe> => <observed>`
-  （preflight 门机判占位符已解）并标〔来源 + 可降级性〕——继承≠免检；向主理人问一句
+- [ ] PREMISE: <承重前提> verify=<独立证明命令 | live-probe> => <observed>（preflight 门机判：三段齐、占位符已解、非 unresolved）
+- [ ] 继承的硬约束 = 也是 premise，同一形态并标〔来源 + 可降级性〕——继承≠免检；向主理人问一句
   「这约束在本 goal 语境还算数吗」是合法且常为最便宜的证伪。
 
 ## North-star gate（目标仓/伞仓声明了方向文档时保留，否则整节删除）
