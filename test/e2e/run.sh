@@ -31,4 +31,13 @@ done
 
 echo; echo "######## E2E SUMMARY ########"
 printf 'PASS=%d  FAIL=%d\n' "$total_pass" "$total_fail"
-[ "$total_fail" -eq 0 ] && { echo "E2E GREEN"; exit 0; } || { echo "E2E FAILED"; exit 1; }
+if [ "$total_fail" -eq 0 ]; then
+  echo "E2E GREEN"
+  # Self-attest for the release gate: a pre-push hook may refuse a `refs/tags/v*` push unless
+  # <git-dir>/e2e-attest names the tag's commit (sha-bound, burned on use). Outside git: no-op.
+  GITDIR=$(git -C "$HERE" rev-parse --absolute-git-dir 2>/dev/null) \
+    && git -C "$HERE" rev-parse HEAD > "$GITDIR/e2e-attest" \
+    && echo "e2e-attest: $(cat "$GITDIR/e2e-attest")"
+  exit 0
+fi
+echo "E2E FAILED"; exit 1
