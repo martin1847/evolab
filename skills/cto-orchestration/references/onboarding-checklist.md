@@ -9,11 +9,11 @@
    同目录 `agents-md-orchestration-section.md` 的**两节**增补进去——①委派 Agent 边界（常驻兜底，
    与 goal 合同纵深防御）+ ②编排者行为内核（角色绑定必并；纪律 bullets **按该文件头部的三层分工
    条件并入**——编排者个人全局配置已有同款则只留角色绑定，防两层复制漂移）。
-3. **wire 强制层 hooks（只接项目级）**：把 `cto-guard-bash.py` + `cto-guard-agent.py` + `cto-guard-edit.py` +
-   `cto-guard-stop.py`（Stop 门）并进 bootstrap §11 已建的**项目** settings.json——**这四个是角色属性的 DENY
-   门，不进用户级**：用户级会把「本项目编排位」的角色带进这台机器上的每个仓；用户级只放席位属性的
-   提醒（retro-reminder / agent-mail 收信）。
-   **用户级已有这四个门 → 提示主理人挪到项目级**，别在项目级再叠一份。（路径用**绝对路径**——hooks 不展开
+3. **wire 强制层 hooks**：把 `cto-guard-bash.py` + `cto-guard-agent.py` + `cto-guard-edit.py` +
+   `cto-guard-stop.py`（Stop 门）并进 bootstrap §11 已建的**项目** settings.json——**bash / agent 两门是角色属性
+   DENY、只接项目级**（`&` 后台 / amend 复合链在任何仓 fire）；edit / stop 门自认身份、可接用户级（见 agentctl
+   README §Wiring）；用户级只放席位属性的提醒（retro-reminder / agent-mail 收信）。
+   **同一门两级同接会双触发 → 提示主理人二选一**，别在项目级再叠一份。（路径用**绝对路径**——hooks 不展开
    `~`；entry 真源 `references/agentctl/guard-hooks.json`——读它、command 换安装根绝对路径后 merge，别抄散文；
    细节 README §Wiring）；接完各喂一条合成 payload **验真触发**（尾随 `&` 应 deny、browser 派发应出提醒），
    再拿一个**非本项目**的 cwd 喂同样的载荷**应零输出**（角色门没漏到别的仓），别只信"配了"。

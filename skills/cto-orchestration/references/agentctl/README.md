@@ -245,8 +245,8 @@ hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则
 
 不另造 settings 脚手架——并进 `repo-governance-bootstrap` §11 已建的那份。**不靠 skill frontmatter
 `hooks:` 自注册**（mid-session 经 Skill 工具激活不注册 → 显式 wiring 才可靠）。
-**四个 guard 都是角色属性的 DENY 门，只接项目级 settings**：用户级会把「本项目编排位」的角色带进这台机器上的
-每个仓；用户级只放席位属性的提醒（retro-reminder / agent-mail 收信）。用户级已有这四个门 → 挪到项目级。
+**cto-guard-edit / cto-guard-stop / retro-reminder 自认身份**（`identity.orchestrated`，非编排仓静默）→ 可接用户级；**cto-guard-bash（除 ⑧⑳）与 cto-guard-agent 仍是角色属性 DENY 门**
+（`&` 后台 / amend 复合链 / cd+相对路径在任何仓 fire）→ 只接项目级；同一 guard 两级同接会双触发；用户级只放席位属性提醒（agent-mail 收信）。
 接完自检：拿一个**非本项目**的 cwd 喂一条合成载荷，应零输出。
 
 Codex 的 Stop 片段（`<repo>/.codex/hooks.json`；`~/.codex/hooks.json` 与两层 `config.toml` 内联
