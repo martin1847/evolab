@@ -247,7 +247,7 @@ hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则
 `hooks:` 自注册**（mid-session 经 Skill 工具激活不注册 → 显式 wiring 才可靠）。
 **cto-guard-edit / cto-guard-stop / retro-reminder 自认身份**（`identity.orchestrated`，非编排仓静默）→ 可接用户级；**cto-guard-bash（除 ⑧⑳）与 cto-guard-agent 仍是角色属性 DENY 门**
 （`&` 后台 / amend 复合链 / cd+相对路径在任何仓 fire）→ 只接项目级；同一 guard 两级同接会双触发；用户级只放席位属性提醒（agent-mail 收信）。
-接完自检：拿一个**非本项目**的 cwd 喂一条合成载荷，应零输出。
+接完自检：edit / stop 用**非编排仓** cwd 喂合成载荷应零输出；bash / agent 只验「别的仓的 settings 里没有它」——脚本本身在任何仓都会 DENY，零输出不是判据。
 
 Codex 的 Stop 片段（`<repo>/.codex/hooks.json`；`~/.codex/hooks.json` 与两层 `config.toml` 内联
 `[hooks]` 也认）——**结构以 codex 官方文档为准，不是 CC 那份的拷贝**：

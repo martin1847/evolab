@@ -16,7 +16,7 @@
    **同一门两级同接会双触发 → 提示主理人二选一**，别在项目级再叠一份。（路径用**绝对路径**——hooks 不展开
    `~`；entry 真源 `references/agentctl/guard-hooks.json`——读它、command 换安装根绝对路径后 merge，别抄散文；
    细节 README §Wiring）；接完各喂一条合成 payload **验真触发**（尾随 `&` 应 deny、browser 派发应出提醒），
-   再拿一个**非本项目**的 cwd 喂同样的载荷**应零输出**（角色门没漏到别的仓），别只信"配了"。
+   再用**非编排仓** cwd 喂 edit / stop 载荷**应零输出**；bash / agent 只验别的仓 settings 里没有它，别只信"配了"。
    （多编排者场景装了 `agent-mail` 的，其席位注册 + 收信 hook 由该 skill 自己的「接入」节自包含，不在本清单。）
 4. 建 `docs/orchestration/` + `docs/orchestration/archive/` 目录（生命周期见 SKILL §5）。
    装了 codegraph 的仓可选：`ln -s <安装根>/references/agentctl/post-checkout-codegraph.sh

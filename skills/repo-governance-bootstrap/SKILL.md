@@ -128,7 +128,7 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
 
 9. **生成 `CLAUDE.md`**：单行 `@AGENTS.md`。
 
-10. **生成 `ACCESS.local.md` + 值文件孪生 `ACCESS.local.env` 并写进 `.gitignore`**：按 `references/templates.md` 的 ACCESS.local 模板建三段式骨架（值/元数据物理分离：`.md` 只留元数据+秘密名字+gotcha，值进纯 KEY=VALUE 的 `.env` 孪生并 `chmod 600`；注入 `set -a; source; set +a`——分离与注入的判据见 agent-backend-standard 附录 E，**该附录里的 env deny 面与重启金丝雀两步本 bootstrap 不采用**），字段留空待用户填实；`.gitignore` 加 `ACCESS.local.*` 与 `.env*` 两行（带注释说明含 creds、永不提交）。**不写 `permissions.deny` 通配规则**：子串通配把「命令文本提到文件名」当「读取」、拦不住 python / `source` 读法，`Read(X.env)` deny 连带封 Edit/Write。值的防线 = gitignore + `chmod 600` + 进程注入；要「看有什么变量」只打印 KEY 与长度/哈希，不打印值。**绝不**把真实凭证写进 stub。
+10. **生成 `ACCESS.local.md` + 值文件孪生 `ACCESS.local.env` 并写进 `.gitignore`**：按 `references/templates.md` 的 ACCESS.local 模板建三段式骨架（值/元数据物理分离：`.md` 只留元数据+秘密名字+gotcha，值进纯 KEY=VALUE 的 `.env` 孪生并 `chmod 600`；注入 `set -a; source; set +a`——分离与注入的判据见 agent-backend-standard 附录 E），字段留空待用户填实；`.gitignore` 加 `ACCESS.local.*` 与 `.env*` 两行（带注释说明含 creds、永不提交）。**不写 `permissions.deny` 通配规则**：子串通配把「命令文本提到文件名」当「读取」、拦不住 python / `source` 读法，`Read(X.env)` deny 连带封 Edit/Write。值的防线 = gitignore + `chmod 600` + 进程注入；要「看有什么变量」只打印 KEY 与长度/哈希，不打印值。**绝不**把真实凭证写进 stub。
 
 11. **配置 memory-discipline hook（默认项目级，直接建）**：把 `references/memory-discipline-hook.py` 接成
     PostToolUse hook——写 `memory/*.md`(非 MEMORY.md) 时确定性注入"事实细节→ACCESS.local.md/docs、只留指针"提醒。

@@ -1,7 +1,7 @@
 # 附录 E — 秘密接触面纪律（分离 · 注入）<!-- trunk:secrets-discipline.md -->
 
 > hub `agent-backend-standard` 的一章。来源:某 IaC 伞仓实证蒸馏(2026-07,同 session 三次同构
-> 失手换来)。2026-09 减法:原「deny 一刀切 + 金丝雀」两件撤出——permissions deny 通配实测
+> 失手换来)。2026-09 减法:原 permissions deny 通配与假数据验证矩阵两件撤出——deny 通配实测
 > 误拦远大于召回(含该文件名的普通命令与子 agent 一并被拒,任务停摆),值的防线改为
 > gitignore + `chmod 600` + 进程注入。**范围**:agent 会接触本地凭证/秘密值的任何仓——目标是把
 > "agent 失手把密文送进 transcript/stdout/git"从纪律问题降为结构上没有理由发生(尽力而为层,不是沙箱)。
