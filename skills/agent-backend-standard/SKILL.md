@@ -35,7 +35,7 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 - **B 数据访问纪律(连接·读·写)** → `references/data-write-discipline.md` —— **读也占连接**(弱事务/autocommit 用完即释放;MANAGED+closeConnection=false 无事务读 = 泄漏);记账写移出主链路 / 不跨 LLM 持锁 / 服务端增量;**关键写保留原子性但同样不持锁跨 LLM/执行**(短原子写 + 锁外执行)。
 - **C Agent-friendly engineering interface** → `references/engineering-interface.md` §1–§6 —— Python / Go / Java / Rust 统一 repo-owned `fix/check/test` 接口；legacy ratchet 分 finding-aware hold gate + 单一 canonical close job，改善 durable 锁定后才放下一次集成、`check` 不改 baseline；另含初始化 forcing function 与失败自解释契约。边界类型规则只交叉引 observability §2,不复制。
 - **D 缓存纪律(准入·永不缓存·失效治理)** → `references/caching-discipline.md` —— 四轴准入(读写比>10:1 / 陈旧红线 / 所有权 / DB 实测不够快,任一不过即不缓存)+ 金钱/占位/鉴权永不缓存、per-user 键强制 userId 命名空间 + **agent 时代失效治理三件套**(缓存决策表 SoT / 失效键注册 enum / 写路径配对失效机检门,任何缓存必有 TTL 兜底)+ 由外向内引入路线(升级触发即 ADR;负缓存/jitter/singleflight 随第一个缓存点同车)。
-- **E 秘密接触面纪律(分离·注入·deny·金丝雀)** → references/secrets-discipline.md —— 值/元数据物理分离(说明文档只留名字+gotcha,值进 gitignored env 文件)+ 注入形态唯一(`set -a; source; set +a`,值不落 stdout/argv/transcript)+ deny 一刀切(防失手不冒充沙箱)+ **金丝雀纪律 MUST**(防护面用假数据全矩阵验证,全绿才许真密文进场;settings 重启才加载,先验加载——"拿真值测防护面"本身就是事故)。
+- **E 秘密接触面纪律(分离·注入)** → references/secrets-discipline.md —— 值/元数据物理分离(说明文档只留名字+gotcha,值进 gitignored `chmod 600` 的 env 文件)+ 注入形态唯一(`set -a; source; set +a`,值不落 stdout/argv/transcript);**不用 permissions deny 拦值文件**(2026-09 减法:误拦远大于召回);遮蔽/扫描面只用假数据验,真值永不作测试载荷。
 - **F 自检清单与评审蒸馏门禁(电在回路 shock-in-the-loop)** → `references/selfcheck-gates.md` —— soft prompts steer, hard gates hold the line;真实评审 findings → PR 自检清单 → 可机检条目下沉 diff-scoped pre-push(纯 git+grep 毫秒级) → 负探针台账;铁律:每关必须指到真 finding,禁理论关卡;hook 是提醒、CI 复跑同脚本才是门。门禁接口归附录 C,本章管门禁的供给与演化。
 
 ## 关联(独立 skill,不在本 hub 重复)

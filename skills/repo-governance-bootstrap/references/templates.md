@@ -182,7 +182,7 @@ Last rewritten: YYYY-MM-DD
 ## ACCESS.local.md 模板（+ 值文件孪生 ACCESS.local.env）
 
 > **两个文件都 gitignored，永不提交/推送。** 值/元数据物理分离（分离与注入判据见
-> agent-backend-standard 附录 E；其 env deny 面与重启金丝雀两步不采用，见 SKILL 第 10 步）：`.md` 只留元数据 + 秘密**名字** + gotcha（agent 可整读、
+> agent-backend-standard 附录 E）：`.md` 只留元数据 + 秘密**名字** + gotcha（agent 可整读、
 > 零遮蔽工序）；**值**一律进纯 `KEY=VALUE` 的 `ACCESS.local.env`（`chmod 600`），用时
 > `set -a; source ACCESS.local.env; set +a; <cmd>` 注入子进程 env，不落 stdout/argv。
 > 命名刻意不入 `.env` 家族（防 dotenv 生态自动加载；同词干配对自明），
