@@ -9,7 +9,10 @@
  * the session out, then refuse to finish.
  *
  * The teardown you already have keeps working — Ctrl-C ends the case and the
- * suite's normal cleanup runs.
+ * suite's normal cleanup runs. From a script: launch this case in its OWN process
+ * group (`setsid`, remember that pgid) and end it with `kill -INT -- -<pgid>`;
+ * signalling only the wrapper PID does nothing, because bash runs its trap after
+ * the foreground child exits.
  *
  * Three things to adapt (marked ADAPT below):
  *   1. the import + call that produces a signed-in page,

@@ -6,7 +6,7 @@
 模型档：中档模型即可——这是耐心观察不是重推理，且长浏览器会话烧上下文很快。
 
 席位形态：带 Bash 的子代理（Agent 工具，通用子代理类型）或 `agentctl start claude` 完整席位，
-cwd = 输出目录或独立 worktree。子代理靠 Bash 调 `playwright-cli`，只读靠 brief 与隔离兜、不靠工具集。
+cwd = 输出目录或独立 worktree，**所有 `playwright-cli` 命令在同一 cwd 下跑**（会话产物锚在那里）。子代理靠 Bash 调 `playwright-cli`，只读靠 brief 与隔离兜、不靠工具集。
 一个命名会话 = 一个浏览器，两个探索者进同一会话会互相踩——**每个探索者一个 `-s=`**，值取该 persona 的 `session` 字段。
 
 ## 填好后原样发出
@@ -34,7 +34,9 @@ cwd = 输出目录或独立 worktree。子代理靠 Bash 调 `playwright-cli`，
 > **永远不要捕获这些值。** 屏幕上出现就不截那块、不引用值；引用标签并说明值已隐去：{{配置 redact 列表}}
 >
 > **工具。** 只用 `playwright-cli -s={{persona.session}}`：`goto` / `snapshot` / `find` / `click` / `fill` / `type` /
-> `press` / `select` / `go-back` / `screenshot`。读页面用 `snapshot` 与 `find`；`screenshot` 是证据不是感知。
+> `press` / `select` / `go-back` / `screenshot`。读页面用 `snapshot` 与 `find`：`snapshot` 把 a11y 树打在 stdout；`open` / `goto`
+> 还会在当前目录 `.playwright-cli/page-*.yml` 自动落一份（实测过 stdout 不含树、只在文件里的情况——树没打出来就 `cat` 最新那份）；
+> 所有命令在同一目录下跑。`screenshot` 是证据不是感知。
 > **不许**用 `cookie-*` / `localstorage-*` / `sessionstorage-*` / `state-save` / `eval`（登录态不归你管，
 > 会话已就绪）；`requests` / `console` 不是 finding 的来源——你只看屏幕。
 >

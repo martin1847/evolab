@@ -1,6 +1,6 @@
 ---
 name: frontend-explorer
-version: 0.1.0
+version: 0.1.1
 description: 探索型前端测试——派一个「第一次见这个产品」的探索者，用 playwright-cli 驱真浏览器走完一段旅程，回一份按挡路程度排序的「在哪卡住 / 哪里看不懂」清单，每条带屏幕原文与截图证据。触发：探索一遍 / 走一遍 / 踢踢轮胎 / UX pass / 找新用户会在哪迷路。不用于判据已知的验收探针、回归测试、性能、代码评审。
 ---
 
@@ -18,14 +18,16 @@ description: 探索型前端测试——派一个「第一次见这个产品」�
 2. **应用在跑且可达**：`base_url` 可访问、其 host 在 `allowed_origins` 里。没在跑就按配置 `auth.setup` 起，
    不要自己发明启动方式。
 3. **浏览器驱动 = `playwright-cli`**（`@playwright/cli`，0.x 命令面会漂，项目钉版本）：探索者经 Bash 调它，
-   每个 persona 一个命名会话 `-s=<persona.session>`，与项目自己的会话及彼此天然隔离、可并行。不用 Playwright MCP、
+   每个 persona 一个命名会话 `-s=<persona.session>`，与项目自己的会话及彼此隔离。**`-s=` 只隔离浏览器，不隔离账号**：
+   本版一份 `session_file` = 一个账号 = 两 persona **串行**（第一轮打通的账号第二轮无路可走）；并行不在承诺面。不用 Playwright MCP、
    不用别的驱动、不调外部 LLM API。工具选型与登录态原则与 cto-orchestration `references/frontend-verify.md`
    同向（可选阅读，非依赖）。
 
 ## 流程（五步）
 
 **1 — 准备会话。** 配置有 `auth.setup.command` 就跑它：它负责把应用带起来、签一个新用户、写出
-`auth.session_file`（含入口 URL 与 storageState 路径），并停在前台。
+`auth.session_file`（含入口 URL 与 storageState 路径），并停在前台。脚本里起它要让它**独占一个进程组**（`setsid` 起、记下
+那个 pgid），结束时给该组发 INT（`kill -INT -- -<pgid>`）；只给 wrapper PID 发不起作用——bash 等前台子进程结束才跑 trap。
 
 **2 — 派发前先冒烟。** 对每个 persona 的会话起浏览器、载入登录态、亲眼确认：
 
@@ -37,6 +39,8 @@ playwright-cli -s=<会话> find "<signed_in_marker.visible_text>"
 ```
 
 看到标记文本才算登录态生效。没亲眼看到会话有效就派探索者 = 它报的每条 finding 都是「没登录」的伪影。
+派第二个 persona 前再证一件事：**它要走的失败 / 返工路径在这个栈上能触发**（例：一次故意不合格的提交会被打回）——
+fake 判定永不打回的栈，rework 步结构上探不到，`steps_not_reached` 那一行就是整轮的结论，别浪费一轮。
 **登录态只经文件路径进浏览器**（`state-load`）。禁止 `cookie-set / cookie-get / cookie-list /
 localstorage-* / sessionstorage-*`，禁止在 `eval` 正文里碰 cookie / token / localStorage——值上了命令行
 或 stdout 就进了 transcript——一次性 session token 正是这样泄漏的。`state-save` 只许落
@@ -72,6 +76,12 @@ gitignored 的输出目录。
 - **最多 10 条**，按挡住旅程的程度排序。
 - finding 是观察不是工单：写发生了什么，不写该做什么。
 - `steps_not_reached`（没走到的步）与筛选掉落表**必报**——不自报边界的探索报告不可消费。
+
+## 产出之后（交接，不是本 skill 的动作）
+
+本 skill 止于观察与筛选。修复归项目、另行授权；稳定可判定的行为并入项目**既有** E2E 的口径归 cto-orchestration
+`references/frontend-verify.md`（可选阅读），不在此复制。探索侧只守三条：下轮 brief 只按改动区域生成；历史 finding /
+标准答案不喂冷探索者（去重归主位）；已覆盖问题复发必须重开——脚本绿压不掉图证。
 
 ## 护栏
 

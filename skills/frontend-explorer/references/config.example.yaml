@@ -24,7 +24,7 @@ auth:
     # command: bash scripts/e2e.sh e2e/explore-hold.spec.ts
     # cwd: .                     # 仓库根
     # ready_line: "explore-hold: ready at"
-    # teardown: signal           # Ctrl-C / SIGINT，由项目自己的 teardown 收拾
+    # teardown: signal           # 用 setsid 起 hold 独占进程组，结束给该组发 INT（kill -INT -- -<pgid>），项目 teardown 收拾
     # 由 hold 用例写出：{ baseUrl, storageState, entry, login }
     session_file: .explore/session.json
 
