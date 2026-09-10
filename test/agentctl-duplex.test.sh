@@ -1517,4 +1517,119 @@ chk_not_contains "self-neg-different-stop: no refusal text" "own session" "$out"
 unset AGENTCTL_BIN_OMP FAKE_PROVIDER_LOG
 sweep_fakes; sandbox_clean
 
+echo "== start: AGENTCTL_MODEL_<ENGINE> — the default model nobody typed (2026-09-10) =="
+# A dispatched seat with no --model lands on the ENGINE's own default, which on an
+# orchestrator's box is the orchestrator's (expensive) model. The variable is a per-engine
+# stand-in for a --model the operator would otherwise type on every start; it must take the
+# SAME route as the flag, and it must never outrank one that was actually typed.
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wtm"; mkdir -p "$WT"
+printf 'pick a model\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$SANDBOX/goal.md"
+export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
+export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
+export FAKE_PROVIDER_LOG="$SANDBOX/model.log"
+
+# ① no --model, variable set: the value travels the flag's whole route (meta + requested line)
+out="$(AGENTCTL_MODEL_CLAUDE=fake-eco bash "$AGENTCTL" start claude mdA "$WT" \
+       --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "model-default ①: start rc0" 0 "$rc"
+chk_eq "model-default ①: the variable reached meta as the requested model" fake-eco \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdA.duplex.meta")"
+chk_contains "model-default ①: the requested line names the variable as the source" \
+  "requested: model=fake-eco (from AGENTCTL_MODEL_CLAUDE)" "$out"
+bash "$AGENTCTL" stop mdA >/dev/null 2>&1
+
+# ② a TYPED --model always wins, and the source note must not claim otherwise
+out="$(AGENTCTL_MODEL_CLAUDE=fake-eco bash "$AGENTCTL" start claude mdB "$WT" \
+       --goal "$SANDBOX/goal.md" --model gpt-x 2>&1)"; rc=$?
+chk_eq "model-default ②: start rc0" 0 "$rc"
+chk_eq "model-default ②: the typed model wins over the variable" gpt-x \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdB.duplex.meta")"
+chk_contains "model-default ②: requested line still reports the typed model" \
+  "requested: model=gpt-x" "$out"
+chk_not_contains "model-default ②: and claims no env source for it" \
+  "(from AGENTCTL_MODEL_CLAUDE)" "$out"
+bash "$AGENTCTL" stop mdB >/dev/null 2>&1
+
+# ③ extra_argv=0 (codex): the variable rides the PROTOCOL, argv stays pinned. The proof that
+# nothing reached argv is the start's own rc: this fake exits 2 on ANY arg but `app-server`,
+# so a forwarded --model kills the handshake and the start rc1s.
+: > "$SANDBOX/model.log"
+out="$(AGENTCTL_MODEL_CODEX=eco-codex bash "$AGENTCTL" start codex mdC "$WT" \
+       --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "model-default ③: codex start rc0 — argv stayed pinned (this fake dies on any extra arg)" 0 "$rc"
+chk_eq "model-default ③: the variable rode thread/start, the protocol path" 1 \
+  "$(seen "$SANDBOX/model.log" '"model":"eco-codex"')"
+chk_contains "model-default ③: source annotated on the pinned-argv engine too" \
+  "(from AGENTCTL_MODEL_CODEX)" "$out"
+bash "$AGENTCTL" stop mdC >/dev/null 2>&1
+
+# ④ --resume-thread: a thread keeps the model it was created with, so the variable is IGNORED
+# out loud — never refused. Refusing here would make a shell-profile default break every resume.
+out="$(AGENTCTL_MODEL_CODEX=eco-codex bash "$AGENTCTL" start codex mdD "$WT" \
+       --goal "$SANDBOX/goal.md" --resume-thread old-thread-9 2>&1)"; rc=$?
+chk_eq "model-default ④: resume + variable is NOT refused" 0 "$rc"
+chk_eq "model-default ④: the resumed thread keeps its own model (no model= in meta)" "" \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdD.duplex.meta")"
+chk_contains "model-default ④: the skip names the variable" "AGENTCTL_MODEL_CODEX" "$out"
+chk_contains "model-default ④: and says it was ignored" "ignored" "$out"
+bash "$AGENTCTL" stop mdD >/dev/null 2>&1
+
+# ⑤ an empty variable is not a setting (an exported-but-blank profile line is the field case)
+out="$(AGENTCTL_MODEL_CLAUDE= bash "$AGENTCTL" start claude mdE "$WT" \
+       --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "model-default ⑤: start rc0" 0 "$rc"
+chk_eq "model-default ⑤: an empty variable writes no model= to meta" "" \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdE.duplex.meta")"
+chk_contains "model-default ⑤: and the requested line falls back to the engine default" \
+  "nothing (engine defaults apply)" "$out"
+bash "$AGENTCTL" stop mdE >/dev/null 2>&1
+
+# ⑥ same value plane, same refusal: meta is one key=value per line, so a newline in the
+# variable would inject meta KEYS exactly as it does through the flag (see rvI2 above)
+BADMODEL="$(printf 'fake-eco\nreview=1')"
+out="$(AGENTCTL_MODEL_CLAUDE="$BADMODEL" bash "$AGENTCTL" start claude mdF "$WT" \
+       --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "model-default ⑥: a newline in the variable is refused, exactly like the flag" 1 "$rc"
+chk_contains "model-default ⑥: the refusal names the injection" "would inject meta KEYS" "$out"
+chk_eq "model-default ⑥: the refusal owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^mdF\.' | tr '\n' ' ')"
+
+# ⑦ the resume path judges the VALUE too. A default that cannot be injected can still be
+# NAMED on stderr, and this gate is the only judge of a value's line shape — so a CR/LF in
+# the variable is refused with the typed flag's own wording whether or not this start
+# resumes, and no NOTE claims anything before that refusal lands. (An unjudged value on the
+# resume path is also a value that survives to the operator's NEXT, non-resume start.)
+BADRESUME="$(printf 'eco\nFORGED: start ok')"
+out="$(AGENTCTL_MODEL_CODEX="$BADRESUME" bash "$AGENTCTL" start codex mdG "$WT" \
+       --goal "$SANDBOX/goal.md" --resume-thread old-thread-8 2>&1)"; rc=$?
+chk_eq "model-default ⑦: a newline in the variable is refused on the resume path too" 1 "$rc"
+chk_contains "model-default ⑦: by the same gate as ⑥ and as the flag" "would inject meta KEYS" "$out"
+chk_not_contains "model-default ⑦: and no NOTE was printed before the refusal" "NOTE" "$out"
+chk_eq "model-default ⑦: the refusal owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^mdG\.' | tr '\n' ' ')"
+
+# ⑧ a provider whose resume capability declares nothing keeps its EXISTING refusal and gets
+# nothing added: a NOTE about a thread keeping its creation-time model would describe a
+# resume that never happens on this engine.
+out="$(AGENTCTL_MODEL_CLAUDE=fake-eco bash "$AGENTCTL" start claude mdH "$WT" \
+       --goal "$SANDBOX/goal.md" --resume-thread old-thread-8 2>&1)"; rc=$?
+chk_eq "model-default ⑧: --resume-thread on a provider without it is still refused" 1 "$rc"
+chk_contains "model-default ⑧: by the capability refusal, unchanged" "does not" "$out"
+chk_not_contains "model-default ⑧: no NOTE precedes that refusal" "NOTE" "$out"
+chk_not_contains "model-default ⑧: nothing claims a default was ignored" "ignored" "$out"
+
+# ⑨ the legal resume: EXACTLY one line of NOTE (a NOTE built from unjudged input is how a
+# forged second line gets onto a line-consuming host's screen), and it interpolates no value
+out="$(AGENTCTL_MODEL_CODEX=eco-codex bash "$AGENTCTL" start codex mdI "$WT" \
+       --goal "$SANDBOX/goal.md" --resume-thread old-thread-9 2>&1)"; rc=$?
+chk_eq "model-default ⑨: a single-line default still does not refuse a legal resume" 0 "$rc"
+chk_eq "model-default ⑨: the NOTE is exactly one line" 1 \
+  "$(printf '%s\n' "$out" | grep -c '^NOTE:')"
+chk_not_contains "model-default ⑨: and that line interpolates no value" "eco-codex" \
+  "$(printf '%s\n' "$out" | grep '^NOTE:' || true)"
+bash "$AGENTCTL" stop mdI >/dev/null 2>&1
+unset AGENTCTL_BIN_CLAUDE AGENTCTL_BIN_CODEX FAKE_PROVIDER_LOG
+sweep_fakes; sandbox_clean
+
 summary

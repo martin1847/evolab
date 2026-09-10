@@ -307,6 +307,35 @@ cmd_start() {
   # -s: an EXISTING empty goal (/dev/null included) is a contract with no content — the seat
   # correctly refuses to work and a whole round burns on BLOCKED-cleanup-recontract (field n=3)
   [ -s "$GOAL" ] || { echo "ERR: --goal file is empty ($GOAL) — an empty contract dispatches a seat with nothing to do; write the goal first" >&2; exit 1; }
+  # THE DEFAULT MODEL NOBODY TYPED. With no --model a dispatched seat takes the ENGINE's own
+  # default, which on an orchestrator's box is the orchestrator's own (expensive) model —
+  # every cheap seat then costs top-tier tokens unless the operator retypes --model on every
+  # start. `AGENTCTL_MODEL_<ENGINE>` (…_OMP / _CODEX / _CLAUDE, from the provider name upper-
+  # cased) is exactly that retyping, done once in a shell profile: it stands in for the flag
+  # and then takes the flag's WHOLE route — MODEL, EXTRA, MODEL_TOKENS — so argv-forwarding
+  # and protocol-pinned engines each keep their single path and every downstream judgement
+  # (check-params' meta-line safety, the pinned-argv token count) still weighs the value.
+  # A TYPED --model always wins; an empty variable is not a setting.
+  MODEL_SRC=""; MODEL_ENV_IGNORED=""
+  MODEL_ENV="AGENTCTL_MODEL_$(printf %s "$ENG" | tr '[:lower:]' '[:upper:]')"
+  eval "MODEL_ENV_VAL=\"\${$MODEL_ENV:-}\""
+  if [ -n "$MODEL_ENV_VAL" ] && [ -z "$MODEL" ]; then
+    if [ -n "$RESUME_THREAD" ]; then
+      # NOT the refusal below: that one answers a model the operator TYPED against a resume.
+      # A profile-wide default is not a request about THIS start, and turning every resume on
+      # such a box into rc1 would be the variable breaking a working command. The thread keeps
+      # the model it was created with either way, so the only honest move is to say so — and
+      # the saying is DEFERRED to the end of a start that really happened: a NOTE printed here
+      # would announce a preserved thread model ahead of the resume-capability refusal below
+      # (an engine that cannot resume at all), and ahead of the one gate that judges this
+      # value's line shape. Only the flag is skipped; the value still faces check-params.
+      MODEL_ENV_IGNORED=1
+    else
+      MODEL="$MODEL_ENV_VAL"; MODEL_SRC="$MODEL_ENV"
+      EXTRA[${#EXTRA[@]}]="--model"; EXTRA[${#EXTRA[@]}]="$MODEL"
+      MODEL_TOKENS=$((MODEL_TOKENS+2))
+    fi
+  fi
   # the review-tier refusals below stay HERE: they read the generated provider spec, which is
   # this shell's own input, and they decide nothing about a value's content
   if [ -n "$RESUME_THREAD" ] && [ "$P_RESUME_FLAG" != "--resume-thread" ]; then
@@ -353,8 +382,14 @@ cmd_start() {
   # every value that will reach meta, plus the review seat's deliverable fence, judged in ONE
   # duplexctl call against the NORMALIZED cwd — comparing against the caller's spelling would
   # let a symlinked or dot-laden cwd argument decide where the fence boundary is
+  # An IGNORED default is judged here too, through the flag's own slot: it reaches no meta,
+  # but it is about to be named on stderr, and a CR/LF value that no gate ever weighed is a
+  # forged second line on any host that reads this output by line — plus it would sail on to
+  # the operator's next, non-resume start. Same gate, same wording, same rc as a typed
+  # --model, resume or not. (MODEL is empty whenever MODEL_ENV_IGNORED is set.)
+  MODEL_CHECK="$MODEL"; [ -n "$MODEL_ENV_IGNORED" ] && MODEL_CHECK="$MODEL_ENV_VAL"
   ctl check-params --gate start --cwd "$CWD" ${REVIEW:+--review} \
-     --deliverable "$DELIV" --model "$MODEL" --resume-thread "$RESUME_THREAD" \
+     --deliverable "$DELIV" --model "$MODEL_CHECK" --resume-thread "$RESUME_THREAD" \
      --workflow "$WORKFLOW" --expect "$EXPECT" || exit 1
   mkdir -p "$DIR"
 
@@ -446,8 +481,14 @@ cmd_start() {
   # engine two different ways (argv for the forwarding providers, meta + protocol for the
   # pinned ones), and nothing here reads back the model the engine actually settled on.
   REQ="${MODEL:+model=$MODEL}"
+  # WHOSE request it was: a model nobody typed reads as a mystery on the operator's screen
+  # (and on codex it is invisible in argv), so the variable that supplied it is named here.
+  [ -n "$MODEL_SRC" ] && REQ="$REQ (from $MODEL_SRC)"
   [ -n "$REVIEW" ] && REQ="${REQ:+$REQ; }review sandbox=$P_REVIEW_SANDBOX"
   if [ "$P_EXTRA_OK" = 1 ] && [ "${#EXTRA[@]}" -gt 0 ]; then REQ="${REQ:+$REQ; }argv ${EXTRA[*]}"; fi
+  # the default nobody's start could use: named, never quoted — the variable NAME is a closed
+  # set of three, so this line cannot be anything but one line, whatever the value held
+  [ -n "$MODEL_ENV_IGNORED" ] && echo "NOTE: $MODEL_ENV is set but --resume-thread keeps the resumed thread on its creation-time model — ignored for this start" >&2
   echo "engine : $ENG — requested: ${REQ:-nothing (engine defaults apply)}; the model/backend actually in effect is the engine's own and is not read back here"
   echo "next   : agentctl watch $S   (blocking, run_in_background)  |  agentctl status $S  (one-shot)"
 }

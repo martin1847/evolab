@@ -14,6 +14,12 @@ set -u
 # suite red on that box, green everywhere else (caught by independent review 2026-07-11).
 # Tests that assert exec routing set the switch INLINE per invocation.
 unset AGENT_WATCH_SYNC 2>/dev/null || true
+# Same class, new surface (2026-09-10): `AGENTCTL_MODEL_<ENGINE>` is DOCUMENTED as a shell-profile
+# export, so the maintainer who follows the README injects a --model into every start this suite
+# makes — meta grows a model= line and the argv-forwarding engines grow two argv tokens. Red on
+# that box, green in CI, for doing exactly what the docs say. The tests that assert the variable
+# set it INLINE per invocation, like the exec-lane switch above.
+unset AGENTCTL_MODEL_OMP AGENTCTL_MODEL_CODEX AGENTCTL_MODEL_CLAUDE 2>/dev/null || true
 
 # Same rule for git: the MACHINE's git config is not the suite's business. This maintainer's
 # box sets `core.hooksPath=~/.githooks`, whose post-checkout backgrounds `codegraph init` for

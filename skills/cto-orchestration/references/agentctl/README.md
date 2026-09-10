@@ -33,6 +33,12 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   `status` 在 N>0 时按深度列出末 N 条，无队列面的引擎零输出。stop 随控制态一起清。
 - **typed exit 三引擎同词汇**（词表 `agentctl states`，处置见下节）；
   **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
+- **`start` 默认模型 = 按引擎的环境变量**：不给 `--model` 时读 `AGENTCTL_MODEL_CLAUDE` /
+  `AGENTCTL_MODEL_OMP` / `AGENTCTL_MODEL_CODEX`，效果等同当场写了 `--model <值>`（同一条路：
+  进 meta，argv 引擎走 argv、pinned 引擎走协议），start 回显标 `(from AGENTCTL_MODEL_<E>)`。
+  优先级 **显式 `--model` > 环境变量 > 引擎默认**；空值 = 未设；`--resume-thread` 时忽略
+  （线程保留创建时的模型，stderr 说一句，不报错）。省掉每次派发重打一遍：写进 shell profile
+  `export AGENTCTL_MODEL_CLAUDE=sonnet`（omp 依旧只传 EXACT id，见 §引擎级注意）。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析；freshness
   用 mtime 对 epoch（每次 steer 即轮转）；必带/不带的判据归 SKILL.md §0。
   **`steer -d` 只移动 watcher 的 freshness 目标，不重发 footer**——worker 不会自动得知新目标，
