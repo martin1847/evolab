@@ -205,7 +205,11 @@ chk_eq "[PREMISE] and stays silent" "" "$out"
 printf "${ok}PREMISE: steer 投递即算一轮 verify=\`agentctl status s1\` 读 round => round=2，确认计数\n" > "$goal"
 run_check "$goal"
 chk_eq "[PREMISE] a fully resolved declaration passes" 0 "$rc"
-chk_eq "[PREMISE] and is silent" "" "$out"
+# AUTHORIZED EDIT (orchestrator ruling, fix round 1): this line used to pin SILENCE for a probe
+# mixing prose with an inline-code span, from the era when the gate executed nothing at all.
+# The premise changed: the shape is still never executed, but a visually opted-in command that is
+# silently skipped reads to its author as verified, so it must now say 未执行 (review B1).
+chk_contains "[PREMISE] and the mixed prose+span probe is reported as not run" "未执行（混排" "$out"
 
 printf "${ok}PREMISE: <claim> verify=<cmd> => <observed>\n" > "$goal"
 run_check "$goal"
@@ -330,6 +334,201 @@ run_check "$SANDBOX/no-such-goal.md"
 chk_eq "[R2-4.4] a missing goal file is not green either" 1 "$rc"
 run_check "$goal"
 chk_eq "[R2-4.4] and the same goal, readable again, is green" 0 "$rc"
+
+# ── premise probe EXECUTION ────────────────────────────────────────────────────────────────
+# A probe written as ONE inline-code span is the author's per-line opt-in: the gate runs it
+# verbatim (shell, cwd = the seat cwd, GOAL_PREFLIGHT_TIMEOUT seconds) and compares the
+# author's own `rc=` / `count=` markers against the live reading (count = non-empty STDOUT
+# lines). Only a self-declared contradiction blocks: no markers = no verdict, a timeout or an
+# unrunnable command = WARN, and a shape fault = nothing in the batch is executed at all.
+run_at(){ # $1 seat cwd  $2 goal — stderr captured APART from stdout
+  err="$(GOAL_PREFLIGHT_CWD="$1" "$CHECK" "$2" 2>&1 >/dev/null)"; rc=$?
+}
+ran(){ [ -e "$1" ] && echo ran || echo absent; }   # side effects asserted, never assumed
+seat="$SANDBOX/seat"; elsewhere="$SANDBOX/elsewhere"; mkdir -p "$seat" "$elsewhere"
+
+# ① the disease this gate exists for: a declared count the command itself refutes
+printf "${ok}PREMISE: 只有一行输出 verify=\`echo one\` => count=2 rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] ① a refuted count= declaration reds" 1 "$rc"
+chk_contains "[EXEC] ① and names declared vs got" "declared count=2, got count=1" "$err"
+chk_contains "[EXEC] ① pointing at the contract" "goal-template.md §Premises" "$err"
+
+# ② negative control: the same probe carrying the markers it really produces
+printf "${ok}PREMISE: 只有一行输出 verify=\`echo one\` => count=1 rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] ② a declaration the run confirms passes" 0 "$rc"
+chk_eq "[EXEC] ② and stays silent" "" "$err"
+
+# ③ no markers → the gate judges nothing and prints what it saw
+printf "${ok}PREMISE: 只有一行输出 verify=\`echo one\` => 观察到一行\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] ③ a marker-free observation is not judged" 0 "$rc"
+chk_contains "[EXEC] ③ but the live reading is reported" "rc=0 count=1" "$err"
+chk_contains "[EXEC] ③ and says why it did not judge" "未声明记号，只报实况" "$err"
+
+# ④ a probe that is not a command is never executed — asserted by side effect, not by belief
+printf "${ok}PREMISE: 停席位即出 rc 文件 verify=live-probe: touch %s/live-ran 停一个席位 => rc 文件出现\n" "$seat" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] ④ a live-probe recipe does not dispatch a shell" 0 "$rc"
+chk_eq "[EXEC] ④ and left no side effect" absent "$(ran "$seat/live-ran")"
+chk_contains "[EXEC] ④ saying it was not run" "未执行（非命令形态）" "$err"
+
+# ⑤ shape first: a placeholder row rejects and NOTHING in the batch runs (side-effect probe)
+printf "${ok}PREMISE: 可执行的一条 verify=\`touch %s/batch-ran\` => count=0 rc=0\nPREMISE: 占位符一条 verify=\`touch %s/ph-ran <待补>\` => count=0 rc=0\n" "$seat" "$seat" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] ⑤ a placeholder row still rejects" 1 "$rc"
+chk_contains "[EXEC] ⑤ on shape, before any execution" "占位符未解" "$err"
+chk_eq "[EXEC] ⑤ and no probe in the batch ran" "absent absent" \
+  "$(ran "$seat/batch-ran") $(ran "$seat/ph-ran")"
+
+# ⑤b an unresolved row is the same class: judged on shape, never executed
+printf "${ok}PREMISE: 可执行的一条 verify=\`touch %s/unres-ran\` => count=0 rc=0\nPREMISE: 未解一条 verify=TBD => 未知\n" "$seat" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] ⑤b an unresolved row rejects too" 1 "$rc"
+chk_eq "[EXEC] ⑤b with nothing executed" absent "$(ran "$seat/unres-ran")"
+
+# ⑥ a probe that outruns the budget WARNs and never blocks a dispatch
+printf "${ok}PREMISE: 慢探针 verify=\`python3 -c 'import time; time.sleep(9)'\` => rc=0\n" > "$goal"
+export GOAL_PREFLIGHT_TIMEOUT=1
+run_at "$seat" "$goal"
+unset GOAL_PREFLIGHT_TIMEOUT
+chk_eq "[EXEC] ⑥ a timed-out probe never blocks" 0 "$rc"
+chk_contains "[EXEC] ⑥ and is reported as a timeout" "超时" "$err"
+
+# ⑥b nor does a command this machine cannot run at all
+printf "${ok}PREMISE: 缺失的二进制 verify=\`no-such-binary-xyz42\` => count=1 rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] ⑥b an unrunnable command never blocks" 0 "$rc"
+chk_contains "[EXEC] ⑥b and is reported as unrunnable" "无法执行" "$err"
+
+# ⑦ cwd semantics: one relative probe, two seat cwds, two answers
+: > "$seat/marker-in-cwd"
+printf "${ok}PREMISE: 席位 cwd 有 marker verify=\`test -f marker-in-cwd\` => rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] ⑦ a relative probe resolves against the seat cwd" 0 "$rc"
+run_at "$elsewhere" "$goal"
+chk_eq "[EXEC] ⑦ and refutes the same declaration from another cwd" 1 "$rc"
+chk_contains "[EXEC] ⑦ naming the cwd it ran in" "$elsewhere" "$err"
+
+# BOUNDARY: an inline-code FRAGMENT inside prose is a citation, not a runnable probe — never
+# executed, but always announced as not run (review 2026-09-10 B1 replaced the earlier silence).
+printf "${ok}PREMISE: 混形态 verify=\`touch %s/mixed-ran\` 读 round => round=2\n" "$seat" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] BOUNDARY: an inline-code fragment inside prose is not a probe" 0 "$rc"
+chk_eq "[EXEC] BOUNDARY: it does not run" absent "$(ran "$seat/mixed-ran")"
+chk_contains "[EXEC] BOUNDARY: and it says it was not run" "未执行（混排 / 多段反引号" "$err"
+
+# LINE NUMBERS are what an operator opens: a row written the way goals really write it (section
+# heading, blank line, list marker + checkbox) must report ITS line, not the blank one above it.
+printf "${ok}## Premises\n\n- [ ] PREMISE: 执行判决报行号 verify=\`echo one\` => count=2 rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] LINE NUMBER: a row under a section break still reds" 1 "$rc"
+chk_contains "[EXEC] LINE NUMBER: and the exec verdict names its own line" "PREMISE 行(第 4 行)" "$err"
+printf "${ok}## Premises\n\n- [ ] PREMISE: 形态判决报行号 verify=<待补> => 未知\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] LINE NUMBER: the shape verdict reds on the same row" 1 "$rc"
+chk_contains "[EXEC] LINE NUMBER: and numbers it the same way" "PREMISE 行(第 4 行)" "$err"
+
+# ── review 2026-09-10 fix round 1 ───────────────────────────────────────────────────────────
+# B1: several spans, or one span mixed into prose, is not runnable as written. Silence is the
+# worst of the three answers — the author opted in visibly — so the gate refuses AND says why.
+printf "${ok}PREMISE: 多段 verify=\`touch %s/multi-a\` and \`touch %s/multi-b\` => rc=1\n" "$seat" "$seat" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] B1 a multi-span probe never blocks a dispatch" 0 "$rc"
+chk_eq "[EXEC] B1 and neither span ran" "absent absent" \
+  "$(ran "$seat/multi-a") $(ran "$seat/multi-b")"
+chk_contains "[EXEC] B1 but it is reported as not run" "未执行（混排 / 多段反引号" "$err"
+chk_contains "[EXEC] B1 telling the author how to opt in" "放进一个反引号段" "$err"
+printf "${ok}PREMISE: 非命令 verify=live-probe: 停一个席位 => rc 文件出现\n" > "$goal"
+run_at "$seat" "$goal"
+chk_not_contains "[EXEC] B1 a span-free probe keeps its own wording" "混排" "$err"
+
+# M1: `count` counts non-empty STDOUT lines and the probe's own stderr is dropped. One probe
+# writing to BOTH streams is what tells the two implementations apart: count=1 passes, count=2
+# reds — a regression that folded stderr into the count would flip exactly these two.
+printf '#!/bin/sh\nprintf "out\\n"\nprintf "err\\n" >&2\n' > "$seat/two-streams.sh"
+chmod +x "$seat/two-streams.sh"
+printf "${ok}PREMISE: 只数 stdout verify=\`./two-streams.sh\` => count=1 rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] M1 one stdout line and one stderr line count as count=1" 0 "$rc"
+chk_eq "[EXEC] M1 and the passing declaration is silent" "" "$err"
+printf "${ok}PREMISE: 不数 stderr verify=\`./two-streams.sh\` => count=2 rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] M1 declaring both streams is refuted" 1 "$rc"
+chk_contains "[EXEC] M1 naming the stdout-only reading" "declared count=2, got count=1" "$err"
+
+# M2: each marker at most ONCE. The comparison consumes one value per marker, so a repeated one
+# would be judged on whichever half came first and the author's own conflict would go unseen.
+printf "${ok}PREMISE: 记号重复 verify=\`true\` => prior rc=1; now rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] M2 a repeated rc= marker is rejected" 1 "$rc"
+chk_contains "[EXEC] M2 as a duplicate declaration" "记号重复：rc= 出现 2 次，只能声明一次" "$err"
+chk_not_contains "[EXEC] M2 not judged by the first hit" "declared rc=1" "$err"
+chk_contains "[EXEC] M2 pointing at the contract" "goal-template.md" "$err"
+printf "${ok}PREMISE: 记号重复 verify=\`echo one\` => count=1 count=2 rc=0\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] M2 a repeated count= marker too" 1 "$rc"
+chk_contains "[EXEC] M2 naming which marker repeated" "记号重复：count= 出现 2 次" "$err"
+printf "${ok}PREMISE: 可执行的一条 verify=\`touch %s/dup-ran\` => count=0 rc=0\nPREMISE: 记号重复 verify=\`true\` => rc=0 也许 rc=1\n" "$seat" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] M2 duplication is a shape fault, so nothing in the batch ran" absent \
+  "$(ran "$seat/dup-ran")"
+printf "${ok}PREMISE: 各一次 verify=\`echo one\` => count=1 rc=0（src=0 recount=2 不是记号）\n" > "$goal"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] M2 NEGATIVE CONTROL: one of each still passes, impostors do not count" 0 "$rc"
+
+# M3: the deadline knob takes a POSITIVE FINITE number of seconds. `nan` parses as a legal float
+# and then makes every communicate() deadline comparison false — no deadline at all, i.e. the
+# dispatch gate becomes hangable again (review 2026-09-10 M3: `nan` + `sleep 30` never returned).
+# Driven through the CLI only (white-box dynamic loading is banned, loc-budget check 6), so the
+# fallback is asserted where an operator sees it: the WARN names the rejected value AND the
+# seconds it fell back to, and the batch still gets its verdict. That the fallback is a REAL
+# deadline is pinned by the CONTROL below plus the 120s live proof recorded in findings.
+printf "${ok}PREMISE: 快探针 verify=\`echo one\` => count=1 rc=0\n" > "$goal"
+for bad in nan -nan inf -inf 0 -0.0 -1 abc; do
+  export GOAL_PREFLIGHT_TIMEOUT="$bad"
+  run_at "$seat" "$goal"
+  unset GOAL_PREFLIGHT_TIMEOUT
+  chk_eq "[EXEC] M3 GOAL_PREFLIGHT_TIMEOUT=$bad still yields the batch verdict" 0 "$rc"
+  chk_contains "[EXEC] M3 =$bad WARNs with the value and the fallback it used" \
+    "GOAL_PREFLIGHT_TIMEOUT=$bad 不是正的有限秒数，回退默认 120s" "$err"
+done
+# NEGATIVE CONTROL: a legitimate value is never warned about, and the passing probe stays silent
+export GOAL_PREFLIGHT_TIMEOUT=5
+run_at "$seat" "$goal"
+unset GOAL_PREFLIGHT_TIMEOUT
+chk_eq "[EXEC] M3 a valid knob is silent" "" "$err"
+run_at "$seat" "$goal"
+chk_eq "[EXEC] M3 and so is an unset knob" "" "$err"
+# (the sandbox PATH holds a no-op `sleep` shim, so a real delay must come from python3 — ⑥ same)
+printf "${ok}PREMISE: 慢探针 verify=\`python3 -c 'import time; time.sleep(9)'\` => rc=0\n" > "$goal"
+export GOAL_PREFLIGHT_TIMEOUT=1
+run_at "$seat" "$goal"
+unset GOAL_PREFLIGHT_TIMEOUT
+chk_contains "[EXEC] M3 CONTROL: a finite deadline is still enforced" "超时 1s" "$err"
+
+# MINOR 1: the supported PREMISE prefix set, stated. ASCII horizontal indentation (space / Tab)
+# and the list markers are declarations; a form-feed / VT / NBSP prefix is not read as one (the
+# pre-fix `\s` class matched them — accepted narrowing, goals indent with spaces and Tabs).
+printf "${ok}   PREMISE: 空格缩进 verify=<待补> => 未知\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREFIX] a space-indented row IS a declaration" 1 "$rc"
+printf "${ok}\tPREMISE: Tab 缩进 verify=<待补> => 未知\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREFIX] a Tab-indented row IS a declaration" 1 "$rc"
+for exotic in '\f' '\v' '\302\240'; do
+  printf "${ok}${exotic}PREMISE: 非常规空白 verify=<待补> => 未知\n" > "$goal"
+  run_check "$goal"
+  chk_eq "[PREFIX] unsupported whitespace prefix ($exotic) is not read as a declaration" 0 "$rc"
+done
+# CR is NOT in that family, and a regex-only probe cannot see why: the gate reads the goal in
+# TEXT mode, so Python's universal-newline translation turns a lone \r into \n before the regex
+# runs — the row lands on its own line and IS judged, numbered as that line.
+printf "${ok}\rPREMISE: CR 前缀 verify=<待补> => 未知\n" > "$goal"
+run_check "$goal"
+chk_eq "[PREFIX] a lone CR is a line break, so the row IS judged" 1 "$rc"
+chk_contains "[PREFIX] and numbered as its own line" "第 3 行" "$out"
 
 rm -rf "$SANDBOX"
 summary

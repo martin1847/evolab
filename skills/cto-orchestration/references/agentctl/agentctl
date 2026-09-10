@@ -339,7 +339,12 @@ cmd_start() {
     exit 1
   fi
   if [ "$PREFLIGHT" = 1 ]; then
-    "$HERE/../goal-preflight.py" "$GOAL" || {
+    # the seat's cwd travels WITH the goal: the gate runs each PREMISE probe verbatim, and a
+    # probe written against the seat's tree (`test -f x`, `grep -n y src/`) answers a different
+    # question anywhere else. Not yet normalized/existence-checked here (that is the next two
+    # lines, whose refusals stay in their current order) — an unusable cwd makes a probe
+    # unrunnable, which this gate WARNs about and never blocks on.
+    GOAL_PREFLIGHT_CWD="$CWD" "$HERE/../goal-preflight.py" "$GOAL" || {
       echo "HINT: mechanical / forensic / pure-research goals opt out explicitly — re-run with --no-preflight" >&2
       exit 1; }
   fi

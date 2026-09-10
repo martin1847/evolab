@@ -13,8 +13,31 @@ goal-template §Premises (the consuming worker re-enumerates the scope and diffs
 pre-dispatch goal-review. Extending the keyword scan to full text trades an unmeasured
 false-positive surface for coverage the layered path already owns; if that trade is ever
 re-priced, measure body-prose keyword density first.
+
+PREMISE EXECUTION is the one half of this gate that is not shape-only. A premise probe written
+as exactly ONE inline-code span is the author's per-line opt-in, so the gate runs it verbatim
+and compares the author's OWN `rc=` / `count=` markers against the live reading. Only a
+self-declared contradiction blocks: a marker-free observation gets its reading printed and no
+verdict, a timeout or an unrunnable command WARNs, and a probe wearing any other shape — no span
+at all, or prose mixed with one/several spans — is never executed but ALWAYS says so: a command
+that is visually opted in and silently skipped reads to its author as verified. Each marker may
+be declared at most once (a repeated `rc=` is a shape fault: only the first would ever be
+consumed, so `prior rc=1; now rc=0` would otherwise be judged on the stale half). `count` counts
+non-empty STDOUT lines only, and probe stderr is dropped: stderr
+carries per-machine diagnostics (`grep: no such file`, deprecation banners) that would make a
+declared count depend on the seat's environment instead of on the claim, and this gate's own
+stderr is a contract surface an executed probe must not be able to write into. The operator
+re-runs the command himself — every verdict prints it, with the cwd it ran in.
+Environment: GOAL_PREFLIGHT_CWD = cwd probes run in (default: this process's cwd);
+GOAL_PREFLIGHT_TIMEOUT = per-probe seconds, a POSITIVE FINITE number (default 120); anything else
+(nan, inf, 0, negative, non-numeric) WARNs and falls back to the default, because `nan` is a legal
+float that removes `communicate()`'s deadline altogether and makes the gate hangable again.
 """
+import math
+import os
 import re
+import signal
+import subprocess
 import sys
 
 
@@ -121,7 +144,16 @@ SCOPE_RE = re.compile(
 # Anchored at line start (list markers and checkbox tolerated) so body prose "…the premise:
 # X" is not read as a declaration; `Premises` (the goal-template section heading) has no colon
 # after the keyword and never matches.
-PREMISE_LINE = re.compile(r"(?mi)^[\s>*+#-]*(?:\[[ x]\]\s*)?PREMISE\s*[:：]\s*(?P<rest>.*)$")
+# The leading class is horizontal whitespace only (`[ \t]`, not `\s`): with `\n` in it the
+# greedy prefix could start on the BLANK line above a `- [ ] PREMISE: …` row and swallow the
+# newline, so every reported line number under a section break was one short — invisible while
+# the only consumers were hand-written fixtures with no blank line above the row. Supported
+# prefixes are ASCII horizontal indentation (space / Tab) plus the list-marker characters; a
+# form-feed / vertical-tab / NBSP prefix is NOT supported — the old `\s` class matched those,
+# this one does not, an accepted narrowing since goals indent with spaces and Tabs. CR is not in
+# that family: the goal is read in TEXT mode, so a lone `\r` has already become a line break
+# before this pattern ever runs (a regex-probed claim about `\r` does not describe the gate).
+PREMISE_LINE = re.compile(r"(?mi)^[ \t>*+#-]*(?:\[[ x]\]\s*)?PREMISE\s*[:：]\s*(?P<rest>.*)$")
 PREMISE_PARTS = re.compile(r"(?s)^(?P<claim>.*?)\bverify\s*=\s*(?P<probe>.*?)=>\s*(?P<obs>.*)$")
 
 
@@ -136,21 +168,142 @@ def premise_faults(body):
                                    "<observed>`——缺 verify= 或 => 的继承断言只是散文"))
             continue
         claim, probe, observed = (part.strip() for part in parts.groups())
+        duplicate = marker_duplicate(observed)
         if not (claim and probe and observed):
             faults.append((number, "三段都要有内容——claim / verify= / => observed 缺一即未声明"))
         elif PLACEHOLDER.search(m.group("rest")):
             faults.append((number, "占位符未解——把 `<…>` 换成真跑过的探针与观察到的结果"))
         elif UNRESOLVED.match(probe) or UNRESOLVED.match(observed):
             faults.append((number, "继承来的机理断言要核过活体才落笔；unresolved/N/A/TBD 不是证据"))
+        elif duplicate:
+            faults.append((number, duplicate))
     return faults
 
 
-def fail(message):
-    print(
-        "ERR: preflight gate: " + message
-        + " Read cto-orchestration/references/goal-template.md.",
-        file=sys.stderr,
-    )
+# The executable half of the premise contract: exactly ONE inline-code span and nothing else is
+# the author's per-line opt-in. Any other shape is never executed but is ALWAYS reported as not
+# run: a probe MIXING prose with a span (`verify=`agentctl status s1` 读 round`) or carrying two
+# spans is not runnable as written, and staying silent about it (the shape's first delivered
+# behaviour, review 2026-09-10 B1) let a visually opted-in command read as verified. A probe with
+# no inline code at all is a live-probe recipe and is likewise told it was not run.
+PROBE_CMD = re.compile(r"^`([^`\n]+)`$")
+# word-boundary markers, so `src=` / `recount=` can never impersonate one
+MARKERS = (("rc", re.compile(r"\brc\s*=\s*(\d+)\b")),
+           ("count", re.compile(r"\bcount\s*=\s*(\d+)\b")))
+CWD_ENV, TIMEOUT_ENV, DEFAULT_TIMEOUT = "GOAL_PREFLIGHT_CWD", "GOAL_PREFLIGHT_TIMEOUT", 120.0
+# 126/127 are the shell's own "I could not run this" answers (not executable / not found), read
+# as an unrunnable probe and never as a refutation: a tool missing on THIS machine says nothing
+# about the claim, and only a self-declared contradiction may block a dispatch.
+UNRUNNABLE = (126, 127)
+
+
+def advise(message):
+    print("WARN: preflight: " + message, file=sys.stderr)
+
+
+def marker_duplicate(observed):
+    """Message if the observation declares one marker twice — a shape fault, not a verdict.
+
+    The comparison consumes exactly one value per marker, so `prior rc=1; now rc=0` would be
+    judged on the stale half and `now rc=0; also rc=1` would hide the author's own conflict.
+    Uniqueness is decided on shape, before anything in the batch runs.
+    """
+    for name, pattern in MARKERS:
+        hits = pattern.findall(observed)
+        if len(hits) > 1:
+            return f"记号重复：{name}= 出现 {len(hits)} 次，只能声明一次"
+    return None
+
+
+def probe_timeout():
+    """Per-probe deadline: a positive finite number of seconds, else the default plus a WARN.
+
+    `float("nan")` parses fine and then makes every `communicate()` deadline comparison false,
+    i.e. no deadline at all — the knob would turn the dispatch gate back into a hangable path.
+    """
+    raw = os.environ.get(TIMEOUT_ENV)
+    if not raw:
+        return DEFAULT_TIMEOUT
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = float("nan")
+    if not math.isfinite(seconds) or seconds <= 0:
+        advise(f"{TIMEOUT_ENV}={raw} 不是正的有限秒数，回退默认 {DEFAULT_TIMEOUT:g}s")
+        return DEFAULT_TIMEOUT
+    return seconds
+
+
+def premise_probes(body):
+    """(line-number, probe, observed) for every three-part premise declaration."""
+    for m in PREMISE_LINE.finditer(body):
+        parts = PREMISE_PARTS.match(m.group("rest"))
+        if not parts:
+            continue
+        claim, probe, observed = (part.strip() for part in parts.groups())
+        if claim and probe and observed:
+            yield body.count("\n", 0, m.start()) + 1, probe, observed
+
+
+def run_probe(command, cwd, timeout):
+    """(exit code, non-empty stdout lines) — the probe verbatim, never re-typed."""
+    with subprocess.Popen(command, shell=True, cwd=cwd, text=True,
+                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, start_new_session=True) as proc:
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # the whole process GROUP, not just the shell: `cmd &` inside the probe keeps the
+            # stdout pipe open, and the post-kill read would then wait forever — a dispatch
+            # gate that can hang is worse than one that WARNs
+            os.killpg(proc.pid, signal.SIGKILL)
+            raise
+        return proc.returncode, sum(1 for line in out.splitlines() if line.strip())
+
+
+def premise_contradiction(body):
+    """Run every opt-in probe; message for the first declaration its own command refutes."""
+    cwd = os.environ.get(CWD_ENV) or os.getcwd()
+    timeout = probe_timeout()
+    for number, probe, observed in premise_probes(body):
+        where = f"PREMISE 行(第 {number} 行)"
+        span = PROBE_CMD.match(probe)
+        if not span:
+            if "`" in probe:
+                advise(f"{where} 未执行（混排 / 多段反引号；"
+                       f"要执行请把整条命令放进一个反引号段）：{probe}")
+            else:
+                advise(f"{where} 未执行（非命令形态）：{probe}")
+            continue
+        command = span.group(1)
+        try:
+            code, count = run_probe(command, cwd, timeout)
+        except subprocess.TimeoutExpired:
+            advise(f"{where} 超时 {timeout:g}s，未判（不拒发）：`{command}`")
+            continue
+        except OSError as exc:
+            advise(f"{where} 无法执行，未判（不拒发）：`{command}` — {exc}")
+            continue
+        if code in UNRUNNABLE:
+            advise(f"{where} 无法执行（shell rc={code}），未判（不拒发）：`{command}`")
+            continue
+        got = {"rc": code, "count": count}
+        declared = []
+        for name, pattern in MARKERS:
+            hit = pattern.search(observed)
+            if hit:
+                declared.append((name, int(hit.group(1))))
+        if not declared:
+            advise(f"{where} 未声明记号，只报实况（不判）：rc={code} count={count} — `{command}`")
+            continue
+        for name, want in declared:
+            if want != got[name]:
+                return (f"{where} 实跑与声明不符：declared {name}={want}, got {name}={got[name]}"
+                        f"（probe `{command}`，cwd {cwd}）。")
+    return None
+
+def fail(message, read="Read cto-orchestration/references/goal-template.md."):
+    print("ERR: preflight gate: " + message + " " + read, file=sys.stderr)
     return 1
 
 
@@ -182,6 +335,10 @@ def main():
     if faults:
         number, why = faults[0]
         return fail(f"PREMISE 行(第 {number} 行)未成立声明：{why}。")
+    contradiction = premise_contradiction(body)
+    if contradiction:
+        return fail(contradiction,
+                    "Read: cto-orchestration/references/goal-template.md §Premises.")
     warn(smelly_rows(body))
     return 0
 
