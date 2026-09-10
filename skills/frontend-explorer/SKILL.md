@@ -1,6 +1,6 @@
 ---
 name: frontend-explorer
-version: 0.1.1
+version: 0.1.2
 description: 探索型前端测试——派一个「第一次见这个产品」的探索者，用 playwright-cli 驱真浏览器走完一段旅程，回一份按挡路程度排序的「在哪卡住 / 哪里看不懂」清单，每条带屏幕原文与截图证据。触发：探索一遍 / 走一遍 / 踢踢轮胎 / UX pass / 找新用户会在哪迷路。不用于判据已知的验收探针、回归测试、性能、代码评审。
 ---
 
@@ -47,9 +47,9 @@ localstorage-* / sessionstorage-*`，禁止在 `eval` 正文里碰 cookie / toke
 gitignored 的输出目录。
 
 **3 — 派发探索者。** 配置里每个 persona 派一个独立子代理，brief 按 `references/dispatch.md` 组装，
-**自包含**——子代理看不到本对话。席位形态：带 Bash 的子代理（Agent 工具）或 `agentctl start claude`
-完整席位；cwd 设为输出目录、或独立 worktree 兜只读。探索者**只读**：驱动浏览器、只往 `output.dir`
-写文件；不读不改不跑项目代码，不离开 `allowed_origins`。
+**自包含**——子代理看不到本对话。席位形态：宿主的**带 Bash 的子代理**（如 Claude Code 的 Agent 工具，通用类型），
+**显式指定经济型模型**（如 `model: sonnet`——这是耐心观察不是重推理，别让它默认继承你的高级模型）；cwd 设为输出目录、
+或独立 worktree 兜只读。探索者**只读**：驱动浏览器、只往 `output.dir` 写文件；不读不改不跑项目代码，不离开 `allowed_origins`。
 
 **4 — 筛选。** 对原始产出按 `references/triage.md` 自己筛，在编排上下文里做——噪声在这里死掉；
 别交回产出它的那个代理（作者是最差的裁判）。

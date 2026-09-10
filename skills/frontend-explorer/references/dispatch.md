@@ -3,10 +3,11 @@
 每个 persona 一个子代理。**子代理看不到产生它的对话**，brief 必须带上它需要的每个事实：配置里的值
 直接贴进去，不按名引用。
 
-模型档：中档模型即可——这是耐心观察不是重推理，且长浏览器会话烧上下文很快。
+模型档：**显式指定经济型模型**（Claude Code 的 Agent 工具写 `model: sonnet`；其他宿主用等价的中档 / 经济档）——这是耐心
+观察不是重推理，且长浏览器会话烧上下文很快；不写就会默认继承编排者的高级模型。
 
-席位形态：带 Bash 的子代理（Agent 工具，通用子代理类型）或 `agentctl start claude` 完整席位，
-cwd = 输出目录或独立 worktree，**所有 `playwright-cli` 命令在同一 cwd 下跑**（会话产物锚在那里）。子代理靠 Bash 调 `playwright-cli`，只读靠 brief 与隔离兜、不靠工具集。
+席位形态：宿主的带 Bash 的子代理（Agent 工具，通用子代理类型），cwd = 输出目录或独立 worktree，
+**所有 `playwright-cli` 命令在同一 cwd 下跑**（会话产物锚在那里）。子代理靠 Bash 调 `playwright-cli`，只读靠 brief 与隔离兜、不靠工具集。
 一个命名会话 = 一个浏览器，两个探索者进同一会话会互相踩——**每个探索者一个 `-s=`**，值取该 persona 的 `session` 字段。
 
 ## 填好后原样发出
