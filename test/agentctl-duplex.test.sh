@@ -1632,4 +1632,87 @@ bash "$AGENTCTL" stop mdI >/dev/null 2>&1
 unset AGENTCTL_BIN_CLAUDE AGENTCTL_BIN_CODEX FAKE_PROVIDER_LOG
 sweep_fakes; sandbox_clean
 
+echo "== start: AGENTCTL_MODEL_<ENGINE>_REVIEW — the review seat's own default (2026-09-11) =="
+# The review seat reads a diff; the execution seat writes the code. One variable for both means
+# the operator who wants a different model on `--review` retypes --model every time. The second
+# spelling is consulted ONLY on a review dispatch, outranks the base variable there, and is
+# otherwise the SAME setting travelling the SAME route — so these five cells assert the
+# precedence, the fall-through, the non-review blindness, and that no gate was cloned.
+# (Numbering continues the model-default cells above; the prefix differs because those labels
+# already run ①–⑨ and an assertion label is how a failure is read.)
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wtr"; mkdir -p "$WT"
+printf 'pick a review model\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' > "$SANDBOX/goal.md"
+export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
+
+# ⑦ both spellings set, review dispatch: the _REVIEW value wins and is named as the source.
+# codex is extra_argv=0, so this also proves the review default took the PROTOCOL route: the
+# fake exits 2 on any arg but `app-server`, so a forwarded --model would rc1 the start.
+export FAKE_PROVIDER_LOG="$SANDBOX/mr-a.log"
+out="$(AGENTCTL_MODEL_CODEX_REVIEW=fake-rev AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mrA "$WT" --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
+chk_eq "model-review ⑦: review start rc0 — argv stayed pinned (this fake dies on any extra arg)" 0 "$rc"
+chk_eq "model-review ⑦: the review variable outranks the base one in meta" fake-rev \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mrA.duplex.meta")"
+chk_contains "model-review ⑦: the requested line names the review variable as the source" \
+  "requested: model=fake-rev (from AGENTCTL_MODEL_CODEX_REVIEW)" "$out"
+chk_eq "model-review ⑦: and it rode thread/start, the protocol path" 1 \
+  "$(seen "$SANDBOX/mr-a.log" '"model":"fake-rev"')"
+chk_eq "model-review ⑦: the execution-seat default never reached the wire" 0 \
+  "$(seen "$SANDBOX/mr-a.log" '"model":"fake-eco"' 5)"
+bash "$AGENTCTL" stop mrA >/dev/null 2>&1
+
+# ⑧ no _REVIEW: a review dispatch falls through to the base variable — the new spelling is an
+# override, not a precondition, so an operator who set only the base one keeps what they had.
+export FAKE_PROVIDER_LOG="$SANDBOX/mr-b.log"
+out="$(AGENTCTL_MODEL_CODEX=fake-eco bash "$AGENTCTL" start codex mrB "$WT" \
+       --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
+chk_eq "model-review ⑧: review start rc0" 0 "$rc"
+chk_eq "model-review ⑧: the base variable still supplies the review seat" fake-eco \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mrB.duplex.meta")"
+chk_contains "model-review ⑧: and the source named is the base variable" \
+  "requested: model=fake-eco (from AGENTCTL_MODEL_CODEX)" "$out"
+bash "$AGENTCTL" stop mrB >/dev/null 2>&1
+
+# ⑨ the blindness that makes the split worth having: an execution dispatch does not read the
+# review spelling at all. A leaked review model on every ordinary seat is the exact cost the
+# operator was trying to avoid.
+export FAKE_PROVIDER_LOG="$SANDBOX/mr-c.log"
+out="$(AGENTCTL_MODEL_CODEX_REVIEW=fake-rev bash "$AGENTCTL" start codex mrC "$WT" \
+       --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+chk_eq "model-review ⑨: non-review start rc0" 0 "$rc"
+chk_eq "model-review ⑨: a non-review dispatch writes no model= to meta" "" \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mrC.duplex.meta")"
+chk_contains "model-review ⑨: it falls back to the engine default, naming nothing" \
+  "nothing (engine defaults apply)" "$out"
+bash "$AGENTCTL" stop mrC >/dev/null 2>&1
+
+# ⑩ a TYPED --model still wins over BOTH variables, and claims no env source
+export FAKE_PROVIDER_LOG="$SANDBOX/mr-d.log"
+out="$(AGENTCTL_MODEL_CODEX_REVIEW=fake-rev AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mrD "$WT" --goal "$SANDBOX/goal.md" --review \
+       --model gpt-x 2>&1)"; rc=$?
+chk_eq "model-review ⑩: review start rc0" 0 "$rc"
+chk_eq "model-review ⑩: the typed model outranks both variables" gpt-x \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mrD.duplex.meta")"
+chk_contains "model-review ⑩: requested line reports the typed model" "requested: model=gpt-x" "$out"
+chk_not_contains "model-review ⑩: and annotates no env source at all" "(from AGENTCTL_MODEL" "$out"
+bash "$AGENTCTL" stop mrD >/dev/null 2>&1
+
+# ⑪ same value plane, same single gate: meta is one key=value per line, so a newline in the
+# review variable injects meta KEYS exactly as the base variable and the flag do (⑥ above).
+# A cloned branch that skipped check-params would show up here and nowhere else.
+export FAKE_PROVIDER_LOG="$SANDBOX/mr-e.log"
+BADREVIEW="$(printf 'fake-rev\nreview=1')"
+out="$(AGENTCTL_MODEL_CODEX_REVIEW="$BADREVIEW" bash "$AGENTCTL" start codex mrE "$WT" \
+       --goal "$SANDBOX/goal.md" --review 2>&1)"; rc=$?
+chk_eq "model-review ⑪: a newline in the review variable is refused, exactly like the flag" 1 "$rc"
+chk_contains "model-review ⑪: the refusal names the injection, word for word" \
+  "would inject meta KEYS" "$out"
+chk_not_contains "model-review ⑪: and no NOTE was printed before it" "NOTE" "$out"
+chk_eq "model-review ⑪: the refusal owns no lane state" "" \
+  "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^mrE\.' | tr '\n' ' ')"
+unset AGENTCTL_BIN_CODEX FAKE_PROVIDER_LOG
+sweep_fakes; sandbox_clean
+
 summary

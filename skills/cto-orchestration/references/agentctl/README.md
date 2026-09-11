@@ -39,6 +39,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   优先级 **显式 `--model` > 环境变量 > 引擎默认**；空值 = 未设；`--resume-thread` 时忽略
   （线程保留创建时的模型，stderr 说一句，不报错）。省掉每次派发重打一遍：写进 shell profile
   `export AGENTCTL_MODEL_CLAUDE=sonnet`（omp 依旧只传 EXACT id，见 §引擎级注意）。
+  **`--review` 席另有一档**：派评审时先读 `AGENTCTL_MODEL_<E>_REVIEW`，没设才落基础变量，非 review
+  派发完全不看它（显式 `--model` 依旧最大）——`export AGENTCTL_MODEL_CODEX_REVIEW=<评审用 id>`。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析；freshness
   用 mtime 对 epoch（每次 steer 即轮转）；必带/不带的判据归 SKILL.md §0。
   **`steer -d` 只移动 watcher 的 freshness 目标，不重发 footer**——worker 不会自动得知新目标，

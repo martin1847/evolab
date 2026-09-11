@@ -18,8 +18,10 @@ unset AGENT_WATCH_SYNC 2>/dev/null || true
 # export, so the maintainer who follows the README injects a --model into every start this suite
 # makes — meta grows a model= line and the argv-forwarding engines grow two argv tokens. Red on
 # that box, green in CI, for doing exactly what the docs say. The tests that assert the variable
-# set it INLINE per invocation, like the exec-lane switch above.
-unset AGENTCTL_MODEL_OMP AGENTCTL_MODEL_CODEX AGENTCTL_MODEL_CLAUDE 2>/dev/null || true
+# set it INLINE per invocation, like the exec-lane switch above. The `_REVIEW` spelling (the
+# review seat's own default, 2026-09-11) is documented the same way and leaks the same way.
+unset AGENTCTL_MODEL_OMP AGENTCTL_MODEL_CODEX AGENTCTL_MODEL_CLAUDE \
+      AGENTCTL_MODEL_OMP_REVIEW AGENTCTL_MODEL_CODEX_REVIEW AGENTCTL_MODEL_CLAUDE_REVIEW 2>/dev/null || true
 
 # Same rule for git: the MACHINE's git config is not the suite's business. This maintainer's
 # box sets `core.hooksPath=~/.githooks`, whose post-checkout backgrounds `codegraph init` for

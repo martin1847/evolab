@@ -319,6 +319,24 @@ cmd_start() {
   MODEL_SRC=""; MODEL_ENV_IGNORED=""
   MODEL_ENV="AGENTCTL_MODEL_$(printf %s "$ENG" | tr '[:lower:]' '[:upper:]')"
   eval "MODEL_ENV_VAL=\"\${$MODEL_ENV:-}\""
+  # THE REVIEW SEAT IS NOT THE EXECUTION SEAT. Reading a diff and arguing about it is a
+  # different job from writing the code, so an operator who wants a different model THERE has
+  # had to retype --model on every `start --review`: both seats share one variable.
+  # `AGENTCTL_MODEL_<ENGINE>_REVIEW` is that retyping done once. It is consulted ONLY when
+  # --review marked this start, and when it holds a value it simply BECOMES the variable this
+  # block is about — name, value and source alike. Nothing below branches on which of the two
+  # spellings won: the flag's whole route, check-params' meta-line gate, the `(from …)`
+  # annotation and the resume NOTE all read MODEL_ENV / MODEL_ENV_VAL, so the review default
+  # inherits every judgement the base variable already faces and no gate is duplicated (two
+  # copies of one rule are two rules that drift). Empty is not a setting here either: an
+  # exported-but-blank _REVIEW falls through to the base variable instead of erasing it, and a
+  # non-review start never reads _REVIEW at all.
+  if [ -n "$REVIEW" ]; then
+    eval "MODEL_ENV_REVIEW_VAL=\"\${${MODEL_ENV}_REVIEW:-}\""
+    if [ -n "$MODEL_ENV_REVIEW_VAL" ]; then
+      MODEL_ENV="${MODEL_ENV}_REVIEW"; MODEL_ENV_VAL="$MODEL_ENV_REVIEW_VAL"
+    fi
+  fi
   if [ -n "$MODEL_ENV_VAL" ] && [ -z "$MODEL" ]; then
     if [ -n "$RESUME_THREAD" ]; then
       # NOT the refusal below: that one answers a model the operator TYPED against a resume.
