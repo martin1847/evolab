@@ -41,6 +41,15 @@ Action 只表达“接下来做什么”：`ALLOW / DENY / HOLD / REMIND`。
 
 否定性结论前先用 known-positive 校准检测链；看不见已知存在的目标时，结论保持 `ABSTAIN`。
 
+### 口头名：三态门（判不了 ≠ 通过）
+
+没有名字的原则只在写门时被想起；有了名字，评审能张口问「**这是三态门吗？**」。三态是门的 **exit code / 处置层**
+口头名，不替换上面的四种 Outcome：0 = 检了且干净（`PASS`），1 = 检了且违规（`FAIL`），2 = 判不了（`ABSTAIN` ∪ `ERROR`，
+两者在诊断文案里仍须分开写明是「证据不足」还是「量具故障」）；第三路永远不许折叠进 0。下游席位 2026-09-10 一次迁仓同时拽断六道门：有第三态的两道
+当场响着坏（一道 rc=2 拒绝出绿、一道报 583 条违规），没有的三处（marker 默认不选 / 缺库即 skip / 断言在文档而
+执行在零个 workflow）静默绿了数周——差别只是当初多写了一个 exit code。推论：**selftest 的坏样本靶点必须在门
+自己的树里**——靶点在别的仓 / 会搬走的目录，selftest 先死于环境，门自己变成第三态还不知道。
+
 ## 同源陷阱：三联控制齐了仍可能空绿
 
 三联控制只管样本**存在**，不管样本**从哪来**。量具、坏样本、"要防哪类损坏"的命名出自同一个人
@@ -86,7 +95,7 @@ and intelligence periodically attacks the workflow.**
 - watcher/dispatch runtime 返回 typed states，区分 DONE、WAITING、FAILED、STALLED、NO-HOOK、TIMEOUT 等；fresh deliverable 是完成判定的 known-positive，陈旧或缺失产物不能打开 DONE gate。
 - `cto-guard-bash.py`、`cto-guard-agent.py`、`mail-guard.py` 的高风险 PreToolUse 对 malformed JSON、必填字段错误和内部异常 fail-closed，输出 `CHECKER-ERROR`/exit 2；测试同时保留 known-bad、known-good、checker-broken。
 - PostToolUse reminder 与 queue freshness 保持 reminder-only：无法判断时软 `ABSTAIN`，不把提醒器故障升级为全局阻断。
-- goal preflight 当前只验证声明的 presence/shape；它不是事实 oracle，不能证明 probe 真执行、结果真实或方向正确。
+- goal preflight 对 Preflight 行只验声明的 presence/shape；对 PREMISE 行的反引号探针原样执行并比对作者自声明的 `rc=` / `count=`（只拦自声明矛盾）——仍不是事实 oracle：值的真伪靠席位与评审席复跑同一行。
 
 ## 当前不做
 
