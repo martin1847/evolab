@@ -1,6 +1,6 @@
 ---
 name: repo-governance-bootstrap
-version: 1.5.2
+version: 1.5.3
 description: 一次性初始化 AI 协作项目的轻量工程治理骨架。新仓库 / 文档治理初始化时调用（也是 cto-orchestration 接入新项目的第一步）。One-shot governance bootstrap for a new repo.
 ---
 
@@ -144,7 +144,7 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
       Python / Go / Java-Maven / Java-Gradle / Rust profile 与相对 module root。语言命令与失败契约的
       canonical = `agent-backend-standard` 附录 C §1–§6；本 skill 只负责初始化。
     - **同时 provision + pin profile 工具链，不能赌机器 PATH**：Python dev deps 进
-      `pyproject.toml` + `uv.lock`；Go 的 staticcheck/golangci-lint 进 repo-owned 版本清单 / bootstrap；
+      `pyproject.toml` + `uv.lock`，**包管理器自身也钉**（`[tool.uv] required-version = "==<ver>"`，附录 C §3；Node 仓 `package.json` `packageManager`）；Go 的 staticcheck/golangci-lint 进 repo-owned 版本清单 / bootstrap；
       Java 只选一个 committed wrapper，固定 Spotless/Checkstyle plugin 与 lifecycle wiring；Rust 用
       `rust-toolchain.toml` 固定 channel + rustfmt/clippy components。大仓可把模板的本地 `test` 分支改成
       AGENTS 明示的 deterministic focused suite；CI 仍跑附录 C 全量收口。

@@ -20,7 +20,7 @@
    本地 <base> 分支不在核对面、不得要求 fast-forward」——squash 集成仓的主 checkout 必然
    分叉，席位拿它判 BLOCKED / 要求 fast-forward 全是误报（下游席位 n=3）。
 
-- **rebase 条件动作 / 集成默认 squash（merge-commit 弃用）**：base 没动不 rebase；动了且与
+- **rebase 条件动作 / 集成默认 squash（merge-commit 仅长驻集成分支批式 PR）**：base 没动不 rebase；动了且与
   改动重叠才 rebase（或 merge base 进来）——判据细节与合后 ancestry 陷阱归你所在仓的 Git 协作
   规范，此处不复读。编排位只记一条：多会话并发时 base 常被别的 PR 推进，
   **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。

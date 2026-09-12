@@ -71,8 +71,9 @@ validation of untrusted input; they simply do not need a Python-style external t
 
 Profile provisioning is part of initialization, not a workstation prerequisite:
 
-- Python pins Ruff, Pyright, and pytest as project dev dependencies in `pyproject.toml` + `uv.lock`;
-  new repositories set Pyright strict, while legacy repositories use §4 ratchets.
+- Python pins Ruff, Pyright, and pytest as project dev dependencies in `pyproject.toml` + `uv.lock`, and pins
+  uv itself with `[tool.uv] required-version = "==<ver>"` (a floating uv version drifts the lock's serialized
+  shape); new repositories set Pyright strict, while legacy repositories use §4 ratchets.
 - Go pins `staticcheck` and `golangci-lint` through a repo-owned version manifest/bootstrap (use a
   `go.mod` tool dependency when supported) and verifies their versions in CI; ambient PATH versions
   are not the source of truth.
@@ -164,4 +165,6 @@ Bootstrap is complete only when:
 6. Positive evidence passes once, and hermetic negative probes prove tool failure and partial
    gate/config installation both block with the required actionable envelope.
 7. CI calls the same wrapper and the language-native full close; a real PR proves the required check can
-   turn red.
+   turn red. Workflows MUST set `defaults.run.shell: bash` (or `shell: bash` on every step): on Linux/macOS
+   runners the unspecified shell is `bash -e` (or `sh -e`) without `pipefail`, so `pytest | tee` exits 0 on
+   failure; the deliberately-red PR MUST fail through the test step itself, not only through lint.

@@ -1,6 +1,6 @@
 ---
 name: git-workflow-standard
-version: 1.1.2
+version: 1.2.0
 description: 生产级 Git 协作 SOP:受保护分支按仓库 tier 门禁、改动从 feature 分支起、集成默认 squash、rebase 判据、提交不加 AI 签名。任何 git commit / push / 开 PR / 建分支 / rebase / 合并场景加载;agent 写完代码准备提交前必读。Use when committing, pushing, opening a PR, branching, rebasing, or merging.
 ---
 
@@ -30,10 +30,11 @@ canonical = 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓的 enro
 
 ## 集成策略（默认线性，2026-06-25 修订）
 
-**默认 squash**;可选 **rebase-merge**(同为线性)。**merge-commit 不是 sanctioned 选项。**
+**默认 squash**;可选 **rebase-merge**(同为线性)。**merge-commit 只有一种 sanctioned 用法:长驻集成分支批式 PR 进 base。**
 - **squash**:线性、每 PR 一个原子全绿 commit、易 revert、bisect 友好 —— 默认。
 - **rebase-merge**:偏好保留 PR 内分块 commit 且要线性的仓。
-- **为何弃 merge-commit**:全 agent、无人读 git 历史 → merge-commit 卖点失效(详见 references §4)。**这是 SOP 默认,不是 Tier 2 服务端硬门**;repo-local 若强制 linear 再按本地门执行。
+- **merge-commit(仅长驻集成分支 → base)**:`dev` / `develop` / `release/**` / `project/*` 批式 PR 进 base 用 merge-commit 保祖先(squash / rebase-merge 重写 SHA,长驻分支与 base 分叉、下一批 PR 重现旧 commit,详见 references §4)。feature → 任何 base 仍走 squash / rebase-merge(线性)。
+- **为何 feature PR 弃 merge-commit**:全 agent、无人读 git 历史 → merge-commit 卖点失效(详见 references §4)。**这是 SOP 默认,不是 Tier 2 服务端硬门**;repo-local 若强制 linear 再按本地门执行。
 - **对抗评审的知识**(约束 / 被否方案)落 **ADR + PR 记录 + commit trailer**,不进 commit graph —— squash 丢 exhaust 不丢 knowledge。
 - **合后判定**:squash / rebase-merge 后原 head 不必是 base 的 ancestor,**MUST NOT** 用 ancestry 单独断言“未合入”或授权清理。历史合入查 forge 的精确 PR;当前内容查 tree / test;部署查不可变 release provenance(见 references §5.1)。
 - **发布证据**:release CI 对 exact pushed digest 完成 smoke 后、GitOps write-back 前,必须产出 immutable `release-evidence/v1`(schema 见 references):只用 `service.version` release tag 贯穿部署,必含完整 `git_sha` 与 `image_digest`;不另造 `release_id`,也不把 SHA/digest 复制到每条 telemetry。

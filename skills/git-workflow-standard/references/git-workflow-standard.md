@@ -31,7 +31,7 @@ canonical 定义在 你的 IaC ruleset,本 skill 只镜像行为契约;具体仓
 
 **原则:能发布 artifact 的仓必须被保护**——受保护分支集 = 受保护分支白名单 `main` / `master` / `develop` / `dev` / `release/**` / `project/*`。
 
-**集成策略边界**:**merge-commit 弃用、默认 squash**(见 §4)是本 SOP 约定,不是 Tier 2 服务端强制;repo-local 如需 linear history,应在本地门显式声明并强制。
+**集成策略边界**:**默认 squash、merge-commit 仅限长驻集成分支批式 PR**(见 §4)是本 SOP 约定,不是 Tier 2 服务端强制;repo-local 如需 linear history,应在本地门显式声明并强制。
 
 **仓的 tier 归属以 你的 IaC ruleset 为准**;本规范仓走 Tier 1。
 
@@ -59,15 +59,15 @@ git log <branchpoint>..origin/<base>   # 空 = base 没动
 
 ## 4. 集成策略（默认线性,2026-06-25 全 agent 修订）
 
-**默认 squash**;可选 **rebase-merge**(同为线性)。**merge-commit 不是 sanctioned 选项。**
+**默认 squash**;可选 **rebase-merge**(同为线性)。**merge-commit 只有一种 sanctioned 用法:长驻集成分支批式 PR 进 base。**
 
 | 策略 | 何时选 | 取舍 |
 |---|---|---|
 | **squash**(默认) | 绝大多数仓 | 线性、每 PR 一个原子全绿 commit、一键 revert、bisect 友好;糊掉 PR 内 WIP 轨迹(对 agent 是噪声,无损) |
 | **rebase-merge** | 偏好保留 PR 内分块 commit 且要线性 | 线性、无 merge bubble;别 rebase 已共享分支(rebasing 黄金律) |
-| ~~merge-commit~~ | —— | **弃用**(理由见下) |
+| **merge-commit** | 仅长驻集成分支(`dev` / `develop` / `release/**` / `project/*`)批式 PR → base | 保祖先:squash / rebase-merge 重写 SHA,长驻分支与 base 分叉、下一批 PR 重现旧 commit(受保护禁 force 重置,只能靠一次补救 merge 拉回);feature → base 不用(理由见下) |
 
-**为何全 agent 下弃 merge-commit**(2026-06-25 重定调研):
+**为何 feature PR 弃 merge-commit**(2026-06-25 重定调研):
 - merge-commit 唯一卖点是"给人读的修复故事";**公司全 agent 开发、无人读 git 历史** → 该论点蒸发(pro-history 倡导者自述其价值是看"一个**人**做了什么")。
 - agent **确实用历史**(Code Researcher ablation:删 commit-history 检索 → 成功率↓),但有用的是**逻辑成块 + 好 message 的 commit**(= squash 产物);WIP/"改评论" churn 是 context 污染、降 bisect 分辨率。
 - agent commit 量爆炸(~275M/wk)下,squash 把每个 PR 收成一个可读节点,主线 `git log --first-parent` 才 legible。

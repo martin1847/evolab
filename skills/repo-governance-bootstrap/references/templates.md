@@ -290,7 +290,7 @@ Version: 1.0.0 | Ratified: YYYY-MM-DD | Last amended: YYYY-MM-DD
 ## 工法（agent 时代工程纪律，可选节）
 
 <canonical vs non-canonical 显式声明 / 就近 AGENTS.md / 防腐门必须 build-failing
-且咬整类、baseline 只收不放 / 行为变更藏 flag 默认 OFF。>
+且咬整类、baseline 只收不放 / 获批变更直接落地（逃生舱用 kill switch），owner 标明需灰度的生产变更才 flag 默认 OFF。>
 
 ## 越线信号（Tripwires）— 出现以下情况即偏航
 
@@ -330,7 +330,7 @@ dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI
 
 - Commit 留本地，owner 明确批准才 push；不加 AI 签名行。
 - Secret、内部 hostname/IP、拓扑只进外部 vault 与 gitignored `ACCESS.local.md`；绝不进 committed tree / traces / 日志 / 对外消息。
-- 行为变更藏 flag、默认 OFF；不顺手 refactor、不动格式。
+- 行为变更须获批；获批的变更直接落地，要逃生舱就加 kill switch（默认开、`=0` 可杀），不做默认 OFF→ON 两步翻转；只有 owner 标明需灰度的生产变更才走 rollout 旗标默认 OFF（定义处写毕业条件）；不顺手 refactor、不动格式。
 - 存疑或需超 scope：STOP and report，不自行扩权。
 
 ## 边界（Scope）
