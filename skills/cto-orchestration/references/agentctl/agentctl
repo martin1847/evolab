@@ -391,7 +391,9 @@ cmd_start() {
     # question anywhere else. Not yet normalized/existence-checked here (that is the next two
     # lines, whose refusals stay in their current order) — an unusable cwd makes a probe
     # unrunnable, which this gate WARNs about and never blocks on.
-    GOAL_PREFLIGHT_CWD="$CWD" "$HERE/../goal-preflight.py" "$GOAL" || {
+    # …and so does the deliverable glob: the gate's write-set reading needs what THIS dispatch
+    # declared it would produce, which is the only write-set source the goal text cannot state.
+    GOAL_PREFLIGHT_CWD="$CWD" GOAL_PREFLIGHT_DELIVERABLE="$DELIV" "$HERE/../goal-preflight.py" "$GOAL" || {
       echo "HINT: mechanical / forensic / pure-research goals opt out explicitly — re-run with --no-preflight" >&2
       exit 1; }
   fi

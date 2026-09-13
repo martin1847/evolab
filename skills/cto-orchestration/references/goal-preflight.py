@@ -28,11 +28,22 @@ carries per-machine diagnostics (`grep: no such file`, deprecation banners) that
 declared count depend on the seat's environment instead of on the claim, and this gate's own
 stderr is a contract surface an executed probe must not be able to write into. The operator
 re-runs the command himself — every verdict prints it, with the cwd it ran in.
+
+LIVE-TREE PROBE (2026-09-13) is a WARN-only shape reading of the same premise lines: a probe
+whose path token lands in this goal's own write set (path tokens in `## Task / Deliverables`
+plus the lane's `--deliverable` glob, GOAL_PREFLIGHT_DELIVERABLE) and that quotes no pinned
+revision (`git show <rev>:` / `cat-file` / `ls-tree` / `git grep`) declares a reading the
+deliverable itself will flip — the shape that failed four goals in two seats in four days.
+It NEVER changes rc and never blocks: a probe asserting an invariant that must still hold
+AFTER delivery wears the identical shape, and only the author knows which he wrote. It does
+NOT parse the C09 closed-set format, sandbox nothing, and compares tokens as written rather
+than by basename (owner ruling + accepted miss class — see the layer's own comment).
 Environment: GOAL_PREFLIGHT_CWD = cwd probes run in (default: this process's cwd);
 GOAL_PREFLIGHT_TIMEOUT = per-probe seconds, a POSITIVE FINITE number (default 120); anything else
 (nan, inf, 0, negative, non-numeric) WARNs and falls back to the default, because `nan` is a legal
 float that removes `communicate()`'s deadline altogether and makes the gate hangable again.
 """
+import fnmatch
 import math
 import os
 import re
@@ -127,10 +138,14 @@ _URL_RE = re.compile(r"https?://\S+")
 # A path token may start absolute (`/Users/...`) or dot-relative (`./src`, `../lib`) —
 # review R2: requiring the letter before the FIRST slash rejected both. The letter
 # requirement moves to the first named segment; bare digits (8/17) still fail it.
+# The path arm is named because a SECOND judgement now reads the same syntax (the write-set
+# check below): one grammar, two consumers, so a path that counts as a scan root also counts
+# as a probe target. SCOPE_RE's own pattern is byte-identical to before the extraction.
+_PATH_ARM = (r"(?:\.{1,2}/|/)?"
+             r"[A-Za-z0-9_.~*-]*[A-Za-z_][A-Za-z0-9_.~*-]*/[^\s`）),，]+")
 SCOPE_RE = re.compile(
     r"scope\s*=|全仓|全树|整仓|repo[ -]?根|repo-root"
-    r"|(?:^|[\s（(=`,，])(?:\.{1,2}/|/)?"
-    r"[A-Za-z0-9_.~*-]*[A-Za-z_][A-Za-z0-9_.~*-]*/[^\s`）),，]+")
+    r"|(?:^|[\s（(=`,，])" + _PATH_ARM)
 
 # inherited-mechanism premise declaration (2026-08-28, n=3 field shape: a mechanism claim
 # arrived by letter / prior transcript and was written into the next goal WITHOUT anyone
@@ -245,6 +260,132 @@ def premise_probes(body):
             yield body.count("\n", 0, m.start()) + 1, probe, observed
 
 
+# ---- live-tree probe morphology (2026-09-13, field n=4 across two seats) --------------------
+# The disease: a premise probe reads a path THIS goal is about to change, so the reading it
+# declares flips the moment the deliverable lands — the goal then fails its own gate on the
+# fix round (own repo 2026-09-10, LESSON premise-anchored-to-live-tree; three more downstream
+# on 2026-09-13, same shape every time). Judged on the probe TEXT alone: never on whether the
+# probe ran, never on its result, and it NEVER changes rc — a probe deliberately asserting an
+# invariant that must still hold AFTER delivery is a legitimate live-tree probe, and only the
+# author knows which of the two he wrote. So: one WARN naming the line and the path.
+# The write set is declared, not discovered: path tokens inside the `## Task / Deliverables`
+# section plus the `--deliverable` glob the lane already knows (GOAL_PREFLIGHT_DELIVERABLE).
+# NOT parsed (owner ruling 2026-09-13): the C09 closed-set format — a second, richer grammar
+# for the same question buys recall this gate cannot price, and the two would drift.
+# Tokens are compared AS WRITTEN (after absolute→seat-relative normalization), never by
+# basename: a goal that says it edits `goal-preflight.py` and a probe that reads
+# `skills/…/references/goal-preflight.py` are not matched, because a basename rule makes every
+# same-named file in the tree a hit. Accepted boundary, stated because it IS a miss class.
+DELIVERABLE_ENV = "GOAL_PREFLIGHT_DELIVERABLE"
+# The TITLE TEXT (`#` and any leading number removed) must START with Task / Deliverable: a
+# substring rule read `## Out of scope / Tasks not done` as a write set, i.e. reported the very
+# paths the goal swore off.
+WRITE_SECTION_RE = re.compile(
+    r"(?msi)^##+ +(?:\d+[.)、]\s*)?(?:Task|Deliverable)[^\n]*\n(.*?)(?=^##+ |\Z)")
+# A bare FILENAME is a write-set path too (`改 README.md`), which SCOPE_RE's arm cannot see:
+# there a slash is what proves path-ness, here the dotted extension does. An extension is a run
+# of ≥2 characters containing a letter, which is what keeps `e.g.` / `i.e.` (1 char), `v1.7.10`
+# / `8.17` (no letter) and `39.5` out; `example.com` remains indistinguishable from a file by
+# morphology alone — accepted false WARN, counted against the false-WARN budget, not hidden.
+_FILE_ARM = (r"[A-Za-z0-9_~*-]*[A-Za-z_][A-Za-z0-9_~*-]*"
+             r"(?:\.(?=[A-Za-z0-9_~*-]*[A-Za-z])[A-Za-z0-9_~*-]{2,8})+")
+# A trailing slash is the other way a directory is written (`docs/`); `docs/api` already arrives
+# through _PATH_ARM, whose tail needs a character after the slash. Bare `docs` with no slash at
+# all stays a miss: a word that common cannot be read as a path. Separate arm on purpose —
+# SCOPE_RE's grammar stays byte-identical, because a scan-面 declaration is a different question.
+_DIR_ARM = r"(?:\.{1,2}/|/)?[A-Za-z0-9_.~*-]*[A-Za-z_][A-Za-z0-9_.~*-]*/"
+PATH_TOKEN_RE = re.compile(
+    r"(?:^|[\s（(=`,，:：])(" + _PATH_ARM + "|" + _FILE_ARM + "|" + _DIR_ARM + ")")
+# pinned-shape, not rev-parsing: any of these reads a committed object, so its answer cannot
+# be changed by this goal's own deliverable. Any distance between `git` and the verb, because a
+# length window only ever mis-read a long `git -C <path> show <rev>:` as live and WARNed on it.
+PINNED_RE = re.compile(r"\bgit\b[^`\n]*?\b(?:show\s+[^\s`]+:|cat-file|ls-tree|grep)\b")
+_TRAILING = "。，、；：,.;:!！?？)）」』】>"
+LIVE_PROBE_MSG = ("{where} 活树探针命中本 goal 写集路径 {path}——交付物一落地它就翻转；"
+                  "描述 base 状态请改 pinned 形态（git show <base sha>:{path} | …），"
+                  "交付后仍应成立的不变量可忽略本行")
+WRITE_SET_NOTE = "该路径在本 goal 写集内；若探针本意是描述 base 状态，改 pinned 形态。"
+
+
+def seat_cwd():
+    """The cwd probes are read against — the seat's tree, or this process's own."""
+    return os.environ.get(CWD_ENV) or os.getcwd()
+
+
+def path_tokens(text):
+    """Every path-shaped token in one text, in order, de-duplicated. URLs never count."""
+    tokens = []
+    for hit in PATH_TOKEN_RE.finditer(_URL_RE.sub("", text)):
+        token = hit.group(1).strip("`")
+        if token.startswith("**") and token.endswith("**"):
+            token = token[2:-2]      # markdown bold AROUND a path — both ends, or `**` globs
+        elif token.endswith("**"):
+            token = token[:-2]
+        token = token.rstrip(_TRAILING)
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def repo_relative(token, cwd):
+    """Seat-relative form of one token, or None when it cannot name a file in this tree.
+
+    An absolute path is normalized against the SEAT cwd (that is the tree the probe runs in);
+    anything resolving outside it, and `~`-relative text this gate would have to expand with
+    the wrong user's home, is not this goal's write set and is dropped in silence.
+    """
+    if token.startswith("~"):
+        return None
+    try:
+        token = os.path.relpath(token, cwd) if os.path.isabs(token) else os.path.normpath(token)
+    except (OSError, ValueError):
+        return None
+    return None if token.startswith("..") or token in (".", "") else token
+
+
+def write_set(body, cwd):
+    """Paths this goal declares it will change: Task / Deliverables tokens ∪ the lane's glob."""
+    entries = []
+    for section in WRITE_SECTION_RE.finditer(body):
+        for token in path_tokens(section.group(1)):
+            rel = repo_relative(token, cwd)
+            if rel and rel not in entries:
+                entries.append(rel)
+    raw = (os.environ.get(DELIVERABLE_ENV) or "").strip()
+    if raw:
+        rel = repo_relative(raw, cwd)
+        if not rel:
+            advise(f"{DELIVERABLE_ENV}={raw} 归一不到席位树内路径，写集只取 Task / Deliverables 节")
+        elif rel not in entries:
+            entries.append(rel)
+    return entries
+
+
+def write_set_hit(token, entries):
+    """The write-set entry this token reads — equality, under a declared dir, or glob match."""
+    for entry in entries:
+        if (token == entry or token.startswith(entry.rstrip("/") + "/")
+                or fnmatch.fnmatch(token, entry)):
+            return entry
+    return None
+
+
+def live_probe_paths(body):
+    """{line-number: path} for every premise probe reading a write-set path off the live tree."""
+    cwd = seat_cwd()
+    entries = write_set(body, cwd)
+    hits = {}
+    for number, probe, _ in premise_probes(body) if entries else ():
+        if PINNED_RE.search(probe):
+            continue
+        for token in path_tokens(probe):
+            rel = repo_relative(token, cwd)
+            if rel and write_set_hit(rel, entries):
+                hits[number] = rel
+                break
+    return hits
+
+
 def run_probe(command, cwd, timeout):
     """(exit code, non-empty stdout lines) — the probe verbatim, never re-typed."""
     with subprocess.Popen(command, shell=True, cwd=cwd, text=True,
@@ -261,9 +402,9 @@ def run_probe(command, cwd, timeout):
         return proc.returncode, sum(1 for line in out.splitlines() if line.strip())
 
 
-def premise_contradiction(body):
+def premise_contradiction(body, live_paths=()):
     """Run every opt-in probe; message for the first declaration its own command refutes."""
-    cwd = os.environ.get(CWD_ENV) or os.getcwd()
+    cwd = seat_cwd()
     timeout = probe_timeout()
     for number, probe, observed in premise_probes(body):
         where = f"PREMISE 行(第 {number} 行)"
@@ -298,8 +439,11 @@ def premise_contradiction(body):
             continue
         for name, want in declared:
             if want != got[name]:
-                return (f"{where} 实跑与声明不符：declared {name}={want}, got {name}={got[name]}"
-                        f"（probe `{command}`，cwd {cwd}）。")
+                verdict = (f"{where} 实跑与声明不符：declared {name}={want}, got {name}={got[name]}"
+                           f"（probe `{command}`，cwd {cwd}）。")
+                # the same predicate, on the rejection path: a refuted reading whose path this
+                # goal is about to rewrite is most often the live-tree shape, not a false claim
+                return (verdict + WRITE_SET_NOTE) if number in live_paths else verdict
     return None
 
 def fail(message, read="Read cto-orchestration/references/goal-template.md."):
@@ -335,7 +479,10 @@ def main():
     if faults:
         number, why = faults[0]
         return fail(f"PREMISE 行(第 {number} 行)未成立声明：{why}。")
-    contradiction = premise_contradiction(body)
+    live_paths = live_probe_paths(body)
+    for number, path in sorted(live_paths.items()):
+        advise(LIVE_PROBE_MSG.format(where=f"PREMISE 行(第 {number} 行)", path=path))
+    contradiction = premise_contradiction(body, live_paths)
     if contradiction:
         return fail(contradiction,
                     "Read: cto-orchestration/references/goal-template.md §Premises.")

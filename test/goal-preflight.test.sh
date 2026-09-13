@@ -530,5 +530,176 @@ run_check "$goal"
 chk_eq "[PREFIX] a lone CR is a line break, so the row IS judged" 1 "$rc"
 chk_contains "[PREFIX] and numbered as its own line" "第 3 行" "$out"
 
+# ── live-tree probe morphology (2026-09-13, field n=4 in four days across two seats) ───────
+# A premise probe reading a path THIS goal will change declares a reading its own deliverable
+# flips: own repo 2026-09-10 (LESSON premise-anchored-to-live-tree) plus three downstream fix
+# rounds on 2026-09-13. WARN-only by owner ruling — a deliberate "must still hold AFTER
+# delivery" invariant wears the identical shape, so rc must never move. Three states pinned:
+# bad sample WARNs (①④), good samples stay silent (②③⑥), broken gauge neither blocks nor
+# crashes (illegal env, missing write-set section).
+lp_run(){ # $1 goal  [$2 GOAL_PREFLIGHT_DELIVERABLE — unset when the arg is absent]
+  if [ "$#" -ge 2 ]; then
+    err="$(GOAL_PREFLIGHT_CWD="$seat" GOAL_PREFLIGHT_DELIVERABLE="$2" "$CHECK" "$1" 2>&1 >/dev/null)"; rc=$?
+  else
+    err="$(GOAL_PREFLIGHT_CWD="$seat" "$CHECK" "$1" 2>&1 >/dev/null)"; rc=$?
+  fi
+}
+lp_goal(){ # $1 PREMISE row (lands on line 3)  $2 Task / Deliverables item (line 5)
+  printf "${ok}## Premises\n%s\n## Task / Deliverables\n%s\n" "$1" "$2" > "$goal"
+}
+LIVE='活树探针命中本 goal 写集路径'
+mkdir -p "$seat/docs" "$elsewhere/docs"
+printf 'k here\n' > "$seat/docs/x.md"          # so the declared count=1 rc=0 is the TRUE reading
+printf 'nothing\n' > "$seat/docs/other.md"     # …and count=0 rc=1 outside the write set
+printf 'k here\n' > "$elsewhere/docs/x.md"     # same file name, another tree (⑥)
+
+# ① the disease itself: write-set path, live tree, no pinned anchor
+lp_goal 'PREMISE: k 还在 verify=`grep -n k docs/x.md` => count=1 rc=0' '1. 改 `docs/x.md` 加一行'
+lp_run "$goal"
+chk_contains "[LIVE] ① a live-tree probe on a write-set path WARNs" "$LIVE" "$err"
+chk_contains "[LIVE] ① naming the line an operator opens" "PREMISE 行(第 3 行)" "$err"
+chk_contains "[LIVE] ① and the path it reads" "docs/x.md" "$err"
+chk_contains "[LIVE] ① handing over the pinned shape" "git show <base sha>:docs/x.md" "$err"
+# ⑦ the ruling: WARN never moves rc — an intentional post-delivery invariant wears this shape
+chk_eq "[LIVE] ⑦ rc stays 0 while the WARN is on stderr" 0 "$rc"
+
+# ② the same claim anchored to a pinned revision cannot flip, so it is never reported
+lp_goal 'PREMISE: base 里有 k verify=`git show 0000000:docs/x.md | grep -n k` => 观察到一行' \
+  '1. 改 `docs/x.md` 加一行'
+lp_run "$goal"
+chk_not_contains "[LIVE] ② a pinned-base probe is silent" "$LIVE" "$err"
+chk_eq "[LIVE] ② and still dispatches" 0 "$rc"
+
+# ③ a live-tree probe on a path this goal does NOT touch is nobody's business
+lp_goal 'PREMISE: other 里没有 k verify=`grep -n k docs/other.md` => count=0 rc=1' \
+  '1. 改 `docs/x.md` 加一行'
+lp_run "$goal"
+chk_not_contains "[LIVE] ③ a path outside the write set is silent" "$LIVE" "$err"
+chk_eq "[LIVE] ③ and dispatches" 0 "$rc"
+
+# ④ the lane's own --deliverable glob is the second write-set source: a goal whose Task section
+# names no path at all is still judged against what the dispatch declared it would produce
+lp_goal 'PREMISE: k 还在 verify=`grep -n k docs/x.md` => count=1 rc=0' '1. 改文档里那一行'
+lp_run "$goal"
+chk_not_contains "[LIVE] ④ CONTROL: no declared path, nothing to hit" "$LIVE" "$err"
+lp_run "$goal" 'docs/*.md'
+chk_contains "[LIVE] ④ GOAL_PREFLIGHT_DELIVERABLE glob makes it a write-set hit" "$LIVE" "$err"
+chk_contains "[LIVE] ④ naming the probe's own path, not the glob" "docs/x.md" "$err"
+chk_eq "[LIVE] ④ and still never blocks" 0 "$rc"
+# ⑧ an empty variable is not a setting — byte-identical to an unset one
+lp_run "$goal"; lp_unset_err="$err"
+lp_run "$goal" ""
+chk_eq "[LIVE] ⑧ an empty GOAL_PREFLIGHT_DELIVERABLE equals an unset one" "$lp_unset_err" "$err"
+chk_eq "[LIVE] ⑧ and neither invents a hit" 0 "$rc"
+
+# a write-set entry naming a DIRECTORY covers what lives under it (the declared 口径: equality,
+# under a declared dir, or glob — never by basename)
+lp_goal 'PREMISE: 入口还在 verify=`grep -n k docs/x.md` => count=1 rc=0' '1. 重写 `docs/legacy` 目录'
+lp_run "$goal"
+chk_not_contains "[LIVE] DIR: a sibling directory is not a hit" "$LIVE" "$err"
+lp_goal 'PREMISE: 入口还在 verify=`grep -n k docs/x.md` => count=1 rc=0' '1. 重写 `docs/api` 目录'
+lp_run "$goal" 'docs/x.md'
+chk_contains "[LIVE] DIR: and the declared path itself still hits" "$LIVE" "$err"
+
+# ⑤ the same predicate on the REJECTION path: a refuted reading whose path this goal rewrites
+# is most often the live-tree shape, so the ERR says so instead of leaving the author to guess
+lp_goal 'PREMISE: 五行 k verify=`grep -n k docs/x.md` => count=5 rc=0' '1. 改 `docs/x.md` 加一行'
+lp_run "$goal"
+chk_eq "[LIVE] ⑤ a refuted declaration still reds" 1 "$rc"
+chk_contains "[LIVE] ⑤ with the existing verdict" "declared count=5, got count=1" "$err"
+chk_contains "[LIVE] ⑤ plus the write-set hint" "该路径在本 goal 写集内" "$err"
+lp_goal 'PREMISE: 五行 k verify=`grep -n k docs/other.md` => count=5 rc=1' '1. 改 `docs/x.md` 加一行'
+lp_run "$goal"
+chk_eq "[LIVE] ⑤ a refuted declaration outside the write set reds the same" 1 "$rc"
+chk_not_contains "[LIVE] ⑤ but carries no write-set hint" "该路径在本 goal 写集内" "$err"
+
+# ⑥ known negatives: a URL, a date/ratio slash, and an absolute path in ANOTHER tree
+lp_goal 'PREMISE: 文档地址 verify=`echo https://example.com/docs/x.md` => count=1 rc=0' \
+  '1. 改 `docs/x.md` 加一行'
+lp_run "$goal"
+chk_not_contains "[LIVE] ⑥ a URL does not impersonate a write-set path" "$LIVE" "$err"
+lp_goal 'PREMISE: 跑分 verify=`echo 8/17` => count=1 rc=0' '1. 改 `docs/x.md` 加一行'
+lp_run "$goal"
+chk_not_contains "[LIVE] ⑥ nor does a bare ratio" "$LIVE" "$err"
+printf "${ok}## Premises\nPREMISE: 别的树 verify=\`grep -n k %s/docs/x.md\` => count=1 rc=0\n## Task / Deliverables\n1. 改 \`docs/x.md\` 加一行\n" "$elsewhere" > "$goal"
+lp_run "$goal"
+chk_not_contains "[LIVE] ⑥ an absolute path outside the seat tree is not this write set" "$LIVE" "$err"
+chk_eq "[LIVE] ⑥ and nothing crashed" 0 "$rc"
+chk_not_contains "[LIVE] ⑥ no traceback" Traceback "$err"
+# …while the SAME file named absolutely INSIDE the seat tree is the disease, normalized
+printf "${ok}## Premises\nPREMISE: 席位树 verify=\`grep -n k %s/docs/x.md\` => count=1 rc=0\n## Task / Deliverables\n1. 改 \`docs/x.md\` 加一行\n" "$seat" > "$goal"
+lp_run "$goal"
+chk_contains "[LIVE] ⑥ an absolute path INSIDE the seat tree normalizes and hits" "$LIVE" "$err"
+chk_contains "[LIVE] ⑥ reported repo-relative, not as typed" "写集路径 docs/x.md" "$err"
+
+# the gauge itself: an unusable variable and a goal with no write-set section are both answered
+# with silence-or-one-line, never a crash and never a refusal
+lp_goal 'PREMISE: k 还在 verify=`grep -n k docs/x.md` => count=1 rc=0' '1. 改文档里那一行'
+lp_run "$goal" "$elsewhere/*.md"
+chk_eq "[LIVE] GAUGE: a deliverable glob outside the seat tree never blocks" 0 "$rc"
+chk_contains "[LIVE] GAUGE: and says the variable was unusable" "归一不到席位树内路径" "$err"
+chk_not_contains "[LIVE] GAUGE: without inventing a hit" "$LIVE" "$err"
+printf "${ok}## Premises\nPREMISE: k 还在 verify=\`grep -n k docs/x.md\` => count=1 rc=0\n" > "$goal"
+lp_run "$goal"
+chk_eq "[LIVE] GAUGE: a goal with no Task / Deliverables section dispatches" 0 "$rc"
+chk_not_contains "[LIVE] GAUGE: with an empty write set nothing can hit" "$LIVE" "$err"
+chk_not_contains "[LIVE] GAUGE: and no traceback" Traceback "$err"
+
+# ── fix round 1 (2026-09-13, cold review REVIEW_LIVE_PROBE_WARN_codex) ─────────────────────
+# Four WARN-precision defects, each kept here as the minimal goal that WARNed on c161a49 and
+# must not now. PRECISION only: nothing below widens recall, and ⑧ re-pins rc on every row —
+# a false WARN costs the layer its 误 WARN ≤1/week kill criterion just as surely as a miss.
+# ① an abbreviation is not a filename: a one-character run after the dot is not an extension
+lp_goal 'PREMISE: 缩写 verify=`echo e.g.` => count=1 rc=0' 'Use e.g. for examples.'
+lp_run "$goal"
+chk_not_contains '[LIVE-FIX] ① e.g. is not a write-set path' "$LIVE" "$err"
+chk_eq '[LIVE-FIX] ⑧ ① rc unmoved' 0 "$rc"
+# ② nor is a version number: its dotted runs carry no letter
+lp_goal 'PREMISE: 版本 verify=`echo v1.7.10` => count=1 rc=0' '1. 把依赖升到 v1.7.10'
+lp_run "$goal"
+chk_not_contains '[LIVE-FIX] ② a version number is not a write-set path' "$LIVE" "$err"
+chk_eq '[LIVE-FIX] ⑧ ② rc unmoved' 0 "$rc"
+# ③ bold markers are stripped in PAIRS — the leading ** used to reach fnmatch as a glob and
+# swallow every sibling directory, so a path the goal never declared came back as a hit
+lp_goal 'PREMISE: 别的树 verify=`echo otherdocs/x.md` => count=1 rc=0' '**docs/x.md**'
+lp_run "$goal"
+chk_not_contains '[LIVE-FIX] ③ bold write set does not glob over a sibling directory' "$LIVE" "$err"
+chk_eq '[LIVE-FIX] ⑧ ③ negative rc unmoved' 0 "$rc"
+lp_goal 'PREMISE: 入口还在 verify=`grep -n k docs/x.md` => count=1 rc=0' '**docs/x.md**'
+lp_run "$goal"
+chk_contains '[LIVE-FIX] ③ CONTROL: the bolded path itself still hits' "$LIVE" "$err"
+chk_contains '[LIVE-FIX] ③ named without its bold markers' "写集路径 docs/x.md" "$err"
+chk_eq '[LIVE-FIX] ⑧ ③ positive rc unmoved' 0 "$rc"
+# ④ the write set is what the goal will CHANGE: a title merely containing "Task" read an
+# exclusion section as a declaration and reported the paths the goal swore off
+printf "${ok}## Premises\nPREMISE: 入口还在 verify=\`grep -n k docs/x.md\` => count=1 rc=0\n## Out of scope / Tasks not done\ndocs/x.md\n" > "$goal"
+lp_run "$goal"
+chk_not_contains '[LIVE-FIX] ④ an out-of-scope section is not a write set' "$LIVE" "$err"
+chk_eq '[LIVE-FIX] ⑧ ④ rc unmoved' 0 "$rc"
+printf "${ok}## Premises\nPREMISE: 入口还在 verify=\`grep -n k docs/x.md\` => count=1 rc=0\n## 2. Deliverables\ndocs/x.md\n" > "$goal"
+lp_run "$goal"
+chk_contains '[LIVE-FIX] ④ CONTROL: a numbered Deliverables title still declares one' "$LIVE" "$err"
+chk_eq '[LIVE-FIX] ⑧ ④ control rc unmoved' 0 "$rc"
+# ⑤ the anchor is morphology at any distance: a long `git -C <path> show <rev>:` reads a
+# committed object exactly like the short form, and the old 40-character window missed it
+lp_goal 'PREMISE: base 里有 README verify=`git -C /tmp/no-such-tree/a/b/c/d/e/f/g/h/i/j/k/l/m show HEAD:README.md` => count=0 rc=128' \
+  '1. 改 `README.md` 加一行'
+lp_run "$goal"
+chk_not_contains '[LIVE-FIX] ⑤ a long -C path is still a pinned anchor' "$LIVE" "$err"
+chk_eq '[LIVE-FIX] ⑧ ⑤ rc unmoved' 0 "$rc"
+# ⑥ a directory is also written with a trailing slash
+lp_goal 'PREMISE: 入口还在 verify=`grep -n k docs/x.md` => count=1 rc=0' '1. 重写 `docs/` 下的全部文档'
+lp_run "$goal"
+chk_contains '[LIVE-FIX] ⑥ a trailing-slash directory covers what lives under it' "$LIVE" "$err"
+chk_contains '[LIVE-FIX] ⑥ naming the probe path, not the directory' "写集路径 docs/x.md" "$err"
+chk_eq '[LIVE-FIX] ⑧ ⑥ rc unmoved' 0 "$rc"
+# ⑦ the real directory-prefix positive the DIR row above never exercised: the write set names
+# a directory and the probe reads a file UNDER it, with no --deliverable glob to lean on
+lp_goal 'PREMISE: 接口文档还在 verify=`echo docs/api/x.md` => count=1 rc=0' '1. 重写 `docs/api` 目录'
+lp_run "$goal"
+chk_contains '[LIVE-FIX] ⑦ a file under a declared directory is a hit' "$LIVE" "$err"
+chk_contains '[LIVE-FIX] ⑦ named as the probe reads it' "写集路径 docs/api/x.md" "$err"
+chk_eq '[LIVE-FIX] ⑧ ⑦ rc unmoved' 0 "$rc"
+
 rm -rf "$SANDBOX"
 summary
