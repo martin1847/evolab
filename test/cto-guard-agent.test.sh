@@ -115,6 +115,137 @@ OUT="$(printf '%s' "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TaskStop
 chk_eq "stale jsonl allows kill" 0 "$RC"
 rm -rf "$JH"
 
+# ── P0e: a dispatch whose prompt names a work tree BEHIND its upstream -> WARN, never DENY ──
+# The WARN rides additionalContext, NOT stderr: on exit 0 the host treats stderr as debug output
+# the dispatching agent never sees, so asserting on stderr would green a message nobody reads
+# (codex review 2026-09-16). Every arm below therefore reads `ctx "$OUT"` and pins stderr empty.
+# Fixture = the shape that proved the pre-rule guard silent: one bare origin, `a` pushes, every
+# other clone stands in for a seat's cwd at a different depth. Local paths only, no network.
+SS="$(mktemp -d)"; SSR="$(cd "$SS" && pwd -P)"; PY3="$(command -v python3)"
+git init -q --bare "$SS/origin.git"
+git clone -q "$SS/origin.git" "$SS/a" 2>/dev/null
+( cd "$SS/a" && git config user.email t@example.com && git config user.name t \
+  && echo one > f && git add f && git commit -qm one && git push -q origin HEAD:main ) >/dev/null 2>&1
+# the bare repo's own HEAD must name the pushed branch, or every clone below lands with no
+# branch at all (dangling remote HEAD) and @{upstream} has nothing to answer
+git -C "$SS/origin.git" symbolic-ref HEAD refs/heads/main
+git clone -q "$SS/origin.git" "$SS/b" 2>/dev/null                  # b stays at commit one
+( cd "$SS/a" && echo two >> f && git commit -qam two && echo three >> f && git commit -qam three \
+  && git push -q origin HEAD:main ) >/dev/null 2>&1
+( cd "$SS/b" && git fetch -q ) >/dev/null 2>&1                     # b: behind 2, fetch fresh
+mkdir -p "$SS/plain"
+git clone -q "$SS/origin.git" "$SS/c" 2>/dev/null
+git -C "$SS/c" checkout -qb solo                                   # a branch with no upstream
+for w in w1 w2 w3 w4 w5; do git clone -q "$SS/origin.git" "$SS/$w" 2>/dev/null; done
+( cd "$SS/a" && echo four >> f && git commit -qam four && git push -q origin HEAD:main ) >/dev/null 2>&1
+for w in w1 w2 w3 w4 w5; do ( cd "$SS/$w" && git fetch -q ) >/dev/null 2>&1; done  # each behind 1
+chk_eq "fixture: b is two commits behind its upstream" 2 "$(git -C "$SS/b" rev-list --count HEAD..@{upstream} 2>/dev/null)"
+
+# ① the field shape: a seat sent into a tree that is behind -> one WARN line, rc untouched
+run PreToolUse Agent "{\"prompt\":\"只读取证：核对 $SS/b 里的 file:line\",\"model\":\"haiku\"}"
+CTX="$(ctx "$OUT")"
+chk_eq "stale tree leaves rc alone" 0 "$RC"
+chk_contains "stale tree warns" "WARN (cto-guard-agent stale-scout-cwd)" "$CTX"
+chk_contains "stale warn carries the behind count" "2" "$CTX"
+chk_contains "stale warn names the work tree" "$SSR/b" "$CTX"
+chk_eq "stale warn writes no stderr (exit-0 stderr is debug, not context)" "" "$ERR"
+
+# ② behind 0 with a fresh fetch -> silent (the only silent case this rule has)
+( cd "$SS/b" && git pull -q ) >/dev/null 2>&1
+run PreToolUse Agent "{\"prompt\":\"只读取证：核对 $SS/b 里的 file:line\",\"model\":\"haiku\"}"
+chk_eq "fresh tree silent" "" "$ERR$OUT"; chk_eq "fresh tree exit 0" 0 "$RC"
+
+# ③ a branch with no upstream cannot be measured, and says so
+run PreToolUse Agent "{\"prompt\":\"audit $SS/c\",\"model\":\"haiku\"}"
+chk_contains "no upstream is spoken" "UNMEASURED (cto-guard-agent stale-scout-cwd)" "$(ctx "$OUT")"
+chk_eq "no upstream exit 0" 0 "$RC"
+chk_eq "no upstream writes no stderr" "" "$ERR"
+
+# ④ behind 0 but FETCH_HEAD is 25h old: that 0 only reflects the last fetch -> UNMEASURED
+"$PY3" -c 'import os,sys,time; os.utime(sys.argv[1],(time.time()-25*3600,)*2)' "$SS/b/.git/FETCH_HEAD"
+run PreToolUse Agent "{\"prompt\":\"audit $SS/b\",\"model\":\"haiku\"}"
+chk_contains "behind=0 on a 25h-old fetch is UNMEASURED" "UNMEASURED (cto-guard-agent stale-scout-cwd)" "$(ctx "$OUT")"
+chk_eq "stale FETCH_HEAD exit 0" 0 "$RC"
+
+# ⑤ a path that is not a git work tree is none of this rule's business
+run PreToolUse Agent "{\"prompt\":\"write notes to $SS/plain\",\"model\":\"haiku\"}"
+chk_eq "non-git path silent" "" "$ERR$OUT"; chk_eq "non-git path exit 0" 0 "$RC"
+
+# ⑥ no git on PATH -> UNMEASURED, never a silent pass (sandbox PATH holds nothing)
+SBIN="$(mktemp -d)"; tmpe="$(mktemp)"
+OUT="$(mkp PreToolUse Agent "{\"prompt\":\"audit $SS/w1\",\"model\":\"haiku\"}" | PATH="$SBIN" "$PY3" "$GUARD" 2>"$tmpe")"; RC=$?; ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_contains "missing git is spoken" "UNMEASURED (cto-guard-agent stale-scout-cwd)" "$(ctx "$OUT")"
+chk_eq "missing git exit 0" 0 "$RC"
+chk_eq "missing git writes no stderr" "" "$ERR"
+
+# ⑦ a git that hangs -> the per-call timeout fires and is spoken, not waited on
+# `/bin/sleep`, absolutely: the sandbox PATH holds only this script, so a bare `sleep` exits 127
+# and the fake git would answer INSTANTLY — the probe would then measure nothing at all
+printf '#!/bin/sh\n/bin/sleep 5\n' > "$SBIN/git"; chmod +x "$SBIN/git"; tmpe="$(mktemp)"
+OUT="$(mkp PreToolUse Agent "{\"prompt\":\"audit $SS/w2\",\"model\":\"haiku\"}" | PATH="$SBIN" "$PY3" "$GUARD" 2>"$tmpe")"; RC=$?; ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+chk_contains "hanging git is spoken" "UNMEASURED (cto-guard-agent stale-scout-cwd)" "$(ctx "$OUT")"
+chk_eq "hanging git exit 0" 0 "$RC"
+rm -rf "$SBIN"
+
+# ⑧ the DENY rules keep precedence: stale tree + no model is still the model DENY
+run PreToolUse Agent "{\"prompt\":\"audit $SS/w1\"}"
+chk_eq "missing model still denies over a stale tree" 2 "$RC"
+chk_contains "the deny is the model one" "DENY" "$ERR"
+chk_not_contains "no freshness note on a denied dispatch" "stale-scout-cwd" "$OUT$ERR"
+
+# ⑨ more work trees than the cap: four judged, one line saying the rest were not
+run PreToolUse Agent "{\"prompt\":\"audit $SS/w1 $SS/w2 $SS/w3 $SS/w4 $SS/w5\",\"model\":\"haiku\"}"
+CTX="$(ctx "$OUT")"
+chk_eq "over-cap exit 0" 0 "$RC"
+chk_eq "exactly four work trees judged" 4 "$(printf '%s\n' "$CTX" | grep -c 'WARN (cto-guard-agent stale-scout-cwd)')"
+chk_contains "over-cap is spoken" "UNMEASURED (cto-guard-agent stale-scout-cwd)" "$CTX"
+chk_eq "over-cap writes no stderr" "" "$ERR"
+
+# ⑩ a LINKED worktree keeps its OWN FETCH_HEAD, in its own git dir — the common dir's copy
+# belongs to a SIBLING tree, so reading that one misreads the fetch age in BOTH directions
+# (codex review 2026-09-16: a stale sibling faked UNMEASURED, a fresh sibling hid a never-fetched
+# tree). Worktree seats are this rule's whole audience, so the wrong file here is a silent pass.
+git clone -q "$SS/origin.git" "$SS/lw" 2>/dev/null
+( cd "$SS/lw" && git fetch -q ) >/dev/null 2>&1
+git -C "$SS/lw" worktree add -B lb "$SS/linked" origin/main >/dev/null 2>&1
+git -C "$SS/linked" branch --set-upstream-to=origin/main lb >/dev/null 2>&1
+LCOMMON="$SS/lw/.git/FETCH_HEAD"; LOWN="$SS/lw/.git/worktrees/linked/FETCH_HEAD"
+age25() { touch -t "$("$PY3" -c 'import time;print(time.strftime("%Y%m%d%H%M.%S",time.localtime(time.time()-25*3600)))')" "$1"; }
+chk_eq "fixture: the linked worktree is level with its upstream" 0 \
+  "$(git -C "$SS/linked" rev-list --count HEAD..@{upstream} 2>/dev/null)"
+chk_eq "fixture: the linked worktree's FETCH_HEAD is NOT the common dir's" 1 \
+  "$([ "$(git -C "$SS/linked" rev-parse --git-path FETCH_HEAD)" \
+     != "$(git -C "$SS/linked" rev-parse --git-common-dir)/FETCH_HEAD" ] && echo 1 || echo 0)"
+# common fresh / linked absent: this tree never fetched, so its behind=0 compares against nothing
+run PreToolUse Agent "{\"prompt\":\"只读取证：核对 $SS/linked\",\"model\":\"haiku\"}"
+chk_contains "linked tree that never fetched is UNMEASURED despite a fresh sibling" \
+  "UNMEASURED (cto-guard-agent stale-scout-cwd)" "$(ctx "$OUT")"
+chk_eq "linked never-fetched exit 0" 0 "$RC"
+# common 25h / linked fresh: the tree at issue IS fresh -> the one silent case, sibling ignored
+( cd "$SS/linked" && git fetch -q ) >/dev/null 2>&1
+age25 "$LCOMMON"
+run PreToolUse Agent "{\"prompt\":\"只读取证：核对 $SS/linked\",\"model\":\"haiku\"}"
+chk_eq "a freshly-fetched linked tree stays silent under a 25h-old sibling" "" "$(ctx "$OUT")$ERR"
+chk_eq "linked fresh exit 0" 0 "$RC"
+# common fresh / linked 25h: the tree at issue is stale -> UNMEASURED, sibling freshness is noise
+touch "$LCOMMON"; age25 "$LOWN"
+run PreToolUse Agent "{\"prompt\":\"只读取证：核对 $SS/linked\",\"model\":\"haiku\"}"
+chk_contains "a 25h-old linked fetch is UNMEASURED despite a fresh sibling" \
+  "UNMEASURED (cto-guard-agent stale-scout-cwd)" "$(ctx "$OUT")"
+chk_eq "linked stale exit 0" 0 "$RC"
+
+# ⑪ prose boundaries: markdown bold and a sentence-final period are not part of the path. Both
+# used to yield complete silence (codex review 2026-09-16) — the one answer this rule may never
+# give for an existing tree it could have measured.
+run PreToolUse Agent "{\"prompt\":\"只读取证：**$SS/w3**\",\"model\":\"haiku\"}"
+chk_contains "a bold-wrapped path is still measured" "$SSR/w3" "$(ctx "$OUT")"
+chk_eq "bold path exit 0" 0 "$RC"
+run PreToolUse Agent "{\"prompt\":\"只读取证：核对 $SS/w3.\",\"model\":\"haiku\"}"
+chk_contains "a sentence-final period is not part of the path" "$SSR/w3" "$(ctx "$OUT")"
+run PreToolUse Agent "{\"prompt\":\"只读取证：核对 $SS/w3/f.\",\"model\":\"haiku\"}"
+chk_contains "a file token plus a period still stands for its tree" "$SSR/w3" "$(ctx "$OUT")"
+rm -rf "$SS"
+
 # ── degenerate ──
 tmpe="$(mktemp)"; out="$(printf 'not json' | python3 "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "malformed JSON is checker error" 2 "$rc"; chk_contains "malformed JSON marker" "CHECKER-ERROR" "$err"

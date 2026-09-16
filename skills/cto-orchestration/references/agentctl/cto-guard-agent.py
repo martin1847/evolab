@@ -4,6 +4,7 @@
 #   PreToolUse   matcher "Agent|Task"  -> browser-dispatch MCP guard  (P0a, DENY)
 #   PreToolUse   matcher "Agent|Task"  -> explicit model-tier required (P0c, DENY)
 #   PreToolUse   matcher "Agent|Task"  -> e2e-runner must be economy tier (P0d, DENY)
+#   PreToolUse   matcher "Agent|Task"  -> cwd named by the brief is BEHIND upstream (P0e, WARN)
 #   PreToolUse   matcher "TaskStop"    -> kill-a-live-agent guard      (P0b, DENY)
 #   PostToolUse  matcher "Agent|Task"  -> black-hole deadline reminder (existing, ALLOW+context)
 # Rationale (2026-07-04 audit): the failing rules already existed in prose (frontend-verify.md / memory)
@@ -12,13 +13,186 @@
 # Deny/checker error = exit 2 + stderr (shown to agent). Reminder = exit 0 + JSON
 # hookSpecificOutput.additionalContext.
 # The Agent/Task/TaskStop tools are Claude-Code concepts — harmless no-ops under Codex/omp.
-import sys, json, re, os, glob, time
+import sys, json, re, os, glob, subprocess, time
 
 BROWSER_RE = re.compile(
     r"playwright|chrome-?devtools|browser|E2E|screenshot|navigate|dev server|"
     r"localhost:[0-9]|vite|npm run dev|pnpm .*dev",
     re.I,
 )
+
+# ── (P0e) PreToolUse·Agent|Task: a seat dispatched into a STALE work tree (WARN, never DENY) ──
+# GATE-AUDIT slug `stale-scout-cwd`. KILL CRITERION (owner ruling 2026-09-16, the ruling that
+# admitted this rule): 30 days with zero hits ⇒ delete. If false WARNs — a DELIBERATE look at an
+# old tree — run above 10% of hits, demote it to speaking only on the UNMEASURED line.
+# FIELD (downstream seats 2026-09-16, n=1 and it cost the whole batch): a read-only 取证 seat
+# inherited the orchestrator's cwd — the main checkout, 74 commits behind upstream — and returned a
+# report whose every file:line resolved and which was entirely STALE. Self-consistent ≠ fresh, so
+# neither the orchestrator reading it nor a human re-read could catch it; it wrote the wrong
+# contract and mis-reported the owner, and the stop came from an implementation seat redding on the
+# right base. dispatch-baseline.md:33-35 already says 只读 scout/audit 也算开工 and names the silent
+# inheritance of the orchestrator's (usually behind) cwd — prose that never reaches the dispatch
+# call, the same failure mode P0a and P0c were promoted out of.
+# WARN ONLY, owner ruling: 取证 on an old tree is sometimes DELIBERATE (a pinned base looks exactly
+# like this), so what must die is not KNOWING which tree you are on. This rule therefore never
+# denies and never moves rc, and it is judged only after the DENY rules above have let the dispatch
+# through — a denied dispatch already has the message that matters.
+# MEASUREMENT, bounded by construction: ≤4 work trees, 2s per git call, 6s total (monotonic).
+#   * candidates = the prompt's ABSOLUTE path tokens that EXIST as a directory (a file token stands
+#     for its directory); a token naming nothing is skipped without spending a subprocess, and a
+#     RELATIVE token is not a candidate at all — it has no meaning without the very cwd at issue.
+#   * each candidate resolves to its work tree in ONE call (`rev-parse --show-toplevel
+#     --git-path FETCH_HEAD`): `--git-path` is the ONLY way to reach a LINKED WORKTREE's own
+#     FETCH_HEAD, which lives in that worktree's git dir (`<common>/worktrees/<name>/`) and NOT
+#     in the common dir — worktree seats are exactly who this rule serves. Reading the common
+#     dir instead measured a SIBLING tree's fetch age (codex review 2026-09-16: a 25h-old common
+#     file made a freshly-fetched linked tree read UNMEASURED, and a fresh common file hid a
+#     linked tree that had never fetched — the silent pass this rule exists to prevent). Both
+#     answers come back relative to the `-C` directory, so both are joined back onto it. Not a
+#     work tree ⇒ silently skipped.
+#   * behind = `rev-list --count HEAD..@{upstream}`, i.e. LOCAL knowledge only. No fetch, no
+#     ls-remote: a guard that reached the network at dispatch time would be a new hazard.
+# UNMEASURED IS SPOKEN, never a silent pass (the tri-state discipline cto-guard-bash's 14/15/19
+# carry): no upstream, git missing, a timeout, the budget, more trees than the cap. behind=0 is
+# UNMEASURED too when FETCH_HEAD is absent or older than 24h — a tree that never fetched reports 0
+# because it has nothing to compare against, which is the one way this rule could lie "fresh".
+# ACCEPT-DOCUMENTED: a path token carrying a space or a non-ASCII byte is not a candidate (this
+# reads a prose brief, not argv — no quoting to parse), and `behind` counts commits, not their
+# relevance: a tree 200 commits behind on files nobody touched warns just the same.
+_P0E_TREE_CAP = 4
+_P0E_CALL_S = 2.0
+_P0E_BUDGET_S = 6.0
+_P0E_FETCH_STALE_S = 24 * 3600
+# This rule's own path arm (goal-preflight.py's `_PATH_ARM` also accepts relative forms, which are
+# meaningless here). Opens on a separator — `*` included, or a bold `**/abs/path**` loses its whole
+# token — and ends on a path byte so trailing prose punctuation is never read as part of the
+# directory. `.` is a legal path byte, so a sentence-final one still lands inside the token and is
+# stripped below; the rest of _P0E_TRAIL cannot reach the token through today's closing class and
+# is listed so widening that class cannot silently reintroduce the swallow.
+_P0E_PATH = re.compile(r"(?:^|[\s\"'`（(\[{=,，:：;；*])(/[A-Za-z0-9_.~@%+/-]*[A-Za-z0-9_.~@%+-])")
+_P0E_TRAIL = ".,;:!?)"
+_P0E_WARN = (
+    "WARN (cto-guard-agent stale-scout-cwd): 派工树 %s 落后 %s %d 个 commit（%s）——旧树取证"
+    "自洽但过期，人工复核抓不到；故意看旧树可无视，否则换 fresh worktree 再派。"
+)
+# Both lines are 判据 + 动作 and nothing else. The 09-16 field narrative that justified the rule
+# lives in the comment above, NOT in the injected text: a dispatcher meets this line mid-decision,
+# and the story costs bytes at exactly the moment the verdict has to be read. UNMEASURED drops the
+# `rev-list` recipe for the same reason — it names the tree, which is what a manual check needs.
+_P0E_UNMEASURED = "UNMEASURED (cto-guard-agent stale-scout-cwd): %s — 新鲜度没判，派发照常。"
+
+
+def _p0e_git(args, deadline):
+    """(returncode, stdout) for one bounded `git` call, or (None, why) when it could not run."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        return None, "guard 的 6s 新鲜度预算用尽"
+    try:
+        proc = subprocess.run(["git"] + args, capture_output=True, text=True,
+                              timeout=min(_P0E_CALL_S, left))
+    except subprocess.TimeoutExpired:
+        return None, "git 单次调用超过 2s 或剩余预算"
+    except OSError:
+        return None, "PATH 上没有可执行的 git"
+    return proc.returncode, proc.stdout.strip()
+
+
+def _p0e_tree(path, deadline):
+    """(work tree root, path of THIS tree's FETCH_HEAD) for one candidate directory; (None, why)
+    when git could not answer at all, and (None, None) when git answered that this is not a work
+    tree. `--git-path` is asked for FETCH_HEAD by name because a linked worktree keeps its own."""
+    rc, out = _p0e_git(["-C", path, "rev-parse", "--show-toplevel", "--git-path", "FETCH_HEAD"],
+                       deadline)
+    if rc is None:
+        return None, out
+    lines = out.splitlines()
+    if rc != 0 or len(lines) != 2 or not lines[0]:
+        return None, None
+    return lines[0], os.path.normpath(os.path.join(path, lines[1]))
+
+
+def _p0e_fetch(fetch_head):
+    """(age of the last fetch in seconds — None when there never was one, a phrase naming it)."""
+    try:
+        age = time.time() - os.path.getmtime(fetch_head)
+    except OSError:
+        return None, "从未 fetch 过（无 FETCH_HEAD）"
+    # minutes under the hour, days past two: "%.0fh" alone renders a 20-minute-old fetch as
+    # "0h 前", which reads like a broken gauge in the one line a dispatcher gets
+    return age, "上次 fetch 约 %s 前" % (
+        "%.0fm" % (age / 60.0) if age < 3600 else
+        "%.0fh" % (age / 3600.0) if age < 48 * 3600 else "%.0fd" % (age / 86400.0))
+
+
+def _p0e_candidates(prompt):
+    """The existing directories this prompt's absolute path tokens name, in order, deduped."""
+    out = []
+    for m in _P0E_PATH.finditer(prompt):
+        cand = m.group(1).rstrip("/") or "/"
+        if not os.path.isdir(cand):
+            # prose boundaries, in order: ONE trailing sentence mark (a period is a legal path
+            # byte, so `…/b.` arrived as part of the token and fell through to b's PARENT — a
+            # measurable tree read as silence), then a file token standing for its directory.
+            stripped = cand[:-1] if cand[-1:] in _P0E_TRAIL else ""
+            if stripped and os.path.isdir(stripped):
+                cand = stripped
+            else:
+                cand = os.path.dirname(stripped or cand)
+                if not os.path.isdir(cand):
+                    continue
+        if cand not in out:
+            out.append(cand)
+    return out
+
+
+def _p0e_freshness(prompt):
+    """([(tree, upstream, behind, fetch phrase)] for every tree that is behind, [reasons freshness
+    could not be measured]). NEVER raises and never decides anything about rc: an exception here
+    would reach the __main__ wrapper and turn a legal dispatch into a CHECKER-ERROR deny."""
+    warns, notes = [], []
+    try:
+        deadline = time.monotonic() + _P0E_BUDGET_S
+        trees, over_cap = [], False
+        for cand in _p0e_candidates(prompt):
+            top, fetch_head = _p0e_tree(cand, deadline)
+            if top is None:
+                if fetch_head:                    # git itself could not answer -> stop probing
+                    notes.append(fetch_head)
+                    break
+                continue                          # not a work tree: not this rule's face
+            if any(top == seen for seen, _ in trees):
+                continue
+            if len(trees) >= _P0E_TREE_CAP:
+                over_cap = True
+                break
+            trees.append((top, fetch_head))
+        for top, fetch_head in trees:
+            rc, out = _p0e_git(["-C", top, "rev-parse", "--abbrev-ref", "@{upstream}"], deadline)
+            if rc is None:
+                notes.append("%s：%s" % (top, out))
+                break
+            if rc != 0 or not out:
+                notes.append("%s 的当前分支没有 upstream，behind 无从比" % top)
+                continue
+            upstream = out.splitlines()[0]
+            rc, count = _p0e_git(["-C", top, "rev-list", "--count", "HEAD..@{upstream}"], deadline)
+            if rc is None:
+                notes.append("%s：%s" % (top, count))
+                break
+            if rc != 0 or not count.isdigit():
+                notes.append("%s：rev-list 没给出 behind 数" % top)
+                continue
+            age, phrase = _p0e_fetch(fetch_head)
+            if int(count) > 0:
+                warns.append((top, upstream, int(count), phrase))
+            elif age is None or age > _P0E_FETCH_STALE_S:
+                notes.append("%s behind=0 但%s，behind 只反映上次 fetch" % (top, phrase))
+        if over_cap:
+            notes.append("prompt 名下的 git 工作树多于 %d 棵，只判了前 %d 棵"
+                         % (_P0E_TREE_CAP, _P0E_TREE_CAP))
+    except Exception:
+        notes.append("guard 判新鲜度时自身出错")
+    return warns, list(dict.fromkeys(notes))
 
 
 def checker_error(message):
@@ -157,6 +331,25 @@ def main():
                 "Read: cto-orchestration/SKILL.md §0 (model 按活分档).\n"
             )
             return 2
+
+        # ── (P0e) the work tree this brief names is BEHIND its upstream (WARN, never DENY) ──────
+        # Judged LAST, i.e. only on a dispatch the DENY rules above already allowed, and it cannot
+        # change the verdict: rc stays 0 and the only channel used is additionalContext. CHANNEL,
+        # not a style choice (codex review 2026-09-16): on exit 0 stderr is the host's DEBUG log
+        # and the dispatching agent never sees it, so a WARN written there is a gauge that reads
+        # green while saying nothing — exactly the false-green this rule exists to kill. Same
+        # channel as cto-guard-bash's (3)/(13)/(14)/(15)/(19)/(20) notes, one JSON document only.
+        # Design, bounds and the kill criterion sit with the constants at the top of this file.
+        warns, notes = _p0e_freshness(prompt)
+        if warns or notes:
+            # both comprehensions stay INSIDE this call: the injected-text ratchet resolves
+            # literals that appear at the sink expression, and a list assembled one statement
+            # earlier would weigh as zero bytes — a page of injected text nobody meters.
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "\n".join(
+                    [_P0E_WARN % w for w in warns] + [_P0E_UNMEASURED % why for why in notes]),
+            }}))
         return 0
 
     # ── (existing) PostToolUse·Agent|Task: black-hole deadline reminder ────────────────────────────

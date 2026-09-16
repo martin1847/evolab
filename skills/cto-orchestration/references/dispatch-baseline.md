@@ -31,7 +31,7 @@
   `rg` 枚举 use site，闭集 ⊇ 命中。
 - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主
   checkout、非新 worktree）→ 对着过期基线出"幻影发现"（删了的看着还在、已合的看着没合）。派 scout
-  **显式指到新 worktree**，可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）。
+  **显式指到新 worktree**，可疑结论再**对 base ref 复核**（`git show origin/<base>:<path>` / `git grep`）；guard-agent P0e 对派往落后 upstream 的树 WARN（见 agentctl README）。
 
 ## 收工核证四件套（SKILL §1.6 验收原则的操作化；四件套定义在此）
 

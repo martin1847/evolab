@@ -38,12 +38,23 @@ cd "$(dirname "$0")"
 
 SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 
-# ---- the three ceilings: measured on this tree, 2026-09-06 ------------------------------------
-CODE_MAX=14018      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-                    # 2026-09-16 +8: the ledger loop skips a `start` row whose work tree no
-                    # longer exists (identity.py), which buys back a two-day WARN on every write
+# ---- the three ceilings: measured on this tree, 2026-09-16 ------------------------------------
+# 2026-09-16 (cto-guard-agent P0e `stale-scout-cwd`): CODE 14010 -> 14203 and INJECT 17647 -> 17939.
+# What the +193 lines and +292 bytes buy: a dispatch-time WARN when a brief sends a seat into a
+# work tree that is behind its upstream, plus the UNMEASURED line for every case it cannot judge
+# (no upstream / no git / timeout / budget / >4 trees / a behind=0 whose last fetch is over 24h
+# old). The field cost it answers is one downstream batch mis-contracted off a 74-commit-stale
+# 取证 report. INJECT had to move with CODE: a WARN rule whose whole output is text cannot ship
+# under a byte ceiling with zero headroom. PROSE and INJECT_SINGLE did NOT move.
+# Fix round 1 (codex review, same day) moved INJECT DOWN 18184 -> 17939: the WARN carried the
+# 09-16 field narrative into the injected text, which belongs in a source comment — the dispatcher
+# meets that line mid-decision. Both P0e lines are now 判据 + 动作 only. CODE rose 14177 -> 14203
+# for the channel fix (additionalContext, not exit-0 stderr), the per-worktree FETCH_HEAD lookup
+# and the prose-boundary strip. A ceiling that went up may come back down; it may not go up again
+# on the same rule without saying what the bytes buy.
+CODE_MAX=14211      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
 PROSE_MAX=1573      # every shipped *.md under the skill, summed wc -l
-INJECT_MAX=17647    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
+INJECT_MAX=17939    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2216  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length
                         # there competes with the fix line it needs.
