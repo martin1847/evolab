@@ -39,7 +39,9 @@ cd "$(dirname "$0")"
 SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 
 # ---- the three ceilings: measured on this tree, 2026-09-06 ------------------------------------
-CODE_MAX=14010      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+CODE_MAX=14018      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+                    # 2026-09-16 +8: the ledger loop skips a `start` row whose work tree no
+                    # longer exists (identity.py), which buys back a two-day WARN on every write
 PROSE_MAX=1573      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=17647    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2216  # the longest SINGLE message, which bites harder than the total: a worker

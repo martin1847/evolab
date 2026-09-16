@@ -1917,6 +1917,14 @@ def orchestrated(target: str, run: str | None = None) -> tuple[str, str]:
         if time.monotonic() >= deadline:
             in_budget = False
             break
+        if not os.path.isdir(cwd):
+            # A `start` row outlives the work tree it names (`git worktree remove` + a window
+            # that runs to yesterday's shard), and a path that is not a directory can neither
+            # be HELD by a live seat nor BE the write under judgement: it is a residue of the
+            # ledger, not an unanswered question. Counting it blind made every write in the
+            # repo warn for two days. The META loop below deliberately does NOT filter: a seat
+            # with no rc file may still be RUNNING, so its unresolvable cwd stays blindness.
+            continue
         verdict = same_repo(cwd)
         if verdict:
             return ORCHESTRATED, f"the phase ledger has a `start` row in this work tree ({cwd})"

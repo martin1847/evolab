@@ -557,4 +557,116 @@ chk_contains "(i14) CONTROL: and the warn is what the rc evidence removes" \
   "could not be attributed" "$(ctx "$OUT")"
 rm -f "$RUN"/ended.duplex.*
 
+# ── sc1/sc3/sc4/sc5 — A CANDIDATE WORK TREE THAT NO LONGER EXISTS (2026-09-16) ──────────────
+# `git worktree remove` takes the tree away, but the phase ledger's `start` row survives for two
+# UTC days by design — so every write in the repo drew "N candidate work tree(s) could not be
+# attributed" for two days (field: ~15 writes in one wave). The verdict never changed (ALLOW),
+# only the noise. A path that is not a directory can neither be HELD by a live seat nor BE this
+# write's target, so it is a residue of the ledger, not an unanswered question.
+# LEDGER SIDE ONLY, and sc5 pins the other half: a meta with no rc file is a possibly-LIVE seat,
+# and its blindness is E1's own contract (the i14 CONTROL arm above) — untouched here.
+SCRUN="$FIX/run-census"; mkdir -p "$SCRUN"
+SCTGT="$FIX/census-target"; mkdir -p "$SCTGT"; git -C "$SCTGT" init -q
+SCGONE="$FIX/census-gone"; mkdir -p "$SCGONE"; rmdir "$SCGONE"   # the removed work tree
+sc_row() { # $1 cwd  $2 run dir — one `start` row in that run dir's shard, realpath'd as the
+           # real writer does (a removed dir still realpaths: only its parents are resolved)
+  python3 -c 'import json, os, sys
+print(json.dumps({"ts": "2026-09-16T00:00:00.000Z", "event": "start", "name": "census",
+                  "session_id": "s", "attempt": "a", "engine": "omp",
+                  "cwd": os.path.realpath(sys.argv[1])}))' "$1" \
+    >> "$2/phase-ledger-$(date -u +%Y%m%d).jsonl"; }
+sc_probe() { # $1 run dir  $2 target → "<state>|<why>"; driven at the helper because the WHY is
+             # the thing under test and the hook only forwards it when it is undecidable
+  python3 -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import identity as m
+state, why = m.orchestrated(sys.argv[3], sys.argv[2])
+print("%s|%s" % (state, why))' "$(dirname "$GUARD")" "$1" "$2"; }
+
+# sc1 — the reported shape: the ONLY candidate is a `start` row whose work tree was removed
+sc_row "$SCGONE" "$SCRUN"
+SC1="$(sc_probe "$SCRUN" "$SCTGT")"
+chk_eq "sc1 a \`start\` row whose work tree was REMOVED is a residue, not blindness" \
+  "not" "${SC1%%|*}"
+chk_eq "sc1 and the blind clause is gone from the why" "0" \
+  "$(printf '%s\n' "$SC1" | grep -c 'could not be attributed')"
+run Write "$SCTGT/src/app.py" "$SCTGT" "$SCRUN"
+chk_eq "sc1 so E1 allows that write (exit 0)" 0 "$RC"
+chk_eq "sc1 and says NOTHING — the two-day WARN storm is exactly what this buys" "" "$ERR$OUT"
+
+# sc3 — NEGATIVE CONTROL: existence is not the same question as attribution. A cwd that EXISTS
+# and is no work tree is still unanswerable, so the filter must not swallow a REAL blind row.
+SCNOGIT="$FIX/census-not-a-repo"; mkdir -p "$SCNOGIT"
+SC3RUN="$FIX/run-census-nogit"; mkdir -p "$SC3RUN"
+sc_row "$SCNOGIT" "$SC3RUN"
+SC3="$(sc_probe "$SC3RUN" "$SCTGT")"
+chk_eq "sc3 CONTROL: a ledger cwd that EXISTS and is no work tree is still undecidable" \
+  "undecidable" "${SC3%%|*}"
+chk_contains "sc3 CONTROL: and still names the unattributable work tree" \
+  "could not be attributed" "$SC3"
+
+# sc4 — skipping a residue must not cost a real positive: same run, one removed tree and one
+# row naming the target's own repo (order deliberate — the dead row is read FIRST)
+SC4RUN="$FIX/run-census-mixed"; mkdir -p "$SC4RUN"
+sc_row "$SCGONE" "$SC4RUN"; sc_row "$SCTGT" "$SC4RUN"
+SC4="$(sc_probe "$SC4RUN" "$SCTGT")"
+chk_eq "sc4 a skipped residue cannot take back a live \`start\` row of this repo" \
+  "orchestrated" "${SC4%%|*}"
+chk_contains "sc4 and the positive is still the ledger evidence" "phase ledger" "$SC4"
+
+# sc5 — NEGATIVE CONTROL for the SCOPE of this change: the META loop is untouched. A seat with
+# no rc file cannot be ruled out, so a removed cwd there stays blindness — the i14 CONTROL
+# verdict, re-pinned here so a later "just filter both loops" cannot pass this suite silently.
+SC5RUN="$FIX/run-census-meta"; mkdir -p "$SC5RUN"
+printf 'engine=omp\ncwd=%s\nround=1\n' "$SCGONE" > "$SC5RUN/ghost.duplex.meta"
+SC5="$(sc_probe "$SC5RUN" "$SCTGT")"
+chk_eq "sc5 CONTROL: a no-rc seat naming a removed tree is STILL undecidable (meta loop unchanged)" \
+  "undecidable" "${SC5%%|*}"
+chk_contains "sc5 CONTROL: and keeps the blind clause" "could not be attributed" "$SC5"
+
+# sc-budget — THE BUDGET-BINDING MIXED RUN (cold review B1, accept-documented 2026-09-16).
+# The contract this change shipped under said "enforcement is unchanged". That sentence is FALSE
+# and the review proved it with this shape: a shard full of residue rows AHEAD of a real `start`
+# row of the target repo. Base spends one `git rev-parse` per residue, exhausts the shared 8s
+# budget before it ever reads the last row, and answers UNDECIDABLE → E1 ALLOW+WARN. HEAD skips
+# the residue for free and reads the positive → ORCHESTRATED → E1 DENY.
+# The orchestrator's ruling: that DENY is not a false positive. The shard really does hold a
+# `start` row naming this work tree; the base merely never got far enough to say so. So the
+# contract clause is now: NO NEW FALSE-POSITIVE DENY, and a TRUE positive that newly fits in the
+# budget is an IMPROVEMENT — pinned here, so a later reviewer reading "enforcement drift" cannot
+# revert it as a regression without deleting a named assertion.
+# Row count is EMPIRICAL, not decorative (measured on the dev box, base identity.py):
+#   100 → orchestrated 1.9s | 300 → orchestrated 2.8s | 600 → orchestrated 5.3s
+#   1200 → undecidable 8.003s | 1800 → undecidable 8.003s
+# Base costs ~6.9ms/row, so break-even is ~1150 and 1200 sits ON the threshold; 1800 keeps ~55%
+# headroom so a faster box still cannot sneak the base under the budget. HEAD reads the same
+# 1800 rows in 0.026s, so the fixture costs this suite nothing.
+SCBRUN="$FIX/run-census-budget"; mkdir -p "$SCBRUN"
+SCB_ROWS=1800
+# ONE python invocation: 1800 `sc_row` calls would cost 1800 interpreter starts (~30s) and the
+# residue paths must be DISTINCT — a repeated cwd is cached by `same_repo` and costs base nothing.
+python3 - "$SCBRUN" "$SCTGT" "$SCB_ROWS" "$(date -u +%Y%m%d)" <<'EOF'
+import json, os, sys
+run, tgt, n, day = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+def row(cwd):
+    return json.dumps({"ts": "2026-09-16T00:00:00.000Z", "event": "start", "name": "census",
+                       "session_id": "s", "attempt": "a", "engine": "omp", "cwd": cwd})
+gone = os.path.join(os.path.dirname(run), "census-budget-gone")   # never created
+rows = [row(os.path.realpath(os.path.join(gone, "%05d" % i))) for i in range(n)]
+rows.append(row(os.path.realpath(tgt)))        # the REAL positive, deliberately read LAST
+with open(os.path.join(run, "phase-ledger-%s.jsonl" % day), "w") as fh:
+    fh.write("\n".join(rows) + "\n")
+EOF
+SCB="$(sc_probe "$SCBRUN" "$SCTGT")"
+chk_eq "sc-budget $SCB_ROWS residue rows no longer eat the budget the real \`start\` row needs" \
+  "orchestrated" "${SCB%%|*}"
+chk_contains "sc-budget and the positive is the ledger row, not a guess" "phase ledger" "$SCB"
+SCB_T0="$(date +%s)"
+run Write "$SCTGT/src/app.py" "$SCTGT" "$SCBRUN"
+SCB_T1="$(date +%s)"
+chk_eq "sc-budget so E1 DENIES the hand-write it used to allow unjudged (exit 2)" 2 "$RC"
+chk_contains "sc-budget and the deny names the disease" "编排位直写源码面" "$ERR"
+chk_eq "sc-budget and the whole verdict lands in seconds, not at the 8s budget wall" 1 \
+  "$([ "$((SCB_T1 - SCB_T0))" -le 2 ] && echo 1 || echo 0)"
+
 summary
