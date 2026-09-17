@@ -701,5 +701,135 @@ chk_contains '[LIVE-FIX] ⑦ a file under a declared directory is a hit' "$LIVE"
 chk_contains '[LIVE-FIX] ⑦ named as the probe reads it' "写集路径 docs/api/x.md" "$err"
 chk_eq '[LIVE-FIX] ⑧ ⑦ rc unmoved' 0 "$rc"
 
+# ── --claims: the governance-document claim census ─────────────────────────────────────────
+# Same PREMISE contract, new consumer: the retro instead of the dispatcher. A governance fact
+# sentence can only be re-checked by a human, so "整篇重写" degrades into transcription plus a
+# fresh timestamp and the wrong sentence gains that freshness as endorsement. What is pinned
+# below is the four ways this mode DIFFERS from the goal mode (no Preflight line required,
+# every DEAD reported, a bad row does not hide the others, a weak-assertion share) plus the
+# unchanged halves it inherits (未判 wording, shape-before-execution, marker comparison).
+claims_run(){ # $@ = doc paths — probes run in $seat, stderr captured APART from stdout
+  err="$(GOAL_PREFLIGHT_CWD="$seat" "$CHECK" --claims "$@" 2>&1 >/dev/null)"; rc=$?
+}
+cdoc="$SANDBOX/gov.md"; cdoc2="$SANDBOX/gov2.md"
+: > "$seat/live-file"
+
+# ① a claim its own probe confirms: rc 0, and the census line is the ONLY thing printed
+printf 'PREMISE: 只有一行输出 verify=`echo one` => count=1 rc=0\n' > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[CLAIMS] ① a confirmed claim passes" 0 "$rc"
+chk_eq "[CLAIMS] ① and prints only the census line" \
+  "claims: 1 文件 1 条，DEAD 0，未判 0，弱断言 0（0%）" "$err"
+
+# ② the disease: a declared reading the document's own command refutes
+printf 'PREMISE: 两行输出 verify=`echo one` => count=2 rc=0\n' > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[CLAIMS] ② a refuted claim reds" 1 "$rc"
+chk_contains "[CLAIMS] ② as a DEAD line at file:line" "DEAD: $cdoc:1" "$err"
+chk_contains "[CLAIMS] ② naming declared vs got" "declared rc=0 count=2, got rc=0 count=1" "$err"
+chk_contains "[CLAIMS] ② and the command an operator re-runs" 'echo one' "$err"
+chk_contains "[CLAIMS] ② counted in the census" "DEAD 1" "$err"
+
+# ③ EVERY dead account, not the earliest sighting — a retro wants the census
+printf 'PREMISE: a verify=`echo one` => count=2 rc=0\nPREMISE: b verify=`false` => rc=0\n' > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[CLAIMS] ③ two refuted claims red" 1 "$rc"
+chk_eq "[CLAIMS] ③ and BOTH are reported" 2 "$(printf '%s\n' "$err" | grep -c '^DEAD:')"
+chk_contains "[CLAIMS] ③ the first row" "DEAD: $cdoc:1" "$err"
+chk_contains "[CLAIMS] ③ the second row" "DEAD: $cdoc:2" "$err"
+
+# ④ weak assertions: a probe proving only that a POINTER resolves cannot refute its sentence.
+# Share over 40% WARNs, never reds — a pointer claim is sometimes exactly the claim.
+{ printf 'PREMISE: w1 verify=`test -f live-file` => rc=0\n'
+  printf 'PREMISE: w2 verify=`ls live-file` => rc=0\n'
+  printf 'PREMISE: w3 verify=`stat live-file` => rc=0\n'
+  printf 'PREMISE: s1 verify=`echo one` => count=1 rc=0\n'
+  printf 'PREMISE: s2 verify=`grep -c x /dev/null` => rc=1\n'; } > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[CLAIMS] ④ a weak share never moves rc" 0 "$rc"
+chk_contains "[CLAIMS] ④ 3/5 is warned" "弱断言占比 60% > 40%——只证指针在，不证事实成立" "$err"
+chk_contains "[CLAIMS] ④ and counted in the census" "弱断言 3（60%）" "$err"
+# 1/5 is under the line: counted, never warned. `test 1 = 1` is a real comparison, not an
+# existence probe — the judgement is the first OPTION, so a test with none is never weak.
+{ printf 'PREMISE: w1 verify=`[ -f live-file ]` => rc=0\n'
+  printf 'PREMISE: s1 verify=`test 1 = 1` => rc=0\n'
+  printf 'PREMISE: s2 verify=`echo one` => count=1 rc=0\n'
+  printf 'PREMISE: s3 verify=`true` => rc=0\n'
+  printf 'PREMISE: s4 verify=`false` => rc=1\n'; } > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[CLAIMS] ④ 1/5 still dispatches" 0 "$rc"
+chk_not_contains "[CLAIMS] ④ and is not warned about" "弱断言占比" "$err"
+chk_contains "[CLAIMS] ④ but is still counted" "弱断言 1（20%）" "$err"
+
+# ⑤ a probe this machine could not finish says so and is 未判 — never a dead account
+printf "PREMISE: 慢探针 verify=\`python3 -c 'import time; time.sleep(3)'\` => rc=0\n" > "$cdoc"
+export GOAL_PREFLIGHT_TIMEOUT=1
+claims_run "$cdoc"
+unset GOAL_PREFLIGHT_TIMEOUT
+chk_eq "[CLAIMS] ⑤ a timed-out probe never reds" 0 "$rc"
+chk_contains "[CLAIMS] ⑤ with the inherited 未判 wording" "超时 1s，未判（不拒发）" "$err"
+chk_contains "[CLAIMS] ⑤ and is counted as 未判, not DEAD" "DEAD 0，未判 1" "$err"
+
+# ⑥ shape first: an unresolved row is an ERR and is never executed (side effect asserted)
+printf 'PREMISE: 占位符 verify=`touch %s/ph-claims` => <待补>\n' "$seat" > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[CLAIMS] ⑥ a placeholder row is an ERR" 1 "$rc"
+chk_contains "[CLAIMS] ⑥ named at file:line" "$cdoc:1 PREMISE 声明未成立" "$err"
+chk_contains "[CLAIMS] ⑥ with the placeholder verdict" "占位符未解" "$err"
+chk_eq "[CLAIMS] ⑥ and nothing ran" absent "$(ran "$seat/ph-claims")"
+# ⑥b the deliberate difference from the goal mode: no dispatch is being held here, so one
+# malformed row must not hide the OTHER rows' dead accounts
+printf 'PREMISE: 占位符 verify=`true` => <待补>\nPREMISE: 死账 verify=`echo one` => count=2 rc=0\n' > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[CLAIMS] ⑥b a malformed row still reds" 1 "$rc"
+chk_contains "[CLAIMS] ⑥b and the other row is judged anyway" "DEAD: $cdoc:2" "$err"
+
+# ⑦ several documents, each located in its own file at its own line
+printf 'PREMISE: a verify=`echo one` => count=2 rc=0\n' > "$cdoc"
+printf '# gov2\n\nPREMISE: b verify=`echo one` => count=3 rc=0\n' > "$cdoc2"
+claims_run "$cdoc" "$cdoc2"
+chk_eq "[CLAIMS] ⑦ both files red" 1 "$rc"
+chk_contains "[CLAIMS] ⑦ the first file's row" "DEAD: $cdoc:1" "$err"
+chk_contains "[CLAIMS] ⑦ the second file's own line" "DEAD: $cdoc2:3" "$err"
+chk_contains "[CLAIMS] ⑦ census counts files and rows" "claims: 2 文件 2 条，DEAD 2" "$err"
+
+# ⑧ the live-tree WARN is deliberately NOT in this mode: a governance claim reading the live
+# tree is exactly what makes it falsifiable, and there is no write set to be anchored against
+printf 'PREMISE: k 还在 verify=`grep -n k docs/x.md` => count=1 rc=0\n## Task / Deliverables\n1. 改 `docs/x.md` 加一行\n' > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[CLAIMS] ⑧ a live-tree probe dispatches" 0 "$rc"
+chk_not_contains "[CLAIMS] ⑧ and raises no write-set WARN" "$LIVE" "$err"
+
+# ⑨ retro-check check 10 — opt-in skip, then the same dead claim reddening the retro gate
+RETRO="$REPO_ROOT/skills/cto-orchestration/references/retro-check.sh"
+rdocs="$SANDBOX/retro/docs"; mkdir -p "$rdocs"
+RTODAY="$(date +%F)"
+printf '# agents\n- 批 %s claims-fixture：绿基线 wall=1m avoidable=0m\n' "$RTODAY" > "$SANDBOX/retro/AGENTS.md"
+retro_run(){ out="$( cd "$SANDBOX/retro" && AGENT_WATCH_DIR="$SANDBOX/retro/.none" \
+  bash "$RETRO" --docs docs 2>&1 )"; rc=$?; }
+printf 'Last rewritten: %s\n' "$RTODAY" > "$rdocs/ACTIVE_CONTEXT.md"
+retro_run
+chk_eq "[CLAIMS] ⑨ docs with no PREMISE line keep the retro gate green" 0 "$rc"
+chk_contains "[CLAIMS] ⑨ and check 10 says it skipped" "[skip] no PREMISE claims in docs (opt-in)" "$out"
+printf 'PREMISE: 仓根有 NOPE.md verify=`test -f NOPE.md` => rc=0\n' >> "$rdocs/ACTIVE_CONTEXT.md"
+retro_run
+chk_eq "[CLAIMS] ⑨ one dead claim reds the retro gate" 1 "$rc"
+chk_contains "[CLAIMS] ⑨ as a FAIL line" "[FAIL] 1 dead claim(s)" "$out"
+chk_contains "[CLAIMS] ⑨ with the DEAD line passed through" "ACTIVE_CONTEXT.md:2" "$out"
+printf 'Last rewritten: %s\nPREMISE: docs 里有 ACTIVE_CONTEXT verify=`test -f docs/ACTIVE_CONTEXT.md` => rc=0\n' \
+  "$RTODAY" > "$rdocs/ACTIVE_CONTEXT.md"
+retro_run
+chk_eq "[CLAIMS] ⑨ a live claim keeps it green" 0 "$rc"
+chk_contains "[CLAIMS] ⑨ counted as zero dead accounts" "PREMISE 行 0 DEAD" "$out"
+chk_contains "[CLAIMS] ⑨ and the WARN is passed through verbatim" "WARN: preflight: 弱断言占比 100%" "$out"
+
+# ⑩ the echo this batch fixed: `.rc` is written by the pane after the engine returns, so a
+# stop that kills the pane never leaves one — the unconditional promise was a dead claim
+WATCHCTL="$REPO_ROOT/skills/cto-orchestration/references/agentctl/watchctl.py"
+chk_eq "[CLAIMS] ⑩ stop names .rc as conditional" 1 \
+  "$(grep -c 'only when the engine exited on its own' "$WATCHCTL")"
+chk_eq "[CLAIMS] ⑩ and no longer lists it unconditionally" 0 \
+  "$(grep -c 'stderr\.log, \.rc,' "$WATCHCTL")"
+
 rm -rf "$SANDBOX"
 summary

@@ -1378,9 +1378,12 @@ def cmd_stop_cleanup(args: argparse.Namespace) -> int:
         print(f"WARN: identity state was NOT cleared for '{name}' — {clear_out}",
               file=sys.stderr)
     consume_tombstone(run, name)
+    # `.rc` is written by the PANE command after the engine returns (see `agentctl`'s PANE
+    # composition), so a stop that kills the pane never leaves one — say so, or the echo is
+    # itself a dead claim pointing an operator at a file that is not there.
     print(f"removed duplex control state; kept for post-mortem: "
-          f"{run}/{name}.duplex.events.jsonl, .stderr.log, .rc, .sent-journal "
-          "(replay-corpus sidecar)")
+          f"{run}/{name}.duplex.events.jsonl, .stderr.log, .sent-journal "
+          "(replay-corpus sidecar), .rc (only when the engine exited on its own)")
     return 1 if id_rc != 0 else 0
 
 def _phase_stop_triple(token: str) -> tuple[str, str]:

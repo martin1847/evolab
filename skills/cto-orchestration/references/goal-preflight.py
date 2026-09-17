@@ -38,6 +38,20 @@ It NEVER changes rc and never blocks: a probe asserting an invariant that must s
 AFTER delivery wears the identical shape, and only the author knows which he wrote. It does
 NOT parse the C09 closed-set format, sandbox nothing, and compares tokens as written rather
 than by basename (owner ruling + accepted miss class — see the layer's own comment).
+CLAIMS MODE (`--claims <doc>…`) runs the SAME premise contract over governance documents
+instead of over a goal: shape first (a placeholder / unresolved row is an ERR), then every
+opt-in probe, then the author's own markers against the live reading. Four deliberate
+differences from the goal mode above. (1) No Preflight line, no Done-when smell, and no
+live-tree WARN: a governance claim is SUPPOSED to read the live world — that is what makes it
+falsifiable at retro time, so telling its author to pin it would defeat the whole reading.
+(2) EVERY refuted claim is reported (`DEAD: <file>:<line> declared … got …`), not just the
+first: a retro wants the census of dead accounts, not the earliest sighting. (3) A malformed
+row ERRs and is never executed, but the other rows of that file still run — one bad row must
+not hide a dead account, and no dispatch is being held back here. (4) A closing `claims:`
+line counts DEAD / 未判 / weak assertions, and a weak-assertion share over 40% WARNs:
+`test -f`-shaped probes prove a POINTER EXISTS and nothing about the claim itself.
+Not judged, exactly as in the goal mode: a non-command probe, a timeout, an unrunnable
+command, a marker-free observation. rc = 1 on any DEAD or shape ERR; a WARN never moves it.
 Environment: GOAL_PREFLIGHT_CWD = cwd probes run in (default: this process's cwd);
 GOAL_PREFLIGHT_TIMEOUT = per-probe seconds, a POSITIVE FINITE number (default 120); anything else
 (nan, inf, 0, negative, non-numeric) WARNs and falls back to the default, because `nan` is a legal
@@ -402,41 +416,58 @@ def run_probe(command, cwd, timeout):
         return proc.returncode, sum(1 for line in out.splitlines() if line.strip())
 
 
+def probe_reading(where, probe, observed, cwd, timeout):
+    """One premise row's opt-in probe, run and paired with the author's markers.
+
+    Returns (command, declared, got) — `declared` the author's [(marker, value)] in MARKERS
+    order, `got` the live {"rc": …, "count": …} — or None when the row was NOT judged (no
+    single inline-code span, a timeout, an unrunnable command, no marker declared at all), in
+    which case the WARN saying so has already been printed. Two consumers read this ladder
+    (the dispatch gate and the --claims census), so "not judged" cannot come out worded two
+    ways; all that differs is what each does with a refutation.
+    """
+    span = PROBE_CMD.match(probe)
+    if not span:
+        if "`" in probe:
+            advise(f"{where} 未执行（混排 / 多段反引号；"
+                   f"要执行请把整条命令放进一个反引号段）：{probe}")
+        else:
+            advise(f"{where} 未执行（非命令形态）：{probe}")
+        return None
+    command = span.group(1)
+    try:
+        code, count = run_probe(command, cwd, timeout)
+    except subprocess.TimeoutExpired:
+        advise(f"{where} 超时 {timeout:g}s，未判（不拒发）：`{command}`")
+        return None
+    except OSError as exc:
+        advise(f"{where} 无法执行，未判（不拒发）：`{command}` — {exc}")
+        return None
+    if code in UNRUNNABLE:
+        advise(f"{where} 无法执行（shell rc={code}），未判（不拒发）：`{command}`")
+        return None
+    got = {"rc": code, "count": count}
+    declared = []
+    for name, pattern in MARKERS:
+        hit = pattern.search(observed)
+        if hit:
+            declared.append((name, int(hit.group(1))))
+    if not declared:
+        advise(f"{where} 未声明记号，只报实况（不判）：rc={code} count={count} — `{command}`")
+        return None
+    return command, declared, got
+
+
 def premise_contradiction(body, live_paths=()):
     """Run every opt-in probe; message for the first declaration its own command refutes."""
     cwd = seat_cwd()
     timeout = probe_timeout()
     for number, probe, observed in premise_probes(body):
         where = f"PREMISE 行(第 {number} 行)"
-        span = PROBE_CMD.match(probe)
-        if not span:
-            if "`" in probe:
-                advise(f"{where} 未执行（混排 / 多段反引号；"
-                       f"要执行请把整条命令放进一个反引号段）：{probe}")
-            else:
-                advise(f"{where} 未执行（非命令形态）：{probe}")
+        reading = probe_reading(where, probe, observed, cwd, timeout)
+        if reading is None:
             continue
-        command = span.group(1)
-        try:
-            code, count = run_probe(command, cwd, timeout)
-        except subprocess.TimeoutExpired:
-            advise(f"{where} 超时 {timeout:g}s，未判（不拒发）：`{command}`")
-            continue
-        except OSError as exc:
-            advise(f"{where} 无法执行，未判（不拒发）：`{command}` — {exc}")
-            continue
-        if code in UNRUNNABLE:
-            advise(f"{where} 无法执行（shell rc={code}），未判（不拒发）：`{command}`")
-            continue
-        got = {"rc": code, "count": count}
-        declared = []
-        for name, pattern in MARKERS:
-            hit = pattern.search(observed)
-            if hit:
-                declared.append((name, int(hit.group(1))))
-        if not declared:
-            advise(f"{where} 未声明记号，只报实况（不判）：rc={code} count={count} — `{command}`")
-            continue
+        command, declared, got = reading
         for name, want in declared:
             if want != got[name]:
                 verdict = (f"{where} 实跑与声明不符：declared {name}={want}, got {name}={got[name]}"
@@ -446,13 +477,93 @@ def premise_contradiction(body, live_paths=()):
                 return (verdict + WRITE_SET_NOTE) if number in live_paths else verdict
     return None
 
+
+# ---- --claims: the governance-document claim census ----------------------------------------
+# The disease: a fact sentence in a governance doc can only be re-checked by a human, so a
+# rewrite is a transcription plus a fresh timestamp and the error gains that freshness as
+# endorsement. Same contract as a goal premise, different consumer — the retro (retro-check
+# check 10) instead of the dispatcher, hence the four differences named in the module docstring.
+# WEAK ASSERTION: a probe whose whole reading is "the pointer resolves" (`test -f …`, `ls …`)
+# cannot refute the sentence it is attached to; it only refutes a MOVED file. Judged on the
+# command's first token plus its first option, never on the claim text: the option set is where
+# the existence family lives, and `test "$a" = "$b"` (no option at all) is a real comparison.
+# The share is a WARN, never a verdict — a pointer claim is sometimes exactly the claim.
+WEAK_TEST = ("test", "[", "[[")
+WEAK_TEST_OPTS = ("-f", "-d", "-e", "-r", "-x", "-s")
+WEAK_HEADS = ("ls", "stat")
+WEAK_LIMIT = 40
+CLAIMS_READ = "Read cto-orchestration/references/retrospective.md §5 治理同步。"
+
+
+def weak_probe(command):
+    """True when the probe proves a POINTER EXISTS rather than that the claim holds."""
+    tokens = command.split()
+    if not tokens:
+        return False
+    if tokens[0] in WEAK_HEADS:
+        return True
+    if tokens[0] not in WEAK_TEST:
+        return False
+    for token in tokens[1:]:
+        if token.startswith("-"):
+            return token in WEAK_TEST_OPTS
+    return False
+
+
+def claims_main(paths):
+    """Every PREMISE row in every named document: shape, then run, then markers vs reading."""
+    if not paths:
+        return fail("usage: goal-preflight.py --claims <governance-doc>…", CLAIMS_READ)
+    cwd, timeout = seat_cwd(), probe_timeout()
+    rc = total = dead = unjudged = weak = 0
+    for path in paths:
+        try:
+            body = open(path, encoding="utf-8").read()
+        except OSError as exc:
+            rc = fail(f"cannot read claims doc: {exc}", CLAIMS_READ)
+            continue
+        faults = premise_faults(body)
+        for number, why in faults:
+            rc = fail(f"{path}:{number} PREMISE 声明未成立：{why}", CLAIMS_READ)
+        broken = {number for number, _ in faults}
+        total += len(broken)
+        for number, probe, observed in premise_probes(body):
+            if number in broken:   # shape first: an unresolved row is never executed
+                continue
+            total += 1
+            where = f"{path}:{number}"
+            span = PROBE_CMD.match(probe)
+            if span and weak_probe(span.group(1)):
+                weak += 1
+            reading = probe_reading(where, probe, observed, cwd, timeout)
+            if reading is None:
+                unjudged += 1
+                continue
+            command, declared, got = reading
+            if any(want != got[name] for name, want in declared):
+                print("DEAD: {} declared {}, got {} — `{}`（cwd {}）".format(
+                    where,
+                    " ".join(f"{name}={want}" for name, want in declared),
+                    " ".join(f"{name}={got[name]}" for name, _ in declared),
+                    command, cwd), file=sys.stderr)
+                dead += 1
+    share = round(weak * 100 / total) if total else 0
+    if share > WEAK_LIMIT:
+        advise(f"弱断言占比 {share}% > {WEAK_LIMIT}%——只证指针在，不证事实成立")
+    print(f"claims: {len(paths)} 文件 {total} 条，DEAD {dead}，未判 {unjudged}，"
+          f"弱断言 {weak}（{share}%）", file=sys.stderr)
+    return 1 if dead else rc
+
 def fail(message, read="Read cto-orchestration/references/goal-template.md."):
     print("ERR: preflight gate: " + message + " " + read, file=sys.stderr)
     return 1
 
 
 def main():
-    if len(sys.argv) != 2:
+    argv = sys.argv[1:]
+    if argv[:1] == ["--claims"]:
+        return claims_main(argv[1:])
+    if len(argv) != 1:
         return fail("usage: goal-preflight.py <goal-file>")
     try:
         body = open(sys.argv[1], encoding="utf-8").read()

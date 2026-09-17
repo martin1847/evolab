@@ -436,5 +436,51 @@ else
   fi
 fi
 
+# 10) 治理 claim 核账 (retrospective.md §5「治理同步」) — 治理文档里的事实句复盘时机械实跑。
+# 病: 事实句只有人能复核, 于是「整篇重写」退化成照抄 + 换时间戳, 错的那句反而拿到新鲜度背书。
+# 形态与 goal 的继承断言单源 (goal-preflight.py 的 PREMISE 语法: `PREMISE: <claim>
+# verify=\`cmd\` => rc=N count=N`), 这里只是换了消费者 — `--claims` 模式做形态 + 实跑 + 记号
+# 比对, 不要求 Preflight 行、不判写集活树 (治理 claim 锚活世界正是它可证伪的原因)。
+# opt-in: 文档里没有 PREMISE 行就跳过 — 没 typed 的事实句机检不了 (同第 7 / 8 检的口径)。
+# 量具坏 = FAIL: claim 已 typed 却读不到脚本 / 没 python3, 这一面根本没检查 (同第 2 / 9 检)。
+# 未判 (超时 / 不可执行 / 非命令形态 / 无记号) 只透传 WARN, 从不算 DEAD: 本机跑不动一条命令,
+# 说明不了那句事实。KILL CRITERION (GATE-AUDIT slug `doc-claims`): 连续两个复盘周期 0 DEAD
+# 且 0 新增 claim ⇒ 降为教义。
+echo "10) 治理 claim 核账 (治理文档 PREMISE 行实跑; opt-in):"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+PREFLIGHT="$HERE/goal-preflight.py"
+CLAIM_FILES=()
+for cf in "$DOCS/ACTIVE_CONTEXT.md" "$DOCS/DECISION_QUEUE.md" "$DOCS/LESSONS.md"; do
+  [ -f "$cf" ] || continue
+  # a symlinked ACTIVE_CONTEXT is the field shape (a pointer into an archive): resolve it, so
+  # the DEAD line names the file an editor will really change instead of the pointer
+  if [ -L "$cf" ]; then
+    tgt="$(readlink "$cf")"
+    case "$tgt" in /*) cf="$tgt";; *) cf="$(dirname "$cf")/$tgt";; esac
+    [ -f "$cf" ] || continue
+  fi
+  grep -l 'PREMISE' "$cf" >/dev/null 2>&1 || continue
+  CLAIM_FILES+=("$cf")
+done
+if [ "${#CLAIM_FILES[@]}" -eq 0 ]; then
+  echo "  [skip] no PREMISE claims in docs (opt-in)"
+elif [ ! -f "$PREFLIGHT" ] || ! command -v python3 >/dev/null 2>&1; then
+  fail "治理 claim 面未检查 — 量具坏 ($PREFLIGHT 或 python3 缺); claim 已 typed 却没跑 ≠ 绿"
+else
+  # doc paths resolve against the CALLER's cwd (that is where --docs was written), the probes
+  # against the repo root (that is where a governance claim's relative path means anything)
+  claim_out="$(GOAL_PREFLIGHT_CWD="${TOP:-$REPO}" python3 "$PREFLIGHT" \
+    --claims "${CLAIM_FILES[@]}" 2>&1)"; claim_rc=$?
+  [ -n "$claim_out" ] && printf '%s\n' "$claim_out"
+  dead_n="$(printf '%s\n' "$claim_out" | grep -c '^DEAD:' | tr -d ' ')"
+  if [ "$dead_n" -gt 0 ]; then
+    fail "$dead_n dead claim(s) — 治理文档事实句实跑与声明不符; 改事实或改声明, 别只改时间戳"
+  elif [ "$claim_rc" -ne 0 ]; then
+    fail "PREMISE 声明形态未成立 (见上 ERR 行) — 占位符 / 未解的 claim 不是 claim"
+  else
+    ok "${#CLAIM_FILES[@]} 份治理文档的 PREMISE 行 0 DEAD"
+  fi
+fi
+
 echo "== result: $fails FAIL, $warns warn =="
 [ "$fails" -eq 0 ]

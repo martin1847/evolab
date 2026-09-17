@@ -52,7 +52,14 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # for the channel fix (additionalContext, not exit-0 stderr), the per-worktree FETCH_HEAD lookup
 # and the prose-boundary strip. A ceiling that went up may come back down; it may not go up again
 # on the same rule without saying what the bytes buy.
-CODE_MAX=14211      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+# 2026-09-17 (`doc-claims`): CODE 14211 -> 14371. What the +160 lines buy: goal-preflight's
+# `--claims` mode (the PREMISE contract run over governance DOCUMENTS instead of a goal — all
+# dead accounts reported, weak-assertion share, no Preflight/live-tree judgement) plus
+# retro-check's check 10 that consumes it, so a governance fact sentence is re-RUN at retro
+# instead of re-typed. The field cost it answers: a copied stale sentence in this repo's own
+# AGENTS.md drove two false reports. PROSE did NOT move (doctrine went into existing lines);
+# INJECT and INJECT_SINGLE are untouched — this layer injects nothing into an agent's context.
+CODE_MAX=14371      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
 PROSE_MAX=1573      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=17939    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2216  # the longest SINGLE message, which bites harder than the total: a worker
