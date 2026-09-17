@@ -11,7 +11,7 @@
 派工基线四件（`agentctl start` 前编排位亲自做完）：
 
 1. **fresh worktree @ 最新远端 base**：`git fetch` 后
-   `git worktree add ../wt-<name> -b feat/<name> origin/<base>`——不让 agent 在过期基线开工。
+   `git worktree add ../wt-<name> -b feat/<name> origin/<base>`——不让 agent 在过期基线开工；`git stash` 是仓级共享状态、穿透这层隔离——多席在飞时不用 stash 切基线，对照用一次性 worktree（guard (22) WARN）。
 2. **构建/依赖就绪**（venv、node_modules 等按该仓声明）——席位开工即能跑测试，不烧轮装环境。
 3. **播种即 seed commit**：编排位播进 worktree 的任何文件（goal/评审档等）先落 commit——
    untracked 即脏树，撞席位清洁门直接 STOP；非交付件放伞仓 docs/，别落 worktree

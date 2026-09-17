@@ -32,6 +32,14 @@
 #       a `gh api …` example hit the real repo; the `>` in the same text truncated the message,
 #       so agentctl could only report a parse error). Body goes in a file: `-f <path>`.
 #       KILL CRITERION (owner 2026-09-02): zero hits in a year -> remove this rule. [DENY]
+#  (22) `git stash` in a repo with >=2 worktrees in flight -> the stash stack lives in the
+#       SHARED `.git`, so it crosses exactly the isolation a per-seat worktree buys: a sibling
+#       seat's tree grows conflicts carrying content it never touched, and nothing says a word
+#       (downstream seats n=1 2026-09-16; this repo n=1 2026-09-17, three trees live, no
+#       collision by luck). WARN ONLY (owner 2026-09-17): at ONE worktree stash is the
+#       commonest legal git idiom there is, so the rule is silent there.
+#       KILL CRITERION (slug `g22-stash-crosses-worktrees`): 30 days with zero hits -> remove;
+#       a false-WARN share >10% (single-seat stashing) -> narrow the trigger. [ALLOW + WARN]
 # Deny/checker error = exit 2 + stderr (shown to the agent). Remind = exit 0 + JSON
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
@@ -943,6 +951,71 @@ def _cwd_drift(raw, repos, base):
             if rel and rel.group("head") in repos and rel.group("head") != here:
                 return here, tok
     return None, None
+
+
+# ── rule (22): `git stash` while several worktrees are in flight (WARN, never DENY) ───────
+# KILL CRITERION (slug `g22-stash-crosses-worktrees`, GATE-AUDIT): 30 days with zero hits ⇒
+# delete; a false-WARN share >10% (a single-seat stash wrongly warned) ⇒ narrow the trigger.
+# FIELD: the stash stack is `refs/stash` plus its reflog in the SHARED `.git`, never
+# per-worktree state. Downstream seats n=1 (2026-09-16): two seats, one repo, two worktrees —
+# one stashed to compare against the baseline, the OTHER tree grew DU/UU conflicts carrying
+# content the first seat had already committed, with no signal anywhere. This repo n=1
+# (2026-09-17): the same spelling with three trees live, which merely did not collide.
+# WARN ONLY, owner ruling 2026-09-17: with ONE worktree `git stash` is the commonest legal git
+# idiom there is, so silence at n=1 is the contract and only real sharing gets a line.
+# TRIGGER = a command-position `git` whose subcommand is `stash`, whatever follows it.
+# Deliberately NOT an enumerated set of stash subcommands (`push|save|pop|apply|drop|clear|
+# list|show|branch|create|store`): every one of them reads or writes that same shared ref, one
+# rule carries one 口径, and an enumerated set is a set that drifts as git grows verbs.
+# REPO = the `-C` path this invocation names (cumulative, git's own semantics), else the leading
+# `cd <ABS> &&` anchor rule (8) prescribes — that is where the stash really lands — else the
+# payload cwd. A `-C` whose path was a quoted span carrying a space reads back as the view's
+# inert `ARG` token, resolves to a path git does not own, and therefore lands in UNMEASURED
+# rather than in a guess about the wrong repo.
+# GAUGE = `git worktree list --porcelain`, ONE bounded (2s) call per named repo and only for a
+# command that really invokes a stash (that invocation is the cost gate; at most 3 probes, so a
+# pathological chain cannot stall the tool call). Unmeasurable — no git, timeout, not a repo,
+# undecodable output, a porcelain with no `worktree ` line at all — is neither a warn nor a
+# silent pass but ONE `UNMEASURED` line, the contract rules (8)/(14)/(16) already carry.
+def _r22_stash_repos(raw, base):
+    """Repo path per command-position `git stash` in this command, in order, deduped."""
+    out = []
+    for seg in _cmd_segments(_pipe_view(raw)):
+        head = _SEG_GIT.match(seg)
+        if not head:
+            continue
+        rest = head.group("rest")
+        if _git_argv(rest)[0] != "stash":
+            continue
+        repo, toks, i = base, rest.split(), 0
+        while i < len(toks) and toks[i].startswith("-"):
+            tok = toks[i]
+            if tok == "-C" and i + 1 < len(toks):
+                val = toks[i + 1]
+                repo = val if os.path.isabs(val) else os.path.join(repo, val)
+            i += 2 if (tok in _GIT_VALUED and "=" not in tok) else 1
+        if repo and repo not in out:
+            out.append(repo)
+    return out
+
+
+def _worktree_live(repo):
+    """(worktrees git lists for `repo`, why it could not be measured) — exactly one is set."""
+    try:
+        proc = subprocess.run(["git", "-C", repo, "worktree", "list", "--porcelain"],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=2)
+    except subprocess.TimeoutExpired:
+        return None, "`git worktree list` 2s 没答完：%s" % repo
+    except Exception:
+        return None, "git 起不来（未装 / 不可执行）：%s" % repo
+    if proc.returncode != 0:
+        return None, "git 不认这个路径是仓（rc=%d）：%s" % (proc.returncode, repo)
+    try:
+        text = proc.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "porcelain 输出不是 UTF-8：%s" % repo
+    live = sum(1 for line in text.split("\n") if line.startswith("worktree "))
+    return (live, "") if live else (None, "porcelain 里没有 `worktree ` 行：%s" % repo)
 
 
 # ── rule (20): the orchestrator writing SOURCE through bash (DENY) ────────────────────────
@@ -2266,6 +2339,34 @@ def main():
             "gate. Fix: one repo per command, or an absolute path." % (here19, tok19)
         )
 
+    # (22) `git stash` with several worktrees in flight: WARN only, by owner ruling — at ONE
+    #      worktree stash is the commonest legal git idiom, so the rule stays silent there.
+    #      Doctrine, trigger 口径, repo resolution and the gauge's failure faces:
+    #      `_r22_stash_repos` / `_worktree_live`. TWO locals, the idiom rule (20) carries: the
+    #      injected-text ratchet resolves ONE literal per local name, so a warn and its
+    #      unmeasured line may not share one. A WARN beats an UNMEASURED from another named
+    #      repo — a measured hit is the thing worth saying. Judged on `raw`, whose leading `cd`
+    #      anchor is read exactly as rule (8) reads it (that is the tree the stash lands in).
+    note22 = note22b = ""
+    mcd22 = _cd_anchor(raw)
+    probe22 = [_worktree_live(r) for r in
+               _r22_stash_repos(raw, mcd22.group(1).strip("\"'") if mcd22 else cwd8)[:3]]
+    # `n is not None` IS the "measured" test — `_worktree_live` sets exactly one of the pair,
+    # and asking the count directly keeps the narrowing visible to a type checker too.
+    live22 = next((n for n, _ in probe22 if n is not None and n >= 2), 0)
+    why22 = next((why for _, why in probe22 if why), "")
+    if live22:
+        note22 = (
+            "WARN (cto-guard 22): `git stash` 是仓级共享状态，会穿透 worktree 隔离（本仓 %d 棵 "
+            "worktree 在飞）——对照用一次性 `git worktree add`；取回用 stash commit SHA，别用 "
+            "`stash@{N}` 索引。" % live22
+        )
+    elif why22:
+        note22b = (
+            "UNMEASURED (cto-guard 22): 多 worktree 判不出（%s）— `git stash` 穿透 worktree 隔离"
+            "这条这次没判，命令照常跑。" % why22
+        )
+
     reminder = ""
     if m:
         session = m.group(2)
@@ -2284,19 +2385,20 @@ def main():
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
     # (8)'s undecidable-scope warn, (13), (14)/(15)'s instrument warnings, (16)'s counter,
-    # (19)'s drift warn and (20)'s two unjudged-write warns ride (3)'s channel: on exit 0 only
-    # additionalContext reaches the agent, and two JSON documents on stdout would be one
-    # malformed hook response. All nine strings stay LOCAL to this frame so the injected-text
-    # ratchet can weigh what a worker is actually handed. (8) is set far above and can be
-    # swallowed by a later DENY — correct: a denial's stderr is the message that matters.
+    # (19)'s drift warn, (20)'s two unjudged-write warns and (22)'s stash warn plus its
+    # unmeasured line ride (3)'s channel: on exit 0 only additionalContext reaches the agent,
+    # and two JSON documents on stdout would be one malformed hook response. All eleven strings
+    # stay LOCAL to this frame so the injected-text ratchet can weigh what a worker is actually
+    # handed. (8) is set far above and can be swallowed by a later DENY — correct: a denial's
+    # stderr is the message that matters.
     if (reminder or note8 or note13 or note14 or note15 or note16 or note19
-            or note20 or note20b):
+            or note20 or note20b or note22 or note22b):
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
                     t for t in (reminder, note8, note13, note14, note15, note16, note19,
-                                note20, note20b)
+                                note20, note20b, note22, note22b)
                     if t),
             }
         }))

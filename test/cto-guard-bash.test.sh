@@ -2227,4 +2227,113 @@ run 'echo "agentctl steer s1 -m `x`"'
 chk_eq "r21-doc-mention-is-not-a-command (accepted FN)" 0 "$RC"
 chk_eq "r21-doc-mention-is-not-a-command is silent on stderr" "" "$ERR"
 
+# ── (22) `git stash` while several worktrees are in flight (WARN, never DENY) ───────────────
+# FIELD: the stash stack lives in the SHARED `.git` (`refs/stash` + its reflog), so a stash made
+# in one worktree is repo state every sibling worktree sees. Downstream seats n=1 (2026-09-16):
+# two seats, one repo, two worktrees — seat A stashed to compare against the baseline and seat
+# B's tree grew DU/UU conflicts carrying content A had already committed, with no signal
+# anywhere. This repo n=1 (2026-09-17) stashed with three worktrees live and only got lucky.
+# WARN NEVER DENY (owner 2026-09-17): at one worktree `git stash` is the commonest legal git
+# idiom there is, so the silence at n=1 is a contract this battery pins, not a gap.
+G22="$G8ROOT/g22"; mkdir -p "$G22/plain"
+git init -q "$G22/multi"
+git -C "$G22/multi" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m init
+git -C "$G22/multi" -c user.email=t@example.com -c user.name=t \
+  worktree add -q -b g22-second "$G22/multi-wt2"
+git init -q "$G22/solo"
+# fixture prerequisite, asserted rather than assumed: a `worktree add` that silently failed
+# would make the whole positive battery read as a correctly-silent single-worktree repo.
+chk_eq "(22) fixture: the multi repo really lists two worktrees" 2 \
+  "$(git -C "$G22/multi" worktree list --porcelain | grep -c '^worktree ')"
+chk_eq "(22) fixture: the solo repo really lists one" 1 \
+  "$(git -C "$G22/solo" worktree list --porcelain | grep -c '^worktree ')"
+
+# ① two worktrees in flight: WARN, exit 0, nothing on stderr — the命令 still runs.
+run_tp 'git stash' "$G22/multi" -
+chk_eq "(22a) a stash with two worktrees in flight never denies" 0 "$RC"
+chk_eq "(22a) and writes nothing to stderr" "" "$ERR"
+chk_contains "(22a) but says so out loud" "WARN (cto-guard 22)" "$(ctx "$OUT")"
+chk_contains "(22a) naming the repo-level sharing" "仓级共享状态" "$(ctx "$OUT")"
+chk_contains "(22a) and the measured worktree count" "本仓 2 棵 worktree 在飞" "$(ctx "$OUT")"
+chk_contains "(22a) handing over the一次性 worktree 正路" "git worktree add" "$(ctx "$OUT")"
+chk_contains "(22a) and the retrieval口径 (SHA, not an index)" "stash commit SHA" "$(ctx "$OUT")"
+
+# ② one worktree: SILENT. The commonest legal use of stash there is, and the owner ruling.
+run_tp 'git stash' "$G22/solo" -
+chk_eq "(22b) a single-worktree stash is allowed" 0 "$RC"
+chk_eq "(22b) and stays completely silent on stdout" "" "$OUT"
+chk_eq "(22b) and on stderr" "" "$ERR"
+run_tp 'git stash pop' "$G22/solo" -
+chk_eq "(22b) …the pop half too" 0 "$RC"
+chk_eq "(22b) …and it is silent as well" "" "$OUT"
+
+# ③ the repo is the one the command ACTS on: `-C` wins over the payload cwd.
+run_tp "git -C $G22/multi stash pop" "$G22/plain" -
+chk_eq "(22c) a -C stash from an unrelated cwd never denies" 0 "$RC"
+chk_eq "(22c) and writes nothing to stderr" "" "$ERR"
+chk_contains "(22c) and judges the -C repo, not the cwd" "本仓 2 棵 worktree 在飞" "$(ctx "$OUT")"
+
+# ④ `list` / `show` are judged the SAME (owner 口径 for this batch): they read the same shared
+#    ref, and one rule carries one 口径.
+run_tp 'git stash list' "$G22/multi" -
+chk_eq "(22d) a stash LIST is judged too" 0 "$RC"
+chk_contains "(22d) and carries the same warn" "WARN (cto-guard 22)" "$(ctx "$OUT")"
+run_tp 'git stash show' "$G22/multi" -
+chk_contains "(22d) …and so does stash SHOW" "WARN (cto-guard 22)" "$(ctx "$OUT")"
+
+# ⑤ NEGATIVE CONTROLS — this rule owns `git stash`, nothing else, and a MENTION is not a command.
+run_tp 'git status' "$G22/multi" -
+chk_eq "(22e) a bare git status in the same repo is allowed" 0 "$RC"
+chk_eq "(22e) and silent on stdout" "" "$OUT"
+chk_eq "(22e) and silent on stderr" "" "$ERR"
+run_tp 'git worktree list' "$G22/multi" -
+chk_eq "(22e) a worktree LIST is not a stash" 0 "$RC"
+chk_eq "(22e) and it is silent" "" "$OUT"
+run_tp 'echo "git stash"' "$G22/multi" -
+chk_eq "(22e) a quoted mention is data, not an invocation" 0 "$RC"
+chk_eq "(22e) and the mention is silent" "" "$OUT"
+# a valued GLOBAL option consumes the next token: `-c alias.s=stash` is DATA, `status` is the
+# subcommand (the same arity discipline rules (17)/(18) carry).
+run_tp 'git -c alias.s=stash status' "$G22/multi" -
+chk_eq "(22e) a stash spelled inside a -c alias value is not the subcommand" 0 "$RC"
+chk_eq "(22e) and that one is silent too" "" "$OUT"
+
+# ⑥ no git at all: UNMEASURED out loud, never a silent pass and never a deny.
+run_nogit 'git stash' "$G22/multi"
+chk_eq "(22f) git absent: never denies" 0 "$RC"
+chk_eq "(22f) and writes nothing to stderr" "" "$ERR"
+chk_contains "(22f) but says the rule went unmeasured" "UNMEASURED (cto-guard 22)" "$(ctx "$OUT")"
+
+# ⑦ a cwd git does not own is the same answer: unmeasured, not "one worktree".
+run_tp 'git stash' "$G22/plain" -
+chk_eq "(22g) a non-repo cwd never denies" 0 "$RC"
+chk_eq "(22g) and writes nothing to stderr" "" "$ERR"
+chk_contains "(22g) and reports it unmeasured" "UNMEASURED (cto-guard 22)" "$(ctx "$OUT")"
+
+# ⑧ DENY PRECEDENCE: a command that rule (20) denies keeps its exit 2 and its stderr, and this
+#    WARN must not ride along on stdout (exit 2 + a hook response would be one malformed reply).
+#    Driven on the r20 fixture — its ledger row and run dir are what make that rule speak.
+PATH="$BIN20:$PATH"; export PATH
+run22d() { # $1 command — the r20 fixture's runner: cwd = the orchestrator's own checkout
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(mkcmd_tp "$1" "$R20" - | AGENT_WATCH_DIR="$RUN20" python3 "$GUARD" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+rm -f /tmp/cto-allow-direct-write
+run22d "git -C $G22/multi stash"
+chk_eq "(22h) control: the stash half of that command warns on its own" 0 "$RC"
+chk_contains "(22h) control names this rule" "WARN (cto-guard 22)" "$(ctx "$OUT")"
+run22d "echo x > $R20/x.py && git -C $G22/multi stash"
+chk_eq "(22h) a (20) DENY still wins" 2 "$RC"
+chk_contains "(22h) and the stderr is (20)'s" "编排位经 bash 直写源码面" "$ERR"
+chk_eq "(22h) and nothing rides along on stdout" "" "$OUT"
+PATH="$OLDPATH20"; export PATH
+
+# ⑨ the `cd <ABS> &&` anchor rule (8) prescribes is where the stash really lands, so it decides
+#    the repo when no `-C` names one.
+run_tp "cd $G22/multi && git stash" "$G22/plain" -
+chk_eq "(22i) a cd-anchored stash never denies" 0 "$RC"
+chk_eq "(22i) and writes nothing to stderr" "" "$ERR"
+chk_contains "(22i) and is judged in the cd target" "本仓 2 棵 worktree 在飞" "$(ctx "$OUT")"
+
 summary

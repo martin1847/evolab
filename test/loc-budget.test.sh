@@ -59,10 +59,21 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # instead of re-typed. The field cost it answers: a copied stale sentence in this repo's own
 # AGENTS.md drove two false reports. PROSE did NOT move (doctrine went into existing lines);
 # INJECT and INJECT_SINGLE are untouched — this layer injects nothing into an agent's context.
-CODE_MAX=14371      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+# 2026-09-17 (cto-guard-bash rule (22) `g22-stash-crosses-worktrees`): CODE 14371 -> 14473,
+# INJECT 17939 -> 18293, INJECT_SINGLE 2216 -> 2570. What the +102 lines and +354 bytes buy: a
+# dispatch-time WARN when a `git stash` is sent at a repo whose `git worktree list --porcelain`
+# shows >=2 trees in flight (the stash stack lives in the shared `.git`, so it crosses the
+# per-seat worktree isolation and the victim seat gets zero signal — downstream seats n=1,
+# this repo n=1), plus the one UNMEASURED line for every case the gauge cannot judge (no git,
+# 2s timeout, not a repo, undecodable porcelain). INJECT_SINGLE had to move WITH the total and
+# is not a second rule's byte: this meter resolves the assembled `additionalContext` join, so
+# any new WARN local in that tuple grows the "longest single message" by exactly its own text —
+# 354 bytes, the same delta as the total. PROSE did NOT move (the doctrine went into an
+# existing dispatch-baseline line).
+CODE_MAX=14473      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
 PROSE_MAX=1573      # every shipped *.md under the skill, summed wc -l
-INJECT_MAX=17939    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
-INJECT_SINGLE_MAX=2216  # the longest SINGLE message, which bites harder than the total: a worker
+INJECT_MAX=18293    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
+INJECT_SINGLE_MAX=2570  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length
                         # there competes with the fix line it needs.
 
