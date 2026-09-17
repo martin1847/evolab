@@ -38,6 +38,12 @@ It NEVER changes rc and never blocks: a probe asserting an invariant that must s
 AFTER delivery wears the identical shape, and only the author knows which he wrote. It does
 NOT parse the C09 closed-set format, sandbox nothing, and compares tokens as written rather
 than by basename (owner ruling + accepted miss class — see the layer's own comment).
+TIER RECEIPT (2026-09-17) is the third WARN-only reading, and the only one that judges the goal
+HEADER rather than a premise: a `Tier: deep` declaration with no filled-in `Goal-Review:` line
+gets one line telling the dispatcher that the pre-dispatch cold goal-review left no receipt.
+No `Tier:` line at all judges nothing (opt-in by absence), an explicit `SKIPPED: <reason>`
+closes it, and the receipt path is never stat-ed nor read — see the layer's own comment for
+why, and for its kill criterion.
 CLAIMS MODE (`--claims <doc>…`) runs the SAME premise contract over governance documents
 instead of over a goal: shape first (a placeholder / unresolved row is an ERR), then every
 opt-in probe, then the author's own markers against the live reading. Four deliberate
@@ -478,6 +484,70 @@ def premise_contradiction(body, live_paths=()):
     return None
 
 
+# ---- tier declaration + goal-review receipt (2026-09-17, field n=3/3 in one dispatch) ------
+# The disease: three goals of one dispatch declared 「档位：深档」 in their own header PROSE and
+# goal-review ran zero times; the single goal of that same dispatch that met a MACHINE gate (the
+# missing Preflight line) was fixed on the spot. The goal that slipped through let its seat
+# invent the judgement it was missing (natural-language substring matching), which cost 12/30
+# rows mis-classified, three implementation rounds and a follow-up ticket — 契约三问 Q3 exists
+# for exactly that failure, and it is asked during goal-review.
+# JUDGED: that a deep goal carries a `Goal-Review:` line whose value is filled in. Owner ruling
+# 2026-09-17: WARN, never DENY — a legitimate exemption really exists (the whitelist in
+# review-dispatch §goal-review), and an explicit `SKIPPED: <reason>` is how it is declared.
+# NOT judged, on purpose: whether the receipt PATH exists or what it says. A receipt commonly
+# lives outside the seat's tree (another worktree, the orchestrator's scratch), so stat-ing it
+# would red the honest declarations and teach authors to inline a fake local path; and reading
+# its contents would make this shape gate an oracle for review QUALITY, which it is not.
+# Also not judged: the tier VALUE's correctness (that a deep goal really adds a 判断面 — a
+# semantic call, SKILL §2's), and nothing at all when no `Tier:` line is present: the layer is
+# opt-in by absence, so every goal written before this batch keeps its exact behaviour.
+# GATE-AUDIT slug: tier-review-receipt
+#   kill criterion: 30 days with zero hits ⇒ delete (the declaration would then be carrying
+#   itself). False WARNs (a legitimate skip being reminded over and over) over 10% of hits ⇒
+#   demote to speaking only on the FIRST dispatch of a goal, not on every re-run.
+# The value stops at the first whitespace or opening bracket, so an annotated declaration
+# (`Tier: deep（新增判据面）`) reads as `deep` instead of as an unknown third tier.
+# Both spans around the colon are INLINE-only (`[ \t]*`, never `\s*`): `\s` matches a newline,
+# so a header copied with its value never filled in — `Goal-Review:` followed by the template's
+# own `## Context` — captured the LINE BELOW as the value, which is filled and carries no
+# placeholder, so the gate went silent on the commonest bad sample there is (codex cold review,
+# 2026-09-17). An empty value is now an empty value: for the receipt it reads as NO receipt (the
+# missing-receipt WARN below), for the tier as NO declaration — the layer is opt-in by absence
+# and a value nobody typed is an absence, so an empty `Tier:` is judged on nothing.
+TIER_LINE = re.compile(r"(?mi)^[ \t>*+#-]*Tier[ \t]*[:：][ \t]*([^\s（(]+)")
+RECEIPT_LINE = re.compile(r"(?mi)^[ \t>*+#-]*Goal-Review[ \t]*[:：][ \t]*(.*)$")
+DEEP_WORDS = ("deep", "深档")
+LIGHT_WORDS = ("light", "轻档")
+TIER_UNKNOWN_MSG = ("Tier 值不认识：`{value}`——档位只有两档（`deep`/`深档`、`light`/`轻档`，"
+                    "判档在 SKILL §2），本行按未声明处理，深档回执未判")
+RECEIPT_MISSING_MSG = ("深档 goal 无 goal-review 回执：派发前 1 轮冷 goal-review"
+                       "（review-dispatch §goal-review），回执路径写 `Goal-Review: <路径>`；"
+                       "正当跳过写 `Goal-Review: SKIPPED: <理由>`")
+RECEIPT_SKIP_MSG = ("深档 goal 的 goal-review 跳过未写理由：`Goal-Review: SKIPPED: <为何这份 "
+                    "goal 不必评>`——无理由的跳过与没声明同值")
+
+
+def tier_advisories(body):
+    """WARN messages for the tier declaration and, when it says deep, its goal-review receipt."""
+    declaration = TIER_LINE.search(body)
+    if not declaration:
+        return []
+    value = declaration.group(1).strip(_TRAILING + "`*").lower()
+    if value in LIGHT_WORDS:
+        return []
+    if value not in DEEP_WORDS:
+        return [TIER_UNKNOWN_MSG.format(value=declaration.group(1))]
+    receipt = RECEIPT_LINE.search(body)
+    # the value is NOT trailing-stripped before the placeholder read: `>` lives in _TRAILING, so
+    # stripping first turned `<回执路径>` into a filled receipt (the template's own shape).
+    filled = receipt.group(1).strip() if receipt else ""
+    if not filled or PLACEHOLDER.search(filled):
+        return [RECEIPT_MISSING_MSG]
+    if filled.upper().startswith("SKIPPED") and not filled[len("SKIPPED"):].strip(_TRAILING + " \t"):
+        return [RECEIPT_SKIP_MSG]
+    return []
+
+
 # ---- --claims: the governance-document claim census ----------------------------------------
 # The disease: a fact sentence in a governance doc can only be re-checked by a human, so a
 # rewrite is a transcription plus a fresh timestamp and the error gains that freshness as
@@ -593,6 +663,8 @@ def main():
     live_paths = live_probe_paths(body)
     for number, path in sorted(live_paths.items()):
         advise(LIVE_PROBE_MSG.format(where=f"PREMISE 行(第 {number} 行)", path=path))
+    for message in tier_advisories(body):
+        advise(message)
     contradiction = premise_contradiction(body, live_paths)
     if contradiction:
         return fail(contradiction,

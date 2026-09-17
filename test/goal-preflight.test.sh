@@ -831,5 +831,145 @@ chk_eq "[CLAIMS] ⑩ stop names .rc as conditional" 1 \
 chk_eq "[CLAIMS] ⑩ and no longer lists it unconditionally" 0 \
   "$(grep -c 'stderr\.log, \.rc,' "$WATCHCTL")"
 
+# ── tier declaration + goal-review receipt (2026-09-17, field n=3/3 in one dispatch) ───────
+# The disease: three goals wrote 「档位：深档」 in their own header prose and goal-review ran
+# zero times; the one goal in that same dispatch that faced a MACHINE gate (the missing
+# Preflight line) complied on the spot. So the tier declaration moves onto a parsed line and a
+# deep goal with no receipt is told once. WARN-only by owner ruling (a legitimate skip exists),
+# opt-in by absence (no `Tier:` line ⇒ nothing judged, so no existing goal changes behaviour).
+TIERW='深档 goal 无 goal-review 回执'
+tier_run(){ err="$("$CHECK" "$1" 2>&1 >/dev/null)"; rc=$?; }
+
+# ① the disease itself: a deep goal carrying no receipt at all
+printf "${ok}Tier: deep\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ① a deep goal with no receipt still dispatches" 0 "$rc"
+chk_contains "[TIER] ① and is told once" "$TIERW" "$err"
+chk_contains "[TIER] ① naming the line to write" 'Goal-Review: <路径>' "$err"
+chk_contains "[TIER] ① and the exemption form" 'Goal-Review: SKIPPED: <理由>' "$err"
+chk_contains "[TIER] ① pointing at the owning contract" "review-dispatch §goal-review" "$err"
+chk_eq "[TIER] ① exactly one line, never a wall" 1 "$(printf '%s\n' "$err" | grep -c "$TIERW")"
+
+# ② a receipt PATH closes it — existence is deliberately not judged (the receipt may live in
+# another tree, and a gate that stats it would fail on every legitimate remote path)
+printf "${ok}Tier: deep\nGoal-Review: /abs/REVIEW.md\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ② a declared receipt is silent" "" "$err"
+chk_eq "[TIER] ② and dispatches" 0 "$rc"
+
+# ③ the sanctioned exemption: a reasoned SKIPPED is a declaration, not an evasion
+printf "${ok}Tier: deep\nGoal-Review: SKIPPED: 纯取证\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ③ a reasoned skip is silent" "" "$err"
+chk_eq "[TIER] ③ and dispatches" 0 "$rc"
+
+# ④ …but a bare SKIPPED is the evasion: no reason means nothing was declared
+printf "${ok}Tier: deep\nGoal-Review: SKIPPED:\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ④ a reasonless skip never blocks either" 0 "$rc"
+chk_contains "[TIER] ④ but is warned about" "跳过未写理由" "$err"
+printf "${ok}Tier: deep\nGoal-Review: SKIPPED\n" > "$goal"
+tier_run "$goal"
+chk_contains "[TIER] ④ the colonless form too" "跳过未写理由" "$err"
+
+# ⑤⑥ the two silent states: a light goal owes no receipt, and a goal with no Tier line at all
+# is not in this layer's territory (opt-in — every goal written before this batch)
+printf "${ok}Tier: light\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑤ a light goal is silent" "" "$err"
+chk_eq "[TIER] ⑤ and dispatches" 0 "$rc"
+printf "${ok}" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑥ no Tier line, nothing judged" "" "$err"
+chk_eq "[TIER] ⑥ and dispatches" 0 "$rc"
+
+# ⑦ a third value is not a third tier: the doctrine has exactly two, so an unknown word is a
+# declaration the gate cannot read and says so instead of guessing a tier
+printf "${ok}Tier: medium\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑦ an unknown tier never blocks" 0 "$rc"
+chk_contains "[TIER] ⑦ but is named" "Tier 值不认识" "$err"
+chk_contains "[TIER] ⑦ quoting what was written" "medium" "$err"
+chk_not_contains "[TIER] ⑦ and no receipt verdict is invented" "$TIERW" "$err"
+
+# ⑧ an unfilled template placeholder is an absent receipt, not a present one — the shape the
+# template itself ships with, and the one a copy-paste author leaves behind
+printf "${ok}Tier: deep\nGoal-Review: <回执路径>\n" > "$goal"
+tier_run "$goal"
+chk_contains "[TIER] ⑧ a placeholder receipt is no receipt" "$TIERW" "$err"
+chk_eq "[TIER] ⑧ and still never blocks" 0 "$rc"
+
+# ⑨ coexistence with the one thing in this gate that DOES block: the advisory is printed
+# before the verdict, so a refuted premise never swallows it
+printf "${ok}Tier: deep\n## Premises\nPREMISE: 两行 verify=\`echo one\` => count=2 rc=0\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑨ a refuted premise still reds" 1 "$rc"
+chk_contains "[TIER] ⑨ and the advisory is still printed" "$TIERW" "$err"
+chk_eq "[TIER] ⑨ WARN before ERR" 1 "$(printf '%s\n' "$err" | grep -n "$TIERW\|^ERR:" | sed -n '1s/:.*//p')"
+chk_contains "[TIER] ⑨ ERR is the second line" "ERR: preflight gate" "$(printf '%s\n' "$err" | sed -n 2p)"
+
+# ⑩ --claims is a different consumer (a governance document, not a dispatch): it judges no
+# tier, so a document merely containing the word is untouched
+printf 'Tier: deep\nPREMISE: 一行 verify=`echo one` => count=1 rc=0\n' > "$cdoc"
+claims_run "$cdoc"
+chk_eq "[TIER] ⑩ claims mode dispatches" 0 "$rc"
+chk_not_contains "[TIER] ⑩ and judges no tier" "$TIERW" "$err"
+chk_not_contains "[TIER] ⑩ nor its value" "Tier 值不认识" "$err"
+
+# ⑪ the doctrine is written in Chinese and so are the goals: 深档 / 轻档 are the same two tiers
+printf "${ok}Tier: 深档\n" > "$goal"
+tier_run "$goal"
+chk_contains "[TIER] ⑪ 深档 is deep" "$TIERW" "$err"
+printf "${ok}Tier: 深档\nGoal-Review: /abs/REVIEW.md\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑪ and closes the same way" "" "$err"
+printf "${ok}Tier: 轻档\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑪ 轻档 is light, and silent" "" "$err"
+# the declaration is a LINE, so a list marker or a blockquote prefix is still one — that is how
+# the template's header actually reaches a goal author's file
+printf "${ok}> Tier: deep\n" > "$goal"
+tier_run "$goal"
+chk_contains "[TIER] ⑪ a blockquoted declaration is a declaration" "$TIERW" "$err"
+printf "${ok}Tier: deep（新增判据面）\nGoal-Review: /abs/REVIEW.md（冷评审）\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑪ an annotated value is not an unknown one" "" "$err"
+
+# ⑫ the shape codex's cold review found: a template header copied with the receipt value never
+# filled in. `\s*` after the colon matched the NEWLINE too, so the line below — in the template
+# that is exactly `## Context` — was captured as the receipt VALUE: non-empty, no placeholder,
+# gate silent on the most common bad sample there is. The value now ends where its line ends.
+printf "${ok}Tier: deep\nGoal-Review:\n\n## Context\n" > "$goal"
+tier_run "$goal"
+chk_contains "[TIER] ⑫ an empty receipt value is no receipt" "$TIERW" "$err"
+chk_eq "[TIER] ⑫ and still never blocks" 0 "$rc"
+chk_not_contains "[TIER] ⑫ the line below was never the value" "## Context" "$err"
+
+# ⑬ the same disease wearing the value's own whitespace: spaces and a tab after the colon are
+# still an empty value, and the body line under them is still body
+printf "${ok}Tier: deep\nGoal-Review:  \t\n正文一行\n" > "$goal"
+tier_run "$goal"
+chk_contains "[TIER] ⑬ a whitespace-only receipt is no receipt" "$TIERW" "$err"
+chk_eq "[TIER] ⑬ and still never blocks" 0 "$rc"
+
+# ⑭ the negative control for ⑫: the identical `## Context` follower behind a REAL receipt stays
+# silent, so the fix shortened the value's span and changed nothing else
+printf "${ok}Tier: deep\nGoal-Review: /abs/REVIEW.md\n\n## Context\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑭ a filled receipt above body is silent" "" "$err"
+chk_eq "[TIER] ⑭ and dispatches" 0 "$rc"
+
+# ⑮ RULING, this batch: an empty `Tier:` value is NO declaration — not an unknown tier. The
+# layer is opt-in by absence (⑥) and a value nobody typed is an absence, so nothing is judged
+# and the deep receipt is not asked for. Before the fix the same span bug named the body line
+# below it (`##`) a third tier and printed 不认识.
+printf "${ok}Tier:\n\n## Context\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑮ an empty Tier value declares nothing" "" "$err"
+chk_eq "[TIER] ⑮ and dispatches" 0 "$rc"
+printf "${ok}Tier:  \t\nGoal-Review: <回执路径>\n" > "$goal"
+tier_run "$goal"
+chk_eq "[TIER] ⑮ whitespace-only too, and no receipt verdict" "" "$err"
+
 rm -rf "$SANDBOX"
 summary

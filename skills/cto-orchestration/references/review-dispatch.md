@@ -31,7 +31,7 @@
 >   §Premises 逐条独立验证——改一行代码要过冷评审，「要不要改」的判断不得零检验直通派工
 > - [ ] 轻档 goal（不新增判据 / 门 / 状态 / 接口 / 解析面：纯删、纯搬迁、有参考实现；判档在 SKILL §2）→ 免 goal-review，但仍过 1 轮冷评审或编排位抽查
 > - [ ] 其余——含一切带写动作的 goal，哪怕看着机械（门禁 / 量具类必评：改断言即改判据）→
->   1 轮冷上下文 goal-review（异构模型，只读 goal 文本，不喂实现语境）；歧义即 fail-closed
+>   1 轮冷上下文 goal-review（异构模型，只读 goal 文本，不喂实现语境）；歧义即 fail-closed。回执写回 goal 抬头：`Goal-Review: <回执绝对路径>`，正当豁免写 `Goal-Review: SKIPPED: <理由>`（配 `Tier: deep`；preflight 见 deep 无回执即 WARN、不拦）
 
 问块按 goal 命中的面选用，任一问不过即 blocking，修 goal 再派；goal 带 Preflight 声明 / premise 脚本时
 评审须**复跑**、不采信贴出值（预计算结果会诱导评审不复跑）；命中**门 / 量具面**（新造或改动门 / 量具；相关条款 C11 / C14）时该轮产出

@@ -9,6 +9,8 @@
 > 基线核对只针对你自己的 worktree；主 checkout 与本地 <base> 分支不在核对面、不得要求
 > fast-forward（squash 集成仓的主 checkout 必然分叉，拿它判 BLOCKED 是误报）。
 
+Tier: <deep | light>（判档在 SKILL §2：goal 新增判据 / 门 / 状态 / 接口 / 解析面 = deep）
+Goal-Review: <回执路径 | SKIPPED: <理由>>（仅 deep；review-dispatch §goal-review）
 ## Context (read first)
 
 <前置研究/诊断文档列表（每项写 `/absolute/path/to/...`）+ 一段话现状。来自外部的观测事实（运维/QA）原样列出并标注

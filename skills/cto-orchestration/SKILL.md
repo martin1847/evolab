@@ -65,7 +65,7 @@ metadata:
 
 - 按风险定深度：低风险走轻量 review；鉴权、迁移、基建、大重构走 `references/review-dispatch.md` 的完整循环。
 - **goal 评审：白名单免评，其余必评**——命中免评白名单（唯一清单在 `references/review-dispatch.md` §goal-review，共同硬门=不新增任何决策面）→ 跳过；未命中或拿不准 → 派发前 1 轮冷上下文 goal-review（仪器六问 + 契约三问，同节）。
-- **档位只有两档，按派工前能看见的事实判，不按行数、不按文件类型**：**深档** = goal 新增判断面（判据 / 门 / 状态 / 接口 / 解析面）→ goal-review 1 轮 + 冷评审 blocking 驱动；跨模块 / 新状态机的深档批派工前方案预审给主理人。**轻档** = 其余（纯删、纯搬迁、有参考实现、本地文档）→ 不做 goal-review，1 轮冷评审或编排位抽查闭合；轻改车道（下文）是轻档的子集。规模由评审看真实 diff 事后判；goal 里不写行数预估、上限或比值（写了 = finding）。写深档合同、裁大批阻断 findings 时建议高推理档（`xhigh` 或者 `max`）。
+- **档位只有两档，按派工前能看见的事实判，不按行数、不按文件类型**：**深档** = goal 新增判断面（判据 / 门 / 状态 / 接口 / 解析面）→ goal-review 1 轮 + 冷评审 blocking 驱动；跨模块 / 新状态机的深档批派工前方案预审给主理人（goal 抬头 `Tier:` 行声明档位，deep 带 `Goal-Review:` 回执，preflight 缺则 WARN）。**轻档** = 其余（纯删、纯搬迁、有参考实现、本地文档）→ 不做 goal-review，1 轮冷评审或编排位抽查闭合；轻改车道（下文）是轻档的子集。规模由评审看真实 diff 事后判；goal 里不写行数预估、上限或比值（写了 = finding）。写深档合同、裁大批阻断 findings 时建议高推理档（`xhigh` 或者 `max`）。
 - **直写也要合同**：编排位自己直写 shipped 面（教义 / 门 / guard）动手前，同样先写最小合同——
   Done-when + 坏样本来源 + scope 三行即可，评审 brief 随附；无合同的直写单元评审者当 finding 报。
 - brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。

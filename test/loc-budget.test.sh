@@ -59,19 +59,23 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # instead of re-typed. The field cost it answers: a copied stale sentence in this repo's own
 # AGENTS.md drove two false reports. PROSE did NOT move (doctrine went into existing lines);
 # INJECT and INJECT_SINGLE are untouched — this layer injects nothing into an agent's context.
-# 2026-09-17 (cto-guard-bash rule (22) `g22-stash-crosses-worktrees`): CODE 14371 -> 14473,
-# INJECT 17939 -> 18293, INJECT_SINGLE 2216 -> 2570. What the +102 lines and +354 bytes buy: a
-# dispatch-time WARN when a `git stash` is sent at a repo whose `git worktree list --porcelain`
-# shows >=2 trees in flight (the stash stack lives in the shared `.git`, so it crosses the
-# per-seat worktree isolation and the victim seat gets zero signal — downstream seats n=1,
-# this repo n=1), plus the one UNMEASURED line for every case the gauge cannot judge (no git,
-# 2s timeout, not a repo, undecodable porcelain). INJECT_SINGLE had to move WITH the total and
-# is not a second rule's byte: this meter resolves the assembled `additionalContext` join, so
-# any new WARN local in that tuple grows the "longest single message" by exactly its own text —
-# 354 bytes, the same delta as the total. PROSE did NOT move (the doctrine went into an
-# existing dispatch-baseline line).
-CODE_MAX=14473      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1573      # every shipped *.md under the skill, summed wc -l
+# 2026-09-17 (`tier-review-receipt`): CODE 14371 -> 14436, PROSE 1573 -> 1575. What the +65 code
+# lines buy: goal-preflight's tier layer — a `Tier: deep` goal with no filled-in `Goal-Review:`
+# receipt gets one WARN (never a DENY, never a path/content check), and a goal with no `Tier:`
+# line is judged on nothing. The +2 prose lines are the two template header lines that layer
+# reads, approved by the owner as the per-goal price (one line of tier, one of receipt); every
+# other doc touched by that batch stayed net-zero. The field cost it answers: one dispatch where
+# three goals declared 深档 in header PROSE and goal-review ran 0/3, while the one goal facing a
+# machine gate complied 1/1. INJECT and INJECT_SINGLE are untouched — this layer speaks on the
+# dispatcher's stderr, not into an agent's context.
+# Fix round 1 (codex cold review, same day): CODE 14436 -> 14443. All +7 are COMMENT above the
+# two regexes, bought by the one-class fix `\s*` -> `[ \t]*` on both sides of the colon: `\s`
+# crossed the newline, so a `Goal-Review:` whose value was never filled in captured the template's
+# own next line (`## Context`) as a filled receipt and the gate went silent on the commonest bad
+# sample. The comment is the ceiling's whole cost and it is load-bearing: it names why the span
+# may never widen back. No prose, INJECT or INJECT_SINGLE movement.
+CODE_MAX=14545      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+PROSE_MAX=1575      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18293    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2570  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length
