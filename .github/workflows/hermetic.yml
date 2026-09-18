@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # test/cto-guard-bash.test.sh (20-sa7) reads a pinned pre-fix commit as its control
       - uses: oven-sh/setup-bun@v2   # two *.bun.ts suites; run.sh SKIPs them if bun is absent
       - name: python correctness (ruff, narrow select)
         # explicit --select: correctness + exec-bit only — style rules deliberately
