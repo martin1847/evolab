@@ -2431,12 +2431,12 @@ chk_contains "(20-sa7) PAIRED RED: on (20)'s grounds" "编排位经 bash 直写�
 chk_eq "(20-sa7) PAIRED RED: with nothing on stdout" "" "$OUT"
 
 # ⑪ BYTE IDENTITY with no note to carry: the splat is `{}`, so both early-return responses must
-# be what origin/main printed, byte for byte. Control = the BASE guard, exported next to copies
+# be what the PRE-FIX base (2e98ca2, pinned: origin/main moves and would make this vacuous) printed, byte for byte. Control = the BASE guard, exported next to copies
 # of its siblings (rule (20) loads cto-guard-edit.py from its own directory, so a lone file in a
 # temp dir would be a different program).
 SA7_BASE_DIR="$G8ROOT/base-agentctl"
 cp -R "$AW_DIR" "$SA7_BASE_DIR"
-git -C "$REPO_ROOT" show origin/main:skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
+git -C "$REPO_ROOT" show 2e98ca2a8a34baca4ff5b43abe6cf2378732d039:skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
   > "$SA7_BASE_DIR/cto-guard-bash.py" 2>/dev/null
 SA7_BASE="$SA7_BASE_DIR/cto-guard-bash.py"
 # the control must BE the base guard, or every comparison below is vacuously green
@@ -2453,7 +2453,7 @@ sa7_cmp() { # $1 label  $2 command  $3 cwd -> SA7_HEAD_OUT holds head's stdout f
   sa7_bytes "$SA7_BASE" "$pay" "$G8ROOT/sa7-base"
   sa7_bytes "$GUARD" "$pay" "$G8ROOT/sa7-head"
   SA7_HEAD_OUT="$(cat "$G8ROOT/sa7-head.out")"
-  chk_eq "(20-sa7) $1: rc/stdout/stderr byte-identical to origin/main" "" \
+  chk_eq "(20-sa7) $1: rc/stdout/stderr byte-identical to pre-fix base 2e98ca2" "" \
     "$(for x in rc out err; do cmp -s "$G8ROOT/sa7-base.$x" "$G8ROOT/sa7-head.$x" \
          || printf '%s differs ' "$x"; done)"
 }
