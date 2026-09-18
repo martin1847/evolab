@@ -82,10 +82,21 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # atomic write. Moving a document stays a human call, which is also why the ceiling is this small.
 # PROSE, INJECT and INJECT_SINGLE did NOT move (the retrospective §5 clause is net-zero lines and
 # this layer prints on a retro operator's terminal, not into an agent's context).
-CODE_MAX=14867      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+# 2026-09-18 (`edge-brake`): CODE 14867 -> 14925, INJECT 18622 -> 18798, INJECT_SINGLE 2739 ->
+# 2915. What the +58 lines buy: two WARNs at the two moments a batch starts铺大饼 — cto-guard's
+# rule (13) second table (a review brief that NAMES the boundary it wants audited) and
+# goal-preflight's fix-round stop-loss (a goal whose filename or title says round 2+). The field
+# cost they answer: two 09-18 batches whose briefs named 对抗输入 / 逐字节回归全部 / symlink /
+# 跨仓 / shallow came back ~25 findings deep with ~6 on the main path, and the fix rounds that
+# followed grew two scripts 536->804 and 315->660 lines. Both INJECT numbers move by the same
+# 176 bytes — that is the ONE new injected line; INJECT_SINGLE moves too because the hook
+# response joins every note into one `additionalContext` document, so the total and the longest
+# single message are the same string here. PROSE did not move (preflight speaks on the
+# dispatcher's stderr, and the guard line is source text, not doctrine).
+CODE_MAX=14925      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
 PROSE_MAX=1575      # every shipped *.md under the skill, summed wc -l
-INJECT_MAX=18622    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
-INJECT_SINGLE_MAX=2739  # the longest SINGLE message, which bites harder than the total: a worker
+INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
+INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length
                         # there competes with the fix line it needs.
 

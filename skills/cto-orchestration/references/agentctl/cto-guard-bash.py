@@ -228,6 +228,20 @@ _R13_TERMS = ("forged", "impostor", "attack payload", "bypass", "绕过", "失�
 _R13_RE = re.compile("|".join(
     (r"\b" + r"\s+".join(re.escape(w) for w in t.split()) + r"\b") if t.isascii()
     else re.escape(t) for t in _R13_TERMS), re.I)
+# The SECOND table, same mechanism and same WARN-only channel, a different disease (owner ruling
+# 2026-09-18). The wording above gets a dispatch REFUSED; the wording below gets it ACCEPTED and
+# then boundless: field n=2 review batches whose BRIEF named the boundary (构造对抗输入 / 逐字节
+# 回归全部 fixture / symlink / 跨仓 / shallow) came back with ~25 findings of which ~6 touched the
+# main path, and the brief's own `任一差异 = blocking` turned the remainder into fix rounds that
+# grew two scripts 536->804 and 315->660 lines — each defence breeding the next boundary. SKILL
+# §2's stop-loss already says this, in prose, where nothing reaches the orchestrator at the
+# moment it WRITES the brief. This is that touch. Literal terms, same declared FP/FN faces as
+# above: a brief legitimately reporting on concurrency reads as a hit, any synonym misses.
+_R13_EDGE_TERMS = ("对抗输入", "变体矩阵", "逐字节回归全部", "对抗变体",
+                   "symlink", "跨仓", "shallow", "并发")
+_R13_EDGE_RE = re.compile("|".join(
+    (r"\b" + re.escape(t) + r"\b") if t.isascii() else re.escape(t)
+    for t in _R13_EDGE_TERMS), re.I)
 _R13_MAX = 256 * 1024
 # Direct command-position dispatch only, judged on the SHARED pipeline view so that quoted data
 # (`echo 'note; agentctl start codex … --goal x'`) cannot trigger an advisory about a command
@@ -461,8 +475,9 @@ def _blocked_stands(path):
 
 
 def _brief_review(raw, vpipe, cwd):
-    """(reason, hits, path) for the first direct `agentctl start codex … --goal <f>`.
-    All-None = nothing to say; `reason` = a SHORT why-not, `hits` = matched phrases.
+    """(reason, hits, edge, path) for the first direct `agentctl start codex … --goal <f>`.
+    All-None = nothing to say; `reason` = a SHORT why-not, `hits` / `edge` = matched phrases
+    from the cyber-filter table and the boundary table respectively.
 
     Returns DATA, never prose: the injected-text ratchet (test/loc-budget.test.sh) weighs
     string literals at the sink, so a message assembled in a helper would be spent unweighed.
@@ -472,38 +487,41 @@ def _brief_review(raw, vpipe, cwd):
     of a legal dispatch. A wording hint must never be able to block one."""
     try:
         if not _R13_POS.search(vpipe):   # quoted data is not a dispatch
-            return None, None, None
+            return None, None, None, None
         m = _R13_HEAD.search(raw)
         if not m:
-            return None, None, None
+            return None, None, None, None
         # first dispatch only, declared boundary: a command chaining two `start codex` calls
         # gets its second brief unread (chaining dispatches is not the shape we optimize for)
         path, reason = _r13_goal_arg(_r13_segment(raw, m.end()))
         if reason or path is None:
-            return reason, None, None
+            return reason, None, None, None
         full = path if os.path.isabs(path) else os.path.join(cwd, path)
         st = os.lstat(full)  # lstat, deliberately: a symlinked brief is reported, not followed
         if stat.S_ISLNK(st.st_mode):
-            return "symlink", None, None
+            return "symlink", None, None, None
         if not stat.S_ISREG(st.st_mode):
-            return "not a regular file", None, None
+            return "not a regular file", None, None, None
         if st.st_size > _R13_MAX:
-            return "larger than 256KB", None, None
+            return "larger than 256KB", None, None, None
         with open(full, "rb") as fh:
             blob = fh.read(_R13_MAX + 1)
         # the size VERDICT comes from the bytes actually read, not the lstat snapshot: the file
         # can grow between stat and open, and a lying/racing stat must not buy an unbounded
         # inspection (review R1 m2). The read itself was already bounded to MAX+1.
         if len(blob) > _R13_MAX:
-            return "larger than 256KB", None, None
+            return "larger than 256KB", None, None, None
         body = blob.decode("utf-8")
     except FileNotFoundError:
-        return "missing", None, None
+        return "missing", None, None, None
     except UnicodeDecodeError:
-        return "not UTF-8", None, None
+        return "not UTF-8", None, None, None
     except Exception:
-        return "unreadable", None, None
-    return None, sorted({h.lower() for h in _R13_RE.findall(body)}), path
+        return "unreadable", None, None, None
+    return (None,
+            sorted({h.lower() for h in _R13_RE.findall(body)}),
+            sorted({h.lower() for h in _R13_EDGE_RE.findall(body)}),
+            path)
 
 
 # ── rule (16): babysit-round counter (WARN, never DENY) ───────────────────────────────────
@@ -2257,7 +2275,8 @@ def main():
     #      pipeline view blanks any quoted span with a space to ARG. Bounded read: regular
     #      files only, no symlink following, 256KB, UTF-8 — every failure degrades to a
     #      `not inspected (<reason>)` line at exit 0.
-    reason13, hits13, path13 = _brief_review(raw, vpipe, data.get("cwd") or os.getcwd())
+    reason13, hits13, edge13, path13 = _brief_review(
+        raw, vpipe, data.get("cwd") or os.getcwd())
     note13 = ""
     if reason13:
         note13 = "WARN (cto-guard 13): brief not inspected (%s); wording unchecked." % reason13
@@ -2269,6 +2288,16 @@ def main():
             "the sensitive narrative INTO the file the reviewer reads. Advisory: a literal "
             "phrase list from those four prompts, not a semantic check."
             % (path13, ", ".join(hits13))
+        )
+    #      SECOND line, same read and same channel: the brief NAMES the boundary it wants
+    #      audited (`_R13_EDGE_TERMS`). Independent of the cyber line — a brief can earn both,
+    #      one line each — and WARN-only for the same reason: naming a boundary is legal.
+    note13b = ""
+    if edge13:
+        note13b = (
+            "WARN (cto-guard 13): brief %s 点名边界（词：%s）——09-18 裁定：评审只审主路径 + "
+            "check 零变异 + 已知阳性，边界 accept-documented 不计 blocking"
+            % (path13, ", ".join(edge13))
         )
 
     m = re.search(r"\bagentctl[\"'\s]+start[\"'\s]+(omp|codex|claude)[\"'\s]+([^\s\"';|&]+)", cmd)
@@ -2430,17 +2459,17 @@ def main():
     # (19)'s drift warn, (20)'s two unjudged-write warns plus its sub-agent line, and (22)'s
     # stash warn plus its unmeasured line ride (3)'s channel: on exit 0 only additionalContext
     # reaches the agent, and two JSON documents on stdout would be one malformed hook response.
-    # All twelve strings stay LOCAL to this frame so the injected-text ratchet can weigh what a
+    # All thirteen strings stay LOCAL to this frame so the injected-text ratchet can weigh what a
     # worker is actually handed. (8) is set far above and can be swallowed by a later DENY —
     # correct: a denial's stderr is the message that matters.
-    if (reminder or note8 or note13 or note14 or note15 or note16 or note19
+    if (reminder or note8 or note13 or note13b or note14 or note15 or note16 or note19
             or note20 or note20b or note20c or note22 or note22b):
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
-                    t for t in (reminder, note8, note13, note14, note15, note16, note19,
-                                note20, note20b, note20c, note22, note22b)
+                    t for t in (reminder, note8, note13, note13b, note14, note15, note16,
+                                note19, note20, note20b, note20c, note22, note22b)
                     if t),
             }
         }))

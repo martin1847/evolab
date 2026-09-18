@@ -916,6 +916,68 @@ chk_eq "an exception inside rule 13 stays exit 0" 0 "$rc13"
 chk_eq "and never emits a CHECKER-ERROR" "" "$err13"
 chk_contains "it degrades to not inspected" "not inspected (unreadable)" "$(ctx "$out13")"
 
+# ── (13b) the boundary-wording line: same read, same channel, the OTHER disease ───────────
+# Owner ruling 2026-09-18: a brief that NAMES the boundary buys a reviewer who audits it, and
+# that dispatch is ACCEPTED (not refused like the cyber wording above) and then boundless.
+printf '%s\n' '本轮请逐字节回归全部 fixture，并构造对抗输入覆盖 symlink / 跨仓 / shallow。' \
+  > "$B13/edge.md"
+run "$D13 $B13/edge.md --review $W13" 1
+chk_eq "① a boundary-naming brief still exits 0 (WARN, never a DENY)" 0 "$RC"
+chk_eq "① and writes nothing to stderr" "" "$ERR"
+chk_contains "① the boundary WARN is emitted" "点名边界" "$(ctx "$OUT")"
+chk_contains "① it names the matched wording" "逐字节回归全部" "$(ctx "$OUT")"
+chk_contains "① every match, not just the first" "对抗输入" "$(ctx "$OUT")"
+chk_contains "① including the ASCII terms" "symlink" "$(ctx "$OUT")"
+chk_contains "① it carries the 09-18 ruling, not a taste claim" \
+  "边界 accept-documented 不计 blocking" "$(ctx "$OUT")"
+chk_eq "① the cyber line does NOT fire on boundary wording alone" 0 \
+  "$(printf '%s' "$(ctx "$OUT")" | grep -c 'cyber')"
+# the whole second table ships tested — an unexercised typo would be a silent dead entry
+printf '%s\n' '再跑一遍变体矩阵：对抗变体 + 并发写入。' > "$B13/edge2.md"
+run "$D13 $B13/edge2.md --review $W13" 1
+chk_contains "① remaining term: 变体矩阵" "变体矩阵" "$(ctx "$OUT")"
+chk_contains "① remaining term: 对抗变体" "对抗变体" "$(ctx "$OUT")"
+chk_contains "① remaining term: 并发" "并发" "$(ctx "$OUT")"
+# ② both diseases in one brief: two independent lines, one each, in one hook response
+printf '%s\n' '别让评审席 bypass 门禁；顺手把 symlink 边界也逐字节回归全部。' > "$B13/both.md"
+run "$D13 $B13/both.md --review $W13" 1
+chk_eq "② a doubly-dirty brief still exits 0" 0 "$RC"
+chk_eq "② exactly two rule-13 lines" 2 \
+  "$(printf '%s' "$(ctx "$OUT")" | grep -c 'WARN (cto-guard 13)')"
+chk_eq "② one of them is the cyber line" 1 "$(printf '%s' "$(ctx "$OUT")" | grep -c 'cyber')"
+chk_eq "② and one is the boundary line" 1 \
+  "$(printf '%s' "$(ctx "$OUT")" | grep -c '点名边界')"
+chk_eq "② still one JSON hook response" 1 "$(printf '%s' "$OUT" | grep -c hookSpecificOutput)"
+# ③ BYTE IDENTITY: a brief naming no boundary must read exactly as the base guard read it.
+# Control = the guard at origin/main, exported beside copies of its siblings (rule (20) loads
+# cto-guard-edit.py from its own directory, so a lone file in a temp dir is a different program).
+E13_BASE_DIR="$G8ROOT/base-r13"
+cp -R "$AW_DIR" "$E13_BASE_DIR"
+git -C "$REPO_ROOT" show origin/main:skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
+  > "$E13_BASE_DIR/cto-guard-bash.py" 2>/dev/null
+E13_BASE="$E13_BASE_DIR/cto-guard-bash.py"
+# the control must BE the pre-batch guard, or every comparison below is vacuously green
+chk_eq "③ control: the exported guard predates this batch" 0 \
+  "$(grep -c '_R13_EDGE_TERMS' "$E13_BASE" 2>/dev/null || true)"
+e13_bytes() { # $1 guard  $2 payload  $3 out-prefix — raw bytes, no command substitution
+  printf '%s' "$2" | python3 "$1" >"$3.out" 2>"$3.err"; echo $? >"$3.rc"
+}
+for e13case in clean dirty cjk; do
+  e13pay="$(mkcmd "$D13 $B13/$e13case.md --review $W13" 1)"
+  e13_bytes "$E13_BASE" "$e13pay" "$G8ROOT/e13-base"
+  e13_bytes "$GUARD" "$e13pay" "$G8ROOT/e13-new"
+  for e13s in out err rc; do
+    chk_eq "③ $e13case: $e13s byte-identical to origin/main" 0 \
+      "$(cmp -s "$G8ROOT/e13-base.$e13s" "$G8ROOT/e13-new.$e13s"; echo $?)"
+  done
+done
+# the loop's last case (`cjk`) left its files behind: the comparison above really did weigh a
+# response that CARRIES rule-13 text, not two empty streams
+chk_contains "③ the compared case really produced a rule-13 line" \
+  "WARN (cto-guard 13)" "$(ctx "$(cat "$G8ROOT/e13-base.out")")"
+chk_eq "③ and no boundary line existed before this batch" 0 \
+  "$(grep -c '点名边界' "$G8ROOT/e13-base.out" || true)"
+
 # ── impl review R1 (codex) — every reproduction verbatim, red-then-green ──────────────────
 # B1: rule 8 REQUIRES -R/--repo for gh in a multi-repo umbrella, so the repository-qualified
 # spelling is the only legal one there — and it must still reach rule 12.

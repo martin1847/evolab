@@ -548,6 +548,32 @@ def tier_advisories(body):
     return []
 
 
+# ---- the fix-round stop-loss (WARN, never a verdict) ----------------------------------------
+# Owner ruling 2026-09-18: a second fix round is the moment a batch stops being the thing that
+# was asked for. Field, same day: two review batches dispatched a round 2 off "任一差异 =
+# blocking" and the two scripts under repair grew 536->804 and 315->660 lines, every defence
+# breeding the next one. SKILL §2's stop-loss is prose and the dispatcher meets no prose here.
+# JUDGED ON THE NAME ONLY: the goal's FILENAME or its first line. That is deliberate — the round
+# number is a fact the dispatcher types, not one this script can measure, and a content scan for
+# "this smells like a repair" would be an oracle for batch QUALITY, which this is not. FIX1 is
+# silent (a first repair round is normal work). `--claims` never reaches here: a governance
+# document that quotes a fix round is not a dispatch.
+# The message says 第 2 修复轮 for FIX3+ as well: the reading is "round 2 or later", one line of
+# text for the whole class, and the stop-loss it asks for is identical at every round past 1.
+# GATE-AUDIT slug: fix-round-stoploss
+#   kill criterion: 30 days in which every hit was dispatched unchanged ⇒ the line is ceremony,
+#   delete it. The instrument is the owner report it asks for, not the WARN itself.
+FIX_ROUND = re.compile(r"_FIX[2-9]\b|修复轮[ \t]*[2-9]|\bfix[ \t]+round[ \t]+[2-9]\b", re.I)
+FIX_ROUND_MSG = ("第 2 修复轮——按 SKILL §2 止损：先报 owner 原需求 vs 两轮净增面，"
+                 "默认降级需求")
+
+
+def fix_round_advisory(path, body):
+    """A message when the goal NAMES itself a second-or-later fix round, else None."""
+    head = body.split("\n", 1)[0]
+    return FIX_ROUND_MSG if FIX_ROUND.search(os.path.basename(path) + "\n" + head) else None
+
+
 # ---- --claims: the governance-document claim census ----------------------------------------
 # The disease: a fact sentence in a governance doc can only be re-checked by a human, so a
 # rewrite is a transcription plus a fresh timestamp and the error gains that freshness as
@@ -665,6 +691,9 @@ def main():
         advise(LIVE_PROBE_MSG.format(where=f"PREMISE 行(第 {number} 行)", path=path))
     for message in tier_advisories(body):
         advise(message)
+    fix_round = fix_round_advisory(sys.argv[1], body)
+    if fix_round:
+        advise(fix_round)
     contradiction = premise_contradiction(body, live_paths)
     if contradiction:
         return fail(contradiction,

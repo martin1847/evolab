@@ -971,5 +971,47 @@ printf "${ok}Tier:  \t\nGoal-Review: <回执路径>\n" > "$goal"
 tier_run "$goal"
 chk_eq "[TIER] ⑮ whitespace-only too, and no receipt verdict" "" "$err"
 
+# ── the fix-round stop-loss: a goal that NAMES itself round 2+ gets one WARN ───────────────
+# Owner ruling 2026-09-18. Judged on the goal's FILENAME or its first line only — the round
+# number is typed by the dispatcher, never measured here. WARN-only at every state.
+FIXW='第 2 修复轮'
+fixdir="$SANDBOX/fix"; mkdir -p "$fixdir"
+
+# ④ the filename carries the round
+fix2="$fixdir/GOAL_X_FIX2.md"
+printf "$ok" > "$fix2"
+tier_run "$fix2"
+chk_contains "[FIX] ④ a FIX2 filename warns" "$FIXW" "$err"
+chk_contains "[FIX] ④ and names the stop-loss owner asks for" "原需求 vs 两轮净增面" "$err"
+chk_eq "[FIX] ④ WARN never blocks" 0 "$rc"
+
+# ⑤ FIX1 is normal work: a first repair round is silent, which is what keeps ④ a signal
+fix1="$fixdir/GOAL_X_FIX1.md"
+printf "$ok" > "$fix1"
+tier_run "$fix1"
+chk_eq "[FIX] ⑤ a FIX1 filename is silent" "" "$err"
+chk_eq "[FIX] ⑤ and dispatches" 0 "$rc"
+
+# ⑥ the other half of the name: the first line, for goals whose filename says nothing
+plain="$fixdir/GOAL_PLAIN.md"
+printf '# 修复轮 2：边界回收\n%s' "$(printf "$ok")" > "$plain"
+tier_run "$plain"
+chk_contains "[FIX] ⑥ a 修复轮 2 title warns" "$FIXW" "$err"
+chk_eq "[FIX] ⑥ and still never blocks" 0 "$rc"
+printf '# Fix round 3 — repair of the repair\n%s' "$(printf "$ok")" > "$plain"
+tier_run "$plain"
+chk_contains "[FIX] ⑥ the English shape too, at round 3" "$FIXW" "$err"
+printf '# Fix round 1 — first repair\n%s' "$(printf "$ok")" > "$plain"
+tier_run "$plain"
+chk_eq "[FIX] ⑥ PAIRED GREEN: round 1 in the title is silent" "" "$err"
+
+# ⑦ --claims is the other consumer: a governance DOCUMENT that quotes a fix round is not a
+# dispatch, so the layer never speaks there
+cfix="$SANDBOX/GOAL_GOV_FIX2.md"
+printf '# 修复轮 2 复盘\nPREMISE: 一行 verify=`echo one` => count=1 rc=0\n' > "$cfix"
+claims_run "$cfix"
+chk_eq "[FIX] ⑦ claims mode dispatches" 0 "$rc"
+chk_not_contains "[FIX] ⑦ and judges no fix round" "$FIXW" "$err"
+
 rm -rf "$SANDBOX"
 summary
