@@ -138,7 +138,7 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
 
 12. **建组合 project gate**：
     - 复制 `references/docs-check.sh` → `scripts/docs-check.sh`。四检 = AGENTS/CLAUDE 尺寸门 · docs
-      相对链接死链（FAIL）· ACTIVE_CONTEXT 新鲜度与行数 · 幻影路径引用。
+      相对链接死链（FAIL）· ACTIVE_CONTEXT 新鲜度与行数 · 幻影路径引用；`--heal` 显式自愈同名唯一死指针（其余跳过）。
     - 发现后端代码 marker 时，复制 `references/engineering-gate.sh` → `scripts/engineering-gate.sh`，
       按 `references/engineering-gate.conf.example` 生成 `scripts/engineering-gate.conf`，显式列出每个
       Python / Go / Java-Maven / Java-Gradle / Rust profile 与相对 module root。语言命令与失败契约的

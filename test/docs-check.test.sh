@@ -25,6 +25,9 @@ mkskel(){
   echo "$d"
 }
 run(){ bash "$SCRIPT" "$1" 2>&1; }
+healrun(){ bash "$SCRIPT" "$1" --heal 2>&1; }
+# skeleton with a git dir (heal refuses to rewrite where there is no rollback)
+mkheal(){ local d; d="$(mkskel)"; mkdir -p "$d/.git"; echo "$d"; }
 
 echo "== docs-check.test =="
 
@@ -71,6 +74,42 @@ r="$(mkskel)"; printf '\n`docs/<module>.md` `roadmap/*.md` `https://x.y/z.md`\n'
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "G/placeholders rc"
 assert_no  "$out" "phantom" "G/placeholders not flagged"
+
+# H — check mode is byte-identical with the heal code present (no rewrite, no heal lines)
+r="$(mkheal)"; printf '\nsee `docs/ADR-0001-scope.md`\n' >> "$r/AGENTS.md"
+before="$(md5sum < "$r/AGENTS.md")"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "H/check-mode rc"
+assert_has "$out" "phantom path" "H/check-mode still warns"
+assert_no  "$out" "heal:" "H/check-mode emits no heal line"
+[ "$before" = "$(md5sum < "$r/AGENTS.md")" ] && ok || no "H/check-mode mutated the file"
+
+# I — unique same-basename candidate → rewritten, heal line, second check is WARN-free
+r="$(mkheal)"; printf '\nsee `docs/ADR-0001-scope.md`\n' >> "$r/AGENTS.md"
+out="$(healrun "$r")"; rc=$?
+assert_rc "$rc" 0 "I/heal rc"
+assert_has "$out" "heal: AGENTS.md:5 docs/ADR-0001-scope.md -> docs/decisions/ADR-0001-scope.md" "I/heal line"
+assert_has "$(cat "$r/AGENTS.md")" '`docs/decisions/ADR-0001-scope.md`' "I/file rewritten"
+assert_has "$(run "$r")" "clean ✓ (0 WARN)" "I/healed pointer re-resolves clean"
+
+# J — two files share the basename → ambiguous, untouched
+r="$(mkheal)"; mkdir -p "$r/docs/notes"; printf '# copy\n' > "$r/docs/notes/ADR-0001-scope.md"
+printf '\nsee `docs/ADR-0001-scope.md`\n' >> "$r/AGENTS.md"
+out="$(healrun "$r")"; rc=$?
+assert_has "$out" "skip: AGENTS.md:5 docs/ADR-0001-scope.md (ambiguous)" "J/ambiguous skip"
+assert_has "$(cat "$r/AGENTS.md")" '`docs/ADR-0001-scope.md`' "J/ambiguous untouched"
+
+# K — ref names a directory the candidate does not sit under → dir-mismatch, untouched
+r="$(mkheal)"; printf '\nsee `docs/guides/ADR-0001-scope.md`\n' >> "$r/AGENTS.md"
+out="$(healrun "$r")"; rc=$?
+assert_has "$out" "skip: AGENTS.md:5 docs/guides/ADR-0001-scope.md (dir-mismatch)" "K/dir-mismatch skip"
+assert_has "$(cat "$r/AGENTS.md")" '`docs/guides/ADR-0001-scope.md`' "K/dir-mismatch untouched"
+
+# L — two backticked refs on one line → multi-ref, untouched (splice ambiguity is not healed)
+r="$(mkheal)"; printf '\nsee `docs/ADR-0001-scope.md` and `docs/INDEX.md`\n' >> "$r/AGENTS.md"
+out="$(healrun "$r")"; rc=$?
+assert_has "$out" "skip: AGENTS.md:5 docs/ADR-0001-scope.md (multi-ref)" "L/multi-ref skip"
+assert_has "$(cat "$r/AGENTS.md")" '`docs/ADR-0001-scope.md`' "L/multi-ref untouched"
 
 echo "== docs-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]
