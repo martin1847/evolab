@@ -2336,4 +2336,139 @@ chk_eq "(22i) a cd-anchored stash never denies" 0 "$RC"
 chk_eq "(22i) and writes nothing to stderr" "" "$ERR"
 chk_contains "(22i) and is judged in the cd target" "本仓 2 棵 worktree 在飞" "$(ctx "$OUT")"
 
+# ── (20) sub agent identity: the DENY becomes one WARN (owner ruling 2026-09-18) ─────────────
+# Same field case as cto-guard-edit's sa battery — the 0918 read-back sub agent was stopped once
+# HERE too, on a heredoc write. A non-empty top-level `agent_id` (sent only inside a sub agent's
+# tool call) downgrades rule (20)'s DENY to one WARN line; every other rule keeps its verdict,
+# which is the property the (18) arms below pin.
+PATH="$BIN20:$PATH"; export PATH
+mkcmd_sa() { # $1 command  $2 cwd  $3 agent_id JSON  $4 agent_type JSON ("-" omits the key)
+  python3 -c 'import json,sys
+d={"hook_event_name":"PreToolUse","tool_name":"Bash",
+   "tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}
+for key, raw in (("agent_id", sys.argv[3]), ("agent_type", sys.argv[4])):
+    if raw != "-": d[key] = json.loads(raw)
+print(json.dumps(d))' "$@"; }
+run_sa20() { # $1 command  $2 agent_id JSON  $3 agent_type JSON  [$4 cwd, default the r20 repo]
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(mkcmd_sa "$1" "${4:-$R20}" "$2" "$3" \
+        | AGENT_WATCH_DIR="$RUN20" python3 "$GUARD" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+rm -f /tmp/cto-allow-direct-write
+
+# ⑥ the fixture rule (20) denies, plus the field: allowed with one WARN, nothing on stderr
+run_sa20 "echo x > $R20/x.py" '"agent_01H"' '"playwright-probe"'
+chk_eq "(20-sa) a sub agent's redirect write is allowed (exit 0)" 0 "$RC"
+chk_eq "(20-sa) and writes nothing to stderr" "" "$ERR"
+chk_contains "(20-sa) but says so out loud" "WARN (cto-guard 20)" "$(ctx "$OUT")"
+chk_contains "(20-sa) naming the caller class" "子 agent" "$(ctx "$OUT")"
+chk_contains "(20-sa) the agent_type label" "playwright-probe" "$(ctx "$OUT")"
+chk_contains "(20-sa) and the target it stood down on" "$R20/x.py" "$(ctx "$OUT")"
+chk_contains "(20-sa) and the rule it stands down from" "铁律①" "$(ctx "$OUT")"
+# the FIELD spelling was a heredoc, and `tee` / in-place `sed` ride the same judgement
+run_sa20 "$(printf "cat > %s/x.py <<'EOF'\nprint(1)\nEOF" "$R20")" '"agent_01H"' '"probe"'
+chk_eq "(20-sa) the heredoc spelling warns too" 0 "$RC"
+chk_contains "(20-sa) …with the same line" "子 agent" "$(ctx "$OUT")"
+run_sa20 "sed -i '' 's/a/b/' $R20/m.py" '"agent_01H"' -
+chk_eq "(20-sa) an in-place sed warns as well" 0 "$RC"
+chk_contains "(20-sa) …and falls back to the id as its label" "agent_01H" "$(ctx "$OUT")"
+
+# ⑦ PAIRED RED: the same commands with no field are denied exactly as before
+run_sa20 "echo x > $R20/x.py" - -
+chk_eq "(20-sa) PAIRED RED: no agent_id, the DENY stands (exit 2)" 2 "$RC"
+chk_contains "(20-sa) PAIRED RED: and the stderr is unchanged" "编排位经 bash 直写源码面" "$ERR"
+chk_eq "(20-sa) PAIRED RED: with nothing on stdout" "" "$OUT"
+for _sa in '""' '42' 'null' '["a"]'; do
+  run_sa20 "echo x > $R20/x.py" "$_sa" '"probe"'
+  chk_eq "(20-sa) agent_id $_sa is no evidence — still denied" 2 "$RC"
+done
+# the override is not spent on a verdict nobody reached (the r20-opaque doctrine)
+touch /tmp/cto-allow-direct-write
+run_sa20 "echo x > $R20/x.py" '"agent_01H"' '"probe"'
+chk_eq "(20-sa) a sub agent does NOT consume the override marker" 1 \
+  "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
+rm -f /tmp/cto-allow-direct-write
+
+# ⑧ EVERY OTHER RULE KEEPS ITS VERDICT: this field is rule (20)'s business alone. Driven in the
+# single-repo cwd where rule (8) is silent by construction, so the DENY below is (18)'s.
+run_sa20 'git rebase --continue && git status' '"agent_01H"' '"probe"' "$ISO_REPO"
+chk_eq "(20-sa) an (18) rebase DENY is untouched by the field (exit 2)" 2 "$RC"
+chk_contains "(20-sa) and the stderr is (18)'s" "历史重写混在复合链里" "$ERR"
+chk_eq "(20-sa) with nothing on stdout" "" "$OUT"
+# …including when the same command ALSO carries the source write (20) would now only warn about:
+# (18) runs first and its DENY is the whole reply.
+run_sa20 "git rebase --continue && echo x > $R20/x.py" '"agent_01H"' '"probe"' "$ISO_REPO"
+chk_eq "(20-sa) a rebase welded to a sub agent's write still denies" 2 "$RC"
+chk_contains "(20-sa) …on (18)'s grounds" "历史重写混在复合链里" "$ERR"
+PATH="$OLDPATH20"; export PATH
+
+# ── (7)/(20) SEAM: an early-return ALLOW still carries the sub agent's WARN (codex F1 0918) ──
+# Rule (7)'s standing grant prints its OWN response and returns above (3)'s note assembly, so
+# before the fix a command that was BOTH a source write and a benign worktree call got (7)'s
+# allow as the WHOLE reply: the write passed with zero trace, and a trace is the only thing the
+# sub-agent downgrade buys in exchange for the DENY it dropped.
+PATH="$BIN20:$PATH"; export PATH
+SA7_CMD="git -C $R20 worktree remove /tmp/sa-nonexistent-seat > $R20/x.py"
+
+# ⑨ both verdicts in ONE response: (7) allows, (20) is heard
+run_sa20 "$SA7_CMD" '"agent_review"' '"probe"'
+chk_eq "(20-sa7) (7)'s standing grant still allows the combined command (exit 0)" 0 "$RC"
+chk_eq "(20-sa7) and stderr stays empty" "" "$ERR"
+chk_contains "(20-sa7) (7)'s permission survives" '"permissionDecision": "allow"' "$OUT"
+chk_contains "(20-sa7) …with (7)'s own reason" "standing grant" "$OUT"
+chk_contains "(20-sa7) and (20)'s WARN rides the same response" "WARN (cto-guard 20)" "$(ctx "$OUT")"
+chk_contains "(20-sa7) naming the caller class" "子 agent" "$(ctx "$OUT")"
+chk_contains "(20-sa7) and the source path it let through" "$R20/x.py" "$(ctx "$OUT")"
+# one hook response, not two documents (a second would be a malformed reply, not a second note)
+chk_eq "(20-sa7) exactly one hookSpecificOutput document" 1 \
+  "$(printf '%s' "$OUT" | grep -c 'hookSpecificOutput')"
+
+# ⑩ PAIRED RED: strip the field and the write is denied exactly as before — (7) is never reached
+run_sa20 "$SA7_CMD" - -
+chk_eq "(20-sa7) PAIRED RED: no agent_id, (20) still denies (exit 2)" 2 "$RC"
+chk_contains "(20-sa7) PAIRED RED: on (20)'s grounds" "编排位经 bash 直写源码面" "$ERR"
+chk_eq "(20-sa7) PAIRED RED: with nothing on stdout" "" "$OUT"
+
+# ⑪ BYTE IDENTITY with no note to carry: the splat is `{}`, so both early-return responses must
+# be what origin/main printed, byte for byte. Control = the BASE guard, exported next to copies
+# of its siblings (rule (20) loads cto-guard-edit.py from its own directory, so a lone file in a
+# temp dir would be a different program).
+SA7_BASE_DIR="$G8ROOT/base-agentctl"
+cp -R "$AW_DIR" "$SA7_BASE_DIR"
+git -C "$REPO_ROOT" show origin/main:skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
+  > "$SA7_BASE_DIR/cto-guard-bash.py" 2>/dev/null
+SA7_BASE="$SA7_BASE_DIR/cto-guard-bash.py"
+# the control must BE the base guard, or every comparison below is vacuously green
+chk_eq "(20-sa7) control: exported guard carries (7)'s standing grant" 2 \
+  "$(grep -c 'standing grant' "$SA7_BASE" 2>/dev/null || true)"
+chk_eq "(20-sa7) control: and predates the seam fix" 0 \
+  "$(grep -c 'ctx20' "$SA7_BASE" 2>/dev/null || true)"
+sa7_bytes() { # $1 guard  $2 payload  $3 out-prefix — raw bytes, no command substitution
+  printf '%s' "$2" | AGENT_WATCH_DIR="$RUN20" python3 "$1" >"$3.out" 2>"$3.err"
+  echo $? >"$3.rc"
+}
+sa7_cmp() { # $1 label  $2 command  $3 cwd -> SA7_HEAD_OUT holds head's stdout for the control
+  local pay; pay="$(mkcmd_sa "$2" "$3" - -)"
+  sa7_bytes "$SA7_BASE" "$pay" "$G8ROOT/sa7-base"
+  sa7_bytes "$GUARD" "$pay" "$G8ROOT/sa7-head"
+  SA7_HEAD_OUT="$(cat "$G8ROOT/sa7-head.out")"
+  chk_eq "(20-sa7) $1: rc/stdout/stderr byte-identical to origin/main" "" \
+    "$(for x in rc out err; do cmp -s "$G8ROOT/sa7-base.$x" "$G8ROOT/sa7-head.$x" \
+         || printf '%s differs ' "$x"; done)"
+}
+sa7_cmp "(7)'s bare standing grant" "git -C $R20 worktree remove /tmp/sa-nonexistent-seat" "$R20"
+chk_contains "(20-sa7) …and that case really is (7)'s allow" "standing grant" "$SA7_HEAD_OUT"
+sa7_cmp "the benign-prune fast path" "git -C $WT/repo worktree prune" "$ISO_REPO"
+chk_contains "(20-sa7) …and that case really is the benign-prune allow" "benign" "$SA7_HEAD_OUT"
+# WHY the prune sink has no positive arm: `_benign_prune` fullmatches the WHOLE command, so a
+# redirect / tee / `sed -i` (every spelling (20) reads) puts it outside the closed syntax. The
+# splat there is symmetry, and this is the verdict that combination really gets — (7)'s DENY on
+# stderr, which is the reply that matters, sub agent or not.
+run_sa20 "git -C $WT/repo worktree prune > $R20/x.py" '"agent_review"' '"probe"'
+chk_eq "(20-sa7) a sub agent's prune+write is outside the benign syntax (exit 2)" 2 "$RC"
+chk_contains "(20-sa7) …and (7)'s destroy DENY is the whole reply" "needs the principal's explicit" "$ERR"
+chk_eq "(20-sa7) …with nothing on stdout" "" "$OUT"
+PATH="$OLDPATH20"; export PATH
+
 summary

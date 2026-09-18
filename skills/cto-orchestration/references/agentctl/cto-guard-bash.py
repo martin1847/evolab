@@ -1028,6 +1028,20 @@ def _worktree_live(repo):
 # so E1 is a paper door there. Measured 2026-09-02, by the orchestrator and again by a cold
 # review: a heredoc write, an append redirect, a `tee` and a `sed -i` onto a repo `.py` all
 # returned rc=0 with zero output from this guard.
+# A SUB AGENT IS NOT THE ORCHESTRATOR — the 2026-09-18 clause (GATE-AUDIT slug
+# `e1-subagent-warn`, the same ruling cto-guard-edit's header carries). A settings-level hook
+# fires inside a sub agent's tool calls too, and the field case is exactly this channel: the 0918
+# read-back sub agent, dispatched to write probe files, was stopped here on a HEREDOC write (and
+# once by E1) because another worktree's ledger row made the repo orchestrated. JUDGED: the
+# payload's top-level `agent_id`, non-empty STRING only (absent / empty / non-string ⇒ unchanged
+# verdict, byte for byte) ⇒ this rule's DENY becomes ONE WARN line at rc 0 on the shared
+# additionalContext channel. NOT JUDGED: `agent_type` is the warn's label, never the predicate;
+# no product-directory exemption; `transcript_path` unread. Every OTHER rule keeps its verdict —
+# a sub agent's command that also trips (18) is still denied by (18). A FORK sub agent is
+# undocumented on this field: carrying `agent_id` it warns, without it it denies as today.
+# The override marker is NOT consumed here, same reason as the unjudgeable-target path below.
+# KILL CRITERION: one observed case within 30 days of the orchestrator routing a hand-write
+# through a fork sub agent ⇒ fork is judged by `agent_type` and rises back to DENY.
 # THE CLOSED SET, enumerated HERE because README §强制层 keeps only the reader's three sentences —
 # it is a set of SPELLINGS this file can parse, never a claim about shell writes in general:
 #  (a) REDIRECTIONS naming a path: `>` `>>` `&>` `&>>` `N>` `N>>`. `_R20_OP` locates every
@@ -1926,10 +1940,24 @@ def main():
     #      that follows (rule (7)'s benign-prune allow, rule (3)'s reminder branch), so a write
     #      chained after a legal dispatch is still judged.
     lit20, opaque20 = _write_targets(raw_hd)
-    note20 = note20b = ""
+    note20 = note20b = note20c = ""
     if lit20:
         g20 = _edit_guard()
         tgt20, why20 = _r20_judge(g20, lit20, cwd8)
+        # SUB AGENT (header clause, owner ruling 2026-09-18): the same write, judged the same
+        # way, but the caller is a worker that was DISPATCHED to write — one WARN line, rc 0.
+        # Placed BEFORE the override so a verdict nobody reached cannot spend an approval, and
+        # carried in a THIRD local for the reason the note20/note20b pair exists: the
+        # injected-text ratchet resolves ONE literal per local name.
+        sub20 = data.get("agent_id")
+        if tgt20 is not None and g20 is not None and isinstance(sub20, str) and sub20:
+            kind20 = data.get("agent_type")
+            note20c = (
+                "WARN (cto-guard 20): 子 agent %s 经 bash 写源码面 %s——派出去写的产物放行留痕；"
+                "若这是编排位借子 agent 绕道，按 SKILL 铁律① 自查。"
+                % (kind20 if isinstance(kind20, str) and kind20 else sub20, tgt20)
+            )
+            tgt20 = None
         if tgt20 is not None and g20 is not None:
             # The override is the LICENSED direct-write path (SKILL.md §2: the orchestrator may
             # write the shipped 教义 / 门 / guard face itself), and consumption IS the approval —
@@ -1995,6 +2023,18 @@ def main():
         r"git\s+(?:-[cC]\s+(?:(?!worktree\s)[^\s;|&]+\s+)?|--?[A-Za-z][^\s;|&]*\s+)*"
         r"worktree\s+(remove|prune)\b([^;|&]*)", unq))
     if wts:
+        # SEAM (codex F1 2026-09-18): both allow branches below print their OWN response and
+        # return, so they never reach (3)'s note assembly at the bottom of main — and (20)'s
+        # sub-agent line, which replaced a DENY, vanished on a command that was BOTH a source
+        # write and a benign worktree call: allowed with zero trace, which is that downgrade's
+        # entire safety boundary. Being placed above these returns was never enough; the message
+        # has to ride them. Carried as a dict the two sinks splat: empty without a top-level
+        # `agent_id`, and splatting {} leaves both responses BYTE-IDENTICAL to before.
+        # ONLY note20c rides: note8 / note20 / note20b fire with no `agent_id` too, so merging
+        # them would move output this batch is contracted to leave untouched — that swallow
+        # predates the sub-agent field and is not this batch's. METER: the text is weighed once,
+        # at the assembly sink it was written for; loc-budget counts per sink, not per reader.
+        ctx20 = {"additionalContext": note20c} if note20c else {}
         destroy = [w for w in wts
                    if w.group(1) == "prune" or re.search(r"(?:^|\s)(?:--force|-f)\b", w.group(2))]
         if destroy:
@@ -2022,6 +2062,7 @@ def main():
                             "gone, so this reaps dead metadata only (no files, no branch refs). "
                             "Override marker untouched."
                         ),
+                        **ctx20,
                     }
                 }))
                 return 0
@@ -2062,6 +2103,7 @@ def main():
                             "cto-guard: non-force `git worktree remove` = standing grant (principal "
                             "2026-07-19). git refuses dirty trees; branch ref survives — reversible."
                         ),
+                        **ctx20,
                     }
                 }))
                 return 0
@@ -2385,20 +2427,20 @@ def main():
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
     # (8)'s undecidable-scope warn, (13), (14)/(15)'s instrument warnings, (16)'s counter,
-    # (19)'s drift warn, (20)'s two unjudged-write warns and (22)'s stash warn plus its
-    # unmeasured line ride (3)'s channel: on exit 0 only additionalContext reaches the agent,
-    # and two JSON documents on stdout would be one malformed hook response. All eleven strings
-    # stay LOCAL to this frame so the injected-text ratchet can weigh what a worker is actually
-    # handed. (8) is set far above and can be swallowed by a later DENY — correct: a denial's
-    # stderr is the message that matters.
+    # (19)'s drift warn, (20)'s two unjudged-write warns plus its sub-agent line, and (22)'s
+    # stash warn plus its unmeasured line ride (3)'s channel: on exit 0 only additionalContext
+    # reaches the agent, and two JSON documents on stdout would be one malformed hook response.
+    # All twelve strings stay LOCAL to this frame so the injected-text ratchet can weigh what a
+    # worker is actually handed. (8) is set far above and can be swallowed by a later DENY —
+    # correct: a denial's stderr is the message that matters.
     if (reminder or note8 or note13 or note14 or note15 or note16 or note19
-            or note20 or note20b or note22 or note22b):
+            or note20 or note20b or note20c or note22 or note22b):
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
                     t for t in (reminder, note8, note13, note14, note15, note16, note19,
-                                note20, note20b, note22, note22b)
+                                note20, note20b, note20c, note22, note22b)
                     if t),
             }
         }))

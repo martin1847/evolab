@@ -669,4 +669,111 @@ chk_contains "sc-budget and the deny names the disease" "编排位直写源码�
 chk_eq "sc-budget and the whole verdict lands in seconds, not at the 8s budget wall" 1 \
   "$([ "$((SCB_T1 - SCB_T0))" -le 2 ] && echo 1 || echo 0)"
 
+# ── sa1–sa7 (2026-09-18) — A SUB AGENT'S WRITE IS ONE WARN, NEVER A DENY ────────────────────
+# FIELD (downstream seats 2026-09-18): a Playwright read-back sub agent whose whole task was to
+# write `scripts/fe-verify/probes/*.probe.ts` was denied here once and by rule (20) once. The
+# trigger was ANOTHER worktree's ledger `start` row; the sub agent's cwd was the umbrella root
+# and its target sat in no LIVE seat tree. Dispatching a worker to write IS the SKILL §0 shape,
+# so the gate was firing on the wrong caller and the only exit was the one-shot override plus a
+# self-report. OWNER RULING 2026-09-18: a non-empty top-level `agent_id` — the field Claude Code
+# sends ONLY inside a sub agent's tool call — turns this DENY into one WARN line (rc 0); a
+# payload without it is judged exactly as before.
+SARUN="$FIX/run-subagent"; mkdir -p "$SARUN"
+SATGT="$FIX/subagent-target"; mkdir -p "$SATGT"; git -C "$SATGT" init -q
+SANO="$FIX/subagent-plain"; mkdir -p "$SANO"; git -C "$SANO" init -q   # no row: not orchestrated
+python3 -c 'import json, os, sys
+print(json.dumps({"ts": "2026-09-18T00:00:00.000Z", "event": "start", "name": "subagent",
+                  "session_id": "s", "attempt": "a", "engine": "omp",
+                  "cwd": os.path.realpath(sys.argv[1])}))' "$SATGT" \
+  > "$SARUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
+# The two sub-agent fields are injected as RAW JSON so the non-string shapes ("" / 42 / null /
+# a list) are drivable through the real hook contract, not just the happy path.
+mkpayload_sa() { # $1 tool  $2 file_path  $3 cwd  $4 agent_id JSON  $5 agent_type JSON ("-" omits)
+  python3 -c 'import json,sys
+d={"hook_event_name":"PreToolUse","tool_name":sys.argv[1],
+   "tool_input":{"file_path":sys.argv[2]},"cwd":sys.argv[3]}
+for key, raw in (("agent_id", sys.argv[4]), ("agent_type", sys.argv[5])):
+    if raw != "-": d[key] = json.loads(raw)
+print(json.dumps(d))' "$@"; }
+run_sa() { # $1 tool  $2 path  $3 cwd  $4 agent_id JSON  $5 agent_type JSON  [$6 run-dir override]
+  local tmpe; tmpe="$(mktemp)"
+  OUT="$(mkpayload_sa "$1" "$2" "$3" "$4" "$5" \
+        | AGENT_WATCH_DIR="${6:-$SARUN}" python3 "$GUARD" 2>"$tmpe")"; RC=$?
+  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
+}
+rm -f /tmp/cto-allow-direct-write
+
+# sa1 — THE FIELD SHAPE: an orchestrated repo, no live seat, a sub agent writing source
+run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '"playwright-probe"'
+chk_eq "sa1 a sub agent's source write is allowed (exit 0)" 0 "$RC"
+chk_eq "sa1 and never lands on stderr" "" "$ERR"
+chk_contains "sa1 the allow is announced, not silent" "WARN (cto-guard E1)" "$(ctx "$OUT")"
+chk_contains "sa1 the warn names the caller class" "子 agent" "$(ctx "$OUT")"
+chk_contains "sa1 and prefers the readable agent_type label" "playwright-probe" "$(ctx "$OUT")"
+chk_contains "sa1 and names the write target" "$SATGT/scripts/probe.ts" "$(ctx "$OUT")"
+chk_contains "sa1 and still states the rule it stands down from" "铁律①" "$(ctx "$OUT")"
+# with no agent_type the id IS the label — a fork sub agent may send one field and not the other
+run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' -
+chk_eq "sa1 an agent_id with no agent_type still warns" 0 "$RC"
+chk_contains "sa1 and falls back to the id as the label" "agent_01H" "$(ctx "$OUT")"
+run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '""'
+chk_eq "sa1 an EMPTY agent_type falls back too" 0 "$RC"
+chk_contains "sa1 …to the id" "agent_01H" "$(ctx "$OUT")"
+
+# sa2 — PAIRED RED, same payload minus the field: the orchestrator's own write still denies
+run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" - -
+chk_eq "sa2 the SAME write with no agent_id is still denied (exit 2)" 2 "$RC"
+chk_contains "sa2 and the deny is unchanged" "编排位直写源码面" "$ERR"
+chk_eq "sa2 and writes no hook response on stdout" "" "$OUT"
+
+# sa3 — a field that is not a non-empty STRING is no sub-agent evidence at all
+for _sa in '""' '42' 'null' '["agent_x"]' '{"id":"x"}' 'true'; do
+  run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" "$_sa" '"probe"'
+  chk_eq "sa3 agent_id $_sa is treated as absent — denied" 2 "$RC"
+  chk_eq "sa3 and it is a DENY, never a hook response: $_sa" "" "$OUT"
+done
+
+# sa4 — an UNORCHESTRATED repo was never this gate's business: the sub-agent branch must not
+# turn that silence into a line (the single-agent lane the SKILL excludes).
+run_sa Write "$SANO/src/app.py" "$SANO" '"agent_01H"' '"probe"'
+chk_eq "sa4 a sub agent writing in an unorchestrated repo is allowed" 0 "$RC"
+chk_eq "sa4 and the gate says NOTHING at all" "" "$ERR$OUT"
+
+# sa5 — NO DOUBLE REPORT. Every UNDECIDABLE branch returns its own ALLOW+WARN BEFORE the DENY
+# point, and the sub-agent branch sits AT that point: so a blind run dir carrying an `agent_id`
+# draws exactly the run-dir WARN and not a second line about the caller.
+run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '"probe"' "$FIX/no-such-sa-run-dir"
+chk_eq "sa5 an unreadable run dir with an agent_id allows" 0 "$RC"
+chk_contains "sa5 and reports the census, as it always did" "LIVE seat set is unknown" \
+  "$(ctx "$OUT")"
+chk_eq "sa5 exactly one WARN line" 1 "$(printf '%s\n' "$(ctx "$OUT")" | grep -c 'WARN (cto-guard E1)')"
+chk_eq "sa5 and the sub-agent line is NOT added to it" 0 \
+  "$(printf '%s\n' "$(ctx "$OUT")" | grep -c '子 agent')"
+# PAIRED CONTROL: the same blind run dir without the field reads identically
+run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" - - "$FIX/no-such-sa-run-dir"
+chk_contains "sa5 CONTROL: the undecidable WARN is untouched by this change" \
+  "LIVE seat set is unknown" "$(ctx "$OUT")"
+
+# sa6 — THE OVERRIDE IS NOT SPENT on a verdict nobody reached (rule (20)'s own doctrine for its
+# unjudgeable targets): a sub agent's write never reaches the DENY, so the one-shot marker must
+# survive it and still be there for the orchestrator's next hand-write.
+touch /tmp/cto-allow-direct-write
+run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '"probe"'
+chk_eq "sa6 a sub agent's write still warns with the marker present" 0 "$RC"
+chk_contains "sa6 and it is the sub-agent line" "子 agent" "$(ctx "$OUT")"
+chk_eq "sa6 and the marker is NOT consumed" 1 \
+  "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
+run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" - -
+chk_eq "sa6 …so the orchestrator's own next write still spends it (allowed)" 0 "$RC"
+chk_eq "sa6 …and consumes it, one-shot as before" 0 \
+  "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
+
+# sa7 — SCOPE: the field decides nothing outside the source face or outside this event/tool set
+run_sa Write "$SATGT/docs/notes.md" "$SATGT" '"agent_01H"' '"probe"'
+chk_eq "sa7 a sub agent writing a non-source face is silent, as before" 0 "$RC"
+chk_eq "sa7 and emits nothing" "" "$ERR$OUT"
+run_sa Read "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '"probe"'
+chk_eq "sa7 a non-matching tool with an agent_id is still a no-op" 0 "$RC"
+chk_eq "sa7 and silent" "" "$ERR$OUT"
+
 summary

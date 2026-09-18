@@ -35,6 +35,27 @@
 # that cannot be OPENED (a listable directory is not a readable census — review §1.3), or a target
 # no governed work tree owns all mean the question is UNANSWERABLE, and a guard that cannot answer
 # must not brick the Edit tool. The WARN says so out loud instead of passing in silence.
+#
+# THE CALLER MAY BE A SUB AGENT — the 2026-09-18 clause (GATE-AUDIT slug `e1-subagent-warn`).
+# A settings-level hook fires for a sub agent's tool calls too, and dispatching a worker to WRITE
+# is the SKILL §0 shape this rule exists to protect: field 2026-09-18, a read-back sub agent whose
+# whole task was `scripts/fe-verify/probes/*.probe.ts` was denied here (and once more by rule (20)
+# on a heredoc), on the strength of ANOTHER worktree's ledger row, and could only proceed through
+# the one-shot override plus a self-report. So the gate was firing on the wrong caller.
+# JUDGED: the payload's top-level `agent_id`, non-empty STRING only — the field Claude Code sends
+# ONLY inside a sub agent's tool call. Present ⇒ the DENY becomes ONE WARN line at rc 0 (this
+# guard's existing additionalContext channel, the same shape every undecidable branch takes);
+# absent, empty, or not a string ⇒ nothing changes, byte for byte.
+# NOT JUDGED, deliberately: `agent_type` is a LABEL for the warn text and never part of the
+# predicate (a name is not an identity); `transcript_path` is not read; there is no "product
+# directory" exemption — the target face is unchanged. A FORK sub agent is undocumented on this
+# field: if it carries `agent_id` it gets the same WARN, and if it does not it is DENIED exactly
+# as today — this clause reads what the payload says and guesses nothing.
+# The one-shot override is NOT consumed on this path: the DENY was never reached, and spending an
+# approval on a verdict nobody reached retires it silently (rule (20) carries the same doctrine
+# for its unjudgeable targets).
+# KILL CRITERION: within 30 days, ONE observed case of the orchestrator using a fork sub agent to
+# route around this rule ⇒ fork is judged by `agent_type` and rises back to DENY.
 # Deny = exit 2 + stderr (shown to the agent). Warn = exit 0 + JSON
 # hookSpecificOutput.additionalContext (the only channel that reaches the agent at exit 0).
 import sys, json, os, re, subprocess
@@ -60,7 +81,7 @@ _TEST_DIR = re.compile(r"/tests?/")
 _OVERRIDE = "/tmp/cto-allow-direct-write"
 
 
-# The four ALLOW+WARN texts, as module-level literals emitted through an INLINE json.dumps at
+# The five ALLOW+WARN texts, as module-level literals emitted through an INLINE json.dumps at
 # each branch. Not a style choice: the injected-text ratchet (test/loc-budget.test.sh)
 # weighs literals AT the sink and resolves one local per sink, so a message routed through a
 # `warn(text)` helper's parameter would be spent entirely unweighed — the exact blind spot that
@@ -84,6 +105,10 @@ _W_IDENTITY = (
     "WARN (cto-guard E1): whether this repo is being ORCHESTRATED could not be established (%s), "
     "so the write to %s was allowed unjudged. If a batch is running here, 车道分工 (SKILL.md §0 "
     "铁律①) holds: dispatch product code, do not type it."
+)
+_W_SUBAGENT = (
+    "WARN (cto-guard E1): 子 agent %s 写源码面 %s——派出去写的产物放行留痕；若这是编排位借子 agent "
+    "绕道，按 SKILL 铁律① 自查。"
 )
 
 
@@ -228,6 +253,19 @@ def main():
     if state != identity.ORCHESTRATED:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "additionalContext": _W_IDENTITY % (why, path)}}))
+        return 0
+
+    # THE CALLER IS A SUB AGENT (header clause, owner ruling 2026-09-18): a payload carrying a
+    # non-empty `agent_id` is a worker that was DISPATCHED to write — the shape 铁律① protects,
+    # not the shape it forbids. Placed HERE, at the DENY point, so every branch
+    # above keeps its own verdict and no case draws two WARN lines; and ABOVE the override, so
+    # a verdict nobody reached cannot silently spend an approval. `agent_type` is the label only.
+    sub = data.get("agent_id")
+    if isinstance(sub, str) and sub:
+        kind = data.get("agent_type")
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "additionalContext": _W_SUBAGENT % (
+                kind if isinstance(kind, str) and kind else sub, path)}}))
         return 0
 
     # The override is the LEGITIMATE direct-write path, not a bypass: SKILL.md §2 licenses the
