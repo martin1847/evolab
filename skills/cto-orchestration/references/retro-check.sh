@@ -482,5 +482,35 @@ else
   fi
 fi
 
+# 11) 文档年龄清单 (retrospective.md §5「文档归档」的机械半边) — 收口归档靠人记, 于是没人碰的
+# 回执与陈旧段落永远活着。`doc-lifecycle.py` 只读扫描按 git 年龄出清单: 回执整份 TTL 天无触碰,
+# 登记簿里无 `PREMISE:` 断言的段落 TTL 天无触碰。清单给人看, 搬与不搬人拍 —— 所以这一检只
+# WARN, 从不 FAIL 在「有条目」上。判不了的形态 (不在仓 / dirty / living 缺) 由脚本列 skip 行。
+# opt-in: 既无 archive 落点也无任何 living 登记簿 ⇒ 跳过 (同第 4 / 7 / 10 检的口径)。
+# 量具坏 = FAIL: 脚本非 0 退出 (扫描面缺失 / 无 python3) 时这一面根本没检查, 而一个扫不到的面
+# 不是一个干净的面。KILL CRITERION (GATE-AUDIT slug `doc-lifecycle`): 连续两个复盘周期清单非空
+# 却一件没搬 ⇒ 这份清单没有消费者, 删。
+echo "11) 文档年龄清单 (回执到期 / 无断言陈段; 只读, 只出清单):"
+LIFECYCLE="$HERE/doc-lifecycle.py"
+DOCFACE=0
+[ -d "$DOCS/archive" ] && DOCFACE=1
+for lf in "$DOCS/ACTIVE_CONTEXT.md" "$DOCS/DECISION_QUEUE.md" "$DOCS/LESSONS.md"; do
+  [ -e "$lf" ] && DOCFACE=1
+done
+if [ "$DOCFACE" -eq 0 ]; then
+  echo "  [skip] no $DOCS/archive and no living 登记簿 (doc-lifecycle 是 opt-in)"
+else
+  life_out="$(python3 "$LIFECYCLE" --docs "$DOCS" 2>&1)"; life_rc=$?
+  [ -n "$life_out" ] && printf '%s\n' "$life_out" | sed 's/^/  /'
+  life_n="$(printf '%s\n' "$life_out" | grep -c '^\(expire\|cool\):' | tr -d ' ')"
+  if [ "$life_rc" -ne 0 ]; then
+    fail "文档年龄面未检查 — 量具坏 ($LIFECYCLE rc=$life_rc); 扫不到 ≠ 干净"
+  elif [ "$life_n" -gt 0 ]; then
+    warn "$life_n 项待裁 (回执到期 / 陈段可降温) — 搬与不搬人拍, 机器只出清单"
+  else
+    ok "0 件到期, 0 段可降温"
+  fi
+fi
+
 echo "== result: $fails FAIL, $warns warn =="
 [ "$fails" -eq 0 ]

@@ -534,5 +534,33 @@ assert_has "$out" "phases: n/a" "PH7/it degrades to one n/a line"
 assert_no  "$out" "Traceback" "PH7/and never leaks a traceback into the retro"
 assert_has "$out" "均记了 wall/avoidable" "PH7/the accounting verdict is byte-identical"
 
+# ---- check 11: 文档年龄清单 (doc-lifecycle 只读扫描) --------------------------------------
+# 三态: 没有扫描面 ⇒ skip; 清单非空 ⇒ warn (搬与不搬人拍, 机器不代拍); 清单空 ⇒ ok.
+DL_OLD="$(date -v-60d -u +%Y-%m-%dT%H:%M:%S 2>/dev/null \
+          || date -u -d '60 days ago' +%Y-%m-%dT%H:%M:%S)"
+
+# Case DL1 — green fixture: living 在、无回执、刚提交 ⇒ ok, 且不改 rc
+r="$(mkrepo)"; out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "DL1/清单空不改 rc"
+assert_has "$out" "11) 文档年龄清单" "DL1/这一检跑了"
+assert_has "$out" "0 件到期, 0 段可降温" "DL1/绿判据"
+
+# Case DL2 — a 60-day-old receipt in docs/ ⇒ warn only: exit stays 0 because 搬与不搬人拍
+r="$(mkrepo)"; printf '# 老回执\n\n收工。\n' > "$r/docs/OLD_RECEIPT.md"
+( cd "$r" && git add -A \
+  && GIT_AUTHOR_DATE="$DL_OLD" GIT_COMMITTER_DATE="$DL_OLD" git commit -qm receipt ) >/dev/null
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "DL2/清单非空是 warn, 不是 FAIL"
+assert_has "$out" "expire: docs/OLD_RECEIPT.md" "DL2/清单点名到期回执"
+assert_has "$out" "项待裁" "DL2/verdict 说明谁来拍"
+
+# Case DL3 — 既无 archive 落点也无任何 living 登记簿 ⇒ skip (opt-in)。rc=1 是第 2 检的判决
+# (ACTIVE_CONTEXT not found), 不是这一检的。
+r="$(mkrepo)"; rm "$r/docs/ACTIVE_CONTEXT.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "DL3/rc 由第 2 检决定"
+assert_has "$out" "doc-lifecycle 是 opt-in" "DL3/没有扫描面就跳过"
+assert_no  "$out" "件到期" "DL3/跳过时不打印清单"
+
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

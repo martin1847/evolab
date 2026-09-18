@@ -74,27 +74,15 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # own next line (`## Context`) as a filled receipt and the gate went silent on the commonest bad
 # sample. The comment is the ceiling's whole cost and it is load-bearing: it names why the span
 # may never widen back. No prose, INJECT or INJECT_SINGLE movement.
-# 2026-09-18 (`e1-subagent-warn`): CODE 14545 -> 14611, INJECT 18293 -> 18622, INJECT_SINGLE
-# 2570 -> 2739. What the +66 code lines buy: E1 and rule (20) read the payload's top-level
-# `agent_id` at their DENY point, so a SUB AGENT dispatched to write source draws one WARN line
-# instead of a denial (field 2026-09-18: a read-back sub agent stopped twice, once per channel,
-# with the one-shot override as its only exit). Most of those lines are the two header clauses —
-# 判据 / 不判什么 / fork 未文档化 / kill criterion — which is where this doctrine has to live.
-# INJECT moves by the two WARN texts (+329 B). INJECT_SINGLE moves by the bash one alone
-# (+169 B): rule (20)'s line joins (3)'s assembled additionalContext response, and that whole
-# assembly is what the single-message meter weighs, so ANY new note there costs the ceiling its
-# own length. PROSE did not move. All three ceilings sat EXACTLY at their measurement before
-# this batch and do again after it — no headroom is bought here.
-# Fix round 1 (codex F1, same day): CODE 14611 -> 14625. All +14 are the (7)/(20) seam in
-# cto-guard-bash: rule (7)'s standing grant and the benign-prune fast path print their own
-# response and return ABOVE (3)'s note assembly, so (20)'s new sub-agent WARN was dropped on a
-# command that was both a source write and a benign worktree call — the write was allowed with
-# NO trace, which is the whole exchange rate of that downgrade. 13 of the 14 lines are the
-# comment naming why only note20c rides and why an empty splat keeps both responses
-# byte-identical. INJECT and INJECT_SINGLE did NOT move: the note's text is weighed once, at the
-# assembly sink it was written for, and this carries the SAME string to a reader who was already
-# going to be handed it.
-CODE_MAX=14625      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+# 2026-09-18 (`doc-lifecycle`): CODE 14545 -> 14787. What the +242 lines buy: a read-only
+# `doc-lifecycle.py` (212) that dates ephemeral receipts per file and living-ledger sections per
+# `git log -L`, plus retro-check's check 11 (30) that turns a non-empty list into ONE warn. The
+# field cost it answers: archiving is remembered by a human, so untouched receipts and stale
+# sections live forever. Deliberately NOT bought: any write path — no `--apply`, no `git mv`, no
+# atomic write. Moving a document stays a human call, which is also why the ceiling is this small.
+# PROSE, INJECT and INJECT_SINGLE did NOT move (the retrospective §5 clause is net-zero lines and
+# this layer prints on a retro operator's terminal, not into an agent's context).
+CODE_MAX=14867      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
 PROSE_MAX=1575      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18622    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2739  # the longest SINGLE message, which bites harder than the total: a worker
