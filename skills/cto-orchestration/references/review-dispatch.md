@@ -123,7 +123,7 @@ codex 第 <N> 轮：request-changes——读 <REVIEW_codex.md>，在本分支一
 
 ## 评审轴（主干 §2 的展开）
 
-SKILL §2 已定：brief 冷上下文、不喂实现者结论（喂了 = anchoring，异构去相关白费）；激进找、
+SKILL §2 已定：brief 冷上下文、不喂实现者结论（喂了 = anchoring，异构去相关白费）；主路径找、
 出口滤（源头克制型措辞是漏报机器；置信过滤放 verdict 层，规则归 preamble）。这里只留轴的枚举与装配表。
 
 **缺失消费者轴（absence review，diff 评审的结构性盲区）**<!-- trunk:缺失消费者 -->：被评审改动若新增/变更一种**能力或

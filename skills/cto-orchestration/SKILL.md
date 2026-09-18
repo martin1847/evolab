@@ -68,7 +68,7 @@ metadata:
 - **档位只有两档，按派工前能看见的事实判，不按行数、不按文件类型**：**深档** = goal 新增判断面（判据 / 门 / 状态 / 接口 / 解析面）→ goal-review 1 轮 + 冷评审 blocking 驱动；跨模块 / 新状态机的深档批派工前方案预审给主理人（goal 抬头 `Tier:` 行声明档位，deep 带 `Goal-Review:` 回执，preflight 缺则 WARN）。**轻档** = 其余（纯删、纯搬迁、有参考实现、本地文档）→ 不做 goal-review，1 轮冷评审或编排位抽查闭合；轻改车道（下文）是轻档的子集。规模由评审看真实 diff 事后判；goal 里不写行数预估、上限或比值（写了 = finding）。写深档合同、裁大批阻断 findings 时建议高推理档（`xhigh` 或者 `max`）。
 - **直写也要合同**：编排位自己直写 shipped 面（教义 / 门 / guard）动手前，同样先写最小合同——
   Done-when + 坏样本来源 + scope 三行即可，评审 brief 随附；无合同的直写单元评审者当 finding 报。
-- brief 冷上下文，不喂实现者结论；激进找问题，出口用 file:line、confidence 与失败探针过滤。
+- brief 冷上下文，不喂实现者结论；只审主路径 + 零变异 + 已知阳性（边界不构造变体、不计 blocking），出口用 file:line、confidence 与失败探针过滤。
 - 先枚举执行分叉；轴装配先查 path→轴映射表（表命中必进 brief，判断只增补），再点名 `缺失消费者`、
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。
 - **非深档默认恒一轮**：findings 回编排位裁 fix / accept-documented，修复轮不自动回评审——编排位
