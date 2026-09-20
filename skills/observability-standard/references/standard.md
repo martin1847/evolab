@@ -53,11 +53,11 @@
 
 ### 附录 A·Python
 - `pyright`/`mypy` **strict** 进 CI 门禁;公共函数(agent/tool/handler)全标注。
-- **数据两档**:只有跨进程数据(JSON / HTTP 载荷、manifest、配置)用 **Pydantic v2** `BaseModel`,`model_config = ConfigDict(extra="forbid")` 抓 typo,边界 `model_validate` 一次;进入内部即转 `@dataclass(frozen=True, slots=True)`,内部 DTO(事件 / 信封 / 结果)不带 Pydantic 依赖与校验开销。混用模块在模块级注释写明边界在哪一行。
+- **数据两档**:只有跨进程数据(JSON / HTTP 载荷、manifest、配置)用 **Pydantic v2** `BaseModel`,`model_config = ConfigDict(extra="forbid", frozen=True)`(抓 typo + 边界对象不可变),边界 `model_validate` 一次;进入内部即转 `@dataclass(frozen=True, slots=True)`,内部 DTO(事件 / 信封 / 结果)不带 Pydantic 依赖与校验开销。混用模块在模块级注释写明边界在哪一行。
 - `NewType` 区分 ID:`RunId = NewType("RunId", str)`。
 - `Literal` 表状态/角色/事件名。
-- 结果用判别联合(内部 → frozen dataclass):`@dataclass(frozen=True, slots=True) class Ok: status: Literal["ok"]; ...` / `Result = Ok | Err`,调用方 `match`。
-- 接口用 `typing.Protocol`(结构化子类型)不用 ABC;默认实现体放独立 mixin 类(Protocol 方法体不被继承)。
+- 结果用判别联合(内部 → frozen dataclass):`Ok` / `Err` 各一个 `@dataclass(frozen=True, slots=True)`,以 `status: Literal["ok"]` 判别,`Result = Ok | Err`,调用方 `match`。
+- 接口用 `typing.Protocol`(结构化子类型)不用 ABC;默认实现体放独立 mixin 类(只结构化符合、不显式继承协议的类拿不到 Protocol 里的默认实现)。
 
 ### 附录 A·Go
 - `go vet` + `staticcheck` + `golangci-lint` 进门禁。
