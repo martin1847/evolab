@@ -60,6 +60,9 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
 3. **E2E**: <环境 + 数据约束（哪个 DB 批准了写）+ 做不到时的诚实降级路径>
 4. 文档：findings 写入 `/absolute/path/to/worktree/docs/orchestration/<NAME>_<FINDINGS|IMPL>_omp.md`，
    含 what-changed / what-verified(真跑过) / NOT-verified / 剩余假设 / 意外发现与关键决策（含理由）。
+   回执里任何「没找到 / 0 命中 / 无回归 / unmatched」类缺席结论写 typed 行
+   `ABSENT: <claim> scope=<扫描根> probe=<cmd> positive=<已知阳性 cmd> => count≥1`
+   （已知阳性先证探测器看得见 X）；拿不出已知阳性就写 `UNKNOWN`、不写缺席。
 
 ## Done when（完成判定 — 每条绑定证明命令，逐条须有**本次会话工具结果**级证据，非记忆中的旧结果；验证范围匹配声明范围）
 

@@ -94,7 +94,7 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # single message are the same string here. PROSE did not move (preflight speaks on the
 # dispatcher's stderr, and the guard line is source text, not doctrine).
 CODE_MAX=14978      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1576      # every shipped *.md under the skill, summed wc -l
+PROSE_MAX=1579      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length
