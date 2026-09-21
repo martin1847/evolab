@@ -35,7 +35,8 @@
 
 ## 收工核证四件套（SKILL §1.6 验收原则的操作化；四件套定义在此）
 
-1. `git status -s` 干净（执行 agent 常"声称完成没 commit"；**评审审合同不审过程卫生，
+1. 读 DONE 行行尾 `dirty=<N>`：`>0`、或**字段缺席**（未判定：cwd 非 git 树 / 探针失败）才手跑
+   `git status -s`（执行 agent 常"声称完成没 commit"；**评审审合同不审过程卫生，
    这件永远归编排位**——别为此往 goal 合同里塞自守门条款）。
 2. `git log origin/<base>..HEAD` 与声明一致（多了 = 夹带，少了 = 没交）。
 3. 独立复跑 test+lint——不吃 worker 转述的结果。

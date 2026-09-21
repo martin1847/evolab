@@ -168,6 +168,11 @@ chk_contains "claude goal delivered as stream-json user frame" '"type":"user"' "
 out="$(bash "$AGENTCTL" status dxC 2>&1)"; rc=$?
 chk_eq "claude result frame → DONE" 0 "$rc"
 chk_contains "DONE carries bounded last summary" "turn 1 complete" "$out"
+# ④ of the dirty-count cells below, and the only one whose sandbox is NOT a git repo: the
+# field is OMITTED when nothing could be judged, never printed as a fabricated 0. Read on the
+# RAW status line (`^DONE:`) — watch's `=== [dxC] DONE` wrapper is a different line shape.
+chk_not_contains "dirty ④: a non-git session cwd publishes NO dirty= field at all" \
+  "dirty=" "$(printf '%s\n' "$out" | grep '^DONE:')"
 out="$(AGENT_WATCH_MAX_POLLS=6 bash "$AGENTCTL" watch dxC 2>&1)"; rc=$?
 chk_eq "duplex watch confirms stable DONE" 0 "$rc"
 chk_eq "watch DONE ends with a machine-readable tail" "EXIT=0" "$(printf '%s\n' "$out" | tail -1)"
@@ -1713,6 +1718,97 @@ chk_not_contains "model-review ⑪: and no NOTE was printed before it" "NOTE" "$
 chk_eq "model-review ⑪: the refusal owns no lane state" "" \
   "$(ls "$WATCH_RUN_DIR" 2>/dev/null | grep '^mrE\.' | tr '\n' ' ')"
 unset AGENTCTL_BIN_CODEX FAKE_PROVIDER_LOG
+sweep_fakes; sandbox_clean
+
+echo "== duplex: the DONE line's dirty=<N> (uncommitted paths the seat would leave) =="
+# Field 2026-09-21 (n=2): a seat published DONE and wrote "Commits: LOCAL only" over a 37-file
+# dirty worktree; the orchestrator found it by hand because the dispatch baseline's
+# `git status -s` clause is prose and fires nothing. The DONE line now carries the COUNT — no
+# new state, no exit code, no DENY. Two paths are excluded because the protocol asks the seat
+# to leave them there (the declared deliverable, BLOCKED.md), and an ABSENT field means
+# UNJUDGED, never a clean tree (cell ④ lives in the dxC block above, the only non-git sandbox).
+sandbox_new; install_running_tmux
+export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
+printf 'count what is uncommitted\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' \
+  > "$SANDBOX/goal.md"
+
+dd_repo() { # $1 dir → a real one-commit git repo (commit identity comes from lib-testkit's env)
+  mkdir -p "$1"
+  git -C "$1" init -q >/dev/null 2>&1
+  printf 'seed\n' > "$1/seed.txt"
+  git -C "$1" add seed.txt >/dev/null 2>&1
+  git -C "$1" commit -qm seed >/dev/null 2>&1
+}
+dd_start() { # $1 session  $2 cwd  [extra start args] — start, then wait for the result frame
+  local name="$1" cwd="$2"; shift 2
+  bash "$AGENTCTL" start claude "$name" "$cwd" --goal "$SANDBOX/goal.md" "$@" >/dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    grep -q '"type":"result"' "$WATCH_RUN_DIR/$name.duplex.events.jsonl" 2>/dev/null && break
+    /bin/sleep 0.2
+  done
+}
+dd_status() { # $1 session → DD_RC, and DD_FIELD = the ` dirty=<N>` SUFFIX of the DONE line
+  local out
+  out="$(bash "$AGENTCTL" status "$1" 2>&1)"; DD_RC=$?
+  # line-anchored on purpose: only the verdict line may carry the field, and only at its end
+  DD_FIELD="$(printf '%s\n' "$out" | grep '^DONE:' | sed -n 's/.*\( dirty=[^ ]*\)$/\1/p')"
+}
+
+# ① the zero, which is also ②'s negative control: the SAME fixture, before anything is dirtied
+R1="$SANDBOX/clean"; dd_repo "$R1"
+dd_start dd1 "$R1"
+dd_status dd1
+chk_eq "dirty ①: a clean git sandbox still reads DONE rc0" 0 "$DD_RC"
+chk_eq "dirty ①: and the DONE line ENDS with the count, zero" " dirty=0" "$DD_FIELD"
+
+# ② the head assertion: the shape of the field incident, counted
+printf 'a\n' > "$R1/untracked-a.txt"
+printf 'b\n' > "$R1/untracked-b.txt"
+printf 'edit\n' >> "$R1/seed.txt"
+dd_status dd1
+chk_eq "dirty ②: 2 untracked files + 1 modified tracked file → dirty=3 (same fixture as ①)" \
+  " dirty=3" "$DD_FIELD"
+chk_eq "dirty ②: and the count changes no verdict — still DONE rc0" 0 "$DD_RC"
+bash "$AGENTCTL" stop dd1 >/dev/null 2>&1
+
+# (a)/(b) the two ways a naive counter gets the arithmetic wrong (goal-review bad samples)
+R2="$SANDBOX/staged"; dd_repo "$R2"
+dd_start dd2 "$R2"
+printf '1\n' > "$R2/staged-1.txt"; printf '2\n' > "$R2/staged-2.txt"
+git -C "$R2" add staged-1.txt staged-2.txt >/dev/null 2>&1
+dd_status dd2
+chk_eq "dirty (a): two files STAGED with a clean worktree → dirty=2, index work is uncommitted work" \
+  " dirty=2" "$DD_FIELD"
+git -C "$R2" commit -qm staged >/dev/null 2>&1
+printf 'more\n' >> "$R2/staged-1.txt"; git -C "$R2" add staged-1.txt >/dev/null 2>&1
+printf 'even more\n' >> "$R2/staged-1.txt"
+dd_status dd2
+chk_eq "dirty (b): one file staged AND re-modified is ONE path, not one per status column" \
+  " dirty=1" "$DD_FIELD"
+bash "$AGENTCTL" stop dd2 >/dev/null 2>&1
+
+# ③ the two exclusions, both live at once
+R3="$SANDBOX/deliv"; dd_repo "$R3"; mkdir -p "$R3/out"
+export FAKE_CLAUDE_DELIVERABLE="$R3/out/REPORT.md"
+dd_start dd3 "$R3" --deliverable out/REPORT.md
+unset FAKE_CLAUDE_DELIVERABLE
+# BLOCKED.md is placed AFTER start (a pre-existing one is the start guard's business) and with
+# an mtime BEFORE the session epoch: fresh + unstamped projects WAITING-INPUT, which never
+# reaches a DONE line at all. The exclusion is about the PATH, not about this round's freshness.
+printf 'an old note\n' > "$R3/BLOCKED.md"; touch -t 200001010000 "$R3/BLOCKED.md"
+printf 'x\n' > "$R3/extra.txt"
+dd_status dd3
+chk_eq "dirty ③: it is DONE, not IDLE-NO-DELIVERABLE (the gate still matched this round)" 0 "$DD_RC"
+chk_eq "dirty ③: the declared deliverable and BLOCKED.md are excluded — only the extra path counts" \
+  " dirty=1" "$DD_FIELD"
+
+# (c) the exclusion is by RESOLVED PATH, never by prefix (goal-review bad sample)
+rm -f "$R3/extra.txt"; printf 'bak\n' > "$R3/out/REPORT.md.bak"
+dd_status dd3
+chk_eq "dirty (c): a sibling that merely starts with the declared path is still counted" \
+  " dirty=1" "$DD_FIELD"
+bash "$AGENTCTL" stop dd3 >/dev/null 2>&1
+unset AGENTCTL_BIN_CLAUDE
 sweep_fakes; sandbox_clean
 
 summary

@@ -150,7 +150,7 @@ exit code、名字、语义、二级子原因词（`reason=<word>`，闭集）�
 
 | 状态 | 编排者要做什么 |
 |---|---|
-| DONE | 收货前仍做正向核证（下节），别只认 typed 行 |
+| DONE | 收货前仍做正向核证（下节），别只认 typed 行。行尾 `dirty=<N>` = **排除声明产物后**（declared `--deliverable` glob + `<cwd>/BLOCKED.md`）仍未提交的路径数：`500+` 是**超扫描上限的告警、不是精确值**；**字段缺席 = 未判定**（cwd 非 git 树 / 探针失败 / 预算用尽），**绝不读成干净**。`>0` 或缺席都先手跑 `git status` 再收货；`0` 只证「排除声明产物后无未提交路径」，**不证整树干净** |
 | FAILED / AGENT-DEAD | 读 events/stderr 尾（有界），走恢复腿 |
 | WAITING-INPUT | 读题，`agentctl steer` 作答 |
 | STALLED-EXTERNAL | 修凭据/额度再重启；见引擎级注意 |

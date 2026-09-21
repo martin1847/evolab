@@ -1881,6 +1881,57 @@ def _porcelain_paths(porcelain: str) -> tuple[list[str], bool]:
     return paths, False
 
 
+# ── the DONE line's dirty count ───────────────────────────────────────────────────────
+# A DIFFERENT question from the fingerprint below, asked of the SAME two probes: not "did the
+# work trace move" but "how many uncommitted paths would this seat leave behind". Field
+# 2026-09-21 (n=2): a seat published DONE and wrote "Commits: LOCAL only" over a 37-file dirty
+# tree, and the orchestrator found it by hand — the dispatch baseline's `git status -s` clause
+# is prose and fires nothing. The runtime cannot know whether THIS contract was supposed to
+# commit, so the whole fix is a NUMBER on the DONE line: no new typed state, no exit code, no
+# DENY, no change to any non-DONE branch.
+#
+# What the number is NOT: `dirty=0` proves "no uncommitted path OUTSIDE the declared products",
+# never "the tree is committed". An ABSENT field is UNJUDGED (no git, cwd not a repo, a probe
+# failed, the budget ran out) — never a clean tree — and `500+` is the bounded-scan alarm, not
+# a count. `dirty=?` was declined for the same reason the states vocabulary stays closed: the
+# field is an observation, and the reader's rule ("`>0` or absent ⇒ run git status yourself")
+# is identical for both spellings.
+def dirty_field(sess: Session) -> str:
+    """` dirty=<N>` to append to a DONE line, or "" when nothing could be judged.
+
+    TWO exclusions, because both are paths the protocol ASKS the seat to leave in the tree:
+    the declared `--deliverable` glob (resolved deliverable_fresh's way — a relative glob is
+    the SESSION cwd's) and `<cwd>/BLOCKED.md`. The comparison is os.path.realpath on both
+    sides and never a prefix test: an untracked `out/REPORT.md.bak` beside a declared
+    `out/REPORT.md` is a real uncommitted path and must still be counted.
+
+    Porcelain paths are repo-root relative and resolved against `--show-toplevel`, the rule
+    progress_fingerprint already follows — the session cwd may be a subdirectory. One record
+    per path in `-z` porcelain is what makes a file that is staged AND re-modified count once.
+    """
+    cwd = sess.meta.get("cwd", "")
+    if not cwd or not os.path.isdir(cwd):
+        return ""
+    budget = progress_budget()
+    porcelain = _git_out(cwd, budget, "status", "--porcelain", "--untracked-files=all", "-z")
+    top = _git_out(cwd, budget, "rev-parse", "--show-toplevel")
+    if porcelain is None or top is None:
+        return ""                    # unjudged ⇒ the field is OMITTED, never a fabricated 0
+    names, overflowed = _porcelain_paths(porcelain)
+    if overflowed:
+        return f" dirty={PROGRESS_DIRTY_MAX}+"
+    root = top.strip() or cwd
+    spared = {os.path.realpath(os.path.join(cwd, "BLOCKED.md"))}
+    pattern = sess.meta.get("deliverable", "")
+    if pattern:
+        if not os.path.isabs(pattern):
+            pattern = os.path.join(cwd, pattern)
+        spared.update(os.path.realpath(hit) for hit in globmod.glob(pattern))
+    count = sum(1 for name in names
+                if os.path.realpath(os.path.join(root, name)) not in spared)
+    return f" dirty={count}"
+
+
 def progress_fingerprint(sess: Session, budget: ProbeBudget) -> tuple[str | None, str]:
     """(work-trace fingerprint, "") — or (None, why) when ANY probe could not be judged. The
     three git reads spend the union's SHARED budget (see ProbeBudget), so a slow repo cannot
@@ -2739,11 +2790,12 @@ def classify(sess: Session) -> int:
                 # guessed freshness (and produced field false-negatives). Legacy markers keep
                 # the mtime path — they carry no hashes to supersede it with.
                 print(f"DONE: engine exited rc=0{receipt_note(receipt)} — receipt evidence "
-                      "supersedes the mtime freshness heuristic")
+                      f"supersedes the mtime freshness heuristic{dirty_field(sess)}")
                 return EXIT_DONE
             if ok:
                 note = f", deliverable fresh: {hit}" if hit else ""
-                print(f"DONE: engine exited rc=0{note} (duplex engines normally stay alive — treat as complete)")
+                print(f"DONE: engine exited rc=0{note} (duplex engines normally stay alive "
+                      f"— treat as complete){dirty_field(sess)}")
                 return EXIT_DONE
             print(f"IDLE-NO-DELIVERABLE: engine exited rc=0 but '{sess.meta.get('deliverable')}' not produced this round")
             misplaced_hint(sess)
@@ -2787,7 +2839,8 @@ def classify(sess: Session) -> int:
                 # WS2 schema gate, so an invalid body can never speak in a DONE line either
                 print(f"DONE: adopted the terminal marker of the current attempt{again} — "
                       f"engine pane already reaped; {detail}"
-                      f"{receipt_note(store.delivered_receipt(marker) or {})}")
+                      f"{receipt_note(store.delivered_receipt(marker) or {})}"
+                      f"{dirty_field(sess)}")
                 return EXIT_DONE
             if klass == identity.UNKNOWN:
                 print(f"IDENTITY-UNKNOWN: terminal marker not adoptable — {detail}")
@@ -2883,7 +2936,7 @@ def classify(sess: Session) -> int:
     if receipt is not None:
         _idle_marks_reset(sess)
         print(f"DONE: engine idle{receipt_note(receipt)} — receipt evidence supersedes the "
-              "mtime freshness heuristic")
+              f"mtime freshness heuristic{dirty_field(sess)}")
         print(f"last: {detail}")
         return EXIT_DONE
     if not ok:
@@ -2903,7 +2956,7 @@ def classify(sess: Session) -> int:
         return EXIT_IDLE_NO_DELIVERABLE
     _idle_marks_reset(sess)
     note = f", deliverable fresh: {os.path.basename(hit)}" if hit else ""
-    print(f"DONE: engine idle{note}")
+    print(f"DONE: engine idle{note}{dirty_field(sess)}")
     print(f"last: {detail}")
     return EXIT_DONE
 
