@@ -93,8 +93,18 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # response joins every note into one `additionalContext` document, so the total and the longest
 # single message are the same string here. PROSE did not move (preflight speaks on the
 # dispatcher's stderr, and the guard line is source text, not doctrine).
-CODE_MAX=14978      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1591      # every shipped *.md under the skill, summed wc -l
+# 2026-09-22 (`codegraph-hooks`): CODE 14978 -> 15002, PROSE 1579 -> 1582. What the +24 net code
+# lines buy: the post-checkout init hook becomes one three-event script (post-checkout /
+# post-commit / post-merge) that also backgrounds `codegraph sync -q` on a tree that already has
+# an index — codegraph 1.5.0 does not sync before a query, so every seat's index used to freeze
+# at init time and `explore` answered off the tree as it was. Net, not gross: the old
+# post-checkout-codegraph.sh (32 lines) became a symlink to the new file, so the meter (-type f)
+# stops counting it. The +3 prose lines are the checklist's rewired step 4 (three symlinks, the
+# legacy name, and the boundary sentence that this buys FRESHNESS, not index SCOPE). INJECT and
+# INJECT_SINGLE did not move — a git hook writes to a developer's stderr, not into an agent's
+# context.
+CODE_MAX=15002      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+PROSE_MAX=1594      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length
