@@ -94,6 +94,8 @@ Evidence: 各证明证到 <决策行|单套件|全量> 为止（缺省 = 单套�
 - [ ] C12 goal 含合并/发布类终态动作
 - [ ] C13 普通非 review-loop 长跑且有明确时长/成本上限
 - [ ] C14 Done-when 含编排者自造量具（非仓内既有套件/CLI 的证明命令）
+- [ ] C15 多 goal 波次 / 父 Goal 接续（本 goal 是某个父 Goal 的一段）
+- [ ] C16 证伪型 goal（spike / 对照 / 候选比较）的采用与弃用
 
 ## Guardrails
 

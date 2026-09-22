@@ -94,7 +94,7 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # single message are the same string here. PROSE did not move (preflight speaks on the
 # dispatcher's stderr, and the guard line is source text, not doctrine).
 CODE_MAX=14978      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1579      # every shipped *.md under the skill, summed wc -l
+PROSE_MAX=1591      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length
@@ -274,9 +274,9 @@ chk_eq "no getattr-shaped access to the loaded module" "" \
 # two copies then drift) and an index row growing into a body (the template re-fattens).
 CLAUSES="$SKILL_ROOT/references/goal-clauses.md"
 GOAL="$SKILL_ROOT/references/goal-template.md"
-chk_eq "clause file has exactly fourteen clause sections" 14 "$(grep -c '^## C[0-9][0-9] ' "$CLAUSES")"
-chk_eq "clause file has exactly fourteen clause bodies" 14 "$(grep -c '^- \[ \]' "$CLAUSES")"
-chk_eq "template index has exactly fourteen rows" 14 "$(grep -c '^- \[ \] C[0-9][0-9] ' "$GOAL")"
+chk_eq "clause file has exactly sixteen clause sections" 16 "$(grep -c '^## C[0-9][0-9] ' "$CLAUSES")"
+chk_eq "clause file has exactly sixteen clause bodies" 16 "$(grep -c '^- \[ \]' "$CLAUSES")"
+chk_eq "template index has exactly sixteen rows" 16 "$(grep -c '^- \[ \] C[0-9][0-9] ' "$GOAL")"
 # every id defined once and indexed once — a renumber, a dropped clause or a duplicated id reds
 id_defects=""
 for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do
@@ -310,7 +310,7 @@ EOF
 }
 # the face's own size is pinned: an extractor that stops seeing body lines would make the scan
 # below vacuously green, which is the same broken-gauge-reads-as-success shape as a zero total.
-chk_eq "the single-source face is all 43 body lines, not just the 14 first lines" 43 \
+chk_eq "the single-source face is all 49 body lines, not just the 16 first lines" 49 \
   "$(clause_body_lines "$CLAUSES" | grep -c '[^[:space:]]')"
 chk_eq "every clause body line is single-sourced in goal-clauses.md" "" "$(dual_scan "$CLAUSES" "$GOAL")"
 
