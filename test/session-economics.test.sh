@@ -6,7 +6,8 @@
 #   ⑤ 身份——同形载荷、cwd 换成没人编排的仓 ⇒ 零字节（配一条同 transcript 的 paired green）；
 #   ⑩ 阈值——被编排仓、刚回复完、上下文 200k ⇒ 零字节（去掉阈值比较的变体在此必红）。
 # 其余：每档每 session 一次 ②③、闲置只提一次 ④、单字段坏样本 ⑥、同 id 多行去重 ⑦（累加 / 取最大
-# 都红）、读数逐项 ⑧、retro-check 第 12 检三态 ⑨。
+# 都红）、读数逐项 ⑧、retro-check 第 12 检三态 ⑨、压缩边界之后才算数 ⑫（配 paired green）、边界后
+# 档位重置 ⑬、文案动作是 `/compact` ⑭。
 # 夹具全是脚本里现写的合成 transcript：真 transcript 是主理人的会话记录，不是测试输入。
 # 沙箱自带 run dir（lib-testkit 的 AGENT_WATCH_DIR）与 HOME，真 /tmp/agent-watch-run 一次都不碰。
 set -u
@@ -54,6 +55,34 @@ rows = [{"type": "user", "timestamp": ts, "message": {"role": "user", "content":
 open(path, "w").write("".join(json.dumps(r) + "\n" for r in rows))' "$1" "$2" "$3"
 }
 
+# 压缩边界夹具：pre 那条 assistant ＋可选的 system/compact_boundary（＋紧随的 isCompactSummary user
+# 行，它不是判据、在这里只为形态真实）＋可选的边界之后一条 assistant。压缩后第一条 prompt 的真实形态
+# = boundary 1 / post 0：尾部最后一条 assistant 还是压缩前那条。
+tx_compact() { # $1 path  $2 pre-ctx  $3 boundary(1/0)  $4 post-ctx(0=无)
+  python3 -c 'import datetime as dt, json, sys
+path, pre, boundary, post = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1", int(sys.argv[4])
+now = dt.datetime.now(dt.timezone.utc)
+def stamp(ago):
+    return (now - dt.timedelta(minutes=ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+def amsg(i, ctx, ago):
+    return {"type": "assistant", "timestamp": stamp(ago),
+            "message": {"id": "msg_%d" % i, "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "usage": {"input_tokens": 10, "cache_read_input_tokens": ctx - 10,
+                                  "cache_creation_input_tokens": 0, "output_tokens": 5}}}
+rows = [{"type": "user", "timestamp": stamp(9), "message": {"role": "user", "content": "干活"}},
+        amsg(1, pre, 8)]
+if boundary:
+    rows.append({"type": "system", "subtype": "compact_boundary", "timestamp": stamp(4),
+                 "content": "Conversation compacted", "level": "info",
+                 "compactMetadata": {"trigger": "manual", "preTokens": pre}})
+    rows.append({"type": "user", "timestamp": stamp(4), "isCompactSummary": True,
+                 "message": {"role": "user", "content": "This session is being continued…"}})
+if post:
+    rows.append(amsg(2, post, 1))
+open(path, "w").write("".join(json.dumps(r) + "\n" for r in rows))' "$1" "$2" "$3" "$4"
+}
+
 payload() { # $1 session  $2 cwd  $3 transcript  [$4 event]
   python3 -c 'import json, sys
 print(json.dumps({"hook_event_name": sys.argv[4], "session_id": sys.argv[1],
@@ -74,7 +103,7 @@ chk_contains "① 打的是 UserPromptSubmit 的 additionalContext" \
   '"hookEventName": "UserPromptSubmit"' "$OUT"
 chk_contains "① 文案报当前上下文" "上下文 320k" "$OUT"
 chk_contains "① 文案报触发的档位" "阈 300k" "$OUT"
-chk_contains "① 文案给动作（收口即换 + handoff）" "handoff" "$OUT"
+chk_contains "① 文案给动作（收口即 /compact）" '收口即 `/compact`' "$OUT"
 chk_eq "① 输出是一行" 1 "$(printf '%s\n' "$OUT" | grep -c .)"
 chk_eq "① 输出是合法 JSON" 1 \
   "$(printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin); print(1)' 2>/dev/null || echo 0)"
@@ -115,6 +144,39 @@ T11="$TX/t11.jsonl"; tx_one "$T11" 320000 0
 mkdir -p "$AGENT_WATCH_DIR/ctx-nudge/s11.json"
 fire s11 "$ORCH" "$T11"
 chk_eq "⑪ 状态写失败不发声（合同：任何异常路径零字节）" "0|" "$RC|$OUT"
+
+# ── ⑫ 压缩边界之后才算数：边界后还没有 assistant ⇒ 压缩后第一条 prompt 零字节 ─────────────
+# 旧读法在这个夹具上读到的正是压缩前那条 408k（0923 现场误报的那一条）。
+T12="$TX/t12.jsonl"; tx_compact "$T12" 408000 1 0
+fire s12 "$ORCH" "$T12"
+chk_eq "⑫ 压缩后第一条 prompt 不说话（旧读法在此报 408k）" "0|" "$RC|$OUT"
+T12B="$TX/t12b.jsonl"; tx_compact "$T12B" 408000 0 0
+fire s12b "$ORCH" "$T12B"
+chk_contains "⑫ PAIRED GREEN：同夹具去掉边界两行就说话（排除「永远静默」）" "上下文 408k" "$OUT"
+
+# ── ⑬ 边界之后档位重置：压缩后是另一段上下文，同一档要能再提醒一次 ─────────────────────────
+T13="$TX/t13.jsonl"; tx_compact "$T13" 320000 0 0
+fire s13 "$ORCH" "$T13"
+chk_contains "⑬ 边界前越 300k 提醒一次" "阈 300k" "$OUT"
+tx_compact "$T13" 320000 1 320000        # 同一 session：补上边界 + 边界之后新的 320k assistant
+fire s13 "$ORCH" "$T13"
+chk_contains "⑬ 边界之后同一档再提醒一次" "阈 300k" "$OUT"
+fire s13 "$ORCH" "$T13"
+chk_eq "⑬ 同一个边界不重复提醒（compact_ts 没存住时此条红）" "0|" "$RC|$OUT"
+T13C="$TX/t13c.jsonl"; tx_compact "$T13C" 320000 0 0
+fire s13c "$ORCH" "$T13C"
+chk_contains "⑬ 对照：无边界首次仍提醒" "阈 300k" "$OUT"
+fire s13c "$ORCH" "$T13C"
+chk_eq "⑬ 对照：无边界时第二次静默（重置不是无条件的）" "0|" "$RC|$OUT"
+
+# ── ⑭ 文案给的动作是 `/compact`，不是「换会话」（主理人 0923：接得上 > 省 token）──────────────
+T14="$TX/t14.jsonl"; tx_one "$T14" 320000 0
+fire s14a "$ORCH" "$T14"
+chk_contains "⑭ 档位文案的动作是 /compact" '收口即 `/compact`' "$OUT"
+T14B="$TX/t14b.jsonl"; tx_one "$T14B" 200000 70
+fire s14b "$ORCH" "$T14B"
+chk_contains "⑭ 闲置文案的动作也是 /compact" '先 `/compact`' "$OUT"
+chk_eq "⑭ 脚本全文不再出现「换会话」" 0 "$(grep -c '换会话' "$SE")"
 
 # ── ⑥ 单字段坏样本：每次只坏一个字段，三次都零字节 + rc=0 ────────────────────────────────
 fire s6a "$ORCH" "$T1" SessionStart

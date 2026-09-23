@@ -9,6 +9,11 @@
 # every compaction of every session — single-agent debugging included — was pushed into the
 # seven-step retro. The payload `cwd` now decides, through the same predicate E1 and the Stop
 # gate consult, and a repo nobody is orchestrating gets NO output at all (not a shorter one).
+# Third branch (2026-09-23): SessionStart source=startup|clear emits the handoff-snapshot pointer.
+# Its predicate is deliberately ONLY "the repo root of payload cwd has docs/ACTIVE_CONTEXT.md" —
+# NOT the orchestration predicate above, because right after a session switch there is usually no
+# LIVE seat yet and an AND would go silent exactly when continuity matters most. Asserted below by
+# firing it in a repo nobody orchestrates, and by pinning the two older branches byte-for-byte.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SH="$HERE/../skills/cto-orchestration/references/retro-reminder.sh"
@@ -86,6 +91,71 @@ chk_eq "r4 a payload with no cwd emits NOTHING, exit 0" "0|" "$rc|$out"
 # and the probe must never reach for the runtime: a reminder that shelled out to agentctl would
 # pay a status call (which publishes an idle conclusion) on every compaction
 chk_not "the reminder invokes no agentctl verb" 'agentctl ' "$(cat "$SH")"
+
+echo "== retro-reminder: SessionStart(startup|clear) = 交接快照开场指针 =="
+# POINT 是一个**没人编排**的仓（run dir 里没有它的 start 行）：指针在这里必须照样说话——这就是
+# 「不叠加被编排谓词」的行为证明，换会话后往往还没有 LIVE 席位。
+POINT="$FIX/point"; mkdir -p "$POINT/docs" "$POINT/sub/deeper"
+git -C "$POINT" init -q
+printf '# 驾驶舱\n\nLast rewritten: 2026-01-02\n' > "$POINT/docs/ACTIVE_CONTEXT.md"
+out="$(payload SessionStart startup "$POINT" | bash "$SH")"; rc=$?
+chk_eq "p1 startup 指针 exits 0" 0 "$rc"
+chk_eq "p1 指针恰一行" 1 "$(printf '%s\n' "$out" | grep -c .)"
+chk_has "p1 指针指向交接快照本身" 'docs/ACTIVE_CONTEXT.md' "$out"
+chk_has "p1 指针带快照日期（让模型自判新旧）" '2026-01-02' "$out"
+chk_has "p1 指针声明事件名" '"hookEventName":"SessionStart"' "$out"
+chk_not "p1 指针不抢用户可见通道" 'systemMessage' "$out"
+json_ok "p1 指针输出是合法 JSON" "$out"
+out="$(payload SessionStart clear "$POINT" | bash "$SH")"; rc=$?
+chk_has "p2 /clear 同形一行" 'ACTIVE_CONTEXT.md' "$out"
+out="$(payload SessionStart resume "$POINT" | bash "$SH")"; rc=$?
+chk_eq "p3 resume 不是新开场，零字节" "0|" "$rc|$out"
+out="$(payload SessionStart startup "$PLAIN" | bash "$SH")"; rc=$?
+chk_eq "p4 PAIRED NEGATIVE：同事件、仓里没有快照 ⇒ 零字节" "0|" "$rc|$out"
+out="$(payload SessionStart startup "$POINT/sub/deeper" | bash "$SH")"; rc=$?
+chk_has "p5 子目录 cwd 仍命中（谓词找的是仓根）" '2026-01-02' "$out"
+POINT2="$FIX/point2"; mkdir -p "$POINT2/docs"; git -C "$POINT2" init -q
+printf '# 驾驶舱\n\n没有日期行\n' > "$POINT2/docs/ACTIVE_CONTEXT.md"
+touch -t 202602031200 "$POINT2/docs/ACTIVE_CONTEXT.md"
+out="$(payload SessionStart startup "$POINT2" | bash "$SH")"; rc=$?
+chk_has "p6 没有 Last rewritten 行就退到文件 mtime" '2026-02-03' "$out"
+out="$(printf '{"hook_event_name":"UserPromptSubmit","source":"startup","cwd":"%s"}' "$POINT" \
+  | bash "$SH")"; rc=$?
+chk_eq "p7 指针只在 SessionStart 说话（同 source 同 cwd 的别的事件零字节）" "0|" "$rc|$out"
+
+echo "== retro-reminder: 既有 compact / PreCompact 输出逐字节不变 =="
+# 对照 = 本批之前的脚本，钉 SHA（不用 origin/main 这种会动的参照物）。它按 dirname "$0"/agentctl 找
+# identity，所以要导出到一个带 agentctl 兄弟目录的临时目录——孤零零一个文件是另一个程序（导出法同
+# cto-guard-bash.test.sh 的 E13）。
+BASE_REV="d6e03ef853e586a0a5c3522f76f8dff27d3025f2"
+BASE_DIR="$FIX/base"; mkdir -p "$BASE_DIR"
+cp -R "$HERE/../skills/cto-orchestration/references/agentctl" "$BASE_DIR/agentctl"
+git -C "$HERE/.." show "$BASE_REV:skills/cto-orchestration/references/retro-reminder.sh" \
+  > "$BASE_DIR/retro-reminder.sh" 2>/dev/null
+BASE="$BASE_DIR/retro-reminder.sh"
+chk_eq "b0 control: 导出的对照确实早于本批（没有开场指针）" 0 \
+  "$(grep -c 'ACTIVE_CONTEXT' "$BASE" 2>/dev/null || true)"
+cmp_case() { # $1 event  $2 source  $3 cwd  $4 label — 原始字节，不过命令替换（会吃掉尾换行）
+  pl="$(payload "$1" "$2" "$3")"
+  pfx="$FIX/cmp-$4"
+  printf '%s' "$pl" | bash "$BASE" >"$pfx.base.out" 2>"$pfx.base.err"; echo $? >"$pfx.base.rc"
+  printf '%s' "$pl" | bash "$SH"   >"$pfx.new.out"  2>"$pfx.new.err";  echo $? >"$pfx.new.rc"
+  for part in out err rc; do
+    if cmp -s "$pfx.base.$part" "$pfx.new.$part"; then
+      ok "b $4 $part 与 $BASE_REV 逐字节相同"
+    else
+      bad "b $4 $part 与 $BASE_REV 不同"
+    fi
+  done
+}
+cmp_case SessionStart compact "$ORCH" compact-orch
+cmp_case SessionStart compact "$PLAIN" compact-plain
+cmp_case PreCompact auto "$ORCH" precompact-orch
+# 空对空不算绿：两个本该说话的旧输出先证非空（对照若因缺 identity 整体失效，cmp 会假绿）
+chk_eq "b control: 对照在 compact/被编排仓确实有输出" 1 \
+  "$([ -s "$FIX/cmp-compact-orch.base.out" ] && echo 1 || echo 0)"
+chk_eq "b control: 对照在 PreCompact 确实有输出" 1 \
+  "$([ -s "$FIX/cmp-precompact-orch.base.out" ] && echo 1 || echo 0)"
 
 echo "== wiring truth-source =="
 json_ok "retro-hooks.json is valid JSON" "$(cat "$WIRE")"

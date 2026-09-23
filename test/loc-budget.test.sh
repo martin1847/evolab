@@ -117,8 +117,19 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # 2026-09-23 (`prose-slim`): PROSE 1597 -> 1552, measured DOWN. 能电不文，电后即减: prose paragraphs
 # a guard / preflight / retro-check already enforces became one line (rule sentence + gate name,
 # so a DENY's `Read:` still lands on the rule), gateless exhortations were cut or shortened.
-CODE_MAX=15398      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1553      # every shipped *.md under the skill, summed wc -l
+# 2026-09-23 (`session-handoff`): CODE 15398 -> 15467, PROSE 1553 -> 1554. What the +69 code lines
+# buy the two places session continuity was left to luck: session-economics reads context only
+# AFTER the last `system/compact_boundary` row (so the first prompt after a `/compact` no longer
+# reports the pre-compaction 408k, and a tier can fire again on the new stretch — one extra state
+# field `compact_ts`), and retro-reminder grows a third branch that answers SessionStart
+# startup/clear with ONE pointer line at `docs/ACTIVE_CONTEXT.md` plus its `Last rewritten` date.
+# The pointer's predicate is a repo-root file test and nothing else — no identity probe, no second
+# marker — which is most of why the branch is this small. The +1 prose line is the rewritten
+# retrospective §7 二选一 (`/compact` 优先) plus the 复述 sentence the pointer routes to. INJECT /
+# INJECT_SINGLE untouched: the extractor weighs `cto-guard-*.py`, and these two speak on the
+# orchestrator's own prompt, not into a worker's brief.
+CODE_MAX=15467      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+PROSE_MAX=1554      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length

@@ -536,7 +536,7 @@ else
   if [ "$se_rc" -ne 0 ]; then
     fail "会话经济面未检查 — 量具坏 ($SESECON rc=$se_rc); 读不到 ≠ 便宜"
   elif [ -n "$se_over" ] && [ "$se_over" -gt 0 ]; then
-    warn "$se_over 个会话 ctx/req 中位数 >300k — 收口即换会话 (retrospective §7)"
+    warn "$se_over 个会话 ctx/req 中位数 >300k — 收口即 /compact (retrospective §7)"
   else
     ok "本周期无 ctx/req 中位数 >300k 的会话"
   fi

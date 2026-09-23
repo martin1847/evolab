@@ -2,21 +2,25 @@
 """session-economics — 会话经济的两个面，一个文件两个入口（提醒 + 读数，共用同一套 transcript 读法）。
 
 病：成本 = Σ 每次调用时的上下文体量。一个不换的编排会话把 400-550k 的上下文乘进它剩下的每一次
-请求，闲置过缓存 TTL 的下一条请求还要按 2× 单价整段重缓存。retrospective §7 的「换会话」是散文，
-而该换的那一刻没有任何东西说话。
+请求，闲置过缓存 TTL 的下一条请求还要按 2× 单价整段重缓存。retrospective §7 的「收口即 `/compact`」
+是散文，而该收口的那一刻没有任何东西说话。
 
 无 argv（stdin = hook 载荷）⇒ **触点**：UserPromptSubmit 上一行 additionalContext，只在两种时刻说：
   ① 上下文首次越过 300k / 450k / 600k（试行阈值，每档每 session 一次）
   ② 距上一条 assistant >55 分钟且上下文 ≥150k（缓存 1h 过期边界的提前量；同一次闲置一次）
-不拦、不改状态、不判对错——**只提醒**：越档与否是判据，换不换会话是人拍。其余每一条 prompt 输出
+读数只算**最后一个压缩边界之后**的那段：`/compact` 之后 transcript 尾部仍留着压缩前那条 408k 的
+assistant，照旧读法会在压缩后第一条 prompt 上误报一次（本席位 0923 实测 408k → 65k）。边界之后还没有
+assistant 行 ⇒ 这一条不说话；边界时间戳比状态里的新 ⇒ 档位与闲置标记清空，压缩后再越档重新提醒。
+不拦、不改状态、不判对错——**只提醒**：越档与否是判据，压不压缩是人拍。其余每一条 prompt 输出
 零字节，任何异常也是零字节 + exit 0（一个提醒永远不该成为会话的故障点）。
 
 `--report <transcript-dir> [--days N]` ⇒ **读数**：复盘时把「这些会话到底多贵」摆到台面上（retro-check
 第 12 检的输入），只读、只出清单、不改一个字节。
 
 边界，写出来而不是假装没有（主理人 0918 裁：边界一律最小化）：触点只读 transcript **尾部**有界字节，
-所以一条巨大的 tool_result 把最后一条 assistant 顶出窗口 ⇒ 这一条 prompt 不提醒（不是报错）。巨大 /
-被截断 / 并发写入的 transcript、多 worktree 共享 session、时钟漂移一律不专门处理：遇到即静默。
+所以一条巨大的 tool_result 把最后一条 assistant 顶出窗口 ⇒ 这一条 prompt 不提醒（不是报错）；压缩边界
+之后的行落在窗口外同理——判不出即静默，窗口不为此扩大。巨大 / 被截断 / 并发写入的 transcript、多
+worktree 共享 session、时钟漂移一律不专门处理：遇到即静默。
 读数模式判不出的会话打一行 `[skip]`，不猜。
 """
 
@@ -109,6 +113,25 @@ def _tail_lines(path):
     return lines[1:] if off else lines      # 窗口首行多半被切断，丢掉
 
 
+def _compact_split(lines):
+    """(最后一个压缩边界之后的行, 该边界 epoch 秒)；没有边界 ⇒ (lines, None)。
+
+    判据只有一个：`type=system` 且 `subtype=compact_boundary`（本机 2.1.280 实测形态）。相邻那条
+    `isCompactSummary` 的 user 行**不作判据**——一个字段一个判据，两个判据迟早互相打架。
+    """
+    for i in range(len(lines) - 1, -1, -1):
+        if '"compact_boundary"' not in lines[i]:
+            continue
+        try:
+            row = json.loads(lines[i])
+        except Exception:                   # noqa: BLE001 — 半行 / 坏行，继续往前找
+            continue
+        if (isinstance(row, dict) and row.get("type") == "system"
+                and row.get("subtype") == "compact_boundary"):
+            return lines[i + 1:], _ts(row)   # ts 解析不出 ⇒ 只切段、不重置状态
+    return lines, None
+
+
 def _last_assistant(lines):
     """(ctx, ts) of 最后一条带 usage 的 assistant 行；找不到 ⇒ None。"""
     for ln in reversed(lines):
@@ -137,14 +160,14 @@ def _load_state(path):
 
 
 def triggers(payload):
-    """(tier, ctx, idle, idle_min, ts)，都不触发 ⇒ None。判据全在这里，身份门在调用方。"""
+    """(tier, ctx, idle, idle_min, ts, cts)，都不触发 ⇒ None。判据全在这里，身份门在调用方。"""
     tp = payload.get("transcript_path")
     if not isinstance(tp, str) or not tp:
         return None
-    lines = _tail_lines(tp)
-    last = _last_assistant(lines)
+    after, cts = _compact_split(_tail_lines(tp))
+    last = _last_assistant(after)
     if last is None:
-        return None
+        return None                          # 含「边界之后还没有 assistant」= 压缩后第一条 prompt
     ctx, ts = last
     if ctx <= 0:
         return None
@@ -153,7 +176,7 @@ def triggers(payload):
     idle = ts is not None and idle_min > IDLE_MINUTES and ctx >= IDLE_CTX_FLOOR
     if tier is None and not idle:
         return None                          # ← 绝大多数 prompt 在这里结束：没碰 identity，没跑 git
-    return (tier, ctx, idle, idle_min, ts)
+    return (tier, ctx, idle, idle_min, ts, cts)
 
 
 def hook():
@@ -170,7 +193,7 @@ def hook():
     fired = triggers(payload)
     if fired is None:
         return 0
-    tier, ctx, idle, idle_min, ts = fired
+    tier, ctx, idle, idle_min, ts, cts = fired
 
     # 有触发才认身份：identity 要花一次 git rev-parse + run dir 列目录，不能压在每条 prompt 上。
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "agentctl"))
@@ -181,9 +204,16 @@ def hook():
 
     spath = os.path.join(identity.run_dir(), STATE_DIR, _SAFE_ID.sub("-", sid)[:120] + ".json")
     st = _load_state(spath)
-    seen = [t for t in st.get("tiers", []) if isinstance(t, int)]
+    # 边界比状态里记的新 ⇒ 档位与闲置标记归零：压缩后是另一段上下文，旧的「这档说过了」不再成立。
+    # 闲置时长仍来自边界之后那条 assistant 的时间戳，清空 idle_ts 只是允许再提醒一次。
+    prev_cts = st.get("compact_ts")
+    if cts is not None and (not isinstance(prev_cts, (int, float)) or cts > prev_cts):
+        seen, last_idle = [], None
+    else:
+        seen = [t for t in st.get("tiers", []) if isinstance(t, int)]
+        last_idle = st.get("idle_ts")
     say_tier = tier is not None and tier not in seen
-    say_idle = idle and st.get("idle_ts") != ts
+    say_idle = idle and last_idle != ts
     if not say_tier and not say_idle:
         return 0                             # 这一档 / 这一次闲置已经说过了
 
@@ -193,18 +223,19 @@ def hook():
 
     parts = []
     if say_tier:
-        parts.append(f"💸 上下文 {_k(ctx)}k/请求（阈 {_k(tier)}k）：批次收口即换会话 + /tmp handoff"
-                     "（retrospective §7）；等 owner / CI >1h 也换")
+        parts.append(f"💸 上下文 {_k(ctx)}k/请求（阈 {_k(tier)}k）：收口即 `/compact`"
+                     "（retrospective §7），别开新会话")
     if say_idle:
         parts.append(f"💸 闲置 {int(idle_min)} 分钟（缓存 1h 过期边界），本条很可能整段重缓存"
-                     f"（≈2×{_k(ctx)}k）；处在批次边界就先换会话，否则收口再换")
+                     f"（≈2×{_k(ctx)}k）；处在批次边界就先 `/compact`，否则收口再 `/compact`")
     try:
         os.makedirs(os.path.dirname(spath), exist_ok=True)
         if say_tier:
             seen.append(tier)
         with open(spath, "w", encoding="utf-8") as fh:
             json.dump({"tiers": sorted(set(seen)),
-                       "idle_ts": ts if say_idle else st.get("idle_ts")}, fh)
+                       "idle_ts": ts if say_idle else last_idle,
+                       "compact_ts": cts if cts is not None else prev_cts}, fh)
     except Exception:                        # noqa: BLE001 — 合同：任何异常路径零字节；记不住就不说
         return 0                             # （否则持久化一直失败时每条同载荷 prompt 都会重提）
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",

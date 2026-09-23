@@ -58,13 +58,17 @@
 
 ## session 切换决策（步骤 7 展开）
 
-治理完评估当前上下文状态，二选一：
+治理完评估当前上下文状态，**`/compact` 优先**（会话 id 不变、摘要自动、可 resume）：接得上 > 省 token。
 
-- **压缩上下文续跑**：同一任务还在连续迭代、没有天然断点。
-- **新 session + handoff**：天然交接点（等外部部署 / 验收、workstream 批次结束、角色 / 优先级切换）；
-  机械阈值：上下文 >300k / 请求、或预计等待 >1h → 收口即换（成本 = 上下文体量 × 请求数；提醒触点在
-  `retro-hooks.json` 的 UserPromptSubmit 条目，本周期读数见 retro-check 第 12 检）。
+- **`/compact` 续跑**：默认路径。机械阈值：上下文 >300k / 请求、或预计等待 >1h → 收口即 `/compact`
+  （成本 = 上下文体量 × 请求数；提醒触点在 `retro-hooks.json` 的 UserPromptSubmit 条目，本周期读数见
+  retro-check 第 12 检）。
+- **新 session + handoff**：只在压缩后仍需彻底清场时（角色 / 优先级切换、workstream 批次结束、等外部
+  部署 / 验收）。
   写一次性 handoff 到 `/tmp/`（**不进 `docs/orchestration/`**——handoff 是 transient 交接产物，放治理
   SoT 会变又一个只生不死的死文件；持久状态归 ACTIVE_CONTEXT + memory，handoff 只快照运行时状态）。三件事：
   ① 待办队列（带状态 + session/worktree/branch 指针）；② 活跃 tmux sessions 及其当前任务；
   ③ 需用户决策的 blocking 项。新 session 读 handoff + memory 冷启动，**读完即删**。
+
+切换 / 压缩后的第一条回复先复述：在飞批次 / 待裁 / 下一步（开场指针触点 = `retro-reminder.sh` 的
+SessionStart startup/clear，谓词 = 仓根 `docs/ACTIVE_CONTEXT.md` 存在）。

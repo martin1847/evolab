@@ -27,3 +27,4 @@ BLOCKED.md
 
 # codegraph index — machine-local, auto-built by post-checkout hook
 .codegraph/
+docs/ACTIVE_CONTEXT.md
