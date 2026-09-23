@@ -74,7 +74,9 @@
 治理完评估当前上下文状态，二选一：
 
 - **压缩上下文续跑**：同一任务还在连续迭代、没有天然断点。
-- **新 session + handoff**：天然交接点（等外部部署 / 验收、workstream 批次结束、角色 / 优先级切换）。
+- **新 session + handoff**：天然交接点（等外部部署 / 验收、workstream 批次结束、角色 / 优先级切换）；
+  机械阈值：上下文 >300k / 请求、或预计等待 >1h → 收口即换（成本 = 上下文体量 × 请求数；提醒触点在
+  `retro-hooks.json` 的 UserPromptSubmit 条目，本周期读数见 retro-check 第 12 检）。
   写一次性 handoff 到 `/tmp/`（**不进 `docs/orchestration/`**——handoff 是 transient 交接产物，放治理
   SoT 会变又一个只生不死的死文件；持久状态归 ACTIVE_CONTEXT + memory，handoff 只快照运行时状态）。三件事：
   ① 待办队列（带状态 + session/worktree/branch 指针）；② 活跃 tmux sessions 及其当前任务；

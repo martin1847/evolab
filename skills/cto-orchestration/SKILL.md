@@ -10,6 +10,7 @@ metadata:
 # CTO Orchestration — 多 agent 软件交付
 
 > 主干只留每次派工都要用的判据与路由；命令细节、故障矩阵和模板按需读 `references/`。
+> **能电不文，电后即减**：能下沉 hook / gate 的规则不写散文；电上之后原正文收成一行指针（判据 `references/shock-in-the-loop.md` §1）——约束类散文的价值随门增多而递减，复盘 §3 同轮淘汰。
 
 三条铁律：
 
