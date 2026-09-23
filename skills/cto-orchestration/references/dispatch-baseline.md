@@ -11,11 +11,9 @@
 派工基线四件（`agentctl start` 前编排位亲自做完）：
 
 1. **fresh worktree @ 最新远端 base**：`git fetch` 后
-   `git worktree add ../wt-<name> -b feat/<name> origin/<base>`——不让 agent 在过期基线开工；`git stash` 是仓级共享状态、穿透这层隔离——多席在飞时不用 stash 切基线，对照用一次性 worktree（guard (22) WARN）。
+   `git worktree add ../wt-<name> -b feat/<name> origin/<base>`——不让 agent 在过期基线开工；多席在飞时不用 `git stash`（仓级共享、穿透 worktree 隔离）切基线，对照用一次性 worktree（guard ㉒ WARN）。
 2. **构建/依赖就绪**（venv、node_modules 等按该仓声明）——席位开工即能跑测试，不烧轮装环境。
-3. **播种即 seed commit**：编排位播进 worktree 的任何文件（goal/评审档等）先落 commit——
-   untracked 即脏树，撞席位清洁门直接 STOP；非交付件放伞仓 docs/，别落 worktree
-   （guard ⑭：`agentctl start` 时 cwd porcelain 非空 → DENY）。
+3. **播种即 seed commit**：编排位播进 worktree 的文件（goal/评审档等）先落 commit、非交付件放伞仓 docs/——untracked 即脏树，席位清洁门直接 STOP（guard ⑭：`agentctl start` 时 cwd porcelain 非空 → DENY）。
 4. **主 checkout 不在核对面**：goal 固定句「基线核对只针对你自己的 worktree；主 checkout 与
    本地 <base> 分支不在核对面、不得要求 fast-forward」——squash 集成仓的主 checkout 必然
    分叉，席位拿它判 BLOCKED / 要求 fast-forward 全是误报（下游席位 n=3）。
@@ -24,9 +22,7 @@
   改动重叠才 rebase（或 merge base 进来）——判据细节与合后 ancestry 陷阱归你所在仓的 Git 协作
   规范，此处不复读。编排位只记一条：多会话并发时 base 常被别的 PR 推进，
   **`git fetch`+检查这一步省不得**（省了才会在过期基线上 PR）。
-- **同 cwd 起第二席前先收割 BLOCKED.md**：BLOCKED.md 是席位间共享路径——前席遗留不清，
-  新席正确拒动他席文件而卡死。编排位收割（读取归档其内容）后删除，再派新席
-  （guard ⑮：`agentctl start` 时 `<cwd>/BLOCKED.md` 存在 → DENY）。
+- **同 cwd 起第二席前先收割 BLOCKED.md**（读取归档后删除）——前席遗留会让新席拒动他席文件而卡死（guard ⑮：`agentctl start` 时 `<cwd>/BLOCKED.md` 存在 → DENY）。
 - **路径闭集派前枚举 use site**：闭集由设计视角写出会漏第三处引用——派前对交付项触碰的符号
   `rg` 枚举 use site，闭集 ⊇ 命中。
 - **只读 scout/audit/Explore 也算"开工"**：经 Agent 工具派出时**静默继承编排者 cwd**（常是落后的主

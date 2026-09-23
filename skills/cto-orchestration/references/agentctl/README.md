@@ -26,9 +26,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   判不出按「开下一轮」走（宁钝勿敏：晚一个边界 > 丢一条指令）。三引擎能力矩阵由 runtime 生成，
   `agentctl capabilities` 是唯一真源（同一张表既驱动路由、又出拒绝文案）。投递成功 ≠ 模型照做，
   验收仍看交付物。
-  **`-m` 正文禁命令替换**：反引号 / `$(` 在 shell 阶段就展开——例子命令真被执行（2026-08-30 一条
-  `gh api` 真打了仓）、`>` 把正文截断，agentctl 只剩 parse error 可报；guard (21) 拦，正路 `-f <file>`。
-  单引号里的字面反引号同样拦（字节禁令，一个正路盖所有拼写）；`<<'EOF'` heredoc 正文是 DATA，`<<EOF` 正文照拦。
+  **`-m` 正文禁命令替换**（反引号 / `$(` 在 shell 阶段就展开、例子命令真被执行；单引号内同拦，`<<'EOF'` 正文是 DATA）：guard ㉑ DENY，正路 `-f <file>`。
 - **steer 队列可见**：`queued=N` 只是引擎报的深度，lane 自己记 sidecar `<s>.steer-log.jsonl`；
   `status` 在 N>0 时按深度列出末 N 条，无队列面的引擎零输出。stop 随控制态一起清。
 - **typed exit 三引擎同词汇**（词表 `agentctl states`，处置见下节）；
@@ -106,9 +104,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   送达即返，无逐帧 ack——诚实边界）；**不会自动 watch**，紧接着用宿主受控后台能力挂
   `agentctl watch <session>`（guard ⑤ 强制宿主后台、拦 shell `&` 与前台阻塞；同步 shell 编排者
   前缀 `AGENT_WATCH_SYNC=1` 显式放行并自读 exit code）。
-- **preflight 门默认开**：启动引擎前带 `GOAL_PREFLIGHT_CWD=<席位 cwd>` 调 `../goal-preflight.py` 校验 goal 里
-  `Preflight: <probe> => <observed result>` 存在且已解占位，并把 PREMISE 行**整段恰一个反引号段**的 verify 命令在席位 cwd 原样跑一遍、
-  与作者写的 `rc=N` / `count=N`（stdout 非空行数，stderr 不计；每种记号至多一次）比对（不符即拒；无记号只报实况；混排 / 多段反引号 / 非命令形态不执行、一律报未执行），未过即拒发、不起引擎；`--no-preflight` 显式豁免（判据归 SKILL.md §1）。同时带 `GOAL_PREFLIGHT_DELIVERABLE=<--deliverable glob>`：门对命中本 goal 写集（`## Task / Deliverables` 里的路径 ∪ 该 glob）且未锚 pinned base 的活树探针打 WARN，不拦。
+- **preflight 门默认开**：起引擎前于席位 cwd 调 `../goal-preflight.py`——`Preflight:` 行缺失 / 占位未解、或 PREMISE 行实跑与作者 `rc=` / `count=` 记号不符即拒发（形态规则见 `goal-template.md` §Premises 与脚本头注）；`--no-preflight` 显式豁免（判据归 SKILL.md §1）；命中本 goal 写集（Task 路径 ∪ `--deliverable`）且未锚 pinned base 的活树探针只 WARN。
 - **`--expect <分钟>` = 本轮等待预算**（`start` 声明、`watch --expect` 覆盖；不给 = 关闭，行为逐字不变）：超 1.5× 且引擎还在跑 → waiter 出 typed `OVER-BUDGET`（每 attempt+round 只报一次，带有界事件尾；普通 steer 开新轮即重新计时），`status` 在 RUNNING 上打一行 `note: over budget by …min`——只说等待超了，不说工作没进展。
 - **席位不能观测/操作自己**：pane 注入 `AGENTCTL_SESSION`，`watch/status/steer/stop/start` 目标等于它即参数面拒（rc=1，非 typed 判决、不打 `EXIT=` 尾行）——席位在自己 turn 里等自己的交付物是死锁（2026-09-02 一席 2h03m）；要停下等裁决写 `BLOCKED.md` 并结束本轮，要报进度写进交付物。席位自行 unset 该变量可绕过 = accepted 边界（防手滑，非对手模型）。
 - **watcher 被外部杀（TERM）= 预期可恢复态**：收到 killed 通知即重挂——supervised 模式下感知环在
@@ -267,11 +263,7 @@ Codex 的 Stop 片段（`<repo>/.codex/hooks.json`；`~/.codex/hooks.json` 与�
 ## cwd 锚定（多仓工作区）
 
 伞形多仓里 bare git/gh 会打在 cwd 所在的仓——未必是你以为的那个；每段含 git/gh 的命令自带锚：`cd /abs/<repo> && …`、
-`git -C <path>`、`gh -R <owner>/<repo>`。guard ⑧ 只拦一种形态（owner 裁定 2026-09-06 收窄）：**cwd 就是伞目录本身**
-——自身直接子目录 ≥2 个带 `.git` 的仓，且 cwd 不在任何 git 工作树内，这时 bare git/gh 连自己的仓都没有。
-**cwd 在任一 git 工作树内一律不拦**（判据 = `git -C <cwd> rev-parse --is-inside-work-tree`；与 session 根、
-`transcript_path` 无关，祖先不扫，单仓与派工 worktree 永不触发）。这条判据判不出时（cwd 列不出 / 没装 git /
-探测超时 / 起不来）→ **任何 cwd**（含真实工作树）都是不拦 + 一行 WARN，绝不静默当放行。
+`git -C <path>`、`gh -R <owner>/<repo>`。guard ⑧ 只拦 **cwd 是伞目录本身**（直接子目录 ≥2 个带 `.git` 的仓、且 cwd 不在任何 git 工作树内）时的裸 git/gh；cwd 在工作树内一律不拦，判不出 → 不拦 + 一行 WARN。
 **明示放弃的覆盖**（非零风险，owner 09-06 裁「效率优先」）：伞形 session 里 cwd 漂到兄弟仓后的裸 git、伞仓子仓
 之下再嵌套的仓、单条命令内 `cd ../B && git …`——这三类回到「作用于 cwd 所在仓」的普通语义。理由：下游四席一天
 50/14/4 次 ⑧ 误拦，台账里这三类 0 例；不再声称「零真阳性漏网」。

@@ -17,10 +17,7 @@
 
 **浏览器归属与登录态**：默认 Playwright 自起的浏览器，**登录态跟项目走、不用临时 profile**——
 每角色一份 storageState（上表的 auth fixture），一个项目一个命名会话 `-s=<project>` 天然隔离、
-并行不互污。**绝不抢主理人日常 Chrome/Edge 的 profile**：争控制面之外，锁 profile 会弄坏他自己的
-浏览器（断连坑过两次）。企业 SSO 等确实无法回放成 storageState 的场景，**CDP attach 一个已在跑的
-专用实例**是正确形态（比夺 profile 好），但要主理人放行——一次性 override、用后即焚。
-强制层见 bash guard ⑨ · agent guard P0a，此处只是指针。
+并行不互污。**绝不抢主理人日常 Chrome/Edge 的 profile**；企业 SSO 等无法回放成 storageState 时 CDP attach 已在跑的专用实例，经主理人放行（一次性 override）——bash guard ⑨ DENY · agent guard P0a DENY。
 
 ## 重复型 E2E：交付物 = `.spec.ts`，不是自建 runner
 
@@ -47,11 +44,7 @@ staging 应养**常备测试账号矩阵**（手机号全字段户 / oauth 贫�
 
 ## 联调铁律
 
-1. **a11y/DOM 快照优先定位元素**，坐标/截图 fallback。
-2. **深层问题（console/network/perf）读运行时**（`playwright-cli console` / `requests`），别从截图猜。
-3. **每次改完回浏览器读运行时验证**（vite HMR 自动重载 → 重新 snapshot/读 console/查 network）。
-   不要只读代码就认定改对了。
-4. **canvas 渲染的 UI**（多维表/图表）a11y 拿不到内容 → 退回截图 read。
+1. a11y/DOM 快照优先定位（canvas UI 退回截图）；2. console/network 读运行时，别从截图猜；3. 每次改完回浏览器读运行时验证（HMR 后重 snapshot），不只读代码认定改对。
 
 ## 交付闭环：三段绿 ≠ 真用户能看到（`代验路径≠真路径` 的前端实例）
 

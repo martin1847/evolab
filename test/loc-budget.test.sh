@@ -114,8 +114,11 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # PROSE did not move (the §4 pointer is half a sentence on an existing line). INJECT and
 # INJECT_SINGLE are untouched: the extractor weighs `cto-guard-*.py` only, and this hook's single
 # line is a nudge on the orchestrator's own prompt, not text injected into a worker's brief.
+# 2026-09-23 (`prose-slim`): PROSE 1597 -> 1552, measured DOWN. 能电不文，电后即减: prose paragraphs
+# a guard / preflight / retro-check already enforces became one line (rule sentence + gate name,
+# so a DENY's `Read:` still lands on the rule), gateless exhortations were cut or shortened.
 CODE_MAX=15398      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1597      # every shipped *.md under the skill, summed wc -l
+PROSE_MAX=1552      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length

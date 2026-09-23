@@ -4,9 +4,7 @@
 
 ## 行为变更
 
-- 未批准的行为变更不落地（停下报批），不靠 flag 藏着先合。
-- 获批的变更直接落地；要逃生舱就加 kill switch（默认开、`=0` 可杀），不做默认 OFF→ON 两步翻转仪式；只有 goal 标明**需灰度**（有生产流量且不可即时回滚）的变更才走 rollout 旗标默认 OFF（agent-backend-standard 附录 A §3；定义处写毕业条件）。
-- 不为普通 bugfix 机械加 flag；按项目既有兼容策略判断。
+- 判据单源 `agents-md-orchestration-section.md`「委派 Agent 边界」（未批不落地、获批直接落 + kill switch、需灰度才 rollout 旗标）；普通 bugfix 不机械加 flag。
 
 ## Measure before more
 
@@ -93,10 +91,8 @@ extensions 把「·」当汉字）。
 
 ## 结构化数据
 
-- JSON 等结构化数据的生成与解析不走 shell 拼接 / sed 正则——引号与转义必漏（printf 拼 JSON
-  遇含引号内容产坏帧；sed 贪婪匹配被嵌套重复键静默）。python 已在
-  依赖里：`json.dumps` / `json.load` 是正路。
+- JSON 等结构化数据用 `json.dumps` / `json.load` 生成与解析，不走 shell 拼接 / sed 正则（引号与转义必漏）。
 
 ## 编辑新鲜度
 
-rebase、另一 agent 写入同一 worktree、或任何会改目标文件的命令之后，重新读取再编辑。不要用旧上下文覆盖新文件；护栏提示 stale edit 时先重读，不绕过。
+rebase、他人写入同一 worktree 或任何改目标文件的命令之后，先重读再编辑；stale edit 提示不绕过。

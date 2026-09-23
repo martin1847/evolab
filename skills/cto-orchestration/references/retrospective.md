@@ -26,17 +26,10 @@
      goal 归档它就死了）；**压缩门**——同层出现 **≥3 条同族条目 → 提蒸馏合并案**（1 条上层判据 +
      retire 原件，corpus 总量不增；总量没减 = 复制不是晋升）。retro 只**提议**，改 spec 由主理人**裁定**
      （提议/批准分离，防按一次性事件堆规则）。
-   - **教训与门同形态**（「缺口要与成绩同形态」的复盘版）：教训入台账写 typed 行——
-     `LESSON: <slug> n=<复发次数> gate=<门路径|none|accepted(理由)>`（行首顶格，允许 `- ` 列表前缀；
-     slug 用 ASCII 词字符 `A-Za-z0-9_.-`，n 最多 9 位，code fence 内的示例不计入台账）
-     ——散文教训进不了决策，复发也没人数得清。n≥2 且 gate=none 是 retro-check 的 blocking FAIL：
-     当批要么升门（gate 指向真实存在的文件），要么主理人显式 accepted(理由)；
-     一条教训最多以散文形态活两次。
-   - **门效果审计（行为门的对偶面）**：本波编排位自造的每个门/上限/仪式写 typed 行
-     `GATE-AUDIT: <slug> hits=<真缺陷数> false=<误报 BLOCKED 数> action=<kill|keep(<理由>)>`
-     （行首顶格或 `- ` 前缀；slug 同 LESSON 字符集；两个计数各最多 9 位；理由可含括号；
-     code fence 内示例不计入）——hits=0 且 false≥2 默认 kill，keep 须写非空理由，否则
-     retro-check 第 8 检 FAIL；先问「门该不该在」，再谈校准阈值。
+   - **教训与门同形态**：教训入台账写 typed 行 `LESSON: <slug> n=<复发次数> gate=<门路径|none|accepted(理由)>`（行首顶格或 `- ` 前缀）
+     ——n≥2 且 gate=none 由 retro-check 第 7 检 FAIL：当批升门（gate 指向真实文件）或主理人显式 accepted(理由)。
+   - **门效果审计（行为门的对偶面）**：本波编排位自造的每个门/上限/仪式写 typed 行 `GATE-AUDIT: <slug> hits=<真缺陷数> false=<误报 BLOCKED 数> action=<kill|keep(<理由>)>`
+     ——hits=0 且 false≥2 默认 kill，keep 须写非空理由，否则 retro-check 第 8 检 FAIL；先问「门该不该在」，再谈校准阈值。
    - **淘汰同轮做**：会在动手那一刻 fire 的才留正文；hook 已强制的收成一行指针；从不 fire 的删或降
      README 背景（不 fire 的散文是净负债）。
 4. **上下文治理**：只关本席位 `agentctl start` 派出且已交付完的会话，其他会话一律不动（会话账
@@ -53,19 +46,13 @@
 6. **memory 治理**：见下「memory 治理」。
 7. **session 切换决策**：见下「session 切换决策」。
 
-收尾跑 SKILL §5 的 **`retro-check.sh`**：已合分支孤儿 worktree、ACTIVE_CONTEXT 新鲜度与
-复发≥2 无门的 LESSON 行、零战果连误报仍无理由 keep 的 GATE-AUDIT 行、DECISION_QUEUE 已清区仍有正文
-是 blocking FAIL；roadmap、MEMORY 与队列新鲜度只给 warning，exit 仍可为 0，需按任务语义人工裁决。脚本只验机械代理，不能证明复盘语义完成。
+收尾跑 SKILL §5 的 **`retro-check.sh`**（FAIL / warning 项以脚本输出为准；warning 按任务语义人工裁决；脚本只验机械代理，不证复盘语义完成）。
 
 ## memory 治理（步骤 6 展开）
 
 - COMPLETED workstream 精简到 ≤10 行（结论 + 关键教训 + 指针），删掉过程细节。
 - 事实性细节（路径 / 凭据 / 执行路径 / 导航步骤）沉淀到项目环境文档（如 `ACCESS.local.md`,
-  由 `repo-governance-bootstrap` 生成），memory 只留指针——memory 跨 session 存活但容量有限，
-  环境文档是 gitignored 的本地 SoT。沉淀时追加更正必须**同时改掉被推翻的原文**（supersede
-  原地改写——append-only 是此类文档的主腐烂模式：下游席位审计实测 64 条可核事实 51.6% 已腐，
-  且全部是指针类〔路径/URL/对象名/file:line〕，原理散文零腐烂）；文档成规模后配自动指针
-  lint——脚本正则抽取指针分档机械核查（路径/符号离线、URL/对象在线），零人工标注。
+  由 `repo-governance-bootstrap` 生成），memory 只留指针；追加更正必须**同时改掉被推翻的原文**（append-only 是此类文档的主腐烂模式，腐的是指针类事实）。
 - 重复 / 矛盾的 memory 合并或删除；已过时的 workstream 状态更新。
 - MEMORY.md 是索引（一行一条，宿主只加载前 200 行 / 25KB，且不进非 fork 子 agent），条目按宿主四类 `user / feedback / project / reference` 落文件；索引行只留指针与一句 hook。
 

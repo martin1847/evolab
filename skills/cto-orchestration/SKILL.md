@@ -53,13 +53,11 @@ metadata:
 2. **写自包含 goal**：一个 goal = 一个可独立交付的单元 + 一个清晰交付物；每条 Done-when 绑定证明命令，写清 scope、out-of-scope、stop-and-report。高不确定方向进入昂贵设计/实现前，先跑最便宜证伪；取证 / 机械 / 纯研究类 goal 用 `--no-preflight` 显式豁免，其余 goal 默认过 preflight 门（start 校验 Preflight 声明已解）。单行合同、Premises 与 Value gate 直接用 `references/goal-template.md`；场景条款按需读 `references/goal-clauses.md`。
 3. **派发并挂 watcher**：`agentctl start …`——goal 帧被接受即返回、**不会自动 watch**，紧接着用宿主
    受控后台跑 `agentctl watch`；先接线 `references/agentctl/guard-hooks.json`（高频机械失误归 guard，
-   主干不复制其规则表）。理解门与 BLOCKED 协议由 runtime footer 固定追加（真源，本文不复制字面）：
-   合同承诺了开工前核对 → worker 把复述写进 `<cwd>/BLOCKED.md` 等裁决，其余场景复述完即开工。
+   主干不复制其规则表）。理解门与 BLOCKED 协议由 runtime footer 固定追加（`agentctl` `append_footer` 为真源，本文不复述）。
 4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；词表跑 `agentctl states`，处置见 agentctl README。
 5. **steering 走 `agentctl steer`**：默认**尽快送达**（turn 进行中原生 mid-turn：omp/codex；claude
    降级 turn 边界并明说；空闲即刻开新 turn）、`--interrupt` 打断当前 turn 以本条重开；
-   引擎能力差异查 `agentctl capabilities`。投递成功 ≠ 模型照做，验收仍看交付物。
-   每个后续 turn 都重新挂 `agentctl watch`。
+   引擎能力差异查 `agentctl capabilities`。投递成功 ≠ 模型照做，验收仍看交付物。每个后续 turn 都重挂 `agentctl watch`（stop guard S1：本仓有 RUNNING 席位且无活 watcher 时拦收工）。
 6. **Implemented → Verified**：fresh 正向交付证据 + 独立评审 + 真实用户路径 E2E 三件齐，**深度按 §2 档位**（轻档 = 1 轮冷评审或编排位抽查 + 子集门；部署与部署环境 E2E 仅当交付物真有部署面）。先本机真路径，再部署，最后才关单；git 集成与 push 门禁归 Git workflow 标准。
 
 ## 2. 对抗式评审循环
@@ -73,11 +71,11 @@ metadata:
 - 先枚举执行分叉；轴装配先查 path→轴映射表（表命中必进 brief，判断只增补），再点名 `缺失消费者`、
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。
 - **非深档默认恒一轮**：findings 回编排位裁 fix / accept-documented，修复轮不自动回评审——编排位
-  复现抽查闭合；任何续派评审（**第 2 轮起**）须在 brief 写 `SHIP-BLOCKING: <依据>`。深档（门禁/
+  复现抽查闭合；任何续派评审须在 brief 写 `SHIP-BLOCKING: <依据>`（runtime 从第 3 次投递起强制：start = 第 1 轮、首次 steer = 第 2 轮）。深档（门禁/
   量具/状态机/安全面）保留 blocking 驱动续轮；同一 finding 的修复连续 2 轮只新增 finding，则止损走三选项之一：换机制 / accept-documented / **向主理人请示需求降级**——两轮催生的是**更大机制**（本轮 remedy 比上轮新增更多防御面/配置/状态，diff 面数在涨）
   而非更小需求 ⇒ 强制走第三选项，请示时附上原需求与两轮 remedy 的净增面（止损空间含需求层）。
 - **提效是显式目标**：批 overhead（评审轮数 × 门分钟数 × 保姆轮）计入杠杆账，收口在台账记
-  wall/avoidable 两个数。仪器（自证 / 变异 / 矩阵）墙钟超过实现墙钟 = 倒挂，下批该仪器降档（binding → advisory → 删；不降 §3 三态门底线）。**轻改车道**（教义/注释/指针，零产品代码）：不派席、不派评审席——
+  wall/avoidable 两个数（retro-check 第 9 检缺记即 FAIL）。仪器（自证 / 变异 / 矩阵）墙钟超过实现墙钟 = 倒挂，下批该仪器降档（binding → advisory → 删；不降 §3 三态门底线）。**轻改车道**（教义/注释/指针，零产品代码）：不派席、不派评审席——
   编排位直改，子集门 + CI 兜底，单 commit 落。非深档迭代只跑**改动面子集门**（选择机械推导；
   同名歧义 / rename / 量具坏一律回退全量），全量留合并前一次 + CI 兜底。**证据到层即停**：
   拒绝/回退类行为证到**决策行**为止，全量只在运行本身是验收对象时跑——合同写明证到哪层，

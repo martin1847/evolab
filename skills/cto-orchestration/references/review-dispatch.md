@@ -14,8 +14,7 @@
 > （`--review` 进评审档、`--deliverable` 给产物 freshness gate，缺一即无 typed 交付）。
 > 差分口径统一 **three-dot**（`origin/<base>...HEAD`，对 merge-base 差分）：stale base 的两点差分会把
 > 他人 commit 的反向删除混进评审面、误判为回退；评审不因 base 移动而 rebase，rebase 归 push/merge 阶段。
-> - [ ] 写 codex 评审 brief / steer → 用中性工程措辞，避 forged / impostor / attack / probe 类
->   攻击词汇（对象：投给引擎的 prompt 文本；安全型内容过滤只判 prompt，被读文件不进判定）。
+> - [ ] 投给引擎的评审 brief / steer 用中性工程措辞、避 forged / impostor / bypass 类攻击词（`start codex --goal` 时 guard ⑬ WARN；被读文件不进内容过滤判定）。
 > - [ ] codex 轮被 cyberPolicy 拦 → 重投前先净化 prompt：敏感细节移入被读文件、prompt 只留
 >   中性指针；仍被拦 → 开新会话兜底（失败轮照常计入轮数预算）。
 > - [ ] 变更集含编排位直写单元（教义 / 门 / guard）→ Context docs 附其最小合同（SKILL §2「直写也要合同」）。
@@ -174,7 +173,6 @@ ADR 类方向文档，brief 里给出其绝对路径，并要求评审者：①�
 **pre-existing（存量 bug、非本 diff 引入）单列**：记录、开 follow-up，不进 blocking；准入口径归 preamble。
 每轮派回时把原 goal 的不可变验收点重贴进 prompt 对照——防多轮改着改着跑题。
 
-- 质量类无限可挑的项（过滤规则、命名）明确"达标线"：线内必修、线外进 `queued`。
-- 为一行 advisory fold-before-push 不值得——先 ship 已 Verified 的，nit 攒 follow-up。
+- 无限可挑的质量项（过滤规则、命名）定达标线：线内必修、线外进 `queued`，nit 攒 follow-up 不阻 ship。
 - **裁决沉淀为 skip rules**：收口时把"已判 advisory / 越界 / 不值得报"的 finding **类别**回写项目 AGENTS.md
   的 Review guidelines 节（codex 官方评审通道原生读该节）——同类噪声下次从源头不进 ledger。
