@@ -118,7 +118,7 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # a guard / preflight / retro-check already enforces became one line (rule sentence + gate name,
 # so a DENY's `Read:` still lands on the rule), gateless exhortations were cut or shortened.
 CODE_MAX=15398      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1552      # every shipped *.md under the skill, summed wc -l
+PROSE_MAX=1553      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length

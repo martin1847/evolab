@@ -36,11 +36,14 @@ AGENT_MAIL_DIR="$TMPMAIL" timeout 570 claude -p "本项目要接入多 agent 编
 4) 只创建文件，不要 push。" --dangerously-skip-permissions < /dev/null >/dev/null 2>&1
 
 # ① docs governance tree
-for f in docs/INDEX.md docs/ACTIVE_CONTEXT.md docs/roadmap/active-roadmap.md AGENTS.md CLAUDE.md ACCESS.local.md; do
+for f in docs/INDEX.md docs/ACTIVE_CONTEXT.md docs/roadmap/active-roadmap.md AGENTS.md ACCESS.local.md; do
   chk_eq "exists: $f" 1 "$([ -f "$WT/$f" ] && echo 1 || echo 0)"
 done
 chk_eq "ADR-0001 created" 1 "$(ls "$WT"/docs/decisions/ADR-0001* >/dev/null 2>&1 && echo 1 || echo 0)"
-chk_contains "CLAUDE.md imports AGENTS.md" "@AGENTS.md" "$(cat "$WT/CLAUDE.md" 2>/dev/null)"
+# Claude Code >= 2.1.277 reads AGENTS.md natively; bootstrap no longer writes the CLAUDE.md shim
+# by default (SKILL.md step 9). If a shim is written for a fallback case, it must import AGENTS.md.
+chk_eq "CLAUDE.md absent, or a shim importing AGENTS.md" 1 \
+  "$({ [ ! -f "$WT/CLAUDE.md" ] || grep -q '@AGENTS.md' "$WT/CLAUDE.md"; } && echo 1 || echo 0)"
 chk_eq "ACCESS.local.md gitignored" 0 "$(cd "$WT" && git check-ignore -q ACCESS.local.md; echo $?)"
 
 # ② AGENTS.md orchestration sections (the cto 编排增量两节)

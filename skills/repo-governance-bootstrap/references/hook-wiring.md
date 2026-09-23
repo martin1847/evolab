@@ -1,8 +1,8 @@
-# memory-discipline hook 三 agent wiring（bootstrap 步骤 11 用）
+# memory-discipline hook 三 agent wiring（bootstrap 步骤 10 用）
 
-## memory-discipline hook 模板（步骤 11）
+## memory-discipline hook 模板（步骤 10）
 
-> 步骤 11 的三 agent wiring。`references/memory-discipline-hook.py` = CC + codex 共用（python3、stdlib json、双
+> 步骤 10 的三 agent wiring。`references/memory-discipline-hook.py` = CC + codex 共用（python3、stdlib json、双
 > extractor、无 jq 依赖），omp 另走 JS hook。字段/flag 已 2026-06 本地实跑验证（见各 ⚠️）。`<S>` = 本 skill 安装路径。
 > 脚本可执行 + shebang，直接 exec、别加 `bash`/`python3` 前缀。
 

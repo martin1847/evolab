@@ -1,6 +1,6 @@
 ---
 name: repo-governance-bootstrap
-version: 1.5.3
+version: 1.5.4
 description: 一次性初始化 AI 协作项目的轻量工程治理骨架。新仓库 / 文档治理初始化时调用（也是 cto-orchestration 接入新项目的第一步）。One-shot governance bootstrap for a new repo.
 ---
 
@@ -51,8 +51,7 @@ docs/
     └── obsolete/
         └── README.md                 # obsolete 索引（仅索引，少用）
 
-AGENTS.md                             # repo 治理规则（Codex 读）
-CLAUDE.md                             # 一行：@AGENTS.md（Claude 读）
+AGENTS.md                             # repo 治理规则（Claude Code ≥ 2.1.277 / Codex / omp 原生读）
 
 scripts/engineering-gate.sh          # 后端 repo-owned fix/check/test 稳定接口（有代码 marker 时）
 scripts/engineering-gate.conf        # 初始化时固化 profile + module root，不在每次运行时猜
@@ -126,17 +125,15 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
 
 8. **生成 `AGENTS.md`**（守尺寸预算：<200 行——超长文件被 agent 静默降权/截断，见治理系统观表）：以 `references/PROJECT_AGENT.md`（中文成品宪法）为准落地，按其章节：Source of Truth 优先级 / 三档工作模式 / 模块边界（FOR / NOT FOR）/ Capability vs Component / 状态词汇 / 文档治理（已含**文档生命周期 anti-rot**：ACTIVE_CONTEXT 快照契约 + 收口归档仪式）/ Code Traceability / **Engineering Gate** / 完成标准。Engineering Gate 写入实际启用的 profile/module root、repo-owned 三命令与规范指针；不复制各语言类型条文。工具偏好若全局 agent 配置未覆盖项目特定项（如子仓库 toolchain）再补。**Redaction 边界**写明一条：secret/凭证只进 `ACCESS.local.md`（gitignored）与外部 vault，永不进 committed tree / traces / 日志 / 对外消息——避免 AGENTS.md 里 "creds never in repo tree" 与本机存明文凭证的口径自相矛盾。
 
-9. **生成 `CLAUDE.md`**：单行 `@AGENTS.md`。
+9. **生成 `ACCESS.local.md` + 值文件孪生 `ACCESS.local.env` 并写进 `.gitignore`**：按 `references/templates.md` 的 ACCESS.local 模板建三段式骨架（值/元数据物理分离：`.md` 只留元数据+秘密名字+gotcha，值进纯 KEY=VALUE 的 `.env` 孪生并 `chmod 600`；注入 `set -a; source; set +a`——分离与注入的判据见 agent-backend-standard 附录 E），字段留空待用户填实；`.gitignore` 加 `ACCESS.local.*` 与 `.env*` 两行（带注释说明含 creds、永不提交）。**不写 `permissions.deny` 通配规则**：子串通配把「命令文本提到文件名」当「读取」、拦不住 python / `source` 读法，`Read(X.env)` deny 连带封 Edit/Write。值的防线 = gitignore + `chmod 600` + 进程注入；要「看有什么变量」只打印 KEY 与长度/哈希，不打印值。**绝不**把真实凭证写进 stub。
 
-10. **生成 `ACCESS.local.md` + 值文件孪生 `ACCESS.local.env` 并写进 `.gitignore`**：按 `references/templates.md` 的 ACCESS.local 模板建三段式骨架（值/元数据物理分离：`.md` 只留元数据+秘密名字+gotcha，值进纯 KEY=VALUE 的 `.env` 孪生并 `chmod 600`；注入 `set -a; source; set +a`——分离与注入的判据见 agent-backend-standard 附录 E），字段留空待用户填实；`.gitignore` 加 `ACCESS.local.*` 与 `.env*` 两行（带注释说明含 creds、永不提交）。**不写 `permissions.deny` 通配规则**：子串通配把「命令文本提到文件名」当「读取」、拦不住 python / `source` 读法，`Read(X.env)` deny 连带封 Edit/Write。值的防线 = gitignore + `chmod 600` + 进程注入；要「看有什么变量」只打印 KEY 与长度/哈希，不打印值。**绝不**把真实凭证写进 stub。
-
-11. **配置 memory-discipline hook（默认项目级，直接建）**：把 `references/memory-discipline-hook.py` 接成
+10. **配置 memory-discipline hook（默认项目级，直接建）**：把 `references/memory-discipline-hook.py` 接成
     PostToolUse hook——写 `memory/*.md`(非 MEMORY.md) 时确定性注入"事实细节→ACCESS.local.md/docs、只留指针"提醒。
     **默认写项目级配置**（`.claude/settings.json` 等，blast radius 小、随 bootstrap 直接建不必问）；只有要全局跨项目
     才问用户写 `~/.claude/`。**为什么需要 hook**：该纪律在 `cto-orchestration` §5，但 skill 文本随长对话
     salience 衰减，高频纪律须 hook 强制层兜底。三 agent wiring（CC/codex/omp 实测字段与坑）见 `references/hook-wiring.md`；**绝不**把真实 secret 写进 hook。
 
-12. **建组合 project gate**：
+11. **建组合 project gate**：
     - 复制 `references/docs-check.sh` → `scripts/docs-check.sh`。四检 = AGENTS/CLAUDE 尺寸门 · docs
       相对链接死链（FAIL）· ACTIVE_CONTEXT 新鲜度与行数 · 幻影路径引用；`--heal` 显式自愈同名唯一死指针（其余跳过）。
     - 发现后端代码 marker 时，复制 `references/engineering-gate.sh` → `scripts/engineering-gate.sh`，
@@ -163,7 +160,7 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
       失败探针证明工具非零、gate/config 半安装都会阻断且输出 failed/fix/retry/AGENTS + canonical 指针。
       docs-only repo 只启用 docs-check（engineering script/config 均不存在）。
 
-13. **完成时报告**：列出已建文件 + 用户下一步建议（填实 ADR-0001 内容 / 完成首个 module 的 FOR-NOT FOR / 把第一个 roadmap item 标 `active` / 在 `ACCESS.local.md` 填本机接入凭证与验证配方 / 若配了 hook 跑一次 memory 写入确认提醒生效 / 收口后重跑 `docs-check.sh` 养成节奏）。
+12. **完成时报告**：列出已建文件 + 用户下一步建议（填实 ADR-0001 内容 / 完成首个 module 的 FOR-NOT FOR / 把第一个 roadmap item 标 `active` / 在 `ACCESS.local.md` 填本机接入凭证与验证配方 / 若配了 hook 跑一次 memory 写入确认提醒生效 / 收口后重跑 `docs-check.sh` 养成节奏）。
 
 ---
 
@@ -182,7 +179,7 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
 deferred 索引 / ACTIVE_CONTEXT / ACCESS.local / INDEX / **NORTH_STAR** / **AGENTS.md minimal
 变体**）→ `references/templates.md`（顶部有目录）。
 评审蒸馏门禁骨架另立两件：`references/pre-push.template` + `references/PR_SELF_CHECK.skeleton.md`
-（步骤 12 取用；方法论 canonical = `agent-backend-standard` 附录 F）。
+（步骤 11 取用；方法论 canonical = `agent-backend-standard` 附录 F）。
 两条主干级判据：
 - **引入重依赖/重组件的 ADR 用 lifecycle 变体**——增 `Owner` / `Sunset Criteria` / `Review-by` 三段，
   防引入后无人清理沦为死基础设施（更细的 lifecycle 规则见 `agent-backend-standard` 附录 A，本骨架只建槽）。
@@ -198,7 +195,7 @@ deferred 索引 / ACTIVE_CONTEXT / ACCESS.local / INDEX / **NORTH_STAR** / **AGE
 - 至少 1 个 ADR，记录仓库边界（Status 为 proposed 或 accepted）
 - 至少 1 个 module 有 FOR / NOT FOR
 - Active roadmap 至少 1 个 item
-- `AGENTS.md` + `CLAUDE.md` 生效，agent 进入新对话能识别上述结构
+- `AGENTS.md` 生效，agent 进入新对话能识别上述结构
 - 有后端代码 marker 时，repo-owned `fix/check/test`、组合 pre-commit 与 actionable failure 指针均已实跑
 
 ## After bootstrap

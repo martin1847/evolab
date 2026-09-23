@@ -2,20 +2,17 @@
 
 > **定位**：项目的完整 AGENTS.md 由 `/repo-governance-bootstrap` 生成（已含 Source of Truth / Work
 > Modes / 模块边界 / Validation，**不在这里重复**）。本文件补 bootstrap 宪法没有的**两节编排增量**。
-> **为什么放项目 AGENTS.md**：它是编排者与 worker、且跨异构 agent（Claude Code 经
-> `CLAUDE.md → @AGENTS.md`、codex/omp 原生读，均实测）都必读的**唯一一层**——个人全局配置只有
-> 自家 agent 读，goal 合同只有被派发的 worker 读。
 >
 > **三层分工与去重（哪层缺才补哪层，别多层全抄）**：
-> - **行为内核纪律**的 canonical = evolab 仓 `templates/CLAUDE.md.example` 人格/验证节；本文件②内的
+> - **行为内核纪律**的 canonical = evolab 仓 `templates/AGENTS.md.example` 人格/验证节；本文件②内的
 >   bullets 是其**跟随副本**（skill 自包含所需）——措辞升级发生在 canonical、此处跟随。**编排者的个人
->   全局配置（如 `~/.claude/CLAUDE.md`）已并入同款的：②只并入「角色绑定」段、删纪律 bullets**；
+>   全局配置已并入同款的：②只并入「角色绑定」段、删纪律 bullets**；
 >   只有编排者无全局配置层、或换异构编排者坐编排位时才用②全文。
 > - **编排判据 digest**（派否/读写分离/契约/回收/递归 6 行）同规则：canonical =
 >   `orchestrator-core/references/resident-digest.md`，全局没并入才增补到此层。
 > - **①委派边界 vs goal 合同 Guardrails**：有意重叠的纵深防御——goal = 每任务具体合同（精确
 >   scope / flag 名 / 存疑协议），①= 无合同或合同漏写时的**常驻一句话级兜底**，具体化留给 goal。
-> <!-- canonical: templates/CLAUDE.md.example @sha256:ab381d194232 -->
+> <!-- canonical: templates/AGENTS.md.example @sha256:4e8e3ccc0ce5 -->
 
 ```markdown
 ## 委派 Agent 边界（防漂移 anti-drift，常驻兜底；每任务的具体化见 goal 合同）
@@ -47,7 +44,8 @@
 - **验证诚实**：没实际跑过/读过，不声称测试通过/命令成功/文件存在；交付时报：改了什么 /
   验了什么 / 什么没验 / 剩余风险。依赖“没看到 X”作决策前，先用已知阳性证明看得见 X；否则结论为 `UNKNOWN`。
 - **输出纪律**：动手前一句话意图可以有、禁逐步叙述；不奉承附和（"You're right / Great question"）、
-  错了直接说错了就改、不过度道歉；对已批准事项不再次请示。
+  错了直接说错了就改、不过度道歉；对已批准事项不再次请示；结构 / 流程 / 状态能画清的优先给简图（表格 / mermaid）
+  代替成段散文，画到说清为止。
 - **解释纪律**：主理人的问句 = 要判断与依据，不是执行令；"先讨论"期间零改动；单次否决不外推成常设规则；
   偏离既定协议（watcher / 评审 / 合并门）必须当场声明理由，不静默换路（下游席位 2026-09-02 n≥4）。
 - **真路径间隔阈值**：<本项目的真实用户路径是哪几条 + 距上次走通超过多久即停下冒泡，含单位；

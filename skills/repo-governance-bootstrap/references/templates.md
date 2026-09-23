@@ -315,7 +315,7 @@ dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI
 
 > 适用：maintained-only 仓（按需修、无 feature drive、无 ADR/roadmap 脚手架——即全量
 > 宪法 `PROJECT_AGENT.md` 的启用条件不满足时）。目标 <60 行：agent 进来 30 秒知道
-> 「这是什么、什么不许做、怎么构建」。CLAUDE.md 仍是一行 `@AGENTS.md`。伞仓覆盖检查
+> 「这是什么、什么不许做、怎么构建」。伞仓覆盖检查
 > （判据见 SKILL.md 伞仓三件套②）一行门：
 > `missing=0; for d in */; do if [ -e "${d}.git" ] && [ ! -f "${d}AGENTS.md" ]; then echo "MISSING: $d"; missing=1; fi; done; exit "$missing"`。
 > 生成语言从项目。节序按 blast radius 递减——最危险的纪律排第一节，agent 截断读取时

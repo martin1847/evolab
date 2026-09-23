@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pre-push — diff-scoped 评审蒸馏门禁（骨架模板，bootstrap 步骤 12 用）。
+# pre-push — diff-scoped 评审蒸馏门禁（骨架模板，bootstrap 步骤 11 用）。
 # 铁律：每一关必须指到一次真实事故 / 评审 finding（清单见 docs/PR_SELF_CHECK.md）；禁理论关卡。
 # 下沉判据：可机械判定 · 纯 git+grep 毫秒级 · diff-scoped（构建级检查归 engineering-gate / CI）。
 # 供给与演化规范：agent-backend-standard/references/selfcheck-gates.md（附录 F）。

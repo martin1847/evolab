@@ -1,10 +1,10 @@
 # Project Engineering Constitution
 
-> 项目级工程治理规则。全局 agent 配置（如 Claude Code 的 `~/.claude/CLAUDE.md`、Codex 的 `~/.codex/AGENTS.md` 等）已涵盖：人格 / 通信 / 反 sycophancy / Agency 按可逆性分配 / 验证诚实性 / 工具偏好。本文件**仅补充**项目长期演化所需的架构治理约束。
+> 项目级工程治理规则。全局 agent 配置已涵盖：人格 / 通信 / 反 sycophancy / Agency 按可逆性分配 / 验证诚实性 / 工具偏好。本文件**仅补充**项目长期演化所需的架构治理约束。
 >
 > **启用条件**：本项目存在 ADR / roadmap / module docs / module evolution 等长期治理脚手架（或正在建立）。一次性脚本、原型、个人小工具不要套这套。
 >
-> **使用方式**：在项目根目录另存为 `AGENTS.md`（Codex 直接读；Claude Code 通过同目录的 `CLAUDE.md` 写一行 `@AGENTS.md` 导入；其他 agent 按其根级 instructions 文件约定）。按项目实际路径替换 ADR / docs 位置。
+> **使用方式**：在项目根目录另存为 `AGENTS.md`。按项目实际路径替换 ADR / docs 位置。
 
 ---
 
