@@ -512,5 +512,35 @@ else
   fi
 fi
 
+# 12) 会话经济 (retrospective.md §7「换会话」的读数半边) — 成本 = 上下文体量 × 请求数, 而一个
+# 不换的编排会话把 400-550k 乘进它剩下的每一次请求。散文阈值没有读数就没人知道自己在哪一档:
+# `session-economics.py --report` 只读本机该仓的 transcript, 按会话出 ctx/req 中位数 / 峰值 /
+# 重缓存尖峰 / calls·msg / ro-streak, 一个字节都不改。提醒那一半在 retro-hooks.json 的
+# UserPromptSubmit 触点, 与本检同一个脚本。
+# opt-in: 本机没有该仓的 transcript 目录就跳过 (同第 4 / 7 / 10 / 11 检的口径)。只 WARN, 从不
+# FAIL 在「贵」上——换不换会话是人拍, 机器只报数。量具坏 = FAIL: 脚本非 0 退出时这一面根本没
+# 检查 (同第 10 / 11 检)。KILL CRITERION (GATE-AUDIT slug `ctx-nudge`, 30 天到 2026-10-23):
+# 收到提醒的席位 ctx/req 中位数仍 >300k ⇒ 提醒等于散文, 撤; 连续两次复盘这份读数零讨论 ⇒ 删。
+echo "12) 会话经济 (本仓会话 ctx/req 读数; opt-in):"
+SESECON="$HERE/session-economics.py"
+SE_TOP="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)"
+[ -z "$SE_TOP" ] && SE_TOP="$REPO"
+# harness 的 transcript 目录名 = cwd 里每个非 [A-Za-z0-9] 字符换成 `-`
+SE_DIR="${HOME:-}/.claude/projects/$( (cd "$SE_TOP" 2>/dev/null && pwd -P) | sed 's/[^A-Za-z0-9]/-/g')"
+if [ ! -d "$SE_DIR" ]; then
+  echo "  [skip] 本机没有 $SE_DIR (无该仓 transcript)"
+else
+  se_out="$(python3 "$SESECON" --report "$SE_DIR" --days 14 2>&1)"; se_rc=$?
+  [ -n "$se_out" ] && printf '%s\n' "$se_out" | sed 's/^/  /'
+  se_over="$(printf '%s\n' "$se_out" | sed -n 's/.*over300k=\([0-9][0-9]*\).*/\1/p' | tail -1)"
+  if [ "$se_rc" -ne 0 ]; then
+    fail "会话经济面未检查 — 量具坏 ($SESECON rc=$se_rc); 读不到 ≠ 便宜"
+  elif [ -n "$se_over" ] && [ "$se_over" -gt 0 ]; then
+    warn "$se_over 个会话 ctx/req 中位数 >300k — 收口即换会话 (retrospective §7)"
+  else
+    ok "本周期无 ctx/req 中位数 >300k 的会话"
+  fi
+fi
+
 echo "== result: $fails FAIL, $warns warn =="
 [ "$fails" -eq 0 ]

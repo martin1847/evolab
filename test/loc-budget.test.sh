@@ -103,7 +103,18 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # legacy name, and the boundary sentence that this buys FRESHNESS, not index SCOPE). INJECT and
 # INJECT_SINGLE did not move — a git hook writes to a developer's stderr, not into an agent's
 # context.
-CODE_MAX=15002      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+# 2026-09-23 (`ctx-nudge`): CODE 15002 -> 15398. What the +396 lines buy: `session-economics.py`
+# (366) — one file, two entries: a UserPromptSubmit 触点 that says ONE line when a session's
+# context first crosses 300k/450k/600k or when the prompt lands past the 1h cache TTL, and a
+# read-only `--report` that turns a repo's transcripts into per-session ctx/req medians — plus
+# retro-check's check 12 (30) that consumes it. The field cost it answers: cost = context size ×
+# request count, the head orchestration seats ran 400-550k/request for days, and §7「换会话」was
+# prose nobody was reminded of at the moment it applied. Deliberately NOT bought: any DENY, any
+# state mutation, any per-prompt speech (no trigger ⇒ zero bytes, zero git, zero identity call).
+# PROSE did not move (the §4 pointer is half a sentence on an existing line). INJECT and
+# INJECT_SINGLE are untouched: the extractor weighs `cto-guard-*.py` only, and this hook's single
+# line is a nudge on the orchestrator's own prompt, not text injected into a worker's brief.
+CODE_MAX=15398      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
 PROSE_MAX=1597      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker

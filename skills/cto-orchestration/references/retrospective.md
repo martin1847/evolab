@@ -47,7 +47,7 @@
    **base 对齐**（squash 集成仓的长驻 checkout：base 分支与 origin 分叉〔ahead 且 behind〕→ 核实
    ahead 内容已被 squash 合并后 backup ref + `reset --hard origin/<base>`；真未合并的工作先救——
    retro-check 1b 只检测告警，reset 归编排者）+
-   **敞口清单**（=下会话入口；敞口要变下一批选题时走盘点仪式 `stocktake.md`，取舍判据单源在彼）。
+   **敞口清单**（=下会话入口；敞口要变下一批选题时走盘点仪式 `stocktake.md`，取舍判据单源在彼）；本周期各会话的 ctx/req 读数见 retro-check 第 12 检。
 5. **治理同步（与 memory 更新同级、不可省）**：文档归档（→ `orchestration/archive/` + 索引行；归档候选不靠人记——retro-check 第 11 检跑 `doc-lifecycle.py` 按 git 年龄出清单，搬与不搬人拍）+
    **ACTIVE_CONTEXT 整篇重写**（非追加，~60 行）+ **roadmap 翻状态** + **决策队列先清再刷**（规则单源 `decision-queue.md` §队列机制：先移除已处理项，再重浮 revisit 到期项、给周期全局图）+ **治理文档 PREMISE 行 0 DEAD**（retro-check 第 10 检把事实句实跑一遍；死账改事实或改声明，别只改时间戳）。
 6. **memory 治理**：见下「memory 治理」。
