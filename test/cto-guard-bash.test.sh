@@ -949,11 +949,16 @@ chk_eq "② and one is the boundary line" 1 \
   "$(printf '%s' "$(ctx "$OUT")" | grep -c '点名边界')"
 chk_eq "② still one JSON hook response" 1 "$(printf '%s' "$OUT" | grep -c hookSpecificOutput)"
 # ③ BYTE IDENTITY: a brief naming no boundary must read exactly as the base guard read it.
-# Control = the guard at origin/main, exported beside copies of its siblings (rule (20) loads
-# cto-guard-edit.py from its own directory, so a lone file in a temp dir is a different program).
+# Control = the guard as of the commit just before the batch that added the edge-term table
+# (beb63c8, 2026-09-18), pinned by SHA: `origin/main` stopped being "pre-batch" the moment that
+# batch was pushed and this control went permanently red (CI red from 2026-09-18 to 09-23). CI
+# checks out with fetch-depth 0, so the pinned object is always present. Exported beside copies
+# of its siblings (rule (20) loads cto-guard-edit.py from its own directory, so a lone file in a
+# temp dir is a different program).
+E13_BASE_REV="ebfd02a8ffc2e84edb8c1cdc6cec05a6b2e2c330"   # beb63c8^
 E13_BASE_DIR="$G8ROOT/base-r13"
 cp -R "$AW_DIR" "$E13_BASE_DIR"
-git -C "$REPO_ROOT" show origin/main:skills/cto-orchestration/references/agentctl/cto-guard-bash.py \
+git -C "$REPO_ROOT" show "$E13_BASE_REV:skills/cto-orchestration/references/agentctl/cto-guard-bash.py" \
   > "$E13_BASE_DIR/cto-guard-bash.py" 2>/dev/null
 E13_BASE="$E13_BASE_DIR/cto-guard-bash.py"
 # the control must BE the pre-batch guard, or every comparison below is vacuously green
