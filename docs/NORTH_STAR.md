@@ -1,4 +1,6 @@
 # NORTH_STAR — evolab 长期架构方向
+<!-- keep-until: 2027-09-24 -->
+<!-- 长青文档：不按 TTL 归档，防腐面 = test/north-star.test.sh（NS-ID 引用完整性）+ semver；到期改本文件即续 -->
 
 > v1.0.0 · 仅 maintainer 修订，semver 版本化；ADR 记历史，这里记方向。
 > 条目带稳定 NS-ID，供 goal 的 Direction-doc 闸与评审 brief 引用；引用完整性由
