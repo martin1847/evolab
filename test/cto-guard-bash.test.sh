@@ -2195,13 +2195,7 @@ chk_contains "r20-identity and the deny names the channel" "编排位经 bash �
 PATH="$OLDPATH20"; export PATH
 GUARD_CWD="$ISO_REPO"
 
-# ── (21) inline steer text carrying command substitution ─────────────────────────
-# damage: a live TUI message with shell substitution could run a command before delivery.
-run "tuictl steer --thread x -m '\$(id)'"
-chk_eq "r21-tuictl inline substitution denied" 2 "$RC"
-# damage: a file body cannot run command substitution through the inline message argument.
-run 'tuictl steer --thread x -f f.md'
-chk_eq "r21-tuictl file body allowed" 0 "$RC"
+# ── (21) inline `agentctl steer -m` text carrying command substitution ─────────────────────
 # FIELD 2026-08-30: a backticked `gh api …` example inside a steer body was expanded and RUN by
 # the shell before agentctl was exec'd, and the `>` in the same text truncated what was left —
 # agentctl could only report a parse error. Positives assert the DENY 三件套; negatives assert

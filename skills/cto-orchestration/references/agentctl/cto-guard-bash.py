@@ -207,9 +207,7 @@ _POS_RUNNER = _pos_head(r";&(") + r"\S*(?:\.test\.sh|test/run\.sh|retro-check\.s
 # and a bound keeps the scan from wandering down a long argv.
 # `--watch` is a BOOLEAN flag: bare or `=true` is watch mode; `--watch=false` (and anything else)
 # is not, and is none of this rule's business (review R1 M4).
-_AGENTCTL = r"(?:\S*/)?(?:agentctl|tuictl)(?![\w-])"
-
-
+_AGENTCTL = r"(?:\S*/)?agentctl(?![\w-])"
 _GH_GLOBAL = r"(?:(?:-R|--repo)\s+[^\s;|&]+\s+|--[\w-]+(?:=[^\s;|&]*)?\s+){0,3}"
 _POS_TYPED = (_pos_head(r";&(|") +
               r"(?:" + _AGENTCTL + r"\s+(?:watch|steer|start|stop)\b"
@@ -1429,15 +1427,14 @@ def _r20_judge(g, lit, cwd):
     return None, unjudged
 
 
-# ── rule (21): inline steer text carrying command substitution (DENY) ───────────
+# ── rule (21): inline steer text carrying command substitution (DENY) ─────────────────────
 # KILL CRITERION (slug `g21-steer-inline-substitution`, retro GATE-AUDIT): hits=0 for a year ⇒
 # kill (owner ruling 2026-09-02, the ruling that admitted the rule).
 # FIELD, 2026-08-30: `agentctl steer <s> -m "…`gh api repos/… --jq .status`…"`. The shell ran the
 # example `gh api` for real (a 404, harmless by luck) before agentctl was even exec'd, and the `>`
 # in the same body truncated what was left, so agentctl reported a parse error and could not say
 # why. Two seats have each been bitten once by this exact shape since (2026-09-02).
-# SHAPE: a command-position `agentctl steer` or `tuictl steer` (the wrapper/env chain
-# rules (8)-(20) already share)
+# SHAPE: a command-position `agentctl steer` (the wrapper/env chain rules (8)-(20) already share)
 # whose line carries `-m`; the BODY is every byte from that `-m` to the END of the command text.
 # A BYTE BAN, and that is the design decision rather than an oversight: single quotes, double
 # quotes and `\$(` are NOT distinguished. The shell does not expand a backtick inside single
@@ -1472,7 +1469,7 @@ def _r20_judge(g, lit, cwd):
 # really do run before the fed shell sees a thing.
 # A MENTION IS NOT A COMMAND, the discipline every other rule here carries: `echo "agentctl steer
 # s1 -m \`x\`"` is not at command position and is not judged, even though that backtick expands.
-# The rule owns inline steer text, not shell substitution in general.
+# The rule owns the steer channel, not shell substitution in general.
 _R21_HEAD = re.compile(_pos_head(r";&(|\n") + _AGENTCTL
                        + r"\s+steer(?![\w-])[^;&|\n]*?\s-m(?=[\s\"'])")
 _R21_SUBST = re.compile(r"`|\$\(")

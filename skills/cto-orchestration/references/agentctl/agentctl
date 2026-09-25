@@ -9,7 +9,6 @@
 #   agentctl stop   <session>            # end + clean control state (events kept for post-mortem)
 #   agentctl capabilities [--json]       # runtime-generated provider capability contract
 #   agentctl states [--json]             # runtime-generated typed state vocabulary
-#   agentctl settings <session>         # read-only
 #   agentctl inventory --dry-run         # read-only candidate overview (never kills anything)
 #   agentctl phases [--since W] [--repo D] [--json]   # phase-ledger readings (no verdict)
 #
@@ -47,7 +46,6 @@ usage() {
   echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [--expect MINUTES] [engine args...]   # session = <proj>-<task>-<engine>, e.g. shop-cart-omp (prefix = who owns it in tmux ls)" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
   echo "       agentctl status <session> | watch <session> [--inline] [--expect MINUTES] | stop <session> | capabilities [--json] | states [--json]" >&2
-  echo "       agentctl settings <session>   # read-only: the model/effort/mode a session is really running under" >&2
   echo "       agentctl phases [--since <N>m|<N>h|<N>d|RFC3339] [--repo <abs>] [--json]   # read-only ledger readings" >&2
   echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
   exit 1
@@ -516,8 +514,6 @@ cmd_start() {
 }
 
 cmd_steer() {
-  [ "${1:-}" = --help ] && { echo "usage: agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]"; return 0; }
-  case "${1:-}" in -*) usage;; esac
   S="${1:?usage: agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]}"; shift
   refuse_self steer "$S"
   MODE=""; ARG=""; VERB="steer"; NEWDELIV=""
@@ -832,11 +828,6 @@ case "${1:-}" in
   # phase-ledger readings. Argument JUDGEMENT is duplexctl's (`--since` grammar, `--repo`
   # containment): this shell forwards argv untouched and the strict parser refuses the rest.
   phases) shift; exec "$PY" "$CTL" --run-dir "$DIR" phases "$@" ;;
-  # Session settings reading; live TUI thread settings have their own entrypoint.
-  settings) shift
-            [ "${1:-}" = --help ] && { echo "usage: agentctl settings <session>"; exit 0; }
-            case "${1:-}" in -*) echo "ERR: agentctl settings takes <session>; live TUI threads: tuictl settings --help" >&2; exit 2;; esac
-            exec "$PY" "$CTL" --run-dir "$DIR" settings "$@" ;;
   stop)   shift; cmd_stop "$@" ;;
   ""|-h|--help) usage ;;
   *) echo "ERR: unknown subcommand '${1}'" >&2; usage ;;
