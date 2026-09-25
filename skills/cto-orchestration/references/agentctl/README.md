@@ -29,6 +29,29 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   **`-m` 正文禁命令替换**（反引号 / `$(` 在 shell 阶段就展开、例子命令真被执行；单引号内同拦，`<<'EOF'` 正文是 DATA）：guard ㉑ DENY，正路 `-f <file>`。
 - **steer 队列可见**：`queued=N` 只是引擎报的深度，lane 自己记 sidecar `<s>.steer-log.jsonl`；
   `status` 在 N>0 时按深度列出末 N 条，无队列面的引擎零输出。stop 随控制态一起清。
+- **共驾原语（不归 agentctl 的活会话）**：`agentctl steer --thread <id> [--engine codex|claude] -m TEXT [--tag copilot] [--confirm]`
+  往**主理人自己开着的 TUI** 插话，永远落在下一轮边界；正文自动前缀 `[<tag>] `。
+  codex = 跑引擎自己的 `codex queue --thread <uuid> --message`（线程需 ≥1 轮，否则
+  `ERR: thread has no rollout yet`）；**A/B 只看一个判据**——daemon 控制 socket
+  `~/.codex/app-server-control/app-server-control.sock` 在就加 `--remote unix://<sock>`，不在就 embedded。
+  claude = 起一个 `--name copilot-<tag>` 的 haiku 中继会话调 SendMessage（用完即退，目标侧显示
+  `Message from @copilot-…`），线程 = `~/.claude/sessions/*.json` 里的会话名或 sessionId，**全等匹配**，多命中即拒。
+  引擎非零退出**原样透传**成一行 `ERR: <cmd> rc=<n>: <stderr 首行>`——不猜原因、不换路径重试（线程归属归 B3）。
+  typed 行：`DELIVERED-NEXT-TURN: reason=queue|peer id=… thread=…`（exit 15）；`--confirm` 再从**投递前的字节偏移**
+  起轮询目标自己的记录（rollout / transcript）：**偏移之后正文与新开轮的行都出现即 `LANDED: turn=… effort=… mode=…`（exit 0），
+  两者先后不计**（codex 实测是新轮先于正文落盘）；截止前没凑齐 / 记录读不了 → `UNMEASURED: <没见到什么>`（exit 7，
+  默认 60s，`AGENTCTL_CONFIRM_TIMEOUT` 可改；截止之后才追加的证据不读）。
+- **`agentctl settings (<session> | --thread <id> --engine codex|claude)` 只读**：出恰一行
+  `SETTINGS: model=… effort=… mode=… approval=… sandbox=… source=turn_context@<第几条>|transcript@<行号>`，
+  读的是引擎自己写的记录（codex rollout 最新 `turn_context`；claude transcript **最后**一条 assistant 行的
+  `message.model` / `effort` + 最后一条 `permission-mode`），不是 start 时请求过什么；读不到出 `UNMEASURED`（exit 7）。
+  **本批不收任何写 flag**（切 effort / model / plan 归 B2 / B3），能力三键 `interject` / `settingsRead` /
+  `settingsWrite` 进了 `agentctl capabilities`——omp 三键全 unsupported，两家 settingsWrite 的 refusal 就是指路句。
+- **`enginectl` = 一个文件三个 PATH 名**，引擎预填：`ln -sf <abs>/skills/cto-orchestration/references/agentctl/enginectl ~/.local/bin/codexctl`、
+  `ln -sf <abs>/skills/cto-orchestration/references/agentctl/enginectl ~/.local/bin/claudectl`（`ompctl` 同理）。
+  `codexctl start s /cwd --goal g` = `agentctl start codex …`；`steer/settings --thread` 自动补 `--engine`（已显式写则不覆盖）；
+  其余动词原样透传。guard 在规则前把 `<engine>ctl start` 归一成 `agentctl start <engine>`，令牌正则认三个别名——
+  **别名与 agentctl 拼法同判**（差分断言在 `test/cto-guard-bash.test.sh` 别名段）。
 - **typed exit 三引擎同词汇**（词表 `agentctl states`，处置见下节）；
   **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
 - **`start` 默认模型 = 按引擎的环境变量**：不给 `--model` 时读 `AGENTCTL_MODEL_CLAUDE` /
@@ -159,7 +182,7 @@ exit code、名字、语义、二级子原因词（`reason=<word>`，闭集）�
 | STALLED-PROGRESS | 流还活着，但整个窗口内**可判的进展源在每个采样点都没动**（三源：①仓库痕迹〔HEAD/脏树/交付物/BLOCKED.md〕②引擎工具/命令帧计数〔纯 token 流不算，那是 STALLED-STREAM 的题；agentctl 公开只读 verb（status/watch/states/capabilities/inventory）的帧也不计——看不是做，手读 `$RUN/<s>.*` 仍计〕③pane 进程组集合〔采样点间生灭的短命子进程看不见，别读成「没起过进程」〕）。窗口用 `AGENT_WATCH_PROGRESS_MINS` 调（默认 30min）、0 关；探针预算有界，超预算按不可判计。**处置按 `reason=` 分支**：<br>· `reason=repo-silent+tools-silent` → 可判源全静且没有源不可判：**先读 events 尾**再决定——卡在无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认走死 → 抢救成果再 stop。<br>· `reason=unknown-source` → 可判源全静但**有源量具坏**（detail 点名哪个）。**按量具坏处置**：先修那个源或人工核证，别当「席位停滞」直接 steer/stop。<br>· `progress_reason=repo-silent+tools-active`（**不出 14**，打在 RUNNING 行上）→ 仓库不落痕但引擎在动（长测试 / docker / 取证）：**继续等**。<br>结构性缺位的源不算量具坏（`[n/a]`，不污染 `reason=`）；只有**零可判源**才整个关闭本状态（每次读打 `progress=unknown: <原因>` 且不刷时间戳）。`last_progress_at` = 上次观察到某源变化的时刻；量具坏后恢复的第一次可判读**只重建基线、不算移动** |
 | OVER-BUDGET | **等待**超预算（`--expect`×1.5），不是工作没进展：先读行后事件尾 → `steer` 给具体下一步 / `--interrupt` 重开 / 或 `agentctl watch <s> --expect <更大值>` 重挂继续等；每 (attempt, round) 只报一次（at-least-once：supervisor 恰在发布后崩溃时可能重复一次），预算是否合理是你的估计问题 |
 | SUPERVISOR-LOST | `reason=dead` → 直接重挂。`reason=unknown` → **先读 detail**：只有它点名 rogue/wedged `<s>-watchd` 时才 `tmux kill-session -t <s>-watchd` 再重挂；其余 unknown（canonical 读超时 / `ps` 不可用 / 租约损坏 / pid 复用嫌疑）**只重挂，绝不杀**——那些情况下杀掉的是一个活着的守护环 |
-| DELIVERED-NEXT-TURN | **steer verb 的出口，不是会话状态**（watch/status 永不产它）：指令已送达但落在 turn 边界。`reason=capability` → 引擎无轮中帧，等边界即可，别重发；`reason=undecidable` → 量具坏（detail 点名哪个），**先修量具或读 events 尾**再决定要不要 `--interrupt`。两者都**已送达**，重发会得到两条指令 |
+| DELIVERED-NEXT-TURN | **steer verb 的出口，不是会话状态**（watch/status 永不产它）：指令已送达但落在 turn 边界。`reason=capability` → 引擎无轮中帧，等边界即可，别重发；`reason=undecidable` → 量具坏（detail 点名哪个），**先修量具或读 events 尾**再决定要不要 `--interrupt`。两者都**已送达**，重发会得到两条指令；`reason=queue` / `reason=peer` = `steer --thread` 投进外部会话的两条通道（codex 队列 / claude 中继），同样已送达 |
 
 新增 typed MESSAGE 行（**exit 码契约不变**，三类都映射到既有失败 / UNKNOWN 出口）：
 

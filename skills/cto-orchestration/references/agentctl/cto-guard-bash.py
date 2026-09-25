@@ -207,7 +207,28 @@ _POS_RUNNER = _pos_head(r";&(") + r"\S*(?:\.test\.sh|test/run\.sh|retro-check\.s
 # and a bound keeps the scan from wandering down a long argv.
 # `--watch` is a BOOLEAN flag: bare or `=true` is watch mode; `--watch=false` (and anything else)
 # is not, and is none of this rule's business (review R1 M4).
-_AGENTCTL = r"(?:\S*/)?agentctl(?![\w-])"
+# `codexctl` / `claudectl` / `ompctl` are PATH names of ONE file (references/agentctl/enginectl)
+# that execs agentctl with the engine prefilled, so a rule that judges an agentctl command must
+# judge the alias identically. Two edits buy that for EVERY rule, with no rule body touched:
+# the binary token accepts all three spellings, and `normalize_engine_aliases` rewrites the
+# START form once on the way in — rules that key on `start <engine>` would otherwise see a
+# start with no engine word in it at all.
+_AGENTCTL = r"(?:\S*/)?(?:agentctl|codexctl|claudectl|ompctl)(?![\w-])"
+_ALIAS_START = re.compile(r"\b(codex|claude|omp)ctl([\"'\s]+)start\b")
+
+
+def normalize_engine_aliases(text):
+    """`<engine>ctl start` → `agentctl start <engine>`, once, before any rule runs.
+
+    The separator the alias used is reused for the injected engine word, so the quoted
+    spellings `_SEG_START` accepts stay accepted. Nothing else is rewritten: the alias in
+    any other position is carried by the binary token above, and a command with no alias in
+    it comes through byte-identical — which is the compatibility property the suite pins.
+    """
+    return _ALIAS_START.sub(
+        lambda m: f"agentctl{m.group(2)}start{m.group(2)}{m.group(1)}", text)
+
+
 _GH_GLOBAL = r"(?:(?:-R|--repo)\s+[^\s;|&]+\s+|--[\w-]+(?:=[^\s;|&]*)?\s+){0,3}"
 _POS_TYPED = (_pos_head(r";&(|") +
               r"(?:" + _AGENTCTL + r"\s+(?:watch|steer|start|stop)\b"
@@ -1497,7 +1518,10 @@ def main():
         return checker_error("PreToolUse Bash requires string tool_input.command.")
     if "run_in_background" in ti and not isinstance(ti["run_in_background"], bool):
         return checker_error("tool_input.run_in_background must be boolean.")
-    raw = ti["command"]
+    # ONE rewrite, at the ONE place the command text enters: every view below (heredoc
+    # strips, quote-blind scans, per-rule regexes) is derived from `raw`, so the alias is
+    # normalized exactly once and no rule needs to know the alias exists.
+    raw = normalize_engine_aliases(ti["command"])
     # Only a QUOTED heredoc delimiter disables expansion, so only those bodies are data-safe for
     # EVERY rule to ignore. Unquoted `<<EOF` bodies may execute command substitutions and must stay
     # visible to the general views. Opener/closer lines survive so commands after the heredoc are

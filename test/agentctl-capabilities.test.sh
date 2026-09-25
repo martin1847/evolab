@@ -322,11 +322,11 @@ chk_eq "C6 DAMAGE ORACLE: NO v1 verb key may appear anywhere in a v2 document" 0
   "$(printf '%s' "$doc" | grep -cE '"(queuedSteer|midTurnSteer|replaceTurn)"')"
 chk_eq "C6 and the human table publishes the same version the machine one does" 1 \
   "$(caps | grep -c 'schemaVersion 2')"
-chk_eq "C6 every provider declares EXACTLY the six contract capabilities" "ok" \
+chk_eq "C6 every provider declares EXACTLY the nine contract capabilities" "ok" \
   "$(printf '%s' "$doc" | python3 -c '
 import json, sys
 want = {"steer","interruptTurn","structuredAsk","structuredReply",
-        "resume","permissionEnforcement"}
+        "resume","permissionEnforcement","interject","settingsRead","settingsWrite"}
 bad = [p + ":" + ",".join(sorted(set(c) ^ want))
        for p, c in json.load(sys.stdin)["providers"].items() if set(c) != want]
 print("ok" if not bad else ";".join(bad))')"
@@ -382,7 +382,7 @@ doc = json.load(open(sys.argv[1]))["providers"]
 rows = [l.rstrip() for l in sys.stdin if l.strip()]
 engines = rows[1].split()[1:]
 bad = []
-for row in rows[2:2 + 6]:
+for row in rows[2:2 + 9]:
     parts = row.split()
     for engine, state in zip(engines, parts[1:]):
         if doc.get(engine, {}).get(parts[0], {}).get("state") != state:
@@ -396,7 +396,7 @@ setup
 out="$(probe drift 2>&1)"; rc=$?
 chk_eq "C7 DAMAGE ORACLE: no drift between the capability table and the routing" 0 "$rc"
 chk_eq "C7 and the gate says so explicitly" "DRIFT: none" "$out"
-chk_eq "C7 the gate covers all 18 cells (3 providers x 6 capabilities)" 18 \
+chk_eq "C7 the gate covers all 27 cells (3 providers x 9 capabilities)" 27 \
   "$(for e in $ALL_PROVIDERS; do probe capkeys "$e"; done | grep -c .)"
 chk_eq "C7 every registered route is declared by a capability" "" \
   "$(probe drift | grep 'routes with no declared capability' || true)"

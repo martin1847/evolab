@@ -166,6 +166,8 @@ SUB_REASON_TOOLS_SILENT = "repo-silent+tools-silent"
 SUB_REASON_UNKNOWN_SOURCE = "unknown-source"
 SUB_REASON_CAPABILITY = "capability"
 SUB_REASON_UNDECIDABLE = "undecidable"
+SUB_REASON_QUEUE = "queue"          # copilot interject: landed in the engine's own queue
+SUB_REASON_PEER = "peer"            # copilot interject: delivered by a peer relay session
 SUB_REASON_CHANGED = "changed"
 SUB_REASON_UNCHANGED = "unchanged"
 SUB_REASON_UNKNOWN = "unknown"
@@ -187,6 +189,12 @@ SUB_REASONS: tuple[tuple[int, str, str], ...] = (
      "the engine declares no mid-turn steer route, so the frame lands at the turn boundary"),
     (EXIT_DELIVERED_NEXT_TURN, SUB_REASON_UNDECIDABLE,
      "the live turn state could not be judged, so the always-landing next-turn route was taken"),
+    (EXIT_DELIVERED_NEXT_TURN, SUB_REASON_QUEUE,
+     "a copilot interject into a foreign codex thread: the text sits in the engine's own queue "
+     "and is consumed at the next turn boundary"),
+    (EXIT_DELIVERED_NEXT_TURN, SUB_REASON_PEER,
+     "a copilot interject into a foreign claude session: a one-shot relay session delivered it "
+     "as a peer message, which the target picks up at its next turn"),
     (EXIT_WATCH_TIMEOUT, SUB_REASON_CHANGED,
      "the poll budget ran out on a session whose progress sources were observed to move"),
     (EXIT_WATCH_TIMEOUT, SUB_REASON_UNCHANGED,
@@ -349,9 +357,12 @@ CAPABILITY_STATES = (SUPPORTED, DEGRADED, UNSUPPORTED, EXPERIMENTAL)
 # instead of reading the new keys as missing fields (cold review R1).
 CAPABILITY_SCHEMA_VERSION = 2
 
-# the closed capability vocabulary, in output order
+# the closed capability vocabulary, in output order. The last three are the copilot
+# primitives (2026-09-25): they are about sessions this runtime does NOT own, which is why
+# none of them is served by a duplex wire route.
 CAPABILITY_ORDER = ("steer", "interruptTurn", "structuredAsk",
-                    "structuredReply", "resume", "permissionEnforcement")
+                    "structuredReply", "resume", "permissionEnforcement",
+                    "interject", "settingsRead", "settingsWrite")
 
 # WHAT EACH CAPABILITY MEANS. Written down because a criterion applied unevenly is the same
 # defect as a wrong cell: cold review R1 caught `resume` being judged "has a dedicated duplex
@@ -369,6 +380,17 @@ CAPABILITY_DEFINITIONS = {
     "resume": "continue a prior conversation's context in a new round through a documented "
               "`agentctl` invocation (in-session route, or stop + start with resume args)",
     "permissionEnforcement": "the runtime constrains what the engine may do and enforces it",
+    "interject": "deliver one message into a live session this runtime does NOT own — the "
+                 "operator's own TUI — landing at that engine's next turn boundary. codex "
+                 "needs the thread to have run at least one turn (a rollout must exist) and "
+                 "goes through the daemon socket with `--remote` whenever one exists; "
+                 "claude goes through a throwaway `copilot-<tag>` relay session's "
+                 "SendMessage, and a bypass↔prompting permission mismatch holds the message",
+    "settingsRead": "read back the model / effort / mode / approval / sandbox a live "
+                    "session is really running under, from the record the engine itself "
+                    "writes (codex rollout `turn_context`, claude transcript assistant and "
+                    "`permission-mode` rows) — never from what was requested at start",
+    "settingsWrite": "change that model / effort / mode on a live session",
 }
 
 # A steer cell's route is an ALTERNATION — "<mid-turn>|<next-turn>" — and the branch emits
@@ -386,9 +408,16 @@ VERB_CAPABILITY = {"steer": "steer", "interrupt": "interruptTurn"}
 # Non-protocol realizations. A capability served by one of these has no wire route, so the
 # drift gate cannot check it against ROUTES — the behaviour battery must. Closed set:
 # `start-argv` = `agentctl start` forwards unrecognized args verbatim to the engine, which
-# is how omp/claude native resume is invoked.
+# is how omp/claude native resume is invoked; `engine-cli` = the engine's own CLI is run
+# once (codex `queue`); `peer-relay` = a throwaway claude seat delivers over the engine's
+# peer-messaging channel; `session-log` = the reading is taken from the record the engine
+# already writes, with no request to the engine at all.
 SURFACE_START_ARGV = "start-argv"
-CAPABILITY_SURFACES = (SURFACE_START_ARGV,)
+SURFACE_ENGINE_CLI = "engine-cli"
+SURFACE_PEER_RELAY = "peer-relay"
+SURFACE_SESSION_LOG = "session-log"
+CAPABILITY_SURFACES = (SURFACE_START_ARGV, SURFACE_ENGINE_CLI, SURFACE_PEER_RELAY,
+                       SURFACE_SESSION_LOG)
 
 
 def _cap(state: str, route: str = "", note: str = "", refusal: str = "",
@@ -2019,6 +2048,7 @@ AGENTCTL_VERBS: tuple[tuple[str, bool], ...] = (
     ("start", False), ("steer", False), ("stop", False),           # they change the session
     ("status", True), ("watch", True), ("states", True),           # they only look at it
     ("capabilities", True), ("inventory", True), ("phases", True),
+    ("settings", True),                                           # read-only settings readback
 )
 OBSERVE_VERBS = frozenset(verb for verb, observe in AGENTCTL_VERBS if observe)
 # hosts that merely CARRY a command: the real command is one of their arguments
@@ -3599,6 +3629,20 @@ PROVIDERS: dict[str, dict] = {
                 UNSUPPORTED,
                 refusal="the lane sets no permission flag for omp: the engine's own "
                         "defaults govern and the runtime enforces nothing"),
+            # the copilot primitives are about the OPERATOR's own live TUI, and omp has no
+            # such surface: no queue CLI, no peer channel, no rollout/transcript of its own
+            "interject": _cap(
+                UNSUPPORTED,
+                refusal="omp publishes no channel into a session this runtime did not "
+                        "start — `agentctl steer --thread` serves codex and claude only"),
+            "settingsRead": _cap(
+                UNSUPPORTED,
+                refusal="omp writes no per-turn settings record this lane can read back — "
+                        "`agentctl settings` serves codex and claude only"),
+            "settingsWrite": _cap(
+                UNSUPPORTED,
+                refusal="no settings write path exists for any provider yet (batch B2 "
+                        "adds it for the seats this runtime owns)"),
         },
     },
     "claude": {
@@ -3648,6 +3692,15 @@ PROVIDERS: dict[str, dict] = {
                 refusal="the lane launches claude with `--permission-mode "
                         "bypassPermissions`: prompts are disabled by design, the runtime "
                         "enforces nothing"),
+            # SendMessage between live claude sessions is the supported channel: the relay
+            # seat is throwaway, and its name is what the target attributes the message to
+            "interject": _cap(SUPPORTED, surface=SURFACE_PEER_RELAY),
+            "settingsRead": _cap(SUPPORTED, surface=SURFACE_SESSION_LOG),
+            "settingsWrite": _cap(
+                UNSUPPORTED,
+                refusal="`/effort` and `/model` are session-local commands with no external "
+                        "entry: type them in that TUI yourself, or let batch B2 send them "
+                        "as stdin frames to a seat this runtime started"),
         },
     },
     "codex": {
@@ -3694,6 +3747,15 @@ PROVIDERS: dict[str, dict] = {
                         f"{CODEX_SANDBOX['default']} (default lane) or "
                         f"{CODEX_SANDBOX['review']} (`--review`, the review seat): "
                         "approvals are disabled by design, the runtime enforces nothing"),
+            # `codex queue --thread <uuid> --message` is the engine's own CLI, so the lane
+            # runs it rather than opening a second writer the app-server would reject
+            "interject": _cap(SUPPORTED, surface=SURFACE_ENGINE_CLI),
+            "settingsRead": _cap(SUPPORTED, surface=SURFACE_SESSION_LOG),
+            "settingsWrite": _cap(
+                UNSUPPORTED,
+                refusal="queueing carries no settings field and a second app-server writer "
+                        "is rejected: batch B2 covers the seats this runtime owns, B3 the "
+                        "daemon threads reachable over `--remote unix://…`"),
         },
     },
 }
@@ -4030,6 +4092,433 @@ class _StrictParser(argparse.ArgumentParser):
         super().__init__(*args, **kwargs)
 
 
+# ── copilot primitives (B1): live sessions agentctl does NOT own ─────────────
+# Everything here serves a session this runtime never started — the operator's own codex or
+# claude TUI. There is no lane, no fifo, no meta and no attempt identity, so the whole
+# surface is ONE delivery per engine plus ONE reader over the artifact that engine already
+# writes (codex rollout jsonl / claude transcript jsonl).
+#
+# FORM ANCHOR, owner ruling 2026-09-25 (「别在这里铺大饼」): no lock, no ownership query, no
+# loaded-thread list, no retry, no error taxonomy. The A/B route is ONE predicate — does the
+# app-server daemon control socket EXIST — and any non-zero engine exit is passed through
+# verbatim as one ERR line, because deciding WHY codex refused (thread held by a plain TUI,
+# stale socket, embedded rejected while a daemon runs) is the ownership question this batch
+# deliberately does not answer. Writing settings is B2; a websocket client is B3.
+COPILOT_POLL_SECS = 1.0
+COPILOT_CONFIRM_SECS = 60.0
+# A delivery that never returns is worse than one that fails: the claude relay is a real
+# 3-turn model session, so this bound is generous — and it is NOT the --confirm budget.
+COPILOT_DELIVER_SECS = 300.0
+CODEX_QUEUE_SOCK = (".codex", "app-server-control", "app-server-control.sock")
+# codex `queue --thread` also accepts a session NAME, but the rollout this verb reads back is
+# addressed by uuid — so the uuid is the only spelling that can be confirmed, and therefore
+# the only one accepted here.
+_THREAD_UUID = re.compile(r"\A[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\Z")
+
+
+class Unreadable(Exception):
+    """The evidence file cannot be read: UNMEASURED, never a verdict in either direction."""
+
+
+def jsonl_rows(path: str, offset: int = 0) -> list[tuple[int, dict]]:
+    """Every COMPLETE json object at/after byte `offset`, as (line-number, object).
+
+    Two deliberate properties. A trailing FRAGMENT is not damage — the engine is mid-append,
+    so a partial last line is left for the next poll instead of read as corruption. A
+    COMPLETE line that is not JSON, or a file that vanished mid-poll, IS damage: it raises,
+    and every caller turns that into UNMEASURED rather than into a LANDED or a SETTINGS
+    reading it cannot stand behind. Line numbers are counted from the offset, so they are
+    absolute only for a whole-file read (which is the only caller that prints one).
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            blob = fh.read()
+    except OSError as exc:
+        raise Unreadable(f"cannot read {path}: {exc.strerror or exc}") from exc
+    cut = blob.rfind(b"\n") + 1
+    rows: list[tuple[int, dict]] = []
+    for num, raw in enumerate(blob[:cut].split(b"\n")[:-1], 1):
+        if not raw.strip():
+            continue
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            raise Unreadable(f"cannot read {path}: line {num} after byte {offset} is not JSON")
+        if isinstance(obj, dict):
+            rows.append((num, obj))
+    return rows
+
+
+def _home(*parts: str) -> str:
+    return os.path.join(os.path.expanduser("~"), *parts)
+
+
+def codex_rollout_hits(thread: str) -> list[str]:
+    """Every rollout file carrying this thread uuid — one per thread in practice.
+
+    Split from the refusal below because the two verbs owe DIFFERENT answers for an empty
+    result: `interject` cannot deliver into a thread with no rollout (ERR), while `settings`
+    simply has no reading to publish (UNMEASURED). Ambiguity stays a refusal for both.
+    """
+    if not _THREAD_UUID.match(thread):
+        die(f"codex --thread takes the full thread uuid, got '{thread}' (read it off the "
+            "TUI status line or the rollout filename)", EXIT_FAILED)
+    hits = sorted(globmod.glob(_home(".codex", "sessions", "*", "*", "*",
+                                     f"rollout-*-{thread}.jsonl")))
+    if len(hits) > 1:
+        die("thread uuid matches several rollouts, refusing to guess: " + " ".join(hits),
+            EXIT_FAILED)
+    return hits
+
+
+def codex_rollout(thread: str) -> str:
+    """The one rollout file that IS this thread. Delivery needs it to EXIST: `codex queue`
+    refuses a thread that has never run a turn, so refusing here says why."""
+    hits = codex_rollout_hits(thread)
+    if not hits:
+        die("thread has no rollout yet (send one turn in the TUI first)", EXIT_FAILED)
+    return hits[0]
+
+
+def claude_registry() -> list[dict]:
+    """Every live claude session the local registry lists."""
+    out = []
+    for path in sorted(globmod.glob(_home(".claude", "sessions", "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def claude_session(thread: str) -> dict:
+    """The registered live claude session whose name or sessionId is EXACTLY `thread`.
+
+    Exact, never a prefix or a substring: the registry is a directory of the operator's own
+    live seats, and a fuzzy match here would deliver somebody else's ruling into a session
+    nobody named. Several matches is a refusal, not a choice.
+    """
+    hits = [rec for rec in claude_registry()
+            if thread in (rec.get("name"), rec.get("sessionId"))]
+    if not hits:
+        die(f"no live claude session is registered as '{thread}' (~/.claude/sessions/*.json "
+            "is the registry; the match is on the full name or sessionId)", EXIT_FAILED)
+    if len(hits) > 1:
+        die(f"'{thread}' matches several live claude sessions, refusing to guess: "
+            + " ".join(f"{r.get('name')}={r.get('sessionId')}" for r in hits), EXIT_FAILED)
+    return hits[0]
+
+
+def claude_relay_target(rec: dict) -> str:
+    """The NAME the relay will address, or a refusal.
+
+    The relay channel (SendMessage) addresses a session by name, so a uuid that selected
+    exactly one record still loses its identity at the hop. FAIL CLOSED (review r1 M1): a
+    name shared by several live sessions — or a record with no name at all — is refused
+    here, before anything is sent, instead of delivering to whichever session wins the name.
+    """
+    name = rec.get("name") or ""
+    sid = rec.get("sessionId") or "?"
+    if not name:
+        die(f"relay target ambiguous: session {sid} has no name, and the relay can only "
+            "address a session by name", EXIT_FAILED)
+    shared = [r for r in claude_registry() if r.get("name") == name]
+    if len(shared) != 1:
+        die(f"relay target ambiguous: name {name} shared by {len(shared)} sessions "
+            + "(" + " ".join(str(r.get("sessionId")) for r in shared) + ") — the relay "
+            "addresses by name, so the sessionId you picked cannot survive the hop",
+            EXIT_FAILED)
+    return name
+
+
+def claude_transcript(rec: dict) -> str:
+    """The transcript jsonl a claude session writes. Located by sessionId wherever it is,
+    and only DERIVED from cwd (every non-alphanumeric character folded to `-`, which is the
+    project-dir naming) when the file does not exist yet — `--confirm` still needs a path to
+    take its byte offset (0) from."""
+    sid = rec.get("sessionId") or ""
+    hits = sorted(globmod.glob(_home(".claude", "projects", "*", f"{sid}.jsonl")))
+    if hits:
+        return hits[0]
+    return _home(".claude", "projects",
+                 re.sub(r"[^A-Za-z0-9]", "-", rec.get("cwd") or ""), f"{sid}.jsonl")
+
+
+def _engine_run(argv: list[str]) -> str:
+    """Run the engine's own CLI once. A non-zero exit is REPORTED, never interpreted."""
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=COPILOT_DELIVER_SECS)
+    except FileNotFoundError:
+        die(f"{argv[0]} is not on PATH", EXIT_FAILED)
+    except subprocess.TimeoutExpired:
+        die(f"{argv[0]} {argv[1]} did not return within {COPILOT_DELIVER_SECS:g}s",
+            EXIT_FAILED)
+    if done.returncode != 0:
+        first = next((ln.strip() for ln in (done.stderr + "\n" + done.stdout).splitlines()
+                      if ln.strip()), "(no output)")
+        die(f"{argv[0]} {argv[1]} rc={done.returncode}: {first}", EXIT_FAILED)
+    return done.stdout
+
+
+def _is_echo(engine: str, row: dict, body: str) -> bool:
+    """Is this row the arrival, in the target's own record, of exactly the text we sent?"""
+    if engine == "codex":
+        payload = row.get("payload") or {}
+        if row.get("type") == "event_msg" and payload.get("type") == "user_message":
+            return body in (payload.get("message") or "")
+        if row.get("type") == "response_item" and payload.get("role") == "user":
+            return any(body in (part.get("text") or "")
+                       for part in payload.get("content") or [] if isinstance(part, dict))
+        return False
+    if row.get("type") != "user":
+        return False
+    content = (row.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return body in content
+    return any(body in (part.get("text") or "")
+               for part in content or [] if isinstance(part, dict))
+
+
+def _turn_line(engine: str, row: dict) -> str:
+    """The LANDED line for a row that opens a new turn, "" when the row is not one."""
+    if engine == "codex":
+        if row.get("type") != "turn_context":
+            return ""
+        payload = row.get("payload") or {}
+        mode = (payload.get("collaboration_mode") or {}).get("mode")
+        return (f"LANDED: turn={payload.get('turn_id') or 'n/a'} "
+                f"effort={payload.get('effort') or 'n/a'} mode={mode or 'n/a'}")
+    if row.get("type") != "assistant":
+        return ""
+    message = row.get("message") or {}
+    return (f"LANDED: turn={message.get('id') or row.get('uuid') or 'n/a'} "
+            f"effort={row.get('effort') or 'n/a'} mode={row.get('permissionMode') or 'n/a'}")
+
+
+def _confirm(engine: str, path: str, offset: int, body: str) -> int:
+    """Watch the target's own record from the byte offset taken BEFORE delivery.
+
+    The offset is the whole fence: a pairing that was already on disk when we queued proves
+    nothing about this delivery, so BOTH halves — our text arriving, and a turn opening —
+    must be appended after it. Their ORDER is not part of the evidence, because the engine
+    does not guarantee one: a live codex run (2026-09-25, scratch TUI on the daemon) writes
+    `task_started` + `turn_context` BEFORE the user `response_item` that carries the queued
+    text. An "echo, then a turn after it" rule read that landing as UNMEASURED while the TUI
+    was visibly answering it. One timed polling loop, no subscription, no state machine: the
+    engine writes, we re-read the tail.
+
+    ACCEPTED BOUNDARY: within that window the pairing is by APPEND, not by turn id (the user
+    row carries none), so an operator typing in the same TUI at the same second could supply
+    the turn. The echo is what fences it to OUR delivery; the turn is only evidence that the
+    session moved.
+
+    The DEADLINE fences the other end (review r1 B1): the clock is read at the TOP of the
+    loop and an expired budget returns before anything is read, so evidence that appears
+    after the window closes is never consumed. Reading first and checking the time last let
+    the final post-deadline read publish a LANDED for a pairing the contract says must not
+    be looked at — an answer whose truth depended on how long the last sleep overslept.
+    """
+    try:
+        budget = float(_knob("AGENTCTL_CONFIRM_TIMEOUT", str(COPILOT_CONFIRM_SECS)))
+    except ValueError:
+        die("AGENTCTL_CONFIRM_TIMEOUT must be a number of seconds", EXIT_FAILED)
+    deadline = time.monotonic() + budget
+    echoed = False
+    while True:
+        now = time.monotonic()
+        if now > deadline:       # inclusive deadline: a read AT it counts, past it never
+            break
+        try:
+            rows = jsonl_rows(path, offset)
+        except Unreadable as exc:
+            print(f"UNMEASURED: {exc}")
+            return EXIT_WATCH_TIMEOUT
+        seen = False
+        landed = ""
+        for _num, row in rows:
+            seen = seen or _is_echo(engine, row, body)
+            landed = _turn_line(engine, row) or landed
+        if seen and landed:
+            print(landed)
+            return EXIT_DONE
+        echoed = echoed or seen
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(COPILOT_POLL_SECS, remaining))
+    missing = ("the message is in the record but no new turn opened with it" if echoed
+               else "the message never reached the record")
+    print(f"UNMEASURED: {missing} within {budget:g}s after byte {offset} of {path}")
+    return EXIT_WATCH_TIMEOUT
+
+
+def _relay_prompt(target: str, body: str) -> str:
+    return ("Use the SendMessage tool exactly once to deliver this message verbatim to the "
+            f"session named {target}:\n{body}\n"
+            "Add nothing of your own, then answer with the single word: sent")
+
+
+def _queued_id(out: str) -> str:
+    """The engine's own handle for what it queued: the last token of its first line, with
+    sentence punctuation stripped (codex prints a sentence ending in the thread id)."""
+    line = next((ln.strip() for ln in out.splitlines() if ln.strip()), "")
+    return line.split()[-1].strip(".,;:") if line else "n/a"
+
+
+def cmd_interject(args) -> int:
+    text = args.text
+    if text is None:
+        if not args.file:
+            die("interject needs -m TEXT or -f FILE", EXIT_FAILED)
+        try:
+            with open(args.file, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError as exc:
+            die(f"cannot read -f {args.file}: {exc.strerror or exc}", EXIT_FAILED)
+    # The tag prefix is the ONLY attribution codex has (the queue carries no sender), and it
+    # is what the operator sees arrive in their own TUI.
+    body = f"[{args.tag}] {text.strip()}"
+    if args.engine == "codex":
+        source = codex_rollout(args.thread)
+        sock = _home(*CODEX_QUEUE_SOCK)
+        argv = ["codex", "queue"]
+        # THE A/B predicate, whole: a daemon that is running refuses embedded queueing, so
+        # its socket existing is the only thing worth asking. Whether the thread really
+        # lives in that daemon is the ownership question B3 answers — if it does not, the
+        # engine refuses and that refusal is reported verbatim.
+        if os.path.exists(sock):
+            argv += ["--remote", f"unix://{sock}"]
+        argv += ["--thread", args.thread, "--message", body]
+        reason = sub_reason(EXIT_DELIVERED_NEXT_TURN, SUB_REASON_QUEUE)
+    else:
+        rec = claude_session(args.thread)
+        source = claude_transcript(rec)
+        relay = f"copilot-{args.tag}"
+        # claude has no queue verb: the supported channel is peer messaging between live
+        # sessions, so the delivery IS a throwaway seat that sends one message and exits.
+        # Its name lands in the target as `Message from @<relay>` — attribution at protocol
+        # level, which is why the claude side needs no tag prefix to be identifiable.
+        # The target is resolved to a name that is UNIQUE in the registry, or refused: the
+        # channel addresses by name, so a uuid cannot be honoured past this point.
+        argv = ["claude", "-p", _relay_prompt(claude_relay_target(rec), body),
+                "--name", relay, "--model", "haiku", "--max-turns", "3",
+                "--allowedTools", "SendMessage", "ListAgents"]
+        reason = sub_reason(EXIT_DELIVERED_NEXT_TURN, SUB_REASON_PEER)
+    offset = os.path.getsize(source) if os.path.exists(source) else 0
+    out = _engine_run(argv)
+    ident = _queued_id(out) if args.engine == "codex" else f"copilot-{args.tag}"
+    print(f"DELIVERED-NEXT-TURN: reason={reason} id={ident} thread={args.thread}")
+    if not args.confirm:
+        return EXIT_DELIVERED_NEXT_TURN
+    return _confirm(args.engine, source, offset, body)
+
+
+def _seat_session_id(sess: Session) -> str:
+    """A claude seat's own transcript id. Our own seats are headless and never appear in
+    ~/.claude/sessions, but the engine announces the id on its stream, so the lane's own
+    events file is the registry for the sessions the registry does not list."""
+    try:
+        rows = jsonl_rows(sess.events)
+    except Unreadable as exc:
+        die(str(exc), EXIT_FAILED)
+    for _num, row in reversed(rows):
+        sid = row.get("session_id") or row.get("sessionId")
+        if sid:
+            return str(sid)
+    die(f"no session_id on {sess.events} yet — the engine has not announced one", EXIT_FAILED)
+
+
+def _codex_reading(thread: str) -> str:
+    """The rollout `settings` reads, or the typed non-answer.
+
+    A missing rollout is not a refusal here (review r1 M2): `settings` is a GAUGE, and a
+    gauge with nothing to read publishes UNMEASURED / 7, the same class as a damaged record.
+    `interject`'s ERR / 2 for the same condition is a different contract — it cannot deliver
+    into a thread the engine has not written yet.
+    """
+    hits = codex_rollout_hits(thread)
+    if not hits:
+        print(f"UNMEASURED: no rollout for thread {thread} yet (the session has not "
+              "written one)")
+        sys.exit(EXIT_WATCH_TIMEOUT)
+    return hits[0]
+
+
+def _settings_source(args) -> tuple[str, str]:
+    """(engine, evidence file) for either spelling. A seat we own reads the SAME artifact as
+    a thread we do not — only the way its id is found differs."""
+    if bool(args.session) == bool(args.thread):
+        die("settings takes EITHER <session> OR --thread <id> --engine codex|claude",
+            EXIT_FAILED)
+    if args.thread:
+        if not args.engine:
+            die("--thread needs --engine codex|claude", EXIT_FAILED)
+        if args.engine == "codex":
+            return "codex", _codex_reading(args.thread)
+        return "claude", claude_transcript(claude_session(args.thread))
+    sess = Session(args.run_dir, args.session)
+    sess.require_meta()
+    engine = sess.meta.get("engine", "")
+    if engine == "codex":
+        thread = sess.meta.get("thread", "")
+        if not thread:
+            die(f"session '{sess.name}' has no thread id in meta yet (no handshake)",
+                EXIT_FAILED)
+        return "codex", _codex_reading(thread)
+    if engine == "claude":
+        return "claude", claude_transcript({"sessionId": _seat_session_id(sess),
+                                            "cwd": sess.meta.get("cwd", "")})
+    die(f"settings has no source for engine '{engine}' — `agentctl capabilities` publishes "
+        "settingsRead per provider", EXIT_FAILED)
+
+
+def cmd_settings(args) -> int:
+    engine, source = _settings_source(args)
+    try:
+        rows = jsonl_rows(source)
+    except Unreadable as exc:
+        print(f"UNMEASURED: {exc}")
+        return EXIT_WATCH_TIMEOUT
+    if engine == "codex":
+        turns = [row for _num, row in rows if row.get("type") == "turn_context"]
+        if not turns:
+            print(f"UNMEASURED: {source} carries no turn_context row yet")
+            return EXIT_WATCH_TIMEOUT
+        payload = turns[-1].get("payload") or {}
+        if not payload.get("model"):
+            print(f"UNMEASURED: the last turn_context in {source} names no model")
+            return EXIT_WATCH_TIMEOUT
+        mode = (payload.get("collaboration_mode") or {}).get("mode")
+        print(f"SETTINGS: model={payload['model']} effort={payload.get('effort') or 'n/a'} "
+              f"mode={mode or 'n/a'} approval={payload.get('approval_policy') or 'n/a'} "
+              f"sandbox={(payload.get('sandbox_policy') or {}).get('type') or 'n/a'} "
+              f"source=turn_context@{len(turns)}")
+        return EXIT_DONE
+    speech = [(num, row) for num, row in rows if row.get("type") == "assistant"]
+    if not speech:
+        print(f"UNMEASURED: {source} carries no assistant line yet")
+        return EXIT_WATCH_TIMEOUT
+    num, row = speech[-1]
+    model = (row.get("message") or {}).get("model")
+    # The LAST line is the reading. An earlier line belongs to an earlier turn, possibly
+    # under a different model, and stitching the two would publish a setting no single turn
+    # ever ran under.
+    if not model:
+        print(f"UNMEASURED: the last assistant line ({source} line {num}) carries no "
+              "message.model")
+        return EXIT_WATCH_TIMEOUT
+    mode = next((r.get("permissionMode") for _m, r in reversed(rows)
+                 if r.get("type") == "permission-mode" and r.get("permissionMode")), "")
+    print(f"SETTINGS: model={model} effort={row.get('effort') or 'n/a'} "
+          f"mode={mode or 'n/a'} approval=n/a sandbox=n/a source=transcript@{num}")
+    return EXIT_DONE
+
+
 def main() -> None:
     # Line-buffered on purpose: the long-running verbs (`watch-wait`, `sense-loop`) run with
     # stdout redirected to a log a live operator tails, and the shell `echo`s they replaced
@@ -4319,6 +4808,31 @@ def main() -> None:
                            "does not")
     p_ph.add_argument("--json", action="store_true", help="stable machine shape")
     p_ph.set_defaults(func=watchctl.cmd_phases)
+
+    # ── copilot primitives: a live session this runtime does NOT own ──
+    # The shell forwards `agentctl steer --thread …` here untouched: there is no lane state
+    # to look up, so every judgement (engine, the A/B route, the confirm window) is this
+    # verb's. `-m` / `-f` are the agentctl spellings, one each.
+    p_int = sub.add_parser("interject", help="queue one message into a live session agentctl "
+                                             "does not own (codex thread / claude peer)")
+    p_int.add_argument("--thread", required=True,
+                       help="codex: the thread uuid; claude: the session name or sessionId")
+    p_int.add_argument("--engine", default="codex", choices=["codex", "claude"])
+    p_int.add_argument("-m", dest="text", help="message text")
+    p_int.add_argument("-f", dest="file", help="file whose contents are the message")
+    p_int.add_argument("--tag", default="copilot",
+                       help="attribution tag: the body is prefixed `[<tag>] `")
+    p_int.add_argument("--confirm", action="store_true",
+                       help="watch the target's own record until the message opens a turn "
+                            "(LANDED) or the window closes (UNMEASURED)")
+    p_int.set_defaults(func=cmd_interject)
+
+    p_set = sub.add_parser("settings", help="read the model/effort/mode a live session is "
+                                            "really running under (read-only: writing is B2)")
+    p_set.add_argument("session", nargs="?", default="")
+    p_set.add_argument("--thread", default="")
+    p_set.add_argument("--engine", default="", choices=["codex", "claude"])
+    p_set.set_defaults(func=cmd_settings)
 
     args = parser.parse_args()
     sys.exit(args.func(args))

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# enginectl — ONE file, three PATH names. Symlink it as `codexctl`, `claudectl` or `ompctl`
+# and the engine is prefilled; everything else is agentctl, verbatim.
+#
+#   ln -sf <abs>/enginectl ~/.local/bin/codexctl
+#   ln -sf <abs>/enginectl ~/.local/bin/claudectl
+#
+#   codexctl start  s /cwd --goal g        ==  agentctl start codex s /cwd --goal g
+#   codexctl steer  --thread <id> -m TEXT  ==  agentctl steer --thread <id> --engine codex -m TEXT
+#   claudectl settings --thread NAME       ==  agentctl settings --thread NAME --engine claude
+#   codexctl status s                      ==  agentctl status s          (plain passthrough)
+#
+# It is argv PLUMBING and nothing else — the same contract agentctl's own entry holds. Two
+# shapes are recognized, neither of which is a judgement about what a command MEANS:
+# `start` takes the engine as its first positional, and the thread form of steer/settings
+# takes it as a flag. A command already carrying `--engine` is passed through untouched, so
+# an explicit spelling always wins over the name the operator invoked.
+# The guard sees through both spellings: cto-guard-bash rewrites `<engine>ctl start` to
+# `agentctl start <engine>` before any rule runs, and its binary token accepts all three
+# aliases — so a rule that DENIES an agentctl command denies the alias identically.
+set -uo pipefail
+
+# $0 is a PATH symlink BY DESIGN here: follow the chain to find agentctl beside the real
+# file, but take the ENGINE from the name that was invoked (basename of $0, not of the
+# target — otherwise every alias would resolve to "enginectl" and prefill nothing).
+INVOKED="$(basename "$0")"
+SELF="$0"
+while [ -L "$SELF" ]; do
+  link="$(readlink "$SELF")"
+  case "$link" in /*) SELF="$link" ;; *) SELF="$(dirname "$SELF")/$link" ;; esac
+done
+AGENTCTL="$(cd "$(dirname "$SELF")" && pwd)/agentctl"
+
+ENG="${INVOKED%ctl}"
+case "$ENG" in
+  codex|claude|omp) ;;
+  *) echo "ERR: enginectl runs as codexctl, claudectl or ompctl (invoked as '$INVOKED') — symlink it under one of those names, or call agentctl directly" >&2; exit 1 ;;
+esac
+
+VERB="${1:-}"
+[ "$#" -gt 0 ] && shift
+case "$VERB" in
+  start) exec "$AGENTCTL" start "$ENG" "$@" ;;
+  steer|settings)
+    thread=0; engine=0
+    for a in "$@"; do
+      case "$a" in
+        --thread|--thread=*) thread=1 ;;
+        --engine|--engine=*) engine=1 ;;
+      esac
+    done
+    # the session form of steer has no engine flag at all: prefill ONLY the thread form
+    if [ "$thread" = 1 ] && [ "$engine" = 0 ]; then
+      exec "$AGENTCTL" "$VERB" "$@" --engine "$ENG"
+    fi
+    exec "$AGENTCTL" "$VERB" "$@" ;;
+  "") exec "$AGENTCTL" ;;
+  *) exec "$AGENTCTL" "$VERB" "$@" ;;
+esac

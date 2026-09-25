@@ -128,8 +128,34 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # retrospective §7 二选一 (`/compact` 优先) plus the 复述 sentence the pointer routes to. INJECT /
 # INJECT_SINGLE untouched: the extractor weighs `cto-guard-*.py`, and these two speak on the
 # orchestrator's own prompt, not into a worker's brief.
-CODE_MAX=15512      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
-PROSE_MAX=1554      # every shipped *.md under the skill, summed wc -l
+# 2026-09-25 (`copilot-primitives` B1 + fix rounds 1-2): CODE 15512 -> 16126, PROSE 1554 -> 1577.
+# Both numbers are measured against the batch's real base `43e6102`, and CODE now includes the
+# new extensionless entry `enginectl` (59 lines) that the meter was not naming — review r1 M3:
+# the first pass claimed a base of 15467 and left its own new shipped entry unweighed.
+# What the +614 code lines buy the two verbs that reach a session agentctl did NOT start — the
+# operator's own codex / claude TUI: duplexctl's `interject` + `settings` (one thin subcommand
+# each over ONE jsonl reader: rollout `turn_context` / transcript assistant rows), the three
+# capability cells per provider that publish them, `enginectl` (one bash file behind the
+# `codexctl` / `claudectl` / `ompctl` PATH names), and the guard's two-line alias face (binary
+# token + `<engine>ctl start` normalization) so an alias cannot buy a different verdict. ~68 of
+# those lines are fix round 1: the confirm loop's deadline fence (clock read before the record,
+# so post-deadline evidence is never consumed), the relay's fail-closed target resolution (a
+# uuid whose NAME is shared by two live sessions is refused, not silently renamed), and the
+# split that lets `settings` answer UNMEASURED where `interject` must still refuse. +9 are fix
+# round 2 (full-suite gate, not review): the two DELIVERED-NEXT-TURN words `queue` / `peer` now
+# live in SUB_REASONS and are emitted through `sub_reason()` (the closed-set scan red on a bare
+# name), and `settings` sits in AGENTCTL_VERBS beside its bash dispatch (parity gate red).
+# The field cost it answers: a downstream seat asked for 逐轮插话 + 回读 and agentctl had ZERO
+# capability over any session it did not own. Deliberately NOT bought (owner ruling, same day):
+# no lock, no ownership query, no loaded-thread list, no retry, no engine-error taxonomy, no
+# event subscription, and no settings WRITE path — those are B2/B3, and their absence is most
+# of why this number is not larger.
+# The +23 prose lines are README's three bullets (the two verbs' typed lines and failure shapes,
+# plus the two `ln -sf` lines enginectl needs to exist at all). INJECT / INJECT_SINGLE did not
+# move: the extractor weighs `cto-guard-*.py` sinks, and the alias work added a regex and a
+# rewrite, not one byte of injected text.
+CODE_MAX=16126      # every shipped *.py / *.sh / the extensionless entrypoints, summed wc -l
+PROSE_MAX=1577      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
                         # meets exactly one of these, at the moment it is blocked, and length
@@ -142,7 +168,10 @@ _sum_lines() { # $@ = find predicates
   find "$SKILL_ROOT" -type f \( "$@" \) -exec wc -l {} + | awk 'END {print $1+0}'
 }
 
-code_lines="$(_sum_lines -name '*.py' -o -name '*.sh' -o -name 'agentctl')"
+# Extensionless shipped ENTRYPOINTS are named one by one, because that is all `find` can key
+# on: `agentctl` since the beginning, `enginectl` since 2026-09-25. A new entry that nobody
+# adds here is shipped code no ceiling watches (review r1 M3 caught exactly that).
+code_lines="$(_sum_lines -name '*.py' -o -name '*.sh' -o -name 'agentctl' -o -name 'enginectl')"
 prose_lines="$(_sum_lines -name '*.md')"
 
 # The injected-text census, lifted verbatim from the retired context-budget.test.sh: measure by

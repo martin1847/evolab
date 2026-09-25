@@ -66,7 +66,7 @@ print("json=%d human=%d subjson=%d subhuman=%d"
       % (len(doc["states"]), len(states), len(doc["subReasons"]), len(subs)))
 ' "$AGENTCTL")"
 chk_eq "json entries == human rows, in BOTH vocabularies" \
-  "json=14 human=14 subjson=8 subhuman=8" "$counts"
+  "json=14 human=14 subjson=10 subhuman=10" "$counts"
 
 echo "== S3: only two spellings exist; anything else is refused =="
 bogus="$(states --bogus 2>&1)"; rc=$?
@@ -161,6 +161,8 @@ SUB_ORACLE="14 repo-silent+tools-active
 14 unknown-source
 15 capability
 15 undecidable
+15 queue
+15 peer
 7 changed
 7 unchanged
 7 unknown"
@@ -605,7 +607,7 @@ states --json > "$SANDBOX/pub.json"
 # the scan face is a shell function so no call site can forget the second file — the failure mode
 # of a per-call-site path list is a green gate that stopped looking at half the lane
 subgate() { python3 "$GATE" "$1/duplexctl.py" "$1/watchctl.py" "$SANDBOX/pub.json"; }
-chk_eq "S6 the real module passes the sub-reason gate" "CONSISTENT 8" \
+chk_eq "S6 the real module passes the sub-reason gate" "CONSISTENT 10" \
   "$(subgate "$(dirname "$CTL")")"
 
 # ── S6b the gate BITES: the same checker against mutated copies ──────────────────────────
@@ -696,7 +698,7 @@ done
 # PAIRED GREEN for the closure scan itself: the copy mechanism is not what reds the four above.
 rm -rf "$SANDBOX/closure-clean"
 cp -R "$(dirname "$CTL")" "$SANDBOX/closure-clean"
-chk_eq "S6b an unmutated copy still passes the closure scan" "CONSISTENT 8" \
+chk_eq "S6b an unmutated copy still passes the closure scan" "CONSISTENT 10" \
   "$(subgate "$SANDBOX/closure-clean")"
 
 echo "== S7: the closed set is ENFORCED at import, not merely published =="
@@ -719,7 +721,7 @@ rm -rf "$SANDBOX/clean"
 cp -R "$(dirname "$CTL")" "$SANDBOX/clean"
 out="$(python3 "$SANDBOX/clean/duplexctl.py" states --json 2>&1)"; rc=$?
 chk_eq "S8 the copy mechanism itself is not what reds S7 (rc)" 0 "$rc"
-chk_eq "S8 and the unmutated copy carries the same 8 sub-reasons" 8 \
+chk_eq "S8 and the unmutated copy carries the same 10 sub-reasons" 10 \
   "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["subReasons"]))')"
 sandbox_clean
 

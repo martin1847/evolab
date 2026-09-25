@@ -2538,4 +2538,63 @@ chk_contains "(20-sa7) …and (7)'s destroy DENY is the whole reply" "needs the 
 chk_eq "(20-sa7) …with nothing on stdout" "" "$OUT"
 PATH="$OLDPATH20"; export PATH
 
+# ── engine aliases: `codexctl` / `claudectl` / `ompctl` judge IDENTICALLY (2026-09-25) ─────
+# `references/agentctl/enginectl` is ONE file under three PATH names that execs agentctl with
+# the engine prefilled. The guard sees through it with two edits and no rule body touched: the
+# binary token accepts all three spellings, and `<engine>ctl start` is rewritten to
+# `agentctl start <engine>` once, before any rule runs. The property under test is therefore
+# DIFFERENTIAL, not "the alias is also denied": for the same input, the alias spelling and the
+# agentctl spelling must produce the same rc, the same stderr and the same hook response —
+# otherwise an operator picks a verdict by choosing a filename.
+alias_same() { # $1 label  $2 agentctl spelling  $3 alias spelling  [$4 run_in_background]
+  local arc aout aerr
+  run "$2" ${4:+1}; arc=$RC; aout="$OUT"; aerr="$ERR"
+  run "$3" ${4:+1}
+  chk_eq "alias $1: same exit code" "$arc" "$RC"
+  chk_eq "alias $1: same stderr" "$aerr" "$ERR"
+  chk_eq "alias $1: same hook response" "$aout" "$OUT"
+  ALIAS_RC="$arc"; ALIAS_OUT="$aout"; ALIAS_ERR="$aerr"
+}
+ALIASWT="$G8ROOT/aliaswt"; mkdir -p "$ALIASWT"
+git -C "$ALIASWT" init -q
+git -C "$ALIASWT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1
+printf 'uncommitted\n' > "$ALIASWT/loose.txt"
+# (14) DENY, the positive anchor: a dirty dispatch is refused under either spelling
+alias_same "(14) dirty dispatch" \
+  "bash references/agentctl/agentctl start omp seedsess $ALIASWT --goal /tmp/g.md" \
+  "bash references/agentctl/ompctl start seedsess $ALIASWT --goal /tmp/g.md"
+chk_eq "alias (14): and the shared verdict really is the DENY" 2 "$ALIAS_RC"
+chk_contains "alias (14): with rule 14's own wording" "播种未 seed commit" "$ALIAS_ERR"
+alias_same "(14) claudectl spells the same dispatch" \
+  "bash references/agentctl/agentctl start claude seedsess $ALIASWT --goal /tmp/g.md" \
+  "bash references/agentctl/claudectl start seedsess $ALIASWT --goal /tmp/g.md"
+# (13) is codex-ONLY, so it proves the ENGINE WORD is really injected: without the rewrite the
+# alias dispatch carries no engine token at all and this WARN would simply vanish
+alias_same "(13) codex brief advisory" \
+  "$D13 $B13/dirty.md --review $W13" \
+  "codexctl start s1 /wt --goal $B13/dirty.md --review $W13" 1
+chk_contains "alias (13): and the shared verdict really is the WARN" "WARN (cto-guard 13)" \
+  "$(ctx "$ALIAS_OUT")"
+chk_contains "alias (13): naming the wording it read" "forged" "$(ctx "$ALIAS_OUT")"
+# an ALLOW is equally unchanged — a guard that only agreed on denials would still move the line
+alias_same "(13) clean brief stays allowed" \
+  "$D13 $B13/clean.md --review $W13" \
+  "codexctl start s1 /wt --goal $B13/clean.md --review $W13" 1
+chk_eq "alias (13 allow): and the shared verdict really is the silent allow" 0 "$ALIAS_RC"
+chk_eq "alias (13 allow): with nothing on stderr" "" "$ALIAS_ERR"
+# (12): the binary TOKEN half, on a verb the rewrite never touches
+alias_same "(12) typed command piped" \
+  'agentctl start omp s1 /wt --goal /tmp/g.md | tee /tmp/o.log' \
+  'ompctl start s1 /wt --goal /tmp/g.md | tee /tmp/o.log'
+chk_eq "alias (12): and the shared verdict really is the DENY" 2 "$ALIAS_RC"
+alias_same "(12) watch piped" 'agentctl watch s1 | cat' 'codexctl watch s1 | cat'
+chk_eq "alias (12 watch): and that one denies too" 2 "$ALIAS_RC"
+# DATA is still data: the rewrite is textual, so the ECHOED alias must not become a dispatch
+run "echo ompctl start seedsess $ALIASWT"
+chk_eq "alias: an echoed alias dispatch is DATA, not a dispatch" 0 "$RC"
+chk_eq "alias: and no DENY reaches stderr" "" "$ERR"
+# and an unrelated binary that merely ENDS in the alias spelling is a different program
+run "bash references/agentctl/notcodexctl start seedsess $ALIASWT --goal /tmp/g.md"
+chk_eq "alias: a longer binary name is not the alias" 0 "$RC"
+
 summary
