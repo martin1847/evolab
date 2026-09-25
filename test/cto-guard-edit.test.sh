@@ -90,6 +90,15 @@ print(d.get("hookSpecificOutput",{}).get("additionalContext",""))'; }
 
 chk_eq "script is executable" 1 "$([ -x "$GUARD" ] && echo 1 || echo 0)"
 
+run Write "$ORCH/test/loc-budget.limits" "$ORCH"
+# damage: a tool write could raise the owner-only ceiling.
+chk_eq "E2 denies a limits write" 2 "$RC"
+# damage: a denial could omit the owner-only remedy.
+chk_contains "E2 gives the owner-only reason" "owner-only ceiling: raise it by hand" "$ERR"
+run Read "$ORCH/test/loc-budget.limits" "$ORCH"
+# damage: the guard could block a read of the ceiling.
+chk_eq "E2 allows a limits read" 0 "$RC"
+
 # ── E1 BAD SAMPLES: the orchestrator hand-writing source outside every live seat ───────────
 rm -f "$RUN"/*.duplex.meta /tmp/cto-allow-direct-write
 run Write "$ORCH/skills/foo.py" "$ORCH"

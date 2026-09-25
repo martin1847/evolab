@@ -204,6 +204,9 @@ def main():
     if not isinstance(path, str) or not path:
         return checker_error(
             "PreToolUse Edit|Write|MultiEdit requires string tool_input.file_path.")
+    if path.endswith("test/loc-budget.limits"):
+        sys.stderr.write("DENY: owner-only ceiling: raise it by hand. Read: cto-orchestration/SKILL.md.\n")
+        return 2
     if not _is_source(path):
         return 0
 

@@ -1595,6 +1595,11 @@ def main():
     cmd = raw.replace("\n", " ")
     if not cmd:
         return 0
+    if ("loc-budget.limits" in cmd and (
+            re.search(r"(?:>>?\s*|\btee\s+(?:-a\s+)?|\bsed\s+-i\S*\s+(?:\S+\s+)*)\S*loc-budget\.limits\b", cmd)
+            or re.search(r"\bpython(?:3)?\s+-c?\b.*loc-budget\.limits", cmd))):
+        sys.stderr.write("DENY: owner-only ceiling: raise it by hand. Read: cto-orchestration/SKILL.md.\n")
+        return 2
     # quote-stripped view: drop "..."/'...'/`...` spans so a token that only appears inside a quoted
     # arg (e.g. `echo "git push later"`, `echo "a & b"`) is NOT mistaken for a real command. Used by
     # the & guard (1) and the push guard (5). NOT used by the send-keys guard (4) — that one is

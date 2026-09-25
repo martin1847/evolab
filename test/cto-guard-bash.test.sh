@@ -54,6 +54,15 @@ run() { # $1 command [$2 run_in_background] -> OUT(stdout) ERR(stderr) RC
 # wired as executable via frontmatter `./...` — exec bit + shebang must hold
 chk_eq "script is executable" 1 "$([ -x "$GUARD" ] && echo 1 || echo 0)"
 
+run 'echo CODE_MAX=1 > test/loc-budget.limits'
+# damage: a Bash redirect could raise the owner-only ceiling.
+chk_eq "limits write denied" 2 "$RC"
+for sample in 'cat test/loc-budget.limits' 'cat test/loc-budget.limits 2>&1' 'grep CODE test/loc-budget.limits > /dev/null' $'cat > docs/x.md <<\'EOF\'\nsee test/loc-budget.limits => PASS\nEOF'; do
+  run "$sample"
+  # damage: a read or documentation command could be denied as a limits write.
+  chk_eq "limits read-like command allowed" 0 "$RC"
+done
+
 # (1) trailing shell & -> ORPHAN, DENY
 run 'npm run dev &'
 chk_eq "trailing & denied (exit 2)" 2 "$RC"; chk_contains "trailing & stderr" "ORPHAN" "$ERR"

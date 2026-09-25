@@ -37,6 +37,7 @@ cd "$(dirname "$0")"
 . ./lib-testkit.sh
 
 SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
+. ./loc-budget.limits
 
 # ---- the three ceilings: measured on this tree, 2026-09-16 ------------------------------------
 # 2026-09-16 (cto-guard-agent P0e `stale-scout-cwd`): CODE 14010 -> 14203 and INJECT 17647 -> 17939.
@@ -128,38 +129,8 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # retrospective §7 二选一 (`/compact` 优先) plus the 复述 sentence the pointer routes to. INJECT /
 # INJECT_SINGLE untouched: the extractor weighs `cto-guard-*.py`, and these two speak on the
 # orchestrator's own prompt, not into a worker's brief.
-# 2026-09-25 (`copilot-primitives` B1 + fix rounds 1-2): CODE 15512 -> 16126, PROSE 1554 -> 1577.
-# Both numbers are measured against the batch's real base `43e6102`, and CODE now includes the
-# new extensionless entry `enginectl` (59 lines) that the meter was not naming — review r1 M3:
-# the first pass claimed a base of 15467 and left its own new shipped entry unweighed.
-# What the +614 code lines buy the two verbs that reach a session agentctl did NOT start — the
-# operator's own codex / claude TUI: duplexctl's `interject` + `settings` (one thin subcommand
-# each over ONE jsonl reader: rollout `turn_context` / transcript assistant rows), the three
-# capability cells per provider that publish them, `enginectl` (one bash file behind the
-# `codexctl` / `claudectl` / `ompctl` PATH names), and the guard's two-line alias face (binary
-# token + `<engine>ctl start` normalization) so an alias cannot buy a different verdict. ~68 of
-# those lines are fix round 1: the confirm loop's deadline fence (clock read before the record,
-# so post-deadline evidence is never consumed), the relay's fail-closed target resolution (a
-# uuid whose NAME is shared by two live sessions is refused, not silently renamed), and the
-# split that lets `settings` answer UNMEASURED where `interject` must still refuse. +9 are fix
-# round 2 (full-suite gate, not review): the two DELIVERED-NEXT-TURN words `queue` / `peer` now
-# live in SUB_REASONS and are emitted through `sub_reason()` (the closed-set scan red on a bare
-# name), and `settings` sits in AGENTCTL_VERBS beside its bash dispatch (parity gate red).
-# The field cost it answers: a downstream seat asked for 逐轮插话 + 回读 and agentctl had ZERO
-# capability over any session it did not own. Deliberately NOT bought (owner ruling, same day):
-# no lock, no ownership query, no loaded-thread list, no retry, no engine-error taxonomy, no
-# event subscription, and no settings WRITE path — those are B2/B3, and their absence is most
-# of why this number is not larger.
-# The +23 prose lines are README's three bullets (the two verbs' typed lines and failure shapes,
-# plus the two `ln -sf` lines enginectl needs to exist at all). INJECT / INJECT_SINGLE did not
-# move: the extractor weighs `cto-guard-*.py` sinks, and the alias work added a regex and a
-# rewrite, not one byte of injected text.
-CODE_MAX=16126      # every shipped *.py / *.sh / the extensionless entrypoints, summed wc -l
-PROSE_MAX=1577      # every shipped *.md under the skill, summed wc -l
-INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
-INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
-                        # meets exactly one of these, at the moment it is blocked, and length
-                        # there competes with the fix line it needs.
+# Ceilings live only in loc-budget.limits. Every agent write to it is denied (cto-guard-edit E2 / cto-guard-bash);
+# the owner edits it by hand.
 
 # ---- meters ------------------------------------------------------------------------------------
 # `wc -l` per file and summed, which is what the retired ratchets measured: a trailing line with
@@ -173,6 +144,29 @@ _sum_lines() { # $@ = find predicates
 # adds here is shipped code no ceiling watches (review r1 M3 caught exactly that).
 code_lines="$(_sum_lines -name '*.py' -o -name '*.sh' -o -name 'agentctl' -o -name 'enginectl')"
 prose_lines="$(_sum_lines -name '*.md')"
+doc_lines="$(python3 - "$SKILL_ROOT" <<'PY'
+import ast
+import pathlib
+import sys
+import tokenize
+
+total = 0
+for path in pathlib.Path(sys.argv[1]).rglob('*.py'):
+    if not path.is_file() or path.is_symlink():
+        continue
+    with path.open('rb') as stream:
+        comments = {tok.start[0] for tok in tokenize.tokenize(stream.readline)
+                    if tok.type == tokenize.COMMENT}
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str):
+            comments.update(range(node.lineno, node.end_lineno + 1))
+    total += len(comments)
+print(total)
+PY
+)" || doc_lines=0
+test_lines="$(wc -l ./*.test.sh | awk 'END {print $1+0}')"
 
 # The injected-text census, lifted verbatim from the retired context-budget.test.sh: measure by
 # SINK, in UTF-8 bytes. The sinks are where text actually leaves for an agent — sys.stderr.write
@@ -265,6 +259,8 @@ EOF
 if [ "${1:-}" = "--measure" ]; then
   echo "CODE_MAX=$code_lines    (shipped *.py / *.sh / agentctl, summed wc -l)"
   echo "PROSE_MAX=$prose_lines    (shipped *.md, summed wc -l)"
+  echo "DOC_MAX=$doc_lines    (shipped *.py comment and string-expression lines)"
+  echo "TEST_MAX=$test_lines    (test/*.test.sh, summed wc -l)"
   echo "INJECT_MAX=$inject_bytes  (guard text reaching agent context, UTF-8 bytes)"
   echo "INJECT_SINGLE_MAX=$inject_single   (longest single message a worker meets at once)"
   exit 0
@@ -288,6 +284,8 @@ _ceiling() { # $1 label  $2 actual  $3 max  $4 unit
 
 _ceiling "shipped code within the total ceiling" "$code_lines" "$CODE_MAX" lines
 _ceiling "shipped prose within the total ceiling" "$prose_lines" "$PROSE_MAX" lines
+_ceiling "shipped Python docs within the total ceiling" "$doc_lines" "$DOC_MAX" lines
+_ceiling "test scripts within the total ceiling" "$test_lines" "$TEST_MAX" lines
 _ceiling "injected guard text within the total ceiling" "$inject_bytes" "$INJECT_MAX" bytes
 _ceiling "no single guard message exceeds the ceiling" "$inject_single" "$INJECT_SINGLE_MAX" bytes
 
