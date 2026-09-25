@@ -38,7 +38,9 @@ import os
 import re
 import select
 import shlex
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 from typing import NoReturn
@@ -3733,10 +3735,7 @@ PROVIDERS: dict[str, dict] = {
             "interject": _cap(SUPPORTED, surface=SURFACE_ENGINE_CLI),
             "settingsRead": _cap(SUPPORTED, surface=SURFACE_SESSION_LOG),
             "settingsWrite": _cap(
-                UNSUPPORTED,
-                refusal="queueing carries no settings field and a second app-server writer "
-                        "is rejected: batch B2 covers the seats this runtime owns, B3 the "
-                        "daemon threads reachable over `--remote unix://…`"),
+                SUPPORTED, surface=SURFACE_ENGINE_CLI),
         },
     },
 }
@@ -4357,6 +4356,42 @@ def _settings_source(args) -> tuple[str, str]:
 
 
 def cmd_settings(args) -> int:
+    if any(value is not None for value in (args.effort, args.mode, args.model)):
+        if args.session or args.engine != "codex" or not args.thread:
+            print("UNSUPPORTED: settings write is only for codex daemon threads")
+            return EXIT_WATCH_TIMEOUT
+        sock = _home(*CODEX_QUEUE_SOCK)
+        try:
+            present = stat.S_ISSOCK(os.stat(sock).st_mode)
+        except OSError:
+            present = False
+        if not present:
+            print("UNSUPPORTED: no daemon socket — start the TUI with codex --remote unix://<sock>")
+            return EXIT_WATCH_TIMEOUT
+        runner = ["uv", "run", "--quiet"] if shutil.which("uv") else ["python3"]
+        if not shutil.which(runner[0]) or (runner[0] == "python3" and
+                                            subprocess.run(["python3", "-c", "import websockets"],
+                                                           capture_output=True).returncode):
+            print("UNSUPPORTED: codex daemon write needs uv or python websockets — brew install uv")
+            return EXIT_WATCH_TIMEOUT
+        argv = runner + [os.path.join(_HERE, "codex-daemon.py"), "--sock", sock,
+                         "--thread", args.thread]
+        for key in ("effort", "mode", "model"):
+            value = getattr(args, key)
+            if value is not None:
+                argv += [f"--{key}", value]
+        result = subprocess.run(argv, capture_output=True, text=True)
+        if result.returncode:
+            print(f"ERR: codex daemon rc={result.returncode}: "
+                  f"{(result.stderr or result.stdout).splitlines()[0] if result.stderr or result.stdout else 'no detail'}")
+            return EXIT_FAILED
+        settings = json.loads(result.stdout)
+        sandbox = settings.get("sandbox")
+        settings["sandbox"] = sandbox.get("type") if isinstance(sandbox, dict) else sandbox
+        print("SETTINGS: " + " ".join(f"{key}={settings.get(key) or 'n/a'}" for key in
+                                      ("model", "effort", "mode", "approval", "sandbox")) +
+              " source=thread/settings/updated")
+        return EXIT_DONE
     engine, source = _settings_source(args)
     try:
         rows = jsonl_rows(source)
@@ -4705,8 +4740,7 @@ def main() -> None:
                             "(LANDED) or the window closes (UNMEASURED)")
     p_int.set_defaults(func=cmd_interject)
 
-    p_set = sub.add_parser("settings", help="read the model/effort/mode a live session is "
-                                            "really running under (read-only: writing is B2)",
+    p_set = sub.add_parser("settings", help="read live settings or write a codex daemon thread",
                            formatter_class=argparse.RawDescriptionHelpFormatter,
                            epilog="SETTINGS: model=… effort=… mode=… approval=… sandbox=… "
                                   "source=turn_context@<n>|transcript@<n> (exit 0)\n"
@@ -4714,6 +4748,9 @@ def main() -> None:
     p_set.add_argument("session", nargs="?", default="")
     p_set.add_argument("--thread", default="")
     p_set.add_argument("--engine", default="", choices=["codex", "claude"])
+    p_set.add_argument("--effort", help="set codex daemon reasoning effort")
+    p_set.add_argument("--mode", choices=["plan", "default"], help="set codex daemon mode")
+    p_set.add_argument("--model", help="set codex daemon model")
     p_set.set_defaults(func=cmd_settings)
 
     args = parser.parse_args()

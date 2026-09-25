@@ -533,7 +533,7 @@ d = json.load(sys.stdin)["providers"]
 print(" ".join(f"{p}.{k}={d[p][k]['"'"'state'"'"']}" for p in sorted(d)
       for k in ("interject", "settingsRead", "settingsWrite")))')"
 chk_eq "H the values are this batch's truth, not a placeholder" \
-  "claude.interject=supported claude.settingsRead=supported claude.settingsWrite=unsupported codex.interject=supported codex.settingsRead=supported codex.settingsWrite=unsupported omp.interject=unsupported omp.settingsRead=unsupported omp.settingsWrite=unsupported" \
+  "claude.interject=supported claude.settingsRead=supported claude.settingsWrite=unsupported codex.interject=supported codex.settingsRead=supported codex.settingsWrite=supported omp.interject=unsupported omp.settingsRead=unsupported omp.settingsWrite=unsupported" \
   "$states"
 chk_eq "H the schema version is unchanged: these are ADDED keys, not a reshape" "2" \
   "$(printf '%s' "$doc" | python3 -c 'import json,sys;print(json.load(sys.stdin)["schemaVersion"])')"
@@ -541,8 +541,48 @@ chk_contains "H every settingsWrite refusal points at the batch that adds it" "B
   "$(printf '%s' "$doc" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)["providers"]
-print(" ".join(d[p]["settingsWrite"]["note"] for p in sorted(d)))')"
+print(" ".join(d[p]["settingsWrite"].get("note", "") for p in sorted(d)))')"
 chk_contains "H the human table carries the same rows" "interject" "$(ac capabilities)"
+copilot_teardown
+
+echo "== J: codex daemon settings write routes through a single script =="
+TMPDIR=/tmp copilot_setup
+mkdir -p "$(dirname "$SOCK")"
+python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()' "$SOCK"
+cat > "$BIN/uv" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = run ] || exit 99
+[ "${2:-}" = --quiet ] || exit 99
+printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
+if [ "${FAKE_DAEMON_FAIL:-0}" = 1 ]; then
+  echo 'daemon stub failure' >&2; exit 1
+fi
+echo '{"effort":"medium","mode":"plan","model":"gpt-6-sol","approval":"never","sandbox":{"type":"danger-full-access"}}'
+EOF
+chmod +x "$BIN/uv"
+out="$(ac settings --thread "$THREAD" --engine codex --effort medium --mode plan 2>&1)"; rc=$?
+# damage: a successful update must return one SETTINGS reading.
+chk_eq "J daemon write success rc" 0 "$rc"
+# damage: the stale rollout says gpt-6-luna; only the notification says gpt-6-sol.
+chk_contains "J daemon write reads notification" "SETTINGS: model=gpt-6-sol effort=medium mode=plan approval=never sandbox=danger-full-access source=thread/settings/updated" "$out"
+export FAKE_DAEMON_FAIL=1
+out="$(ac settings --thread "$THREAD" --engine codex --effort medium 2>&1)"; rc=$?
+# damage: a failed daemon update must not be reported as a successful reading.
+chk_eq "J daemon failure rc" 2 "$rc"
+# damage: hiding the daemon's error would make the refused update unactionable.
+chk_contains "J daemon error detail" "ERR: codex daemon rc=1: daemon stub failure" "$out"
+unset FAKE_DAEMON_FAIL
+: > "$STUB_ARGV_LOG"
+out="$(ac settings --thread "$THREAD" --engine codex --mode plan 2>&1)"; rc=$?
+# damage: stale rollout values must not be forwarded as overrides for a mode-only write.
+chk_eq "J mode-only forwards no stale model/effort" 1 "$(python3 -c 'import sys; s=open(sys.argv[1]).read(); print(int("--mode plan" in s and "--effort" not in s and "--model" not in s))' "$STUB_ARGV_LOG")"
+rm -f "$SOCK"
+out="$(ac settings --thread "$THREAD" --engine codex --effort medium 2>&1)"; rc=$?
+# damage: without a daemon socket, a write must refuse before invoking the script.
+chk_eq "J missing socket" "7:UNSUPPORTED: no daemon socket" "$rc:${out%% —*}"
+out="$(ac settings --thread "$CLAUDE_NAME" --engine claude --effort medium 2>&1)"; rc=$?
+# damage: a claude thread must never be sent to the codex daemon path.
+chk_eq "J claude write refusal" "7:UNSUPPORTED: settings write is only for codex daemon threads" "$rc:$out"
 copilot_teardown
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
