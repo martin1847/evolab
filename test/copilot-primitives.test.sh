@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copilot primitives (B1, 2026-09-25): `tuictl interject` and `tuictl settings`.
+# Copilot primitives (B1, 2026-09-25): `tuictl steer` and `tuictl settings`.
 #
 # WHAT THESE VERBS ARE: the two ways to address a session agentctl did NOT start —
 # the operator's own codex or claude TUI. There is no lane, no fifo and no meta behind them,
@@ -222,7 +222,7 @@ chk_eq "lane settings gives the live TUI entrypoint" \
 # ─────────────────────────────────────────────────────────────────────────────────────────
 echo "== A: the A/B route is ONE predicate — does the daemon control socket exist =="
 copilot_setup
-out="$(tc interject --thread "$THREAD" -m "no daemon here" 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "no daemon here" 2>&1)"; rc=$?
 chk_eq "A no socket: the verb delivers and types the boundary" 15 "$rc"
 chk_contains "A no socket: typed line names the queue route" \
   "DELIVERED-NEXT-TURN: reason=queue" "$out"
@@ -237,7 +237,7 @@ chk_contains "A the tag prefix is at the HEAD of the body, not appended" \
 
 : > "$STUB_ARGV_LOG"
 mkdir -p "$(dirname "$SOCK")"; : > "$SOCK"
-out="$(tc interject --thread "$THREAD" -m "daemon is up" 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "daemon is up" 2>&1)"; rc=$?
 chk_eq "A socket present: still one delivery, same typed class" 15 "$rc"
 chk_contains "A socket present: the remote endpoint is on the argv" \
   "--remote unix://$SOCK" "$(cat "$STUB_ARGV_LOG")"
@@ -245,7 +245,7 @@ chk_eq "A PAIRED: exactly one engine invocation either way (no retry, no second 
   1 "$(argv_count)"
 # a custom tag replaces the default, head of body, nothing else
 : > "$STUB_ARGV_LOG"; rm -f "$SOCK"
-tc interject --thread "$THREAD" -m "tagged" --tag montior >/dev/null 2>&1
+tc steer --thread "$THREAD" -m "tagged" --tag montior >/dev/null 2>&1
 chk_contains "A --tag is the prefix the operator sees arrive" \
   "--message [montior] tagged" "$(cat "$STUB_ARGV_LOG")"
 copilot_teardown
@@ -254,7 +254,7 @@ copilot_teardown
 echo "== B: an engine refusal is REPORTED verbatim — never interpreted, never retried =="
 copilot_setup
 export FAKE_CODEX_MODE=daemon
-out="$(tc interject --thread "$THREAD" -m "who owns this thread" 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "who owns this thread" 2>&1)"; rc=$?
 chk_eq "B DAMAGE ORACLE: a refused delivery fails (EXIT_FAILED), never DELIVERED" 2 "$rc"
 chk_eq "B exactly one ERR line, no commentary around it" 1 \
   "$(printf '%s\n' "$out" | grep -c '^ERR:')"
@@ -271,12 +271,12 @@ copilot_teardown
 # ─────────────────────────────────────────────────────────────────────────────────────────
 echo "== C: addressing refusals — a thread we cannot name is never guessed at =="
 copilot_setup
-out="$(tc interject --thread "$MISSING_THREAD" -m "nobody home" 2>&1)"; rc=$?
+out="$(tc steer --thread "$MISSING_THREAD" -m "nobody home" 2>&1)"; rc=$?
 chk_eq "C a uuid with no rollout is refused before any engine call" 2 "$rc"
 chk_contains "C and the refusal says what to do about it" \
   "thread has no rollout yet (send one turn in the TUI first)" "$out"
 chk_eq "C DAMAGE ORACLE: nothing was sent" 0 "$(argv_count)"
-out="$(tc interject --thread "not-a-uuid" -m "x" 2>&1)"; rc=$?
+out="$(tc steer --thread "not-a-uuid" -m "x" 2>&1)"; rc=$?
 chk_eq "C a non-uuid codex thread is refused (the rollout is addressed by uuid)" 2 "$rc"
 chk_contains "C and says which spelling it needs" "full thread uuid" "$out"
 # claude: EXACT match only, and several matches is a refusal listing candidates
@@ -287,7 +287,7 @@ with open(os.path.join(home, ".claude", "sessions", "4343.json"), "w", encoding=
     json.dump({"name": name, "sessionId": "0199dd44-5555-4666-8777-888899990000",
                "cwd": os.path.join(home, "work"), "status": "shell"}, fh)
 PY
-out="$(tc interject --thread "$CLAUDE_NAME" --engine claude -m "which one" 2>&1)"; rc=$?
+out="$(tc steer --thread "$CLAUDE_NAME" --engine claude -m "which one" 2>&1)"; rc=$?
 chk_eq "C two live claude sessions with one name: refused, not guessed" 2 "$rc"
 chk_contains "C and both candidates are named" "$CLAUDE_SID" "$out"
 chk_contains "C including the second" "0199dd44-5555-4666-8777-888899990000" "$out"
@@ -297,7 +297,7 @@ chk_eq "C DAMAGE ORACLE: an ambiguous target receives nothing" 0 "$(argv_count)"
 # deliver the ruling to whichever of them wins that name, while the typed line claimed the
 # uuid the operator picked. Fail closed instead: refuse, send nothing.
 for uuid in "$CLAUDE_SID" "0199dd44-5555-4666-8777-888899990000"; do
-  out="$(tc interject --thread "$uuid" --engine claude -m "by uuid" 2>&1)"; rc=$?
+  out="$(tc steer --thread "$uuid" --engine claude -m "by uuid" 2>&1)"; rc=$?
   chk_eq "C a uuid whose name is shared is refused, not silently renamed ($uuid)" 2 "$rc"
   chk_contains "C and the refusal names the ambiguity ($uuid)" \
     "relay target ambiguous: name $CLAUDE_NAME shared by 2 sessions" "$out"
@@ -311,13 +311,13 @@ with open(os.path.join(home, ".claude", "sessions", "4444.json"), "w", encoding=
     json.dump({"sessionId": "0199ee55-6666-4777-8888-999900001111",
                "cwd": os.path.join(home, "work"), "status": "shell"}, fh)
 PY
-out="$(tc interject --thread "0199ee55-6666-4777-8888-999900001111" --engine claude -m "no name" 2>&1)"
+out="$(tc steer --thread "0199ee55-6666-4777-8888-999900001111" --engine claude -m "no name" 2>&1)"
 rc=$?
 chk_eq "C a nameless live session is refused (the relay has no way to address it)" 2 "$rc"
 chk_contains "C and says why" "has no name" "$out"
 rm -f "$HOME/.claude/sessions/4444.json"
 rm -f "$HOME/.claude/sessions/4343.json"
-out="$(tc interject --thread "zz-copilot" --engine claude -m "prefix only" 2>&1)"; rc=$?
+out="$(tc steer --thread "zz-copilot" --engine claude -m "prefix only" 2>&1)"; rc=$?
 chk_eq "C a PREFIX of a live session name is not a match" 2 "$rc"
 chk_contains "C and the refusal points at the registry" "~/.claude/sessions" "$out"
 copilot_teardown
@@ -325,7 +325,7 @@ copilot_teardown
 # ─────────────────────────────────────────────────────────────────────────────────────────
 echo "== D: claude delivery is a throwaway relay seat over the peer channel =="
 copilot_setup
-out="$(tc interject --thread "$CLAUDE_NAME" --engine claude -m "reply PONG" 2>&1)"; rc=$?
+out="$(tc steer --thread "$CLAUDE_NAME" --engine claude -m "reply PONG" 2>&1)"; rc=$?
 chk_eq "D the relay delivered and typed the boundary" 15 "$rc"
 chk_contains "D the typed line names the peer route" "DELIVERED-NEXT-TURN: reason=peer" "$out"
 chk_contains "D the id IS the relay name the target will attribute it to" \
@@ -339,10 +339,10 @@ chk_contains "D and the target named in the prompt" "$CLAUDE_NAME" "$argv"
 chk_contains "D the body reaches the relay tagged" "[copilot] reply PONG" "$argv"
 # sessionId addresses the same session as the name
 : > "$STUB_ARGV_LOG"
-out="$(tc interject --thread "$CLAUDE_SID" --engine claude -m "by id" 2>&1)"; rc=$?
+out="$(tc steer --thread "$CLAUDE_SID" --engine claude -m "by id" 2>&1)"; rc=$?
 chk_eq "D a sessionId addresses the same seat" 15 "$rc"
 export FAKE_CLAUDE_MODE=fail
-out="$(tc interject --thread "$CLAUDE_NAME" --engine claude -m "held" 2>&1)"; rc=$?
+out="$(tc steer --thread "$CLAUDE_NAME" --engine claude -m "held" 2>&1)"; rc=$?
 chk_eq "D a relay that fails is reported, not swallowed" 2 "$rc"
 chk_contains "D with the relay's own first line" "no session named that is accepting" "$out"
 unset FAKE_CLAUDE_MODE
@@ -352,7 +352,7 @@ copilot_teardown
 echo "== E: the --confirm gauge, four arms (C14) =="
 copilot_setup
 export FAKE_CODEX_APPEND=full
-out="$(tc interject --thread "$THREAD" -m "confirm me" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "confirm me" --confirm 2>&1)"; rc=$?
 chk_eq "E POSITIVE: echo + a new turn after the offset is LANDED (rc 0)" 0 "$rc"
 chk_contains "E POSITIVE: the boundary line is still published first" \
   "DELIVERED-NEXT-TURN" "$out"
@@ -362,23 +362,23 @@ chk_contains "E POSITIVE: and the settings that turn runs under" "effort=low mod
 # records the queued text. An order-sensitive reader called this exact landing UNMEASURED
 # while the TUI was visibly answering it.
 export FAKE_CODEX_APPEND=live
-out="$(tc interject --thread "$THREAD" -m "live order" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "live order" --confirm 2>&1)"; rc=$?
 chk_eq "E POSITIVE (live order): turn_context BEFORE the echo is still LANDED" 0 "$rc"
 chk_contains "E POSITIVE (live order): and names that turn" "LANDED: turn=t-live" "$out"
 
 export FAKE_CODEX_APPEND=echo
-out="$(tc interject --thread "$THREAD" -m "no turn follows" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "no turn follows" --confirm 2>&1)"; rc=$?
 chk_eq "E NEGATIVE: the text arrived but no turn opened — UNMEASURED (rc 7)" 7 "$rc"
 chk_contains "E NEGATIVE: and it says WHICH half was not seen" \
   "the message is in the record but no new turn opened with it" "$out"
 chk_not_contains "E NEGATIVE: never LANDED" "LANDED" "$out"
 
 export FAKE_CODEX_APPEND=garbage
-out="$(tc interject --thread "$THREAD" -m "damaged record" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "damaged record" --confirm 2>&1)"; rc=$?
 chk_eq "E BROKEN GAUGE: a non-JSON line appended is UNMEASURED, never LANDED" 7 "$rc"
 chk_contains "E BROKEN GAUGE: and names the file it could not read" "cannot read" "$out"
 export FAKE_CODEX_APPEND=vanish
-out="$(tc interject --thread "$THREAD" -m "record gone" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "record gone" --confirm 2>&1)"; rc=$?
 chk_eq "E BROKEN GAUGE: the record vanishing mid-poll is UNMEASURED too" 7 "$rc"
 chk_contains "E BROKEN GAUGE: and says so" "cannot read" "$out"
 
@@ -395,7 +395,7 @@ with open(sys.argv[1], "a", encoding="utf-8") as fh:
         "collaboration_mode": {"mode": "default"}}}) + "\n")
 PY
 export FAKE_CODEX_APPEND=none
-out="$(tc interject --thread "$THREAD" -m "old news" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "old news" --confirm 2>&1)"; rc=$?
 chk_eq "E BOUNDARY: a pairing from BEFORE the offset is not this delivery's evidence" 7 "$rc"
 chk_contains "E BOUNDARY: the verdict is the absence, not the stale pair" \
   "the message never reached the record" "$out"
@@ -409,7 +409,7 @@ chk_not_contains "E BOUNDARY: and certainly not LANDED" "LANDED" "$out"
 # already spent. This is the arm that discriminates — the pre-fix loop read once before it
 # ever looked at the clock, and answered LANDED / 0.
 export FAKE_CODEX_APPEND=full AGENTCTL_CONFIRM_TIMEOUT=0
-out="$(tc interject --thread "$THREAD" -m "budget already spent" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "budget already spent" --confirm 2>&1)"; rc=$?
 chk_eq "E DEADLINE: an exhausted budget consumes no evidence at all (rc 7)" 7 "$rc"
 chk_not_contains "E DEADLINE: and never publishes LANDED" "LANDED" "$out"
 chk_contains "E DEADLINE: the boundary line is still published" "DELIVERED-NEXT-TURN" "$out"
@@ -428,7 +428,7 @@ with open(sys.argv[1], "a", encoding="utf-8") as fh:
 PY
 ) &
 late_writer=$!
-out="$(tc interject --thread "$THREAD" -m "late pair" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$THREAD" -m "late pair" --confirm 2>&1)"; rc=$?
 chk_eq "E DEADLINE: a pairing appended after the window is not this run's answer" 7 "$rc"
 chk_not_contains "E DEADLINE: no late LANDED" "LANDED: turn=t-late" "$out"
 wait "$late_writer" 2>/dev/null
@@ -436,11 +436,11 @@ export AGENTCTL_CONFIRM_TIMEOUT=2
 unset FAKE_CODEX_APPEND
 # PAIRED GREEN on the claude side: the same gauge over a transcript
 export FAKE_CLAUDE_APPEND=full
-out="$(tc interject --thread "$CLAUDE_NAME" --engine claude -m "reply PONG" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$CLAUDE_NAME" --engine claude -m "reply PONG" --confirm 2>&1)"; rc=$?
 chk_eq "E claude POSITIVE: peer message + an assistant line is LANDED" 0 "$rc"
 chk_contains "E claude POSITIVE: the assistant turn is named" "LANDED: turn=msg_h9" "$out"
 export FAKE_CLAUDE_APPEND=echo
-out="$(tc interject --thread "$CLAUDE_NAME" --engine claude -m "silent target" --confirm 2>&1)"; rc=$?
+out="$(tc steer --thread "$CLAUDE_NAME" --engine claude -m "silent target" --confirm 2>&1)"; rc=$?
 chk_eq "E claude NEGATIVE: delivered but the seat never spoke — UNMEASURED" 7 "$rc"
 unset FAKE_CLAUDE_APPEND
 copilot_teardown
@@ -489,7 +489,7 @@ chk_not_contains "F BROKEN GAUGE: and publishes no reading" "SETTINGS:" "$out"
 chk_not_contains "F DAMAGE ORACLE: interject's delivery refusal is NOT reused here" \
   "send one turn in the TUI first" "$out"
 # PAIRED: the same missing rollout is still ERR / 2 for a DELIVERY
-out2="$(tc interject --thread "$THREAD" -m "cannot deliver" 2>&1)"; rc2=$?
+out2="$(tc steer --thread "$THREAD" -m "cannot deliver" 2>&1)"; rc2=$?
 chk_eq "F PAIRED: interject on the same missing rollout stays a refusal" 2 "$rc2"
 chk_contains "F PAIRED: with its own wording" "thread has no rollout yet" "$out2"
 seed_rollout

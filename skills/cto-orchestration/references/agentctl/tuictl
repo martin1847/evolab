@@ -13,12 +13,13 @@ PY="${AGENTCTL_PYTHON:-python3}"
 DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 
 usage() {
-  echo "usage: tuictl interject --engine codex|claude --thread <id> (-m TEXT | -f FILE) [--tag T] [--confirm]"
+  echo "usage: tuictl steer --engine codex|claude --thread <id> (-m TEXT | -f FILE) [--tag T] [--confirm]"
   echo "       tuictl settings --engine E --thread <id> [--effort E] [--mode plan|default] [--model M]"
 }
 
 case "${1:-}" in
-  interject|settings) verb="$1"; shift; exec "$PY" "$CTL" --run-dir "$DIR" "$verb" "$@" ;;
+  steer) shift; exec "$PY" "$CTL" --run-dir "$DIR" interject "$@" ;;
+  settings) shift; exec "$PY" "$CTL" --run-dir "$DIR" settings "$@" ;;
   --help) usage; exit 0 ;;
   *) usage >&2; exit 1 ;;
 esac
