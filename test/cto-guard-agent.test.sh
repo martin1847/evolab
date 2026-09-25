@@ -284,7 +284,7 @@ runid PostToolUse Agent '{"prompt":"run playwright E2E against localhost:3000"}'
 chk_eq "Post second copy silent" "" "$OUT"
 run PreToolUse Agent '{"prompt":"run the test suite"}'; a=$RC; run PreToolUse Agent '{"prompt":"run the test suite"}'
 chk_eq "no tool_use_id: never deduped" "2/2" "$a/$RC"
-chk_eq "marker dir is 0700" "700" "$(stat -f %Lp "$AGENT_WATCH_DIR/guard-agent.seen" 2>/dev/null || stat -c %a "$AGENT_WATCH_DIR/guard-agent.seen")"
+chk_eq "marker dir is 0700" "700" "$(python3 -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])' "$AGENT_WATCH_DIR/guard-agent.seen")"
 AGENT_WATCH_DIR=/nonexistent/zz runid PreToolUse Agent '{"prompt":"run the test suite"}' toolu_zz03
 chk_eq "unwritable run dir still judges" 2 "$RC"
 rm -rf "$AGENT_WATCH_DIR"
