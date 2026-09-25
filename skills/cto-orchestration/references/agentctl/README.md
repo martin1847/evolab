@@ -230,7 +230,7 @@ hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则
   （「正在被编排」= 同仓有 LIVE 席位或今/昨相位账本 `start` 行，同仓 = git common dir；判 not 则零输出放行，不打扰单 agent 会话；
   活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir / 账本不可读 → ALLOW+WARN）。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：browser/E2E 派发含
-  `mcp__chrome-devtools` → DENY（逼 Playwright）；派发未显式钉 `model` 档 → DENY；e2e-runner 派发 model 非便宜档 → DENY；prompt 里的绝对路径若是落后 upstream 的 git 树 → WARN+UNMEASURED（P0e `stale-scout-cwd`，≤4 树 / 6s 预算，永不 DENY）。
+  `mcp__chrome-devtools` → DENY（逼 Playwright）；派发未显式钉 `model` 档 → DENY；e2e-runner 派发 model 非便宜档 → DENY；prompt 里的绝对路径若是落后 upstream 的 git 树 → WARN+UNMEASURED（P0e `stale-scout-cwd`，≤4 树 / 6s 预算，永不 DENY）。**只管主位**：agentctl 起的席位（env `AGENTCTL_SESSION`）模型已由派发者钉死，P0c/P0d 在那里静默；两级同接按 `tool_use_id` 去重，一次派发只判一次。
   Pre·TaskStop|KillShell：目标 `.output` 与 subagent transcript 取最鲜 mtime，120s 内还在长 = 活的 → DENY（override
   `touch /tmp/cto-allow-kill-<id>`，任何经核实的杀单动机都适用）。Post·Agent：browser 派发注入 deadline-watch 提醒。
 - **`cto-guard-stop.py`（Stop）** — **本仓正在被编排**且本仓席位 `agentctl status` 说 RUNNING 且附 `no watcher armed`：
@@ -249,9 +249,9 @@ hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则
 
 不另造 settings 脚手架——并进 `repo-governance-bootstrap` §11 已建的那份。**不靠 skill frontmatter
 `hooks:` 自注册**（mid-session 经 Skill 工具激活不注册 → 显式 wiring 才可靠）。
-**cto-guard-edit / cto-guard-stop / retro-reminder 自认身份**（`identity.orchestrated`，非编排仓静默）→ 可接用户级；**cto-guard-bash（除 ⑧⑳）与 cto-guard-agent 仍是角色属性 DENY 门**
-（`&` 后台 / amend 复合链 / cd+相对路径在任何仓 fire）→ 只接项目级；同一 guard 两级同接会双触发；用户级只放席位属性提醒（agent-mail 收信）。
-接完自检：edit / stop 用**非编排仓** cwd 喂合成载荷应零输出；bash / agent 只验「别的仓的 settings 里没有它」——脚本本身在任何仓都会 DENY，零输出不是判据。
+**cto-guard-edit / cto-guard-stop / retro-reminder 自认身份**（`identity.orchestrated`，非编排仓静默）→ 可接用户级；**cto-guard-agent 自认席位角色**（agentctl 席位下 P0c/P0d 静默、两级同接按 `tool_use_id` 去重）→ 接用户级即可（09-25）；**cto-guard-bash（除 ⑧⑳）仍是角色属性 DENY 门**
+（`&` 后台 / amend 复合链 / cd+相对路径在任何仓 fire）→ 只接项目级、两级同接会双触发；用户级只放席位属性提醒（agent-mail 收信）。
+接完自检：edit / stop 用**非编排仓** cwd 喂合成载荷应零输出；agent 用 `AGENTCTL_SESSION=x` 喂无 `model` 载荷应零输出、去掉它应 DENY；bash 只验「别的仓的 settings 里没有它」——脚本本身在任何仓都会 DENY，零输出不是判据。
 
 Codex 的 Stop 片段（`<repo>/.codex/hooks.json`；`~/.codex/hooks.json` 与两层 `config.toml` 内联
 `[hooks]` 也认）——**结构以 codex 官方文档为准，不是 CC 那份的拷贝**：

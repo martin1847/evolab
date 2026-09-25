@@ -7,6 +7,10 @@
 #   PreToolUse   matcher "Agent|Task"  -> cwd named by the brief is BEHIND upstream (P0e, WARN)
 #   PreToolUse   matcher "TaskStop"    -> kill-a-live-agent guard      (P0b, DENY)
 #   PostToolUse  matcher "Agent|Task"  -> black-hole deadline reminder (existing, ALLOW+context)
+# Scope (owner ruling 2026-09-25): P0c/P0d are ORCHESTRATOR-seat rules — a seat agentctl launched
+# (AGENTCTL_SESSION in env) had its model pinned by the dispatcher, so both stay silent there. Wired
+# at user AND project level the guard runs twice per call: it dedupes on (event, tool_use_id), so one
+# dispatch is judged once and the second copy exits 0 without a word. Safe to wire at user level.
 # Rationale (2026-07-04 audit): the failing rules already existed in prose (frontend-verify.md / memory)
 # but didn't fire at dispatch/kill time. Prose that doesn't reach the decision point is net-negative →
 # promote to tool-call hooks. Same conclusion applied again 2026-07-10 for P0c (see below).
@@ -195,6 +199,44 @@ def _p0e_freshness(prompt):
     return warns, list(dict.fromkeys(notes))
 
 
+# ── seat role + two-level dedupe (owner ruling 2026-09-25) ──────────────────────────────────
+# WORKER seat = a process agentctl launched: the pane assembly (agentctl `start`) exports
+# AGENTCTL_SESSION to all three engines and hooks inherit the environment. Its model was chosen
+# by the orchestrator at dispatch, so the economy rules would only re-ask a settled question;
+# the orchestrator's own interactive session carries no marker and is the target.
+def _worker_seat():
+    return bool(os.environ.get("AGENTCTL_SESSION", "").strip())
+
+
+# The same guard wired at user AND project level runs twice per tool call, in parallel. Both
+# copies see the dispatch's `tool_use_id` (PreToolUse/PostToolUse carry it, PermissionRequest
+# does not): the first to create the marker judges, the other exits 0 silently. No id → no
+# dedupe (a doubled verdict is the old behaviour; a silent false ALLOW would be a new one).
+def _seen_before(event, tool_use_id):
+    if not isinstance(tool_use_id, str) or not tool_use_id:
+        return False
+    seen = os.path.join(os.environ.get("AGENT_WATCH_DIR") or "/tmp/agent-watch-run", "guard-agent.seen")
+    try:
+        os.makedirs(seen, mode=0o700, exist_ok=True)
+        marker = os.path.join(seen, "%s-%s" % (event, re.sub(r"[^A-Za-z0-9_.-]", "_", tool_use_id)[:120]))
+        os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return True
+    except OSError:
+        return False  # run dir unwritable: judge as before, never trade a verdict for silence
+    try:  # bounded sweep, only once the dir has grown: markers older than 10 minutes go
+        names = os.listdir(seen)
+        if len(names) > 256:
+            cutoff = time.time() - 600
+            for n in names:
+                p = os.path.join(seen, n)
+                if os.path.getmtime(p) < cutoff:
+                    os.unlink(p)
+    except OSError:
+        pass
+    return False
+
+
 def checker_error(message):
     sys.stderr.write(f"CHECKER-ERROR: {message}\n")
     return 2
@@ -215,6 +257,8 @@ def main():
         event == "PreToolUse" and tool in ("Agent", "Task", "TaskStop", "KillShell")
     ) or (event == "PostToolUse" and tool in ("Agent", "Task"))
     if not applicable:
+        return 0
+    if _seen_before(event, data.get("tool_use_id")):
         return 0
     ti = data.get("tool_input")
     if not isinstance(ti, dict):
@@ -307,30 +351,31 @@ def main():
         # IS an e2e-run dispatch by definition — same zero-false-positive trick as P0a's tool token;
         # a premium REVIEW of e2e code doesn't carry the marker and must pass). Premium-name check is
         # deliberately narrow (fable/opus) — cto-guard-bash (6) forces the marker onto every runner.
-        if "E2E_ECONOMY=1" in prompt and re.search(r"\b(fable|opus)\b", str(ti.get("model") or ""), re.I):
-            sys.stderr.write(
-                "DENY: e2e-runner dispatch (brief carries E2E_ECONOMY=1) on a premium model. Running "
-                "live e2e gates is mechanical supervision — re-dispatch with an economy tier (e.g. "
-                "haiku). Read: cto-orchestration/SKILL.md §0 (不自己跑长 E2E / model 按活分档).\n"
-            )
-            return 2
+        if not _worker_seat():  # P0d/P0c are orchestrator-seat rules (scope note at the top)
+            if "E2E_ECONOMY=1" in prompt and re.search(r"\b(fable|opus)\b", str(ti.get("model") or ""), re.I):
+                sys.stderr.write(
+                    "DENY: e2e-runner dispatch (brief carries E2E_ECONOMY=1) on a premium model. Running "
+                    "live e2e gates is mechanical supervision — re-dispatch with an economy tier (e.g. "
+                    "haiku). Read: cto-orchestration/SKILL.md §0 (不自己跑长 E2E / model 按活分档).\n"
+                )
+                return 2
 
-        subagent_type = ti.get("subagent_type", "") or ""
-        model = str(ti.get("model") or "").strip()
-        if subagent_type != "fork" and not model:
-            sys.stderr.write(
-                "DENY: Agent/Task dispatch missing explicit `model`. Silent inheritance of the parent "
-                "session's model burns premium tier on mechanical work (caught 2026-07-10: two workers "
-                "defaulted to Fable for scripted probes). Pick a tier and re-dispatch with `model` set:\n"
-                "  economy tier (mechanical/light: file moves, running tests, small patches, scripted "
-                "probes) -> e.g. haiku/sonnet, gpt-5-mini\n"
-                "  reasoning tier (adversarial review, architecture, long-context research) -> "
-                "e.g. opus, gpt-5.6\n"
-                "  premium/frontier stays allowed, but it must be deliberate, not silent inheritance. "
-                "(subagent_type \"fork\" is exempt — it always inherits the parent model.) "
-                "Read: cto-orchestration/SKILL.md §0 (model 按活分档).\n"
-            )
-            return 2
+            subagent_type = ti.get("subagent_type", "") or ""
+            model = str(ti.get("model") or "").strip()
+            if subagent_type != "fork" and not model:
+                sys.stderr.write(
+                    "DENY: Agent/Task dispatch missing explicit `model`. Silent inheritance of the parent "
+                    "session's model burns premium tier on mechanical work (caught 2026-07-10: two workers "
+                    "defaulted to Fable for scripted probes). Pick a tier and re-dispatch with `model` set:\n"
+                    "  economy tier (mechanical/light: file moves, running tests, small patches, scripted "
+                    "probes) -> e.g. haiku/sonnet, gpt-5-mini\n"
+                    "  reasoning tier (adversarial review, architecture, long-context research) -> "
+                    "e.g. opus, gpt-5.6\n"
+                    "  premium/frontier stays allowed, but it must be deliberate, not silent inheritance. "
+                    "(subagent_type \"fork\" is exempt — it always inherits the parent model.) "
+                    "Read: cto-orchestration/SKILL.md §0 (model 按活分档).\n"
+                )
+                return 2
 
         # ── (P0e) the work tree this brief names is BEHIND its upstream (WARN, never DENY) ──────
         # Judged LAST, i.e. only on a dispatch the DENY rules above already allowed, and it cannot

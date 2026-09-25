@@ -9,6 +9,8 @@ cd "$(dirname "$0")"
 . ./lib-testkit.sh
 
 GUARD="../skills/cto-orchestration/references/agentctl/cto-guard-agent.py"
+unset AGENTCTL_SESSION                # a worker seat exempts P0c/P0d — this suite judges as the orchestrator
+export AGENT_WATCH_DIR="$(mktemp -d)" # dedupe markers land here, never in the live run dir
 
 echo "== cto-guard-agent.py =="
 
@@ -257,5 +259,34 @@ tmpe="$(mktemp)"; out="$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name
 chk_eq "non-applicable tool stays allowed" 0 "$rc"; chk_eq "non-applicable tool silent" "" "$err"
 tmpe="$(mktemp)"; out="$(python3 -c 'import glob,io,runpy,sys; sys.stdin=io.StringIO("{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TaskStop\",\"tool_input\":{\"task_id\":\"broken-checker\"}}"); glob.glob=lambda *a,**k: (_ for _ in ()).throw(RuntimeError("boom")); runpy.run_path(sys.argv[1],run_name="__main__")' "$GUARD" 2>"$tmpe")"; rc=$?; err="$(cat "$tmpe")"; rm -f "$tmpe"
 chk_eq "internal Agent checker failure exits 2" 2 "$rc"; chk_contains "internal Agent checker failure marker" "CHECKER-ERROR" "$err"
+
+# ── scope (owner 2026-09-25): P0c/P0d are ORCHESTRATOR rules — an agentctl seat (AGENTCTL_SESSION) is exempt ──
+AGENTCTL_SESSION=zz-seat run PreToolUse Agent '{"prompt":"run the test suite"}'
+chk_eq "worker seat: missing model allowed" 0 "$RC"; chk_eq "worker seat: silent" "" "$OUT$ERR"
+AGENTCTL_SESSION=zz-seat run PreToolUse Agent '{"prompt":"run: E2E_ECONOMY=1 bash test/e2e/run.sh","model":"opus"}'
+chk_eq "worker seat: e2e on opus allowed" 0 "$RC"
+AGENTCTL_SESSION=zz-seat run PreToolUse Agent '{"prompt":"browser E2E; ToolSearch select:mcp__chrome-devtools__take_snapshot","model":"sonnet"}'
+chk_eq "worker seat: P0a still denies (not an economy rule)" 2 "$RC"
+AGENTCTL_SESSION="" run PreToolUse Agent '{"prompt":"run the test suite"}'
+chk_eq "empty AGENTCTL_SESSION is not a worker seat" 2 "$RC"
+
+# ── two-level dedupe: one (event, tool_use_id) is judged once; the second copy exits 0 silently ──
+runid() { local tmpe; tmpe="$(mktemp)"; OUT="$(mkp "$1" "$2" "$3" | python3 -c 'import json,sys; d=json.load(sys.stdin); d["tool_use_id"]=sys.argv[1]; print(json.dumps(d))' "$4" | python3 "$GUARD" 2>"$tmpe")"; RC=$?; ERR="$(cat "$tmpe")"; rm -f "$tmpe"; }
+runid PreToolUse Agent '{"prompt":"run the test suite"}' toolu_zz01
+chk_eq "first copy denies" 2 "$RC"
+runid PreToolUse Agent '{"prompt":"run the test suite"}' toolu_zz01
+chk_eq "second copy (same id) exits 0" 0 "$RC"; chk_eq "second copy silent" "" "$OUT$ERR"
+runid PreToolUse Agent '{"prompt":"run the test suite"}' toolu_zz02
+chk_eq "new id judged again" 2 "$RC"
+runid PostToolUse Agent '{"prompt":"run playwright E2E against localhost:3000"}' toolu_zz01
+chk_contains "Pre and Post of one id are distinct keys" "BLACK-HOLE" "$(ctx "$OUT")"
+runid PostToolUse Agent '{"prompt":"run playwright E2E against localhost:3000"}' toolu_zz01
+chk_eq "Post second copy silent" "" "$OUT"
+run PreToolUse Agent '{"prompt":"run the test suite"}'; a=$RC; run PreToolUse Agent '{"prompt":"run the test suite"}'
+chk_eq "no tool_use_id: never deduped" "2/2" "$a/$RC"
+chk_eq "marker dir is 0700" "700" "$(stat -f %Lp "$AGENT_WATCH_DIR/guard-agent.seen" 2>/dev/null || stat -c %a "$AGENT_WATCH_DIR/guard-agent.seen")"
+AGENT_WATCH_DIR=/nonexistent/zz runid PreToolUse Agent '{"prompt":"run the test suite"}' toolu_zz03
+chk_eq "unwritable run dir still judges" 2 "$RC"
+rm -rf "$AGENT_WATCH_DIR"
 
 summary

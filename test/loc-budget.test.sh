@@ -128,7 +128,7 @@ SKILL_ROOT="$REPO_ROOT/skills/cto-orchestration"
 # retrospective §7 二选一 (`/compact` 优先) plus the 复述 sentence the pointer routes to. INJECT /
 # INJECT_SINGLE untouched: the extractor weighs `cto-guard-*.py`, and these two speak on the
 # orchestrator's own prompt, not into a worker's brief.
-CODE_MAX=15467      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
+CODE_MAX=15512      # every shipped *.py / *.sh / the `agentctl` bash entrypoint, summed wc -l
 PROSE_MAX=1554      # every shipped *.md under the skill, summed wc -l
 INJECT_MAX=18798    # UTF-8 bytes of guard text that reaches an agent's context (extractor below)
 INJECT_SINGLE_MAX=2915  # the longest SINGLE message, which bites harder than the total: a worker
