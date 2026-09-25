@@ -22,7 +22,7 @@ metadata:
 
 | 角色 | 责任 | 默认实现（可换） |
 |---|---|---|
-| 编排者 | 写 goal、派工、监控、裁决、落盘；不写产品代码 | 任意 shell + 文件 agent |
+| 编排者 | 写 goal、派工、监控、裁决、落盘；不写产品代码；提示词 / 教义文本自己改（要派出则准最强模型），改完的测试再派 | 任意 shell + 文件 agent |
 | 执行 agent | 按 goal 实现、自测、E2E、交付；不扩 scope；须可观测且可轮间 resume | omp / Claude Code |
 | 评审 agent | 冷上下文只读挑刺，给 evidence + severity + verdict；不改码 | codex / 不同 lineage 模型 |
 | 运维 agent | 对不可达环境只读取证与部署后验证；不顺手修复 | 用户转交只读取证提示词 |
