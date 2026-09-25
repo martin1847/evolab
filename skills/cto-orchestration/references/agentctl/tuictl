@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Live TUI copilot entrypoint; follow PATH symlinks before locating duplexctl.py.
+set -uo pipefail
+
+SELF="$0"
+while [ -L "$SELF" ]; do
+  link="$(readlink "$SELF")"
+  case "$link" in /*) SELF="$link" ;; *) SELF="$(dirname "$SELF")/$link" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
+CTL="$HERE/duplexctl.py"
+PY="${AGENTCTL_PYTHON:-python3}"
+DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
+
+usage() {
+  echo "usage: tuictl interject --engine codex|claude --thread <id> (-m TEXT | -f FILE) [--tag T] [--confirm]"
+  echo "       tuictl settings --engine E --thread <id> [--effort E] [--mode plan|default] [--model M]"
+}
+
+case "${1:-}" in
+  interject|settings) verb="$1"; shift; exec "$PY" "$CTL" --run-dir "$DIR" "$verb" "$@" ;;
+  --help) usage; exit 0 ;;
+  *) usage >&2; exit 1 ;;
+esac

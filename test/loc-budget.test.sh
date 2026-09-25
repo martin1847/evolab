@@ -140,9 +140,9 @@ _sum_lines() { # $@ = find predicates
 }
 
 # Extensionless shipped ENTRYPOINTS are named one by one, because that is all `find` can key
-# on: `agentctl` since the beginning, `enginectl` since 2026-09-25. A new entry that nobody
+# on: `agentctl` since the beginning, `tuictl` since 2026-09-25. A new entry that nobody
 # adds here is shipped code no ceiling watches (review r1 M3 caught exactly that).
-code_lines="$(_sum_lines -name '*.py' -o -name '*.sh' -o -name 'agentctl' -o -name 'enginectl')"
+code_lines="$(_sum_lines -name '*.py' -o -name '*.sh' -o -name 'agentctl' -o -name 'tuictl')"
 prose_lines="$(_sum_lines -name '*.md')"
 doc_lines="$(python3 - "$SKILL_ROOT" <<'PY'
 import ast
