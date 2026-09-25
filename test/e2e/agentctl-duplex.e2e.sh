@@ -92,6 +92,6 @@ EOF
 # through the engine's own CLI, model passed as an ARGUMENT so no default config was touched.
 run_leg claude --model "${E2E_MODEL_CLAUDE:-haiku}"
 run_leg omp --auto-approve --model="${E2E_MODEL_OMP:-anthropic/claude-haiku-4-5}"
-run_leg codex --model "${E2E_MODEL_CODEX:-gpt-5.6-luna}"
+run_leg codex --model "${E2E_MODEL_CODEX:-gpt-6-luna}"
 
 summary
