@@ -93,6 +93,7 @@ UNRESOLVED = re.compile(
 # `<>` included (`*`, not `+`): an EMPTY placeholder is an unresolved declaration too, and
 # `verify=<> => observed` passed the `+` version (cold review §3.2).
 PLACEHOLDER = re.compile(r"<[^<>\n]*>")
+COUNT_RE = re.compile(r"(?:≤|<=|≈|不超过|以内|上限|最多|至多)\s*\d+\s*(?:行|条|lines?)|\d+\s*(?:行|条)\s*(?:以内|以下|上限)")
 # WARN-class smell only: an acceptance row asserting INTERNAL agreement (table vs registry)
 # instead of observable behaviour is where same-source self-proof hides. Never blocks — this
 # gate validates declaration shape and is never an oracle for oracle quality.
@@ -675,6 +676,10 @@ def main():
         return fail("replace every placeholder with the probe actually run and its observed result")
     if UNRESOLVED.match(probe) or UNRESOLVED.match(observed):
         return fail("the cheapest refutation must be run before dispatch; unresolved/N/A is not evidence")
+    pinned = COUNT_RE.search(body)
+    if pinned:
+        return fail(f"goal 写了祈使数字『{pinned.group(0)}』——规模由评审看真实 diff 事后判，合同不写行数 / 条数预估、上限或比值。",
+                    "Read: cto-orchestration/SKILL.md §2.")
     line = LINE_RE.search(body).group(0)
     if ABSENCE_RE.search(line) and not SCOPE_RE.search(_URL_RE.sub("", line)):
         return fail(

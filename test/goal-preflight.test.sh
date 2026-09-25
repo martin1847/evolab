@@ -31,6 +31,16 @@ run_check "$goal"
 chk_eq "placeholders rejected" 1 "$rc"
 chk_contains "placeholder error is actionable" "replace every placeholder" "$out"
 
+printf 'Preflight: `ls` => ok rc=0\n胶水 ≤ 20 行；findings ≤40 行\n' > "$goal"
+run_check "$goal"
+# damage: a goal that pins a size (行 / 条) would dispatch — owner 09-03 / SKILL §2 call it a finding, and two cold reviews on 0925 let four through.
+chk_eq "prescriptive count rejected" 1 "$rc"
+chk_contains "prescriptive count names the hit" "≤ 20 行" "$out"
+printf 'Preflight: `ls` => ok rc=0\nDOC 5046→4923 行（实测）；全量 47/48\n' > "$goal"
+run_check "$goal"
+# damage: a measured count is a fact, not a prescription, and must still dispatch.
+chk_eq "measured count passes" 0 "$rc"
+
 for unresolved in 'not run' pending unknown N/A; do
   printf 'Preflight: query metrics => %s\n' "$unresolved" > "$goal"
   run_check "$goal"
