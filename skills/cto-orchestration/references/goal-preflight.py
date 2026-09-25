@@ -678,8 +678,7 @@ def main():
         return fail("the cheapest refutation must be run before dispatch; unresolved/N/A is not evidence")
     pinned = COUNT_RE.search(body)
     if pinned:
-        return fail(f"goal 写了祈使数字『{pinned.group(0)}』——规模由评审看真实 diff 事后判，合同不写行数 / 条数预估、上限或比值。",
-                    "Read: cto-orchestration/SKILL.md §2.")
+        advise(f"goal 写了祈使数字『{pinned.group(0)}』——规模估计就删（合同不写行数 / 条数预估、上限或比值，SKILL §2），接口约定就留")
     line = LINE_RE.search(body).group(0)
     if ABSENCE_RE.search(line) and not SCOPE_RE.search(_URL_RE.sub("", line)):
         return fail(
