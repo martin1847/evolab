@@ -12,6 +12,17 @@ Env controls:
   FAKE_OMP_QUEUED          integer reported as get_state.queuedMessageCount (default 0)
   FAKE_OMP_DELIVERABLE     path written (with fresh mtime) after each prompt/steer
   FAKE_OMP_ASK=1           emit a real extension_ui_request (confirm) after prompt
+  FAKE_OMP_TOOL_FRAMES     path of a SWITCH file: while it exists and is non-empty, every
+                           get_state first emits one tool_execution_start +
+                           tool_execution_end pair whose args.command is that file's text
+                           (shape mirrors the live 2026-09-28 omp stream: type / toolCallId /
+                           toolName / args on start, result on end). Delete the file and the
+                           seat stops running tools — that is the 坏红 half of every progress
+                           fixture pair. Content is SYNTHETIC; no downstream text is copied.
+  FAKE_OMP_TOOL_NAME       toolName for those frames (default "bash"; a non-bash name is what
+                           the observation-verb filter must not be able to judge)
+  FAKE_OMP_TOOL_UPDATE=1   also emit a tool_execution_update between the pair — output
+                           arriving INSIDE one call, which this lane must never count
 Protocol shape mirrors the live probe of omp 17.0.5: ready frame first, a setWidget
 extension_ui_request as connect-time UI chrome, correlated response frames.
 """
@@ -56,6 +67,36 @@ def queued() -> int:
         return 0
 
 
+tool_seq = 0
+
+
+def emit_tool_frames() -> None:
+    """One start/end pair per call while the switch file says the seat is running tools.
+    Emitted BEFORE the correlated get_state response so the reader has appended them by the
+    time the caller's classify reads the stream — a pair that lands after the response would
+    be counted one poll late and make every window assertion a race."""
+    global tool_seq
+    switch = os.environ.get("FAKE_OMP_TOOL_FRAMES")
+    if not switch:
+        return
+    try:
+        command = Path(switch).read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if not command:
+        return
+    tool_seq += 1
+    call_id = f"toolu_fake{tool_seq:04d}"
+    name = os.environ.get("FAKE_OMP_TOOL_NAME", "bash")
+    emit({"type": "tool_execution_start", "toolCallId": call_id, "toolName": name,
+          "args": {"command": command}})
+    if os.environ.get("FAKE_OMP_TOOL_UPDATE") == "1":
+        emit({"type": "tool_execution_update", "toolCallId": call_id, "toolName": name,
+              "delta": {"content": [{"type": "text", "text": "partial output"}]}})
+    emit({"type": "tool_execution_end", "toolCallId": call_id, "toolName": name,
+          "result": {"content": [{"type": "text", "text": "synthetic tool output"}]}})
+
+
 log_path = os.environ.get("FAKE_PROVIDER_LOG")
 emit({"type": "ready"})
 emit({"type": "extension_ui_request", "id": "ui-widget", "method": "setWidget",
@@ -71,6 +112,7 @@ for line in sys.stdin:
     command = message.get("type")
     request_id = message.get("id")
     if command == "get_state":
+        emit_tool_frames()
         if os.environ.get("FAKE_OMP_BAD_STATE") == "1":
             emit({"id": request_id, "type": "response", "command": "get_state",
                   "success": False, "error": "internal state error"})

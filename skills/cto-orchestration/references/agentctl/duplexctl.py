@@ -2166,11 +2166,37 @@ def codex_tool_events(sess: Session, frames: list[dict]) -> int | None:
 
 
 def omp_tool_events(sess: Session, frames: list[dict]) -> int | None:
-    """UNKNOWN, always. The omp duplex stream carries lane protocol only — ready, correlated
-    command responses, agent_start/agent_end, extension UI requests — and not one tool or
-    command frame to count. A zero here would be a source voting "no tool ran" on evidence it
-    never had; omp sessions are judged by the other two sources."""
-    return None
+    """Count of omp's own tool frames: `tool_execution_start` and `tool_execution_end`, each
+    counted once — the same counted-not-paired rule claude's tool_use/tool_result and codex's
+    item/started + item/completed follow, because a tool that opened AND closed between two
+    polls leaves no unmatched pair and is still activity.
+
+    `tool_execution_update` is deliberately NOT counted: that frame is output arriving inside
+    one call, which is STALLED-STREAM's question, not this source's — counting it would let a
+    single long-running tool refresh the progress clock off its own token flow.
+
+    The ONE exception is the one the other two vocabularies already make: a `bash` frame whose
+    `args.command` is nothing but this lane's observation verbs. The end frame carries a
+    `result` and no `args`, so the filtered call's `toolCallId` is remembered and its closing
+    frame is dropped with it — a filtered call must not keep the clock alive through its own
+    answer frame (same reasoning as claude_tool_events' `observed` set)."""
+    count = 0
+    observed: set[str] = set()          # toolCallIds whose call was filtered out
+    for frame in frames:
+        ftype = frame.get("type")
+        if ftype not in ("tool_execution_start", "tool_execution_end"):
+            continue
+        call = frame.get("toolCallId")
+        filtered = frame.get("toolName") == "bash" and agentctl_observe_command(
+            _dict(frame.get("args")).get("command"))
+        if not filtered and ftype == "tool_execution_end" and isinstance(call, str):
+            filtered = call in observed
+        if filtered:
+            if isinstance(call, str):
+                observed.add(call)
+            continue
+        count += 1
+    return count
 
 
 ENGINE_TOOL_EVENTS = {"claude": claude_tool_events, "codex": codex_tool_events,
@@ -2180,10 +2206,16 @@ ENGINE_TOOL_EVENTS = {"claude": claude_tool_events, "codex": codex_tool_events,
 def tools_activity(sess: Session, engine: str) -> tuple[str | None, str, bool]:
     """(fingerprint, "", False) of engine tool activity, or (None, why, structural) when this
     source has no answer. `structural` is the m-1 distinction this file already draws between
-    [n/a] and [unknown]: an engine whose lane carries no tool frames at all is nothing to look
-    at, while an events file nobody can read is a BROKEN GAUGE — and only a broken gauge may
-    taint a verdict's reason word. Junk the counter cannot read never reads as silence, the same
-    rule complete_frames_integrity serves the stall probe."""
+    [n/a] and [unknown]: an engine with nothing to look at is [n/a], while an events file
+    nobody can read is a BROKEN GAUGE — and only a broken gauge may taint a verdict's reason
+    word. Junk the counter cannot read never reads as silence, the same rule
+    complete_frames_integrity serves the stall probe.
+
+    Every SHIPPED engine now declares a vocabulary (claude, codex, omp — omp's was added
+    2026-09-28), so the two [n/a] returns below are the contract a lane WITHOUT one would get:
+    an `engine=` this table does not know, or a counter that declines to answer. Neither is
+    reachable from the three engines `start` accepts; they stay because the alternative is a
+    fourth engine silently voting "no tool ran" on evidence it never had."""
     counter = ENGINE_TOOL_EVENTS.get(engine)
     if counter is None:
         return None, f"engine '{engine or 'unset'}' declares no tool-frame vocabulary", True
@@ -2371,8 +2403,9 @@ def progress_verdict(sess: Session) -> tuple[bool, str, str, str, str]:
     # THREE buckets, not two: `judged` votes, `blind` is a gauge that tried and failed (it
     # forbids a clean verdict word), `absent` is a source there is nothing to look at for (it
     # votes on nothing and accuses nobody). Collapsing the last two made a session with no
-    # recorded pane_pid — or any omp session, whose stream has no tool vocabulary at all —
-    # report `unknown-source` forever, i.e. "fix your gauge" for a gauge that was never there.
+    # recorded pane_pid report `unknown-source` forever, i.e. "fix your gauge" for a gauge that
+    # was never there. (The omp lane used to be the second such case; it counts its own tool
+    # frames since 2026-09-28 and is an ordinary judged source now.)
     judged, blind, absent, active = [], [], [], []
     record: dict = {"round": rnd}
     for name, fp_key, judged_key in PROGRESS_KEYS:

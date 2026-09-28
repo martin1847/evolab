@@ -2696,9 +2696,10 @@ out="$(pg_status2 pgCLO)"; rc=$?
 chk_eq "prog-claude-other-tool-counts: a Bash frame with no readable command counts too" \
   10 "$rc"
 
-# prog-doc-omp-unchanged lives in agentctl-duplex.test.sh: an omp session cannot be
-# hand-seeded (classify's omp projector asks the LIVE engine for its turn state), and that
-# suite is where the fake omp duplex engine already runs.
+# The omp counterparts of these three cases (prog-pos-omp-tool-frames-count /
+# prog-neg-omp-self-observe-silent / prog-omp-broken-gauge) live in agentctl-duplex.test.sh:
+# an omp session cannot be hand-seeded (classify's omp projector asks the LIVE engine for its
+# turn state), and that suite is where the fake omp duplex engine already runs.
 
 # ── PARITY, not single-source: two definitions, ONE mechanical gate ────────────────────────
 # Review R1 B2 (accept-documented): `agentctl`'s public surface is still dispatched by its own

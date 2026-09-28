@@ -1256,12 +1256,16 @@ out="$(bash "$AGENTCTL" status svA 2>&1)"; rc=$?
 chk_eq "③ PAIRED GREEN: streaming with an empty queue is still RUNNING 10" 10 "$rc"
 chk_eq "③ PAIRED GREEN: a depth of 0 lists nothing at all" 0 \
   "$(printf '%s\n' "$out" | grep -c '^queued: ')"
-# NB3.3: $WT is not a git repo, so the work-trace probe cannot be JUDGED. An unjudgeable gauge
-# owes the operator an ADMISSION, never a timestamp — publishing the failure moment as
-# `last_progress_at` made the gauge's own clock look like the work's (cold review R1 §3).
-chk_contains "③ an unjudgeable progress probe says so" "progress=unknown" "$out"
-chk_not_contains "③ and fabricates NO last_progress_at out of its own failure" \
+# C17 (2026-09-28): this cell used to assert `progress=unknown` + no `last_progress_at`, which
+# held ONLY because the omp lane had no tool-frame vocabulary — $WT is not a git repo and this
+# fake tmux exports no PANE_PID, so with `tools` [n/a] the union had ZERO judged sources. omp
+# counts its own tool frames now, so this session HAS a judged source and owes a reading, not
+# an admission. The blind-union contract itself is unchanged and is asserted for omp on a
+# genuinely blind union (non-repo cwd AND an unreadable stream) in prog-omp-broken-gauge below,
+# and for claude in agentctl-supervised-watch.test.sh M16 NB3.3.
+chk_contains "③ the omp union has a judged source, so it publishes a reading" \
   "last_progress_at=" "$out"
+chk_not_contains "③ and no longer admits an unmeasured union" "progress=unknown" "$out"
 bash "$AGENTCTL" stop svA >/dev/null 2>&1
 export FAKE_OMP_QUEUED=2 FAKE_PROVIDER_LOG="$SANDBOX/sv-q.log"
 # IDLE, so every steer below takes the QUEUE half (`follow_up`): a queue DEPTH can only be an
@@ -1335,13 +1339,29 @@ chk_eq "③ stop removes the delivery log with the rest of the control state" 0 
 unset FAKE_OMP_QUEUED FAKE_OMP_STATE_FILE FAKE_PROVIDER_LOG
 sweep_fakes; sandbox_clean
 
-# ── prog-doc-omp-unchanged: the omp lane has NO tool-frame vocabulary, so the new
-#    self-observation filter cannot reach it — whatever the frames happen to look like ──────
-# [n/a], never [unknown]: an omp stream carries lane protocol only (ready, correlated
-# responses, agent_start/agent_end), so `tools` votes on nothing and accuses nobody. The two
-# sessions below get streams shaped like SELF-OBSERVATION and like REAL WORK respectively; the
-# published verdict and its sub-reason word must be identical, because neither was read.
-# A live engine is required: classify's omp projector asks the ENGINE for its turn state.
+# ── prog-omp-tool-frames: the omp lane counts its OWN tool frames ─────────────────────────
+# Field motive (2026-09-28, downstream seat): an omp seat wrote its deliverable OUTSIDE its
+# cwd and called tools for 30+ minutes. The repo source was silent, the pane source cannot see
+# subprocesses that live between two sampling points, and `tools` was not read at ALL — the
+# counter returned None on the claim that an omp stream carries lane protocol only. The lane
+# published four false 14s that day, one of them after the receipt already said DONE, and the
+# reason word said `tools-silent` about a source nobody had looked at. A live stream carries
+# `tool_execution_start` / `tool_execution_end` pairs, so the source is real and is now judged.
+#
+# C17 — assertions RETIRED here, each encoding the behaviour this batch changes:
+#   old "prog-doc-omp-unchanged: [$s] the tools source never voted" (tools_j == false)
+#     → new "prog-pos-omp-tool-frames-count: the tools source really VOTED" (tools_j == true)
+#     it pinned `omp_tool_events` returning None, which is exactly the defect.
+#   old "both streams reach the SAME typed exit" / "the SAME sub-reason word"
+#     → new: the self-observing stream and the working stream now reach DIFFERENT verdicts
+#     (14 vs withheld) — the old pair asserted indistinguishability, i.e. blindness.
+#   old "the shared verdict really is the frozen one (14)" for the WORKING stream
+#     → new "prog-pos-omp-tool-frames-count": a working omp seat is NOT frozen.
+#   old "and tools is never named as a broken gauge" — KEPT in spirit and re-asserted below:
+#     a readable stream with no countable frame is tools-silent, never unknown-source.
+# A live engine is required throughout: classify's omp projector asks the ENGINE for its turn
+# state, so these cases cannot be hand-seeded the way the claude/codex ones in
+# agentctl-supervised-watch.test.sh are.
 sandbox_new; install_running_tmux
 WT="$SANDBOX/wt"; mkdir -p "$WT"
 printf 'investigate the thing\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' \
@@ -1353,35 +1373,155 @@ OMPREPO="$SANDBOX/omprepo"; mkdir -p "$OMPREPO"   # a repo, so the REPO source c
 git -C "$OMPREPO" init -q 2>/dev/null
 git -C "$OMPREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
 omp_progress() { AGENT_WATCH_PROGRESS_MINS=0.01 bash "$AGENTCTL" status "$1" 2>&1; }
-omp_reason() { printf '%s\n' "$1" | sed -n 's/.*\(reason=[a-z+-]*\).*/\1/p' | head -1; }
-for pair in "pgOMPSELF:agentctl status pgOMPSELF" "pgOMPWORK:pytest -q tests/unit"; do
-  s="${pair%%:*}"; cmd="${pair#*:}"
-  bash "$AGENTCTL" start omp "$s" "$OMPREPO" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
-  rc="$(omp_progress "$s" >/dev/null 2>&1; echo $?)"
-  chk_eq "prog-doc-omp-unchanged: [$s] the first read opens the window (RUNNING)" 10 "$rc"
-  /bin/sleep 1
-  # a codex-shaped commandExecution frame in an OMP stream: the counter must not read it at all
-  printf '%s\n' "{\"method\":\"item/started\",\"params\":{\"item\":{\"type\":\"commandExecution\",\"command\":\"$cmd\"}}}" \
-    >> "$WATCH_RUN_DIR/$s.duplex.events.jsonl"
-  eval "OUT_$s=\"\$(omp_progress $s)\"; RC_$s=\$?"
-  chk_eq "prog-doc-omp-unchanged: [$s] the tools source never voted" "false" \
-    "$(python3 -c '
+omp_start() { bash "$AGENTCTL" start omp "$1" "${2:-$OMPREPO}" --goal "$SANDBOX/goal.md" \
+                >/dev/null 2>&1; }
+omp_tool_j() { python3 -c '
 import json, sys
 try:
     print(json.dumps(json.load(open(sys.argv[1])).get("tools_j")))
 except Exception:
-    print("")' "$WATCH_RUN_DIR/$s.duplex.progress")"
-  bash "$AGENTCTL" stop "$s" >/dev/null 2>&1
-done
-chk_eq "prog-doc-omp-unchanged: both streams reach the SAME typed exit" "$RC_pgOMPWORK" \
-  "$RC_pgOMPSELF"
-chk_eq "prog-doc-omp-unchanged: and the SAME sub-reason word — nothing was read either way" \
-  "$(omp_reason "$OUT_pgOMPWORK")" "$(omp_reason "$OUT_pgOMPSELF")"
-chk_eq "prog-doc-omp-unchanged: the shared verdict really is the frozen one (14)" 14 \
-  "$RC_pgOMPSELF"
-chk_not_contains "prog-doc-omp-unchanged: and tools is never named as a broken gauge" \
-  "tools —" "$OUT_pgOMPSELF"
-unset FAKE_OMP_STATE_FILE
+    print("")' "$WATCH_RUN_DIR/$1.duplex.progress"; }
+omp_starts() { grep -c '"type":"tool_execution_start"' \
+                 "$WATCH_RUN_DIR/$1.duplex.events.jsonl" 2>/dev/null || echo 0; }
+
+# ── ① prog-pos-omp-tool-frames-count (KNOWN POSITIVE): repo silent + tools moving ──────────
+# The switch file makes the fake engine emit one synthetic start/end pair per get_state; the
+# damage oracle is deleting it, which is a seat that stopped running tools.
+export FAKE_OMP_TOOL_FRAMES="$SANDBOX/omp-tool-switch"
+printf 'pytest -q tests/unit -k progress\n' > "$FAKE_OMP_TOOL_FRAMES"
+omp_start pgOMPWORK
+rc="$(omp_progress pgOMPWORK >/dev/null 2>&1; echo $?)"
+# damage: a first read that already concluded would make every later assertion meaningless
+chk_eq "prog-pos-omp-tool-frames-count: the first read only OPENS the window (RUNNING)" \
+  10 "$rc"
+/bin/sleep 1
+out="$(omp_progress pgOMPWORK)"; rc=$?
+# damage: the counter is blind again (None) ⇒ tools cannot vote ⇒ a working seat reads frozen
+chk_eq "prog-pos-omp-tool-frames-count: a working omp seat with a frozen repo is WITHHELD" \
+  10 "$rc"
+# damage: the omp lane counts frames but the withheld observation is not published by name
+chk_contains "prog-pos-omp-tool-frames-count: and the observation is published by name" \
+  "progress_reason=repo-silent+tools-active" "$out"
+# damage: `tools` recorded as unjudged ⇒ this passed on the repo/pane sources, not on tools
+chk_eq "prog-pos-omp-tool-frames-count: the tools source really VOTED (was: never voted)" \
+  "true" "$(omp_tool_j pgOMPWORK)"
+# damage: the fixture emitted nothing and the case proved a property of an empty stream
+chk_eq "prog-pos-omp-tool-frames-count: the stream really carried tool frames" 1 \
+  "$([ "$(omp_starts pgOMPWORK)" -ge 2 ] && echo 1 || echo 0)"
+rm -f "$FAKE_OMP_TOOL_FRAMES"                     # the seat stops running tools
+/bin/sleep 1
+out="$(omp_progress pgOMPWORK)"; rc=$?
+# damage: tools counted something that is not a tool (a response frame, an update frame) ⇒ the
+# clock would never freeze and STALLED-PROGRESS would be dead for omp
+chk_eq "prog-pos-omp-tool-frames-count DAMAGE ORACLE: stop the tools and the window fires 14" \
+  14 "$rc"
+# damage: a judged-and-still tools source mislabelled as a broken gauge
+chk_contains "prog-pos-omp-tool-frames-count: with both judged sources named still" \
+  "reason=repo-silent+tools-silent" "$out"
+bash "$AGENTCTL" stop pgOMPWORK >/dev/null 2>&1
+
+# ── ② prog-neg-omp-self-observe-silent (NEGATIVE CONTROL): watching is not working ─────────
+# The same frames, the same volume, the ONE difference being that the command is this lane's
+# own read-only verb. Without the filter an omp seat could hold its own progress clock open
+# forever by polling itself — the exact 2h03m failure the filter was built for.
+printf 'agentctl status pgOMPSELF\n' > "$FAKE_OMP_TOOL_FRAMES"
+omp_start pgOMPSELF
+rc="$(omp_progress pgOMPSELF >/dev/null 2>&1; echo $?)"
+# damage: the window never opened ⇒ the 14 below is a stale-window artefact, not the filter's verdict
+chk_eq "prog-neg-omp-self-observe-silent: first read RUNNING" 10 "$rc"
+/bin/sleep 1
+out="$(omp_progress pgOMPSELF)"; rc=$?
+# damage: the filter does not reach omp's frame shape ⇒ self-polling reads as work
+chk_eq "prog-neg-omp-self-observe-silent: self-observation frames still fire 14" 14 "$rc"
+# damage: an excluded frame counted as UNREADABLE instead of as nothing
+chk_contains "prog-neg-omp-self-observe-silent: as tools-silent, never a broken gauge" \
+  "reason=repo-silent+tools-silent" "$out"
+# damage: the engine emitted no frames at all and this 14 proves nothing about the filter
+chk_eq "prog-neg-omp-self-observe-silent: the excluded frames really were emitted" 1 \
+  "$([ "$(omp_starts pgOMPSELF)" -ge 2 ] && echo 1 || echo 0)"
+bash "$AGENTCTL" stop pgOMPSELF >/dev/null 2>&1
+rm -f "$FAKE_OMP_TOOL_FRAMES"
+
+# ── ③ prog-omp-broken-gauge: an unreadable stream is UNKNOWN, never zero and never silent ──
+# Same rule the claude/codex sources already obey (M17 tools 量具坏 / 半行帧 in
+# agentctl-supervised-watch.test.sh): a counter that could not read may not vote. 14 is then
+# decided by the sources that COULD be judged, under the unchanged PROGRESS_QUORUM, and the
+# published word says a gauge called the operator — not that the seat stood still.
+omp_start pgOMPJUNK
+rc="$(omp_progress pgOMPJUNK >/dev/null 2>&1; echo $?)"
+# damage: the window never opened ⇒ the 14 below is a stale-window artefact, not the gauge's verdict
+chk_eq "prog-omp-broken-gauge: first read RUNNING" 10 "$rc"
+printf '{not json at all\n' >> "$WATCH_RUN_DIR/pgOMPJUNK.duplex.events.jsonl"
+/bin/sleep 1
+out="$(omp_progress pgOMPJUNK)"; rc=$?
+# damage: an undecodable omp stream folded into a silent vote ⇒ the operator is told the seat
+# froze when the truth is that the gauge broke
+chk_eq "prog-omp-broken-gauge: one judged source + one broken gauge still concludes" 14 "$rc"
+# damage: the word says tools-silent ⇒ the operator runs the stall disposition instead of fixing the gauge
+chk_contains "prog-omp-broken-gauge: as unknown-source, never tools-silent" \
+  "reason=unknown-source" "$out"
+# damage: the reason names no cause ⇒ a junk line and an unreadable file look the same to the operator
+chk_contains "prog-omp-broken-gauge: and the undecodable stream is named" "undecodable" "$out"
+bash "$AGENTCTL" stop pgOMPJUNK >/dev/null 2>&1
+
+# THE QUORUM FLOOR for omp, relocated here from the ③ queue cell (C17 above): a blind repo
+# source is no longer enough to leave the union unmeasured — the stream has to be unreadable
+# too. With BOTH blind and no pane_pid the union has nothing to publish, and its honest output
+# is an admission with NO timestamp: the gauge's own failure moment is not when the work moved.
+omp_start pgOMPBLIND "$WT"                        # $WT is not a git repo: the repo source is blind
+printf '{not json at all\n' >> "$WATCH_RUN_DIR/pgOMPBLIND.duplex.events.jsonl"
+out="$(omp_progress pgOMPBLIND)"; rc=$?
+# damage: a fully blind union concludes 14 ⇒ a verdict with zero measurements behind it
+chk_eq "prog-omp-broken-gauge: a union with nothing judged never concludes" 10 "$rc"
+# damage: an unreadable omp stream folded into a judged zero ⇒ the union claims a measurement
+# nobody took, and PROGRESS_QUORUM's floor stops meaning anything
+chk_contains "prog-omp-broken-gauge: it ADMITS the union was unmeasured" "progress=unknown" \
+  "$out"
+# damage: the gauge's own failure instant published as when the work moved (cold review R1 §3)
+chk_not_contains "prog-omp-broken-gauge: and fabricates no last_progress_at out of it" \
+  "last_progress_at=" "$out"
+bash "$AGENTCTL" stop pgOMPBLIND >/dev/null 2>&1
+
+# The remaining shapes are read straight off the source, because an omp stream cannot hold a
+# half-written line across a `status`: classify's live get_state lands a complete frame behind
+# the fragment and joins it into an undecodable line, which is case ③ above. The vote itself
+# is what matters, so it is asserted where it is produced.
+: > "$WATCH_RUN_DIR/pgOMPPROBE.duplex.events.jsonl"
+printf 'engine=omp\ncwd=%s\nround=1\n' "$OMPREPO" > "$WATCH_RUN_DIR/pgOMPPROBE.duplex.meta"
+omp_source() { python3 - "$AW_DIR" "$WATCH_RUN_DIR" <<'OMPPY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import duplexctl as d
+value, why, structural = d.tools_activity(d.Session(sys.argv[2], "pgOMPPROBE"), "omp")
+print(json.dumps([value, structural, "incomplete line" in why]))
+OMPPY
+}
+# damage: an empty-but-READABLE stream read as [n/a] or as unknown — a source that answers
+# "no tool ran" must say so as a judged zero, or the window can never fire for a quiet seat
+chk_eq "prog-omp-broken-gauge: a readable stream with no countable frame is a judged ZERO" \
+  '["tools=0", false, false]' "$(omp_source)"
+printf '{"type":"tool_execution_start","toolCallId":"t1","toolName":"read"' \
+  >> "$WATCH_RUN_DIR/pgOMPPROBE.duplex.events.jsonl"
+# damage: the bytes before a landing frame read as a settled total ⇒ a tool that is arriving
+# right now votes silent (cold review R1 T1, now for omp too)
+chk_eq "prog-omp-broken-gauge: a frame caught MID-WRITE is UNKNOWN, not zero and not [n/a]" \
+  '[null, false, true]' "$(omp_source)"
+printf ',"args":{}}\n' >> "$WATCH_RUN_DIR/pgOMPPROBE.duplex.events.jsonl"
+# damage: a non-bash tool silently filtered ⇒ every read/grep/eval a seat runs would vanish
+chk_eq "prog-omp-broken-gauge: the landed non-bash frame counts (the filter cannot judge it)" \
+  '["tools=1", false, false]' "$(omp_source)"
+# damage: tool_execution_update counted ⇒ ONE long tool's output stream holds the progress
+# clock open forever, which is STALLED-STREAM's question, not this source's
+chk_eq "prog-omp-broken-gauge: tool_execution_update is output, not a tool event" 0 \
+  "$(python3 - "$AW_DIR" <<'UPPY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import duplexctl as d
+print(d.omp_tool_events(None, [{"type": "tool_execution_update", "toolCallId": "t1",
+                                "toolName": "bash", "delta": {}}] * 3))
+UPPY
+)"
+unset FAKE_OMP_STATE_FILE FAKE_OMP_TOOL_FRAMES
 sweep_fakes; sandbox_clean
 
 echo "== self: a seat may not watch / steer / stop / start ITSELF =="
