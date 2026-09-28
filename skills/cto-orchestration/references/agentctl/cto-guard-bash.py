@@ -1572,7 +1572,7 @@ def main():
     if not cmd:
         return 0
     if ("loc-budget.limits" in cmd and (
-            re.search(r"(?:>>?\s*|\btee\s+(?:-a\s+)?|\bsed\s+-i\S*\s+(?:\S+\s+)*)\S*loc-budget\.limits\b", cmd)
+            re.search(r"(?:>>?\s*|\btee(?:\s+[^\s;|&]+)*?\s+|\bsed\s+-i\S*\s+(?:\S+\s+)*)\S*loc-budget\.limits\b", cmd)
             or re.search(r"\bpython(?:3)?\s+-c?\b.*loc-budget\.limits", cmd))):
         sys.stderr.write("DENY: owner-only ceiling: raise it by hand. Read: cto-orchestration/SKILL.md.\n")
         return 2
