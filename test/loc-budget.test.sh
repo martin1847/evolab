@@ -372,7 +372,7 @@ EOF
 }
 # the face's own size is pinned: an extractor that stops seeing body lines would make the scan
 # below vacuously green, which is the same broken-gauge-reads-as-success shape as a zero total.
-chk_eq "the single-source face is all 53 body lines, not just the 17 first lines" 53 \
+chk_eq "the single-source face is all 55 body lines, not just the 17 first lines" 55 \
   "$(clause_body_lines "$CLAUSES" | grep -c '[^[:space:]]')"
 chk_eq "every clause body line is single-sourced in goal-clauses.md" "" "$(dual_scan "$CLAUSES" "$GOAL")"
 

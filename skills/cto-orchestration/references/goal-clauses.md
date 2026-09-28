@@ -37,7 +37,9 @@
 
 ## C07 涉及长耗时外部作业
 - [ ] 涉及长耗时外部作业 → 写**等待配方**：禁止阻塞 sleep >60s，改有判据的短轮询（命令 + 达成
-  条件），连续 N 次未达成 → STOP and report（缺配方则 worker 自创长 sleep 顶穿 watcher 窗口）。
+  条件），连续 N 次未达成 → STOP and report（缺配方则 worker 自创长 sleep 顶穿 watcher 窗口）；
+  编排位派发带 `--expect <预计分钟>`：超 1.5× 出 typed OVER-BUDGET 唤醒，重挂 `watch --expect <更大值>`
+  每抬一次再报一次 = 周期 check-in（席位合法长跑数小时也不空等）。
 
 ## C08 改动带功能旗标
 - [ ] 改动带功能旗标 → 写旗标门控：<flag 名，默认 ON/OFF + 理由>。
