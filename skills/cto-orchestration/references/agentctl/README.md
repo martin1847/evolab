@@ -105,7 +105,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   `agentctl watch <session>`（guard ⑤ 强制宿主后台、拦 shell `&` 与前台阻塞；同步 shell 编排者
   前缀 `AGENT_WATCH_SYNC=1` 显式放行并自读 exit code）。
 - **preflight 门默认开**：起引擎前于席位 cwd 调 `../goal-preflight.py`——`Preflight:` 行缺失 / 占位未解、或 PREMISE 行实跑与作者 `rc=` / `count=` 记号不符即拒发（形态规则见 `goal-template.md` §Premises 与脚本头注）；`--no-preflight` 显式豁免（判据归 SKILL.md §1）；命中本 goal 写集（Task 路径 ∪ `--deliverable`）且未锚 pinned base 的活树探针只 WARN。
-- **`--expect <分钟>` = 本轮等待预算**（`start` 声明、`watch --expect` 覆盖；不给 = 关闭，行为逐字不变）：超 1.5× 且引擎还在跑 → waiter 出 typed `OVER-BUDGET`（每 attempt+round 只报一次，带有界事件尾；普通 steer 开新轮即重新计时），`status` 在 RUNNING 上打一行 `note: over budget by …min`——只说等待超了，不说工作没进展。
+- **`--expect <分钟>` = 本轮等待预算**（`start` 声明、`watch --expect` 覆盖；不给 = 关闭，行为逐字不变）：超 1.5× 且引擎还在跑 → waiter 出 typed `OVER-BUDGET`（每 (attempt, round, 预算值) 只报一次，带有界事件尾；普通 steer 开新轮即重新计时），`status` 在 RUNNING 上打一行 `note: over budget by …min`——只说等待超了，不说工作没进展。**抬高预算重挂 = 再报一次**：`--expect 30` 超 45min 报一次、改挂 `--expect 60` 后超 90min 再报一次（同值重挂不重报），长跑轮次靠这个拿周期唤醒，不必另开接口。
 - **席位不能观测/操作自己**：pane 注入 `AGENTCTL_SESSION`，`watch/status/steer/stop/start` 目标等于它即参数面拒（rc=1，非 typed 判决、不打 `EXIT=` 尾行）——席位在自己 turn 里等自己的交付物是死锁（2026-09-02 一席 2h03m）；要停下等裁决写 `BLOCKED.md` 并结束本轮，要报进度写进交付物。席位自行 unset 该变量可绕过 = accepted 边界（防手滑，非对手模型）。
 - **watcher 被外部杀（TERM）= 预期可恢复态**：收到 killed 通知即重挂——supervised 模式下感知环在
   tmux 里没被碰过，重挂只是重新读记录，连本轮结论都不丢（下线期间算出的终态照样在盘上等着）。
@@ -157,7 +157,7 @@ exit code、名字、语义、二级子原因词（`reason=<word>`，闭集）�
 | RUNNING | 继续等 |
 | STALLED-STREAM | **先从 checkout/commits 抢救成果，再 stop**；探针任一不确定按 RUNNING 处理（宁钝勿敏）。窗口用 `AGENT_WATCH_STALL_MINS` 调、0 关 |
 | STALLED-PROGRESS | 流还活着，但整个窗口内**可判的进展源在每个采样点都没动**（三源：①仓库痕迹〔HEAD/脏树/交付物/BLOCKED.md〕②引擎工具/命令帧计数〔纯 token 流不算，那是 STALLED-STREAM 的题；agentctl 公开只读 verb（status/watch/states/capabilities/inventory）的帧也不计——看不是做，手读 `$RUN/<s>.*` 仍计〕③pane 进程组集合〔采样点间生灭的短命子进程看不见，别读成「没起过进程」〕）。窗口用 `AGENT_WATCH_PROGRESS_MINS` 调（默认 30min）、0 关；探针预算有界，超预算按不可判计。**处置按 `reason=` 分支**：<br>· `reason=repo-silent+tools-silent` → 可判源全静且没有源不可判：**先读 events 尾**再决定——卡在无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认走死 → 抢救成果再 stop。<br>· `reason=unknown-source` → 可判源全静但**有源量具坏**（detail 点名哪个）。**按量具坏处置**：先修那个源或人工核证，别当「席位停滞」直接 steer/stop。<br>· `progress_reason=repo-silent+tools-active`（**不出 14**，打在 RUNNING 行上）→ 仓库不落痕但引擎在动（长测试 / docker / 取证）：**继续等**。<br>结构性缺位的源不算量具坏（`[n/a]`，不污染 `reason=`）；只有**零可判源**才整个关闭本状态（每次读打 `progress=unknown: <原因>` 且不刷时间戳）。`last_progress_at` = 上次观察到某源变化的时刻；量具坏后恢复的第一次可判读**只重建基线、不算移动** |
-| OVER-BUDGET | **等待**超预算（`--expect`×1.5），不是工作没进展：先读行后事件尾 → `steer` 给具体下一步 / `--interrupt` 重开 / 或 `agentctl watch <s> --expect <更大值>` 重挂继续等；每 (attempt, round) 只报一次（at-least-once：supervisor 恰在发布后崩溃时可能重复一次），预算是否合理是你的估计问题 |
+| OVER-BUDGET | **等待**超预算（`--expect`×1.5），不是工作没进展：先读行后事件尾 → `steer` 给具体下一步 / `--interrupt` 重开 / 或 `agentctl watch <s> --expect <更大值>` 重挂继续等；每 (attempt, round, 预算值) 只报一次（at-least-once：supervisor 恰在发布后崩溃时可能重复一次）——**抬高预算重挂就会在新阈值再报一次**（同值重挂不重报），长跑轮次的周期唤醒就是这么拿的；预算是否合理是你的估计问题 |
 | SUPERVISOR-LOST | `reason=dead` → 直接重挂。`reason=unknown` → **先读 detail**：只有它点名 rogue/wedged `<s>-watchd` 时才 `tmux kill-session -t <s>-watchd` 再重挂；其余 unknown（canonical 读超时 / `ps` 不可用 / 租约损坏 / pid 复用嫌疑）**只重挂，绝不杀**——那些情况下杀掉的是一个活着的守护环 |
 | DELIVERED-NEXT-TURN | **steer verb 的出口，不是会话状态**（watch/status 永不产它）：指令已送达但落在 turn 边界。`reason=capability` → 引擎无轮中帧，等边界即可，别重发；`reason=undecidable` → 量具坏（detail 点名哪个），**先修量具或读 events 尾**再决定要不要 `--interrupt`。两者都**已送达**，重发会得到两条指令 |
 

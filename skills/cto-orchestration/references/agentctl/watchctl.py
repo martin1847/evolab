@@ -780,7 +780,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             over_by = f"{used - expect:.2f}" if used - expect < 1 else f"{used - expect:.1f}"
             print(f"note: over budget by {over_by}min (expect {expect:g}min) — the "
                   f"WAIT is over budget past {expect * OVER_BUDGET_FACTOR:g}min, the work is "
-                  "not judged; an armed watcher reports OVER-BUDGET once for this round")
+                  "not judged; an armed watcher reports OVER-BUDGET once for this round at "
+                  "this budget — raise it (agentctl watch <s> --expect <bigger>) to be woken "
+                  "again later")
     # RUNNING with nobody watching is the field's most expensive omission. Advisory only: the
     # typed line and the exit code are untouched.
     if rc == 10 and not watcher_alive(run, name):
@@ -1079,18 +1081,30 @@ def _sense_conclude(args: argparse.Namespace, rnd: str, rc: int, msg: str,
 def _expect_mark_path(run_dir: str, name: str) -> str:
     return os.path.join(run_dir, f"{name}.duplex.expect-report")
 
-def _expect_mark_key(run_dir: str, name: str, rnd: str) -> str:
-    """(sessionId, attemptId, round) — the identity of ONE wait-budget report, or "" when the
-    active identity cannot be established (nothing to key a report to, and classify already
-    answers such a session with IDENTITY-UNKNOWN)."""
+def _expect_mark_key(run_dir: str, name: str, rnd: str, expect: float) -> str:
+    """(sessionId, attemptId, round, BUDGET) — the identity of ONE wait-budget report, or ""
+    when the active identity cannot be established (nothing to key a report to, and classify
+    already answers such a session with IDENTITY-UNKNOWN).
+
+    The budget VALUE is part of the identity, and that is the whole disposition `cmd_set_expect`
+    documents: re-arming after an OVER-BUDGET with a BIGGER number is how an orchestrator says
+    "this is taking longer than I thought, wake me again later". Keyed on the round alone, that
+    re-arm could never report again. Raising the budget buys exactly one more report at the new threshold; re-arming with the
+    SAME number buys none, because nothing about that report's identity changed. The value is
+    formatted with `:g`, the same way `set-expect` prints it and `expect_minutes` parses it, so
+    `30` and `30.0` are ONE key and not two reports.
+
+    at-least-once (the block below) is unchanged: this widens WHAT counts as a distinct report,
+    never how many times one report may be delivered."""
     rec, status = identity.IdentityStore(run_dir, name).load()
     if status != identity.STATUS_OK or rec is None:
         return ""
-    return f"{rec.get('sessionId')}/{rec.get('attemptId')}/{rnd}"
+    return f"{rec.get('sessionId')}/{rec.get('attemptId')}/{rnd}/{expect:g}"
 
 def _expect_reported(run_dir: str, name: str, key: str) -> bool:
-    """Whether THIS (session, attempt, round) already had a report DELIVERED. A file nobody can
-    read answers False: an unreadable ledger is not evidence that the orchestrator was told."""
+    """Whether THIS (session, attempt, round, budget) already had a report DELIVERED. A file
+    nobody can read answers False: an unreadable ledger is not evidence that the orchestrator
+    was told."""
     try:
         with open(_expect_mark_path(run_dir, name), encoding="utf-8", errors="replace") as fh:
             return key in {line.strip() for line in fh}
@@ -1138,19 +1152,22 @@ def _expect_record(run_dir: str, name: str, key: str) -> bool:
 def _report_over_budget(args: argparse.Namespace, rnd: str) -> None:
     """Conclude OVER-BUDGET at THIS sampling point, or return and keep sensing.
 
-    ONE report per (sessionId, attemptId, round) — at-least-once, see the block above — and the
-    whole decision (read the ledger, deliver the conclusion, record it) runs under the LANE'S
-    SINGLE-WRITER LOCK, the same flock `send` serializes steers on. Two properties come from
-    that, and neither survives a lock-free check-then-append (review R1 B1):
+    ONE report per (sessionId, attemptId, round, BUDGET) — at-least-once, see the block above —
+    and the whole decision (read the ledger, deliver the conclusion, record it) runs under the
+    LANE'S SINGLE-WRITER LOCK, the same flock `send` serializes steers on. Two properties come
+    from that, and neither survives a lock-free check-then-append (review R1 B1):
       * two observers of the same round cannot both publish. The loser reads the winner's
         record and returns to ordinary sensing (a terminal class, or the poll budget running
         out as WATCH-TIMEOUT);
       * a steer that opens the next round cannot interleave with a claim about the old one.
     The ledger records what was DELIVERED, never what was attempted: a publish refused by the
     identity fence, an unwritable terminal surface or a crash in that window records nothing,
-    so a re-armed waiter may report the same round again. A plain steer opens a new round and
-    `--interrupt` a new attempt — either may report again, because the budget is per round and
-    so is the estimate behind it.
+    so a re-armed waiter may report the same round again. A plain steer opens a new round,
+    `--interrupt` a new attempt and `watch --expect <bigger>` a new budget — any of the three
+    may report again, because the budget is per round and so is the estimate behind it.
+    The budget read here is the SAME snapshot that produced this verdict and that
+    `over_budget_line` prints, so the ledger line always names the threshold the orchestrator
+    was actually woken at.
     A lock we cannot even open is not a fence, and an unfenced report is not made."""
     run, name = args.run_dir, args.session
     sess = Session(run, name)
@@ -1165,7 +1182,7 @@ def _report_over_budget(args: argparse.Namespace, rnd: str) -> None:
         # blocking, exactly as every other writer on this lane takes it: the only holders are
         # `send` and a peer observer, both bounded by their own watchdogs
         acquire_writer_lock(lock)
-        key = _expect_mark_key(run, name, rnd)
+        key = _expect_mark_key(run, name, rnd, expect)
         if not key or _expect_reported(run, name, key) or not _expect_recordable(run, name):
             return
         _sense_conclude(args, rnd, EXIT_OVER_BUDGET, over_budget_line(sess, used, expect),

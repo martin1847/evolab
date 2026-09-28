@@ -2212,13 +2212,14 @@ chk_eq "FL6 internal codes agree across languages and collide with no published 
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
-echo "== OB: the wait budget — --expect turns it on, and it fires ONCE per attempt+round =="
+echo "== OB: the wait budget — --expect turns it on, once per attempt+round+budget =="
 # Field motive (2026-09-02): waiting had NO budget, so a pathological turn reads RUNNING
 # forever and only an operator ASKING ever notices — one review seat sat in `agentctl watch`
 # on its own deliverable for 2h03m, typed RUNNING / tools-active the whole way. `--expect
 # <minutes>` is the dispatcher's own estimate, 1.5x it is the report threshold, and the report
-# is ONE per attempt+round: a state that repeats every poll would wake the orchestrator
-# forever, and a state that never repeats after a steer would be a one-shot gauge.
+# is ONE per attempt+round+budget: a state that repeats every poll would wake the orchestrator
+# forever, a state that never repeats after a steer would be a one-shot gauge, and a state that
+# ignores a RAISED budget leaves a long round with a single wake-up for its whole life.
 # The clock under test is the ROUND EPOCH file, which is what every other round fence in this
 # lane reads — so the fixtures backdate that file rather than sleeping through a real budget.
 sw_sandbox
@@ -2339,7 +2340,8 @@ chk_not_contains "ob-neg-same-round-no-repeat: no second OVER-BUDGET for that ro
   "OVER-BUDGET" "$out2"
 
 # ── the budget is ENGINE-INDEPENDENT, and one live codex cell proves it ───────────────────
-# The clock is the round epoch and the report key is identity+round; neither reads `engine`.
+# The clock is the round epoch and the report key is identity+round+budget; none of them reads
+# `engine`.
 # Only the evidence TAIL is engine-shaped, which is why one non-claude cell is enough here.
 ob_seed obCX 0.02
 printf 'engine=codex\ncwd=%s\nround=1\npane_pid=70000\nthread=t-fixture\nexpect_min=0.02\n' \
@@ -2366,6 +2368,62 @@ out4="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obFIRE 2>&1)"; rc4=$?
 chk_eq "ob-pos-new-attempt-after-interrupt: the new attempt reports round 2 again" 19 "$rc4"
 chk_eq "ob-pos-new-attempt-after-interrupt: three reports, three distinct keys" 3 \
   "$(grep -c . "$WATCH_RUN_DIR/obFIRE.duplex.expect-report")"
+
+# ── ob-pos-raise-expect-reports-again / ob-neg-same-expect-no-repeat ──────────────────────
+# Field motive (2026-09-28, downstream orchestrator): a legitimate round ran ~7h. The budget
+# reported ONCE and then nothing — the orchestrator had no periodic wake-up at all and sat
+# blind for 3h20m — because the ledger key was (session, attempt, round) and a re-arm with a
+# BIGGER `--expect` landed on the very same key. `cmd_set_expect` documented the opposite in
+# the same breath ("re-arming after an OVER-BUDGET with a bigger number is the whole
+# disposition"), so the verb and the ledger contradicted each other. The budget VALUE is part
+# of a report's identity now: raising it buys exactly ONE more report, at the new threshold.
+ob_seed obRAISE 0.02
+ob_age obRAISE 600                       # ten hours in: every budget used below is blown
+out6="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obRAISE 2>&1)"; rc6=$?
+# damage: the first report never fires ⇒ nothing below can tell "re-armed" from "never woke"
+chk_eq "ob-pos-raise-expect-reports-again: the declared budget reports once" 19 "$rc6"
+# damage: the ledger still keys on the round alone ⇒ the raise is swallowed and a long round
+# gets exactly one wake-up for its entire life, which is the field failure itself
+out7="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obRAISE --expect 0.05 2>&1)"; rc7=$?
+chk_eq "ob-pos-raise-expect-reports-again: raising the budget re-arms the report" 19 "$rc7"
+# damage: it reports again but against the OLD threshold ⇒ the line lies about what was blown
+chk_contains "ob-pos-raise-expect-reports-again: at the NEW threshold, not the old one" \
+  "expected 0.05min" "$out7"
+# damage: the value never reached the key, or the two writers format it differently (0.05 vs
+# 0.050000) and one raise buys an unbounded number of reports
+chk_eq "ob-pos-raise-expect-reports-again: two reports, each keyed by the budget it fired at" \
+  2 "$(grep -Ec '/0\.(02|05)$' "$WATCH_RUN_DIR/obRAISE.duplex.expect-report")"
+# ── ob-neg-same-expect-no-repeat (NEGATIVE CONTROL): re-arming alone reports nothing ───────
+# damage: ANY re-arm reports ⇒ every re-attached waiter wakes the orchestrator again, which is
+# the forever-repeating state this ledger was built to prevent. The re-arm carries NO --expect
+# on purpose: the budget in meta is still 0.05, so this is a same-value re-arm whose output
+# can be asserted for the VERDICT word (a `--expect` re-arm echoes `set-expect`'s own
+# disposition sentence, which names the state it is explaining).
+out8="$(AGENT_WATCH_MAX_POLLS=2 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obRAISE 2>&1)"
+rc8=$?
+chk_eq "ob-neg-same-expect-no-repeat: the SAME budget falls back to the ordinary exit" 7 "$rc8"
+# damage: the ordinary exit still carries an OVER-BUDGET line ⇒ every re-attach wakes the orchestrator
+chk_not_contains "ob-neg-same-expect-no-repeat: and never reports that budget twice" \
+  "OVER-BUDGET" "$out8"
+# and re-declaring the SAME number through the verb is no different — it is the VALUE that
+# identifies a report, never the act of arming
+out8b="$(AGENT_WATCH_MAX_POLLS=2 AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obRAISE \
+           --expect 0.05 2>&1)"; rc8b=$?
+# damage: the ACT of re-declaring buys a report ⇒ a same-value --expect re-arm wakes forever
+chk_eq "ob-neg-same-expect-no-repeat: re-declaring the same budget reports nothing either" \
+  7 "$rc8b"
+# damage: a suppressed report still writes a ledger line ⇒ the ledger stops recording deliveries
+chk_eq "ob-neg-same-expect-no-repeat: the ledger did not grow" 2 \
+  "$(grep -c . "$WATCH_RUN_DIR/obRAISE.duplex.expect-report")"
+# damage: a new ROUND is blocked by an old budget's ledger line ⇒ the round fence stops
+# working the moment a budget value repeats across rounds (this is ob-pos-new-round-after-steer
+# with the budget held CONSTANT, which the key change could plausibly have broken)
+printf 'engine=claude\ncwd=%s\nround=2\npane_pid=70000\nexpect_min=0.05\n' "$WT" \
+  > "$WATCH_RUN_DIR/obRAISE.duplex.meta"
+: > "$WATCH_RUN_DIR/obRAISE.duplex.round-started"
+ob_age obRAISE 600
+out9="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obRAISE 2>&1)"; rc9=$?
+chk_eq "ob-neg-same-expect-no-repeat: a NEW round at the same budget still reports" 19 "$rc9"
 
 # ── ob-tail-bounded-600: the evidence tail is bounded by ROWS and by BYTES, line-wise ─────
 ob_seed obTAIL 0.02
@@ -2453,8 +2511,10 @@ chk_eq "ob-doc-marker-missing-eligible: with the ledger gone the same round repo
 printf 'not-a-key\n\x00\xff garbage\n' > "$WATCH_RUN_DIR/obMARK.duplex.expect-report"
 outm3="$(AGENT_WATCH_FOLLOW_MAX=0 bash "$AGENTCTL" watch obMARK 2>&1)"; rcm3=$?
 chk_eq "ob-doc-marker-corrupt-eligible: a garbage ledger suppresses nothing" 19 "$rcm3"
+# C17 (2026-09-28): the tail used to be the ROUND (`/1$`); the ledger key carries the BUDGET as
+# its last component now, so the shape asserted here is `<round>/<budget>`.
 chk_eq "ob-doc-marker-corrupt-eligible: and the real key was appended beside the garbage" 1 \
-  "$(grep -c "/1$" "$WATCH_RUN_DIR/obMARK.duplex.expect-report")"
+  "$(grep -Ec '/1/0\.02$' "$WATCH_RUN_DIR/obMARK.duplex.expect-report")"
 # UNWRITABLE ⇒ suppressed, and ordinary sensing CONTINUES (a directory in the ledger's place
 # is the portable spelling of "this append can never succeed" — no uid can write it)
 ob_seed obNOMARK 0.02
@@ -2543,8 +2603,10 @@ chk_eq "ob-doc-postpublish-crash-may-duplicate: published=2 for one key (at-leas
   "$(wm obDUP)"
 chk_eq "ob-doc-postpublish-crash-may-duplicate: ledger=1 — it never doubles, it only misses" 1 \
   "$(grep -c . "$WATCH_RUN_DIR/obDUP.duplex.expect-report")"
+# C17 (2026-09-28): the round used to be the key's LAST component and was read off the tail;
+# the budget is the tail now, so the round is read as the field it has always been (3rd).
 chk_eq "ob-doc-postpublish-crash-may-duplicate: both reports were the same round, not a rotation" \
-  1 "$(sed -n 's#.*/\([0-9]*\)$#\1#p' "$WATCH_RUN_DIR/obDUP.duplex.expect-report")"
+  1 "$(cut -d/ -f3 "$WATCH_RUN_DIR/obDUP.duplex.expect-report" | sort -u)"
 unset AGENT_WATCH_MAX_POLLS
 sw_clean
 

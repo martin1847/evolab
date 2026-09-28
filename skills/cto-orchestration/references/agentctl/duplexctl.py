@@ -3490,7 +3490,9 @@ def cmd_set_expect(args: argparse.Namespace) -> int:
     and then written through `meta_update`, the single write point that keeps the file's
     one-key-per-line invariant. A waiter may raise the budget it is about to wait under
     (re-arming after an OVER-BUDGET with a bigger number is the whole disposition), which is
-    why this is an override and not a start-only value."""
+    why this is an override and not a start-only value — and the report ledger is keyed on the
+    budget VALUE, so that raise really does buy one more report at the new threshold instead of
+    a silent round (watchctl._expect_mark_key)."""
     sess = Session(args.run_dir, args.session)
     sess.require_meta()
     problem = expect_problem(args.minutes)
@@ -3499,7 +3501,7 @@ def cmd_set_expect(args: argparse.Namespace) -> int:
     meta_update(sess, "expect_min", str(float(args.minutes)))
     print(f"expect: {float(args.minutes):g}min per round for '{args.session}' — the waiter "
           f"reports OVER-BUDGET past {float(args.minutes) * OVER_BUDGET_FACTOR:g}min, once "
-          "per attempt+round")
+          "per attempt+round at THIS budget (raise it again to be woken again)")
     return 0
 
 
