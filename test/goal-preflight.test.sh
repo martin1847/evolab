@@ -31,14 +31,13 @@ run_check "$goal"
 chk_eq "placeholders rejected" 1 "$rc"
 chk_contains "placeholder error is actionable" "replace every placeholder" "$out"
 
-printf 'Preflight: `ls` => ok rc=0\n胶水 ≤ 20 行；findings ≤40 行\n' > "$goal"
+for s in '胶水 ≤ 20 行；findings ≤40 行|祈使数字『≤ 20 行』' 'Change-Type: defect\n既有测试逐字不改、目录全绿|逐字不改」与行为改动同现'; do printf 'Preflight: `ls` => ok rc=0\n'"${s%%|*}"'\n' > "$goal"; run_check "$goal"
+# damage: a pinned size (行 / 条) would slip past silently — owner 09-03 / SKILL §2 call it a finding; 0925 archive scan found 53 in 29 goals, so the number is named at dispatch (WARN, not FAIL: `打印 ≤ 12 行读数` / `advisory ≤3 条` are interface counts and blocked the FAIL form). A verbatim-tests clause on a defect goal leaves the seat no exit (downstream n=2 BLOCKED, one steer each): named, not blocked; >10% false WARN ⇒ delete.
+chk_eq "WARN-class smell still dispatches: ${s##*|}" 0 "$rc"
+chk_contains "and is named at dispatch: ${s##*|}" "${s##*|}" "$out"; done
+printf 'Preflight: `ls` => ok rc=0\nChange-Type: defect\nDOC 5046→4923 行（实测）；全量 47/48；既有测试不动，其断言正是被改行为的可改/删，回执逐条列出\n' > "$goal"
 run_check "$goal"
-# damage: a pinned size (行 / 条) would slip past silently — owner 09-03 / SKILL §2 call it a finding; 0925 archive scan found 53 in 29 goals, so the number is named at dispatch (WARN, not FAIL: `打印 ≤ 12 行读数` / `advisory ≤3 条` are interface counts and blocked the FAIL form).
-chk_eq "prescriptive count still dispatches" 0 "$rc"
-chk_contains "prescriptive count is named at dispatch" "祈使数字『≤ 20 行』" "$out"
-printf 'Preflight: `ls` => ok rc=0\nDOC 5046→4923 行（实测）；全量 47/48\n' > "$goal"
-run_check "$goal"
-# damage: a measured count is a fact, not a prescription, and must stay silent.
+# damage: a measured count is a fact, not a prescription, and must stay silent. The C17 wording on a defect goal is the sanctioned shape and stays silent too.
 chk_eq "measured count passes silently" "0:" "$rc:$out"
 
 for unresolved in 'not run' pending unknown N/A; do

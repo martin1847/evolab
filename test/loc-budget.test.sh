@@ -336,9 +336,9 @@ chk_eq "no getattr-shaped access to the loaded module" "" \
 # two copies then drift) and an index row growing into a body (the template re-fattens).
 CLAUSES="$SKILL_ROOT/references/goal-clauses.md"
 GOAL="$SKILL_ROOT/references/goal-template.md"
-chk_eq "clause file has exactly sixteen clause sections" 16 "$(grep -c '^## C[0-9][0-9] ' "$CLAUSES")"
-chk_eq "clause file has exactly sixteen clause bodies" 16 "$(grep -c '^- \[ \]' "$CLAUSES")"
-chk_eq "template index has exactly sixteen rows" 16 "$(grep -c '^- \[ \] C[0-9][0-9] ' "$GOAL")"
+chk_eq "clause file has exactly seventeen clause sections" 17 "$(grep -c '^## C[0-9][0-9] ' "$CLAUSES")"
+chk_eq "clause file has exactly seventeen clause bodies" 17 "$(grep -c '^- \[ \]' "$CLAUSES")"
+chk_eq "template index has exactly seventeen rows" 17 "$(grep -c '^- \[ \] C[0-9][0-9] ' "$GOAL")"
 # every id defined once and indexed once — a renumber, a dropped clause or a duplicated id reds
 id_defects=""
 for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do
@@ -372,7 +372,7 @@ EOF
 }
 # the face's own size is pinned: an extractor that stops seeing body lines would make the scan
 # below vacuously green, which is the same broken-gauge-reads-as-success shape as a zero total.
-chk_eq "the single-source face is all 49 body lines, not just the 16 first lines" 49 \
+chk_eq "the single-source face is all 53 body lines, not just the 17 first lines" 53 \
   "$(clause_body_lines "$CLAUSES" | grep -c '[^[:space:]]')"
 chk_eq "every clause body line is single-sourced in goal-clauses.md" "" "$(dual_scan "$CLAUSES" "$GOAL")"
 

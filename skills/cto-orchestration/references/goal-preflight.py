@@ -94,6 +94,11 @@ UNRESOLVED = re.compile(
 # `verify=<> => observed` passed the `+` version (cold review §3.2).
 PLACEHOLDER = re.compile(r"<[^<>\n]*>")
 COUNT_RE = re.compile(r"(?:≤|<=|≈|不超过|以内|上限|最多|至多)\s*\d+\s*(?:行|条|lines?)|\d+\s*(?:行|条)\s*(?:以内|以下|上限)")
+# 2026-09-28 (downstream n=2): a verbatim-tests clause on a behaviour-changing goal contradicts itself — the old
+# assertions pin the very behaviour being changed and the seat can only BLOCK. WARN, never a verdict: a legitimate
+# shape exists (the change never touches an old assertion). False WARNs over 10% of hits ⇒ delete the pair.
+VERBATIM_RE = re.compile(r"逐字不改|\bverbatim\b", re.I)
+BEHAVIOUR_RE = re.compile(r"Change-Type\s*[:：]\s*defect|修复前红.{0,8}修复后绿|\bred\s*(?:→|->)\s*green\b", re.I)
 # WARN-class smell only: an acceptance row asserting INTERNAL agreement (table vs registry)
 # instead of observable behaviour is where same-source self-proof hides. Never blocks — this
 # gate validates declaration shape and is never an oracle for oracle quality.
@@ -679,6 +684,9 @@ def main():
     pinned = COUNT_RE.search(body)
     if pinned:
         advise(f"goal 写了祈使数字『{pinned.group(0)}』——规模估计就删（合同不写行数 / 条数预估、上限或比值，SKILL §2），接口约定就留")
+    if VERBATIM_RE.search(body) and BEHAVIOUR_RE.search(body):
+        advise("「既有测试逐字不改」与行为改动同现——旧断言编码的正是被改行为时席位无出路；"
+               "改写为 goal-clauses C17「既有测试不动；其断言正是被改行为的可改/删，回执逐条列出旧断言→新断言→为何编码旧合同」")
     line = LINE_RE.search(body).group(0)
     if ABSENCE_RE.search(line) and not SCOPE_RE.search(_URL_RE.sub("", line)):
         return fail(
