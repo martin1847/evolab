@@ -39,6 +39,11 @@ DIR="${AGENT_WATCH_DIR:-/tmp/agent-watch-run}"
 CTL="$HERE/duplexctl.py"
 PY="${AGENTCTL_PYTHON:-python3}"
 ARMED_ID=""   # arm-time snapshot of the active identity; captured by watch before it senses
+# omp journal filter — the ONE definition of what the pane REFUSES to journal. The two lines
+# are self-contained on purpose: test/agentctl-journal-filter.test.sh `eval`s them straight out
+# of this file, so the regex exists exactly once in the repo and cannot drift from its test.
+JOURNAL_FILTER_RE='^\{"type":"message_update","assistantMessageEvent":\{"type":"(text|thinking|toolcall)_delta",'
+JOURNAL_FILTER_CMD="LC_ALL=C grep -a --line-buffered -v -E"
 q() { printf %q "$1"; }
 ctl() { "$PY" "$CTL" --run-dir "$DIR" "$@"; }
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
@@ -500,7 +505,23 @@ cmd_start() {
   # descendant inherits both, so a child that setsid()s out of the pane's group still carries
   # which seat made it AND which directory it serves. Both are LABELS, not switches — nothing
   # branches on their presence, and a process without them is simply unattributable.
-  PANE="export AGENTCTL_SESSION=$(q "$S") AGENTCTL_CWD=$(q "$CWD"); exec 3<>$(q "$FIFO"); $ECMD <&3 >> $(q "$EV") 2>> $(q "$ERR"); e=\$?; echo \$e > $(q "$RC").tmp && mv $(q "$RC").tmp $(q "$RC")"
+  # The engine's stdout goes through JOURNAL_FILTER before the journal. WHY each part:
+  # · WHOLE LINE, not a rewrite: omp re-embeds the whole message-so-far as `partial` in every
+  #   delta frame, so one message costs O(L²) bytes (field 2026-09-30: 3.5GB in 35min, classify
+  #   past its 30s budget, a live seat published as ENGINE-SILENT). No reader here reads a
+  #   delta frame or a `partial` — the matching `*_end` frame carries the full text — so the
+  #   three delta subtypes are pure ballast and every surviving line stays BYTE-identical.
+  # · PREFIX-ANCHORED, no `.*`: omp's key order puts the subtype in the first ~70 bytes, so the
+  #   match is decided there; an unanchored pattern would also drop any KEPT frame that merely
+  #   quotes that text inside its payload (a tool result echoing a stream, say), and a `.*`
+  #   would walk megabyte lines for nothing.
+  # · LC_ALL=C -a --line-buffered: bytes not characters (a stray invalid UTF-8 byte must not
+  #   turn the stream "binary" and silence grep), and a line reaches the journal the moment the
+  #   engine emits it — the stall probe reads this file's mtime, block buffering would freeze it.
+  # · rc INSIDE the group: `$RC` must land when the ENGINE exits, not when the pipe closes (a
+  #   lingering grandchild can hold the write end open long after). PIPESTATUS is out of the
+  #   question anyway — the pane runs under tmux's default-shell, which is not always bash.
+  PANE="export AGENTCTL_SESSION=$(q "$S") AGENTCTL_CWD=$(q "$CWD"); exec 3<>$(q "$FIFO"); { $ECMD <&3 2>> $(q "$ERR"); e=\$?; echo \$e > $(q "$RC").tmp && mv $(q "$RC").tmp $(q "$RC"); } | $JOURNAL_FILTER_CMD $(q "$JOURNAL_FILTER_RE") >> $(q "$EV") 2>> $(q "$ERR")"
   if ! tmux new-session -d -s "$S" -c "$CWD" "$PANE"; then
     rm -f "$FIFO" "$DIR/$S.duplex.meta"
     echo "ERR: tmux new-session failed for '$S' (nothing started)" >&2; exit 1

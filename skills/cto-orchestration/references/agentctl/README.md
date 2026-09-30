@@ -72,7 +72,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   受压丢掉 receipt 展示行时再补一行由结构字段重建的 receipt 摘要
   （`receipt (rebuilt from record fields): reason=… phase=…`）。引擎 raw 全量只落
   `$RUN/<s>.duplex.events.jsonl`（单条 raw transcript 可达百 KB 级，回显会炸编排者上下文——
-  摘要有界是本控制面的硬设计）。
+  摘要有界是本控制面的硬设计）。omp 的三种 `message_update/*_delta` 帧在 pane 管道里整行滤掉
+  （`*_end` 帧带全文，控制面零损失；一个写大文件的席位 journal 从 GB 级回到 MB 级）。
 - **后台任务 cwd 语义**：宿主后台机制跑 `agentctl watch` 时，命令继承**发起时刻
   编排者的 cwd**，与 worker 会话 cwd 无关；判断后台任务归属认 `$RUN/<session>.*` 文件名，别认 cwd。
 - **watch 等的是 worker，不是外部作业**：worker 在等长外部作业（部署列车 / CI / 远端队列）时

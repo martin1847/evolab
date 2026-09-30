@@ -23,6 +23,17 @@ Env controls:
                            the observation-verb filter must not be able to judge)
   FAKE_OMP_TOOL_UPDATE=1   also emit a tool_execution_update between the pair — output
                            arriving INSIDE one call, which this lane must never count
+  FAKE_OMP_DELTA_FRAMES=N  after each prompt/steer emit a real-shape streaming run: one
+                           text_start, N text_delta (each re-embedding the whole message so
+                           far as `partial` — the O(L²) growth the pane filter exists for),
+                           one text_end carrying the full `content`. Key order and first
+                           bytes mirror the live 2026-09-30 omp stream.
+  FAKE_OMP_LINGER_CHILD=1  before exiting, leave a sleeping grandchild holding the inherited
+                           stdout: the engine is gone but the pipe's write end is not, which
+                           is what the rc file must not wait for. Its argv carries
+                           `agentctl-linger:<AGENTCTL_SESSION>` so a test can find and kill
+                           ITS OWN child — a bare `sleep 3` is unselectable on a shared box
+                           and blanket pattern kills have shot live engines here before
 Protocol shape mirrors the live probe of omp 17.0.5: ready frame first, a setWidget
 extension_ui_request as connect-time UI chrome, correlated response frames.
 """
@@ -30,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -68,6 +80,42 @@ def queued() -> int:
 
 
 tool_seq = 0
+delta_seq = 0
+
+
+def emit_delta_frames() -> None:
+    """One streaming run per prompt/steer: start, N deltas, end.
+
+    `partial` carries the message accumulated SO FAR in every delta (that is the live omp
+    behaviour, and why one long message costs O(L²) journal bytes); the terminal text_end
+    carries the same text once as `content` — which is why dropping the deltas loses nothing.
+    """
+    global delta_seq
+    try:
+        count = int(os.environ.get("FAKE_OMP_DELTA_FRAMES", "0"))
+    except ValueError:
+        return
+    if count <= 0:
+        return
+    delta_seq += 1
+    index = delta_seq
+    text = ""
+    emit({"type": "message_update",
+          "assistantMessageEvent": {"type": "text_start", "contentIndex": index}})
+    for n in range(count):
+        chunk = f"synthetic chunk {n} "
+        text += chunk
+        emit({"type": "message_update",
+              "assistantMessageEvent": {
+                  "type": "text_delta", "contentIndex": index, "delta": chunk,
+                  "partial": {"role": "assistant",
+                              "content": [{"type": "text", "text": text}]}}})
+    emit({"type": "message_update",
+          "assistantMessageEvent": {
+              "type": "text_end", "contentIndex": index,
+              "content": {"type": "text", "text": text},
+              "partial": {"role": "assistant",
+                          "content": [{"type": "text", "text": text}]}}})
 
 
 def emit_tool_frames() -> None:
@@ -125,6 +173,7 @@ for line in sys.stdin:
     elif command in {"prompt", "steer", "follow_up", "abort_and_prompt"}:
         emit({"id": request_id, "type": "response", "command": command, "success": True})
         emit({"type": "agent_start"})
+        emit_delta_frames()
         deliverable = os.environ.get("FAKE_OMP_DELIVERABLE")
         if deliverable:
             with open(deliverable, "a", encoding="utf-8") as fh:
@@ -137,3 +186,11 @@ for line in sys.stdin:
     elif command == "abort":
         emit({"id": request_id, "type": "response", "command": command, "success": True})
         break
+
+if os.environ.get("FAKE_OMP_LINGER_CHILD") == "1":
+    # the engine is about to die while a grandchild still holds the inherited stdout: the rc
+    # file must land on the ENGINE's exit, never on the pipe reader's EOF
+    seat = os.environ.get("AGENTCTL_SESSION", "noseat")
+    # the trailing `: marker` is load-bearing: with `sleep` as the LAST command the shell
+    # exec()s it away and the argv marker (the only safe selector) disappears with it
+    subprocess.Popen(["/bin/sh", "-c", f"sleep 3; : agentctl-linger:{seat}"])
