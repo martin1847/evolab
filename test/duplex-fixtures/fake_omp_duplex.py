@@ -192,5 +192,9 @@ if os.environ.get("FAKE_OMP_LINGER_CHILD") == "1":
     # file must land on the ENGINE's exit, never on the pipe reader's EOF
     seat = os.environ.get("AGENTCTL_SESSION", "noseat")
     # the trailing `: marker` is load-bearing: with `sleep` as the LAST command the shell
-    # exec()s it away and the argv marker (the only safe selector) disappears with it
-    subprocess.Popen(["/bin/sh", "-c", f"sleep 3; : agentctl-linger:{seat}"])
+    # exec()s it away and the argv marker (the only safe selector) disappears with it.
+    # `/bin/sleep`, not `sleep`: the testkit's PATH carries a no-op `sleep` (so the waiter's
+    # backoff loops are instant) and it reaches this child through the inherited env — the
+    # grandchild then dies at once and T6's "pipe still held" is decided by a startup race
+    # (won on macOS, lost on Linux CI, run 36713365254)
+    subprocess.Popen(["/bin/sh", "-c", f"/bin/sleep 3; : agentctl-linger:{seat}"])
