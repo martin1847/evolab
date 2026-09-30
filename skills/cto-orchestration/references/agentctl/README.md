@@ -39,11 +39,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   `export AGENTCTL_MODEL_CLAUDE=sonnet`（omp 依旧只传 EXACT id，见 §引擎级注意）。
   **`--review` 席另有一档**：派评审时先读 `AGENTCTL_MODEL_<E>_REVIEW`，没设才落基础变量，非 review
   派发完全不看它（显式 `--model` 依旧最大）——`export AGENTCTL_MODEL_CODEX_REVIEW=<评审用 id>`。
-  **深档 goal 另有一档**：非 review、没写 `--model`、也不是 `--resume-thread` 时，若 goal 的 `Tier:`
-  行判为 `deep`/`深档`（口径 = `goal-preflight.py` 的 `TIER_LINE`，只取首个匹配、大小写不敏感），
-  先读 `AGENTCTL_MODEL_<E>_DEEP`，回显标 `(from AGENTCTL_MODEL_<E>_DEEP)`；没设 / 空值 / `light` /
-  无 `Tier:` 行 / 读不出来都落基础变量。完整优先级：**显式 `--model` > `_REVIEW`（仅 review 派发）
-  > `_DEEP`（仅深档 goal）> 基础变量 > 引擎默认**——`export AGENTCTL_MODEL_OMP_DEEP=<强档 id>`。
+  **深档另有一档**：非 review、无 `--model`、非 resume 且 goal `Tier:` 判 deep（口径 = goal-preflight `TIER_LINE`）
+  → 先读 `AGENTCTL_MODEL_<E>_DEEP`，回显标 `(from …_DEEP)`；其余落基础变量。优先级：显式 `--model` > `_REVIEW`（仅 review）> `_DEEP`（仅 deep）> 基础变量 > 引擎默认。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析；freshness
   用 mtime 对 epoch（每次 steer 即轮转）；必带/不带的判据归 SKILL.md §0。
   **`steer -d` 只移动 watcher 的 freshness 目标，不重发 footer**——worker 不会自动得知新目标，
@@ -231,7 +228,7 @@ hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则
   ⑳ 编排位经 bash 三类字面写入（重定向族 / `tee` / `sed -i`）触及源码面 → WARN 留痕（= E1 的 bash 通道；`cp`/`mv`/`git apply`
   等 accepted-uncovered；不可判目标同样 ALLOW+WARN）· (21) `steer -m` 含反引号或
   `$(`（正路 `-f`）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
-- **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：**本仓正在被编排时**，编排位对源码/测试文件的写入 → WARN 留痕（复盘按次数审）
+- **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：**本仓正在被编排时**，编排位对源码/测试文件的写入 → WARN 留痕
   （「正在被编排」= 同仓有 LIVE 席位或今/昨相位账本 `start` 行，同仓 = git common dir；判 not 则零输出放行，不打扰单 agent 会话；
   活体席位自己的 cwd 零输出放行；run dir / 账本不可读 → ALLOW+WARN）。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：browser/E2E 派发含
