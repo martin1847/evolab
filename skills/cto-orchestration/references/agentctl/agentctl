@@ -68,7 +68,7 @@ usage() {
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
   echo "       agentctl status <session> | watch <session> [--inline] [--expect MINUTES] | stop <session> | capabilities [--json] | states [--json]" >&2
   echo "       agentctl phases [--since <N>m|<N>h|<N>d|RFC3339] [--repo <abs>] [--json]   # read-only ledger readings" >&2
-  echo "       agentctl inventory --dry-run   # read-only; no other spelling exists" >&2
+  printf '%s\n' "       agentctl inventory --dry-run   # read-only; no other spelling exists" "       default model without --model: AGENTCTL_MODEL_<E>_REVIEW (--review only) > AGENTCTL_MODEL_<E>_DEEP (non-review deep-Tier goal only) > AGENTCTL_MODEL_<E> > engine default; E = OMP|CODEX|CLAUDE" >&2
   exit 1
 }
 

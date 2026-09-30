@@ -6,22 +6,14 @@
 
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-cto--orchestration-blueviolet)](SKILL.md)
 [![Part of evolab](https://img.shields.io/badge/part%20of-evolab-blue)](../../README.md)
-[![Multi-Runtime](https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20any-success)](#前置依赖与安装)
+[![Multi-Runtime](https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20any-success)](#安装)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../../LICENSE)
 
 **把"自己写代码"变成"派工 + 异构对抗评审 + 旗标门控"——一个人，一群 agent，生产级交付。**
 
-[看效果](#效果示例) · [模型策略](#三层异构模型策略) · [安装](#前置依赖与安装) · [触发方式](#触发方式) · [它和同类有什么不同](#它和同类有什么不同) · [安全边界](#安全边界)
-
-</div>
-
----
-
-<div align="center">
-
 <img src="../../assets/cto-compare.jpg" alt="plan-first A/B：同一 goal 派给 omp(Opus) 与 codex(GPT)，对比两份 plan 的根因/实证/覆盖/方案" width="760">
 
-<sub>真实 plan-first A/B：同一个 goal 派给 omp(Opus) 与 codex(GPT)，各自先出排查结论 + 方案 plan（不改代码），对比谁挖得深——据此定谁执行、谁评审。</sub>
+<sub>真实 plan-first A/B：同一个 goal 派给两个模型，各自只出排查结论 + 方案（不改代码），对比谁挖得深——据此定谁执行、谁评审。</sub>
 
 </div>
 
@@ -29,64 +21,30 @@
 
 ## 它解决什么问题
 
-单 agent 一把梭是公认反模式——它**声称完成但没 commit**、**自己评审自己说没问题**、CI **全绿但产物早就停更**；多 agent 又乱成一团：谁派谁、谁信谁、死了怎么知道？缺的从来不是工具，是**纪律**。
+单 agent 一把梭是公认反模式——**声称完成但没 commit**、**自己评审自己说没问题**、CI **全绿但产物早就停更**；多 agent 又乱成一团：谁派谁、谁信谁、死了怎么知道？缺的不是工具，是**纪律**。
 
-`cto-orchestration` 把真实多 agent 项目打磨出的编排纪律沉淀成 skill——编排者绝不写产品代码，执行/评审异构分离，watcher 盯**存活信号**（agent 死了退回 shell ≠ 任务完成），行为变更先获批、逃生舱用 kill switch。它编码的是**派发链路里所有会骗你的静默失败**：假完成、假评审、假绿灯、孤儿进程空转。整体理念 **A²**（Agentic AI × Anything，一拖多）见[仓库根 README](../../README.md)。
+本 skill 把真实多 agent 项目打磨出的编排纪律沉淀成条文 + 强制层：编排者绝不写产品代码，执行 / 评审用**不同 lineage** 的模型对抗，watcher 只认 **typed 终态信号**（agent 死了退回 shell ≠ 任务完成），行为变更先获批、逃生舱用 kill switch。它编码的是派发链路里所有会骗你的静默失败：假完成、假评审、假绿灯、孤儿进程空转。模型按活分档而不是按位置降级——上图的 plan-first A/B 就是选型依据：
 
-> **为什么是 headless + 协议？** 抓屏/送按键随 CLI 版本漂移且实测仅七八成可靠。`agentctl` 让
-> omp/claude 走引擎原生双工协议长驻（duplex：`agentctl steer` 轮内可达），codex 走逐轮 resume
-> （round）；tmux 只做保活，状态永远是 typed exit code，不是屏幕。
-
-## 效果示例
-
-让谁执行、谁评审，不靠拍脑袋——跑一次 **plan-first A/B**：同一个 goal 同时派给两个模型，各自只产出"排查结论 + 方案 plan + 风险"（**先不改代码**），再对比 plan 质量。上方截图是一次真实对比，要点如下（原文见[致谢](#致谢)）：
-
-| 维度 | codex（GPT）的 plan | omp（Opus）的 plan |
+| 维度 | codex（GPT） | omp（Opus） |
 |---|---|---|
-| 根因 | 读码归因到表层筛选/平铺函数的 legacy 分支 | 更深：抓到上游结构判定门，非预期结构时走 LLM 重生成——真正的平行数据源 |
-| 实证 | 纯读码推断 | 真去 live 环境拉产物数据逐条核对 |
-| 覆盖 | 偏单一模块 | 跨上下游消费链路（导出器 / 相邻模块） |
-| 方案 | 新增 helper、保守保留 legacy | 移除冗余分支、确定性派生重建 |
+| 根因 | 读码归因到表层 legacy 分支 | 抓到上游结构判定门——真正的平行数据源 |
+| 实证 | 纯读码推断 | 去 live 环境拉数据逐条核对 |
+| 覆盖 | 单一模块 | 跨上下游消费链路 |
 
-> 两份 plan 都对（codex 发现的表层问题 omp 也含修），但 omp 挖到了"完全不一样"的真根因。**于是这个项目定 omp 执行、codex 评审——plan-first A/B 让模型选型有据可依，不是凭感觉。**
+> 两份 plan 都对，但一份挖到了"完全不一样"的真根因——于是该项目定 omp 执行、codex 评审。工程判据见 [SKILL §0 角色分工](SKILL.md)。
 
-## 三层异构模型策略
+> **为什么是 headless + 协议？** 抓屏 / 送按键随 CLI 版本漂移且实测仅七八成可靠。`agentctl` 让 worker 走引擎原生双工协议长驻（`agentctl steer` 轮内可达）；tmux 只做保活，状态永远是 typed exit code，不是屏幕。
 
-这是核心设计，也是它和别人最不一样的地方——**三个位置，刻意用不同强度/不同家族的模型**（人话版；工程判据 SoT 见 [SKILL §0 角色分工](SKILL.md)）：
+## 安装
 
-| 层 | 角色 | 模型选择 | 为什么 |
-|---|---|---|---|
-| **编排** | 你（CTO） | **最强模型**，如 Fable 5 | 定方向、拆 goal、判评审、做决策——智力最值钱的一层，丝滑度直接决定全局质量 |
-| **执行** | omp / Claude Code | **按活分档** | 机械活可用弱模型；重推理 + 长上下文必须用强模型，别按“worker”位置固定降级 |
-| **评审** | codex / 另一 agent | **实际不同 lineage** | 核对真实 model/backend；工具名本身不证明异构，同模型自审仍有 self-preference bias |
-
-> **关键洞察**：模型按活分档，不按位置降级。执行侧 `omp` 可换成 **Claude Code**；评审侧默认用 codex，
-> 但派发前仍要核实际 model/backend，三层同 lineage 会削弱对抗价值。
-
-<div align="center">
-
-<img src="../../assets/cto-judgment.jpg" alt="编排者基于实战的模型分工判断：omp/Opus 执行、codex/GPT 评审" width="420">
-
-<sub>真实复盘片段：为什么让 omp(Opus) 执行、codex(GPT) 评审的现场判断。</sub>
-
-</div>
-
-## 前置依赖与安装
-
-**依赖**：`tmux` + 一个执行 agent CLI（[`omp`/oh-my-pi](https://github.com/can1357/oh-my-pi)，也可换 **Claude Code**）+ `codex`（[评审，异构推荐绑它](https://github.com/openai/codex)）。三个**首次用前都要登录、配好模型**；分工见[上一节](#三层异构模型策略)。
-
-**装**（Claude Code plugin marketplace，推荐）：
+依赖：`tmux` + 一个执行 agent CLI（[omp](https://github.com/can1357/oh-my-pi) 或 Claude Code）+ [`codex`](https://github.com/openai/codex)（评审席，异构推荐绑它）；三者首次用前都要登录、配好模型。
 
 ```text
 /plugin marketplace add martin1847/evolab
 /plugin install cto-orchestration@evolab
 ```
 
-> 手动拷贝、其他 runtime（Cursor / Cline…）、以及**配套的 `repo-governance-bootstrap`**（cto 派工依赖项目先有治理骨架，二者一起装才成体系）——完整装法见[仓库 README](../../README.md)。
-
-### 装完第一句话
-
-对你的强模型编排会话（推荐 Fable 5）说：
+手动拷贝、其他 runtime、以及**配套的 `repo-governance-bootstrap`**（派工依赖项目先有治理骨架）见[仓库 README](../../README.md)。装完对你的强模型编排会话说：
 
 ```text
 进入 CTO 编排模式。我来定方向，你不写产品代码——按 cto-orchestration 的
@@ -94,57 +52,39 @@
 对抗评审到 approve 再向我汇报。需求是：<你的需求>
 ```
 
-## 触发方式
-
-完整触发场景（自动加载行为的 SoT）见 [SKILL frontmatter 的 `description`](SKILL.md)——典型如"你做 CTO / 编排者，别自己写代码"、"派 omp 实现、codex 评审"、"goal 模式派发"、"管理并行会话"、"起 watcher 盯着"。
+完整触发场景（自动加载行为的 SoT）见 [SKILL frontmatter 的 `description`](SKILL.md)。
 
 ## 它会交付什么
-
-（产物速览；落盘纪律工程判据 SoT 见 [SKILL §5 状态落盘](SKILL.md)）
 
 | 产物 | 内容 |
 |---|---|
 | `*_GOAL.md` | 带 file:line 预判、交付物清单、guardrails 的派工文档 |
-| `*_REVIEW_codex.md` | codex 异构评审的 severity 分级 findings + verdict，逐轮追加 |
-| watcher 状态 | lane-aware typed 信号（全枚举跑 `agentctl states`；处置见 `references/agentctl/README.md`） |
-| 复盘快照 | 交付清单 + 教训固化 + roadmap/ACTIVE_CONTEXT 翻转 |
+| `*_REVIEW_codex.md` | 异构评审的 severity 分级 findings + verdict，逐轮追加 |
+| watcher 状态 | typed 信号（全枚举 `agentctl states`；处置见 `references/agentctl/README.md`） |
+| 复盘快照 | 交付清单 + 教训固化 + roadmap / ACTIVE_CONTEXT 翻转 |
 
 ## 它和同类有什么不同
-
-不攻击同行，只讲路线差异：
 
 | 维度 | 通用 agent 框架 / 全自动 DAG | 平台型（Web UI 派遣） | **cto-orchestration** |
 |---|---|---|---|
 | 谁做主 | agent 自主拆任务、自动跑 | UI 中央调度 | **编排者手写 goal、全程在场** |
-| 评审 | 多为同构单评 / 质量门控 | 人工 review 门 | **异构对抗式循环**（不同模型） |
-| 失败处理 | 假设自动化可信 | 看 dashboard | **存活检测 + 假完成/假绿灯的系统编码** |
+| 评审 | 同构单评 / 质量门控 | 人工 review 门 | **异构对抗式循环** |
+| 失败处理 | 假设自动化可信 | 看 dashboard | **存活检测 + 假完成 / 假绿灯的系统编码** |
 | 形态 | 装框架 / 自托管 | 部署平台 | **一个 skill，跑在你已有的终端里** |
-| 卖点 | 自动化（去睡觉） | 可视化协作 | **纪律**（别被假信号坑死） |
 
 ## 安全边界
 
-一句话：**不可逆操作（push / PR / 迁移 / 删除 / 对外消息）先报后做、等明确放行；行为变更先获批、逃生舱用 kill switch（goal 标明需灰度才旗标默认 OFF）；交付走验证诚实三段式；编排者绝不写产品代码。** 完整判据见 [SKILL §3 变更纪律](SKILL.md) + 顶部三铁律。
+**不可逆操作（push / PR / 迁移 / 删除 / 对外消息）先报后做、等明确放行；行为变更先获批、逃生舱用 kill switch；交付走验证诚实三段式；编排者绝不写产品代码。** 完整判据见 [SKILL §3 变更纪律](SKILL.md) + 顶部三铁律。
 
 ## 文件结构
 
-三层：`SKILL.md`（给 agent 的编排方法论主干）· `references/`（模板 / watcher 工具集 / 各节机制展开——
-以 SKILL.md 各节的指针为准，不在此维护第二份目录树）· 本 README（给人看的安装+定位页；
-图存仓库根 assets/，不随 skill 安装）。
-
-## 致谢
-
-整理自公众号 **阳哥进化论** 的多 agent 编排实战，是 [evolab](../../README.md) 合集的旗舰 skill。理念 **A²**（Agentic AI × Anything，一拖多）。完整复盘原文：
-
-- [A² 时代来临：Agentic AI × Anything](https://mp.weixin.qq.com/s/hC9EFNh7gTsq4PPlwViLiA)
-- [上下文治理：一个人指挥一群 agent 的收口纪律](https://mp.weixin.qq.com/s/JbdQrJR5lBwjcTcS4fSWPQ)
-
-## License
-
-[MIT](../../LICENSE)
+`SKILL.md`（给 agent 的方法论主干，触发即加载）· `references/`（模板 / agentctl 工具集 / 各节机制展开，按 SKILL.md 各节指针按需读）· 本 README（给人看的定位 + 安装页，agent 不加载；图存仓库根 `assets/`，不随 skill 安装）。
 
 ---
 
 <div align="center">
+
+整理自公众号 **阳哥进化论** 的多 agent 编排实战（[A² 时代来临](https://mp.weixin.qq.com/s/hC9EFNh7gTsq4PPlwViLiA) · [上下文治理](https://mp.weixin.qq.com/s/JbdQrJR5lBwjcTcS4fSWPQ)）· [MIT](../../LICENSE)
 
 *别自己写代码——当 CTO，派工去。*
 
