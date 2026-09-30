@@ -39,6 +39,11 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   `export AGENTCTL_MODEL_CLAUDE=sonnet`（omp 依旧只传 EXACT id，见 §引擎级注意）。
   **`--review` 席另有一档**：派评审时先读 `AGENTCTL_MODEL_<E>_REVIEW`，没设才落基础变量，非 review
   派发完全不看它（显式 `--model` 依旧最大）——`export AGENTCTL_MODEL_CODEX_REVIEW=<评审用 id>`。
+  **深档 goal 另有一档**：非 review、没写 `--model`、也不是 `--resume-thread` 时，若 goal 的 `Tier:`
+  行判为 `deep`/`深档`（口径 = `goal-preflight.py` 的 `TIER_LINE`，只取首个匹配、大小写不敏感），
+  先读 `AGENTCTL_MODEL_<E>_DEEP`，回显标 `(from AGENTCTL_MODEL_<E>_DEEP)`；没设 / 空值 / `light` /
+  无 `Tier:` 行 / 读不出来都落基础变量。完整优先级：**显式 `--model` > `_REVIEW`（仅 review 派发）
+  > `_DEEP`（仅深档 goal）> 基础变量 > 引擎默认**——`export AGENTCTL_MODEL_OMP_DEEP=<强档 id>`。
 - **deliverable gate**：相对 glob 一律按**会话 cwd** 解析；freshness
   用 mtime 对 epoch（每次 steer 即轮转）；必带/不带的判据归 SKILL.md §0。
   **`steer -d` 只移动 watcher 的 freshness 目标，不重发 footer**——worker 不会自动得知新目标，

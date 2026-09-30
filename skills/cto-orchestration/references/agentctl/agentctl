@@ -42,6 +42,22 @@ ARMED_ID=""   # arm-time snapshot of the active identity; captured by watch befo
 q() { printf %q "$1"; }
 ctl() { "$PY" "$CTL" --run-dir "$DIR" "$@"; }
 meta_get() { sed -n "s/^$2=//p" "$DIR/$1.duplex.meta" 2>/dev/null | head -1; }
+goal_tier_deep() { # $1 goal file — rc 0 only when its `Tier:` line says deep. THE READING IS
+  # goal-preflight.py's own `TIER_LINE` / `DEEP_WORDS`, loaded by path instead of re-spelled:
+  # a second regex for one declaration drifts on the first edit, and that gate is what goal
+  # authors already write against. Every unanswerable case (no python3, unreadable goal, no
+  # `Tier:` line, an unknown value) is NOT deep — the caller then keeps the base variable.
+  "$PY" - "$HERE/../goal-preflight.py" "$1" >/dev/null 2>&1 <<'TIERPY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("goal_preflight", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+with open(sys.argv[2], encoding="utf-8", errors="replace") as fh:
+    hit = mod.TIER_LINE.search(fh.read())
+value = hit.group(1).strip(mod._TRAILING + "`*").lower() if hit else ""
+sys.exit(0 if value in mod.DEEP_WORDS else 1)
+TIERPY
+}
 usage() {
   echo "usage: agentctl start <omp|codex|claude> <session> <cwd> --goal F [--deliverable G] [--no-preflight] [--review] [--expect MINUTES] [engine args...]   # session = <proj>-<task>-<engine>, e.g. shop-cart-omp (prefix = who owns it in tmux ls)" >&2
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
@@ -335,6 +351,22 @@ cmd_start() {
     eval "MODEL_ENV_REVIEW_VAL=\"\${${MODEL_ENV}_REVIEW:-}\""
     if [ -n "$MODEL_ENV_REVIEW_VAL" ]; then
       MODEL_ENV="${MODEL_ENV}_REVIEW"; MODEL_ENV_VAL="$MODEL_ENV_REVIEW_VAL"
+    fi
+  fi
+  # THE GOAL'S TIER IS A MODEL DECISION TOO (owner ruling 2026-09-30). A deep goal is the one
+  # that adds a 判断面; a light one has a reference implementation to follow. The operator has
+  # been retyping --model on exactly the deep dispatches, so `AGENTCTL_MODEL_<ENGINE>_DEEP` is
+  # that retyping done once, and like _REVIEW it simply BECOMES the variable this block is
+  # about — name, value and source together, so no gate below is duplicated.
+  # READ ONLY WHEN: no --model was typed (a typed flag is a request about THIS start), this is
+  # not a --review (that seat has its own spelling above, and two tiers on one dispatch would
+  # need a precedence nobody asked for), and not a --resume-thread (the thread keeps its
+  # creation-time model, so swapping the NAME here would only change which variable the
+  # ignore-NOTE blames). Cheap test first: with _DEEP unset nothing reads the goal at all.
+  if [ -z "$REVIEW" ] && [ -z "$MODEL" ] && [ -z "$RESUME_THREAD" ]; then
+    eval "MODEL_ENV_DEEP_VAL=\"\${${MODEL_ENV}_DEEP:-}\""
+    if [ -n "$MODEL_ENV_DEEP_VAL" ] && goal_tier_deep "$GOAL"; then
+      MODEL_ENV="${MODEL_ENV}_DEEP"; MODEL_ENV_VAL="$MODEL_ENV_DEEP_VAL"
     fi
   fi
   if [ -n "$MODEL_ENV_VAL" ] && [ -z "$MODEL" ]; then

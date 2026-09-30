@@ -1860,6 +1860,141 @@ chk_eq "model-review ⑪: the refusal owns no lane state" "" \
 unset AGENTCTL_BIN_CODEX FAKE_PROVIDER_LOG
 sweep_fakes; sandbox_clean
 
+echo "== start: AGENTCTL_MODEL_<ENGINE>_DEEP — the deep-tier seat's own default (2026-09-30) =="
+# A deep goal is the one that adds a 判断面; a light one has a reference implementation to
+# follow. The operator was retyping --model on exactly the deep dispatches. The third spelling
+# is consulted ONLY when the goal's own `Tier:` line says deep (goal-preflight's `TIER_LINE`,
+# imported rather than re-spelled), only on a non-review start with no typed --model, and is
+# otherwise the SAME setting travelling the SAME route — so these cells assert the precedence,
+# every fall-through, and the blindness that makes the split worth having.
+sandbox_new; install_running_tmux
+WT="$SANDBOX/wtd"; mkdir -p "$WT"
+printf 'deep work\nTier: deep\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' \
+  > "$SANDBOX/goal-deep.md"
+printf 'light work\nTier: light\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' \
+  > "$SANDBOX/goal-light.md"
+printf 'undeclared tier\nPreflight: ls duplex-fixtures => 5 fake engines on disk\n' \
+  > "$SANDBOX/goal-none.md"
+export AGENTCTL_BIN_CODEX="$FIX/fake_codex_duplex.py"
+
+# ⑫ deep goal, both spellings set: the _DEEP value wins and is named as the source. codex is
+# extra_argv=0, so this also proves the deep default took the PROTOCOL route: the fake exits 2
+# on any arg but `app-server`, so a forwarded --model would rc1 the start.
+export FAKE_PROVIDER_LOG="$SANDBOX/md-a.log"
+out="$(AGENTCTL_MODEL_CODEX_DEEP=fake-deep AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mdpA "$WT" --goal "$SANDBOX/goal-deep.md" 2>&1)"; rc=$?
+# damage: a deep dispatch landing on the cheap default is the retype this variable removes.
+chk_eq "model-deep ⑫: deep start rc0 — argv stayed pinned (this fake dies on any extra arg)" 0 "$rc"
+# damage: meta recording the base value would make status/resume act on the wrong tier.
+chk_eq "model-deep ⑫: the deep variable outranks the base one in meta" fake-deep \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdpA.duplex.meta")"
+# damage: an unnamed source leaves the operator unable to tell which variable paid for the seat.
+chk_contains "model-deep ⑫: the requested line names the deep variable as the source" \
+  "requested: model=fake-deep (from AGENTCTL_MODEL_CODEX_DEEP)" "$out"
+# damage: a value reaching argv instead of the protocol kills the handshake on pinned engines.
+chk_eq "model-deep ⑫: and it rode thread/start, the protocol path" 1 \
+  "$(seen "$SANDBOX/md-a.log" '"model":"fake-deep"')"
+# damage: leaking the light-lane default onto the wire would make the meta line a lie.
+chk_eq "model-deep ⑫: the base default never reached the wire" 0 \
+  "$(seen "$SANDBOX/md-a.log" '"model":"fake-eco"' 5)"
+bash "$AGENTCTL" stop mdpA >/dev/null 2>&1
+
+# ⑬ a LIGHT goal is not a deep one: the base variable supplies the seat, untouched
+export FAKE_PROVIDER_LOG="$SANDBOX/md-b.log"
+out="$(AGENTCTL_MODEL_CODEX_DEEP=fake-deep AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mdpB "$WT" --goal "$SANDBOX/goal-light.md" 2>&1)"; rc=$?
+# damage: a light goal refused at start is the tier split breaking an ordinary dispatch.
+chk_eq "model-deep ⑬: light start rc0" 0 "$rc"
+# damage: reading the strong default on every light dispatch is the cost the tier split avoids.
+chk_eq "model-deep ⑬: a light goal keeps the base variable in meta" fake-eco \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdpB.duplex.meta")"
+# damage: naming _DEEP on a light seat sends the operator to a variable that never fired.
+chk_contains "model-deep ⑬: and the source named is the base variable" \
+  "requested: model=fake-eco (from AGENTCTL_MODEL_CODEX)" "$out"
+bash "$AGENTCTL" stop mdpB >/dev/null 2>&1
+
+# ⑭ NO `Tier:` line at all — the layer is opt-in by absence, exactly as goal-preflight reads it,
+# so every goal written before this batch keeps its model
+export FAKE_PROVIDER_LOG="$SANDBOX/md-c.log"
+out="$(AGENTCTL_MODEL_CODEX_DEEP=fake-deep AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mdpC "$WT" --goal "$SANDBOX/goal-none.md" 2>&1)"; rc=$?
+# damage: a goal with no Tier line refused at start would break every goal written before this batch.
+chk_eq "model-deep ⑭: undeclared-tier start rc0" 0 "$rc"
+# damage: treating "no declaration" as deep would silently re-price every existing goal.
+chk_eq "model-deep ⑭: an undeclared tier keeps the base variable" fake-eco \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdpC.duplex.meta")"
+bash "$AGENTCTL" stop mdpC >/dev/null 2>&1
+
+# ⑮ an exported-but-blank _DEEP is not a setting: it falls through to the base variable instead
+# of erasing it (the field shape of every profile line somebody commented out)
+export FAKE_PROVIDER_LOG="$SANDBOX/md-d.log"
+out="$(AGENTCTL_MODEL_CODEX_DEEP= AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mdpD "$WT" --goal "$SANDBOX/goal-deep.md" 2>&1)"; rc=$?
+# damage: a blank _DEEP refusing the start turns a commented-out profile line into an outage.
+chk_eq "model-deep ⑮: blank _DEEP start rc0" 0 "$rc"
+# damage: an empty variable read as a setting would dispatch a seat with no model at all.
+chk_eq "model-deep ⑮: a blank _DEEP falls through to the base variable" fake-eco \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdpD.duplex.meta")"
+# damage: naming the blank variable as the source points the operator at an empty setting.
+chk_contains "model-deep ⑮: and names the base variable as the source" \
+  "(from AGENTCTL_MODEL_CODEX)" "$out"
+bash "$AGENTCTL" stop mdpD >/dev/null 2>&1
+
+# ⑯ A REVIEW DISPATCH NEVER READS _DEEP, deep goal or not: the review seat has its own spelling
+# and two tiers on one dispatch would need a precedence nobody asked for.
+export FAKE_PROVIDER_LOG="$SANDBOX/md-e.log"
+out="$(AGENTCTL_MODEL_CODEX_DEEP=fake-deep AGENTCTL_MODEL_CODEX_REVIEW=fake-rev \
+       AGENTCTL_MODEL_CODEX=fake-eco bash "$AGENTCTL" start codex mdpE "$WT" \
+       --goal "$SANDBOX/goal-deep.md" --review 2>&1)"; rc=$?
+# damage: a review dispatch refused on a deep goal is the review lane lost to the tier split.
+chk_eq "model-deep ⑯: review start rc0" 0 "$rc"
+# damage: a deep goal reviewed on the execution-tier default is the review seat losing its own.
+chk_eq "model-deep ⑯: the review spelling still wins on a deep goal" fake-rev \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdpE.duplex.meta")"
+# damage: a review echo naming _DEEP would claim a tier the handshake never selected.
+chk_not_contains "model-deep ⑯: and _DEEP is named nowhere" "AGENTCTL_MODEL_CODEX_DEEP" "$out"
+bash "$AGENTCTL" stop mdpE >/dev/null 2>&1
+# …and with NO _REVIEW set, a review dispatch falls to the BASE variable, never to _DEEP
+export FAKE_PROVIDER_LOG="$SANDBOX/md-f.log"
+out="$(AGENTCTL_MODEL_CODEX_DEEP=fake-deep AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mdpF "$WT" --goal "$SANDBOX/goal-deep.md" --review 2>&1)"; rc=$?
+# damage: falling to _DEEP here would make --review silently pick the execution-seat tier.
+chk_eq "model-deep ⑯: a review with no _REVIEW lands on the base variable, not _DEEP" fake-eco \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdpF.duplex.meta")"
+bash "$AGENTCTL" stop mdpF >/dev/null 2>&1
+
+# ⑰ a TYPED --model still outranks all three variables, and claims no env source
+export FAKE_PROVIDER_LOG="$SANDBOX/md-g.log"
+out="$(AGENTCTL_MODEL_CODEX_DEEP=fake-deep AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mdpG "$WT" --goal "$SANDBOX/goal-deep.md" \
+       --model gpt-x 2>&1)"; rc=$?
+# damage: a typed --model refused because a deep variable exists is the flag breaking.
+chk_eq "model-deep ⑰: typed-model start rc0" 0 "$rc"
+# damage: a variable outranking a flag the operator typed is the tool ignoring the request.
+chk_eq "model-deep ⑰: the typed model outranks the deep variable" gpt-x \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdpG.duplex.meta")"
+# damage: an env annotation on a typed model would misreport who chose the seat.
+chk_not_contains "model-deep ⑰: and annotates no env source at all" "(from AGENTCTL_MODEL" "$out"
+bash "$AGENTCTL" stop mdpG >/dev/null 2>&1
+
+# ⑱ --resume-thread: a thread keeps the model it was created with, so nothing is swapped and the
+# ignore-NOTE must blame the variable that was actually consulted — the BASE one.
+export FAKE_PROVIDER_LOG="$SANDBOX/md-h.log"
+out="$(AGENTCTL_MODEL_CODEX_DEEP=fake-deep AGENTCTL_MODEL_CODEX=fake-eco \
+       bash "$AGENTCTL" start codex mdpH "$WT" --goal "$SANDBOX/goal-deep.md" \
+       --resume-thread old-thread-9 2>&1)"; rc=$?
+# damage: a deep goal that cannot be resumed loses its thread to the tier split.
+chk_eq "model-deep ⑱: resume + deep goal is not refused" 0 "$rc"
+# damage: a NOTE naming a variable this start never read sends the operator to the wrong line.
+chk_contains "model-deep ⑱: the ignore-NOTE names the base variable" \
+  "NOTE: AGENTCTL_MODEL_CODEX is set" "$out"
+# damage: a model= line on a resumed thread would claim a model the resume never sent.
+chk_eq "model-deep ⑱: the resumed thread still carries no model= in meta" "" \
+  "$(sed -n 's/^model=//p' "$WATCH_RUN_DIR/mdpH.duplex.meta")"
+bash "$AGENTCTL" stop mdpH >/dev/null 2>&1
+unset AGENTCTL_BIN_CODEX FAKE_PROVIDER_LOG
+sweep_fakes; sandbox_clean
+
 echo "== duplex: the DONE line's dirty=<N> (uncommitted paths the seat would leave) =="
 # Field 2026-09-21 (n=2): a seat published DONE and wrote "Commits: LOCAL only" over a 37-file
 # dirty worktree; the orchestrator found it by hand because the dispatch baseline's
