@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 # cto-guard-edit — PreToolUse·Edit|Write|MultiEdit enforcement for cto-orchestration. ONE rule:
 #   (E1) the ORCHESTRATOR writing product code by hand, IN A REPO THIS BOX IS ORCHESTRATING
-#        -> DENY (iron law ①, 车道分工, field n=2: two batches where the seat hand-coded the very
+#        -> WARN (iron law ①, 车道分工, field n=2: two batches where the seat hand-coded the very
 #        thing it had just briefed a worker for, and paid for it with the review lane it thereby
 #        lost). The rule existed only in prose (SKILL.md §0) and prose does not reach the moment
 #        a `Write` tool call is issued — same conclusion as cto-guard-bash/agent, promoted to a
 #        tool-call hook.
+# WHY IT ONLY WARNS (owner ruling 2026-09-30, this rule and its bash twin (20) together): the
+# verdict used to be a DENY liftable by a one-shot marker, and the field price of that shape is
+# a dispatched ROUND per false stop — downstream 2026-09-29, a 3-line forensic script was
+# stopped twice. "Is this product code" is not mechanically decidable from an extension, which
+# is why the five blind branches below already ALLOW+WARN; the judged branch now joins them.
+# The line still names the disease and the target, so a retro can COUNT the slips; what is gone
+# is the block, and with it the marker that only existed to lift the block.
 #
 # WHICH REPO IS THIS GATE'S BUSINESS — the clause added 2026-09-06 (audit §1). Until then the
 # rule fired in EVERY git work tree, so a single-agent session editing an unrelated checkout was
@@ -43,19 +50,18 @@
 # on a heredoc), on the strength of ANOTHER worktree's ledger row, and could only proceed through
 # the one-shot override plus a self-report. So the gate was firing on the wrong caller.
 # JUDGED: the payload's top-level `agent_id`, non-empty STRING only — the field Claude Code sends
-# ONLY inside a sub agent's tool call. Present ⇒ the DENY becomes ONE WARN line at rc 0 (this
-# guard's existing additionalContext channel, the same shape every undecidable branch takes);
-# absent, empty, or not a string ⇒ nothing changes, byte for byte.
+# ONLY inside a sub agent's tool call. Present ⇒ the CALLER-CLASS line instead of the 编排位 one
+# (both rc 0 since 2026-09-30; the two texts stay distinct because only one of them is a
+# 车道分工 slip worth counting); absent, empty, or not a string ⇒ the 编排位 line.
 # NOT JUDGED, deliberately: `agent_type` is a LABEL for the warn text and never part of the
 # predicate (a name is not an identity); `transcript_path` is not read; there is no "product
 # directory" exemption — the target face is unchanged. A FORK sub agent is undocumented on this
-# field: if it carries `agent_id` it gets the same WARN, and if it does not it is DENIED exactly
-# as today — this clause reads what the payload says and guesses nothing.
-# The one-shot override is NOT consumed on this path: the DENY was never reached, and spending an
-# approval on a verdict nobody reached retires it silently (rule (20) carries the same doctrine
-# for its unjudgeable targets).
-# KILL CRITERION: within 30 days, ONE observed case of the orchestrator using a fork sub agent to
-# route around this rule ⇒ fork is judged by `agent_type` and rises back to DENY.
+# field: carrying `agent_id` it draws the sub-agent line, without it the 编排位 line — this
+# clause reads what the payload says and guesses nothing.
+# KILL CRITERION (slug `e1-orchestrator-warn`, replacing the fork-routing one the DENY carried):
+# a retro that reads 30 days of these WARNs and finds every one of them a write the orchestrator
+# was right to make ⇒ delete the branch, it is ceremony. Raising it back to a block is the
+# owner's call on the counted 车道分工 slips, never this file's.
 # Deny = exit 2 + stderr (shown to the agent). Warn = exit 0 + JSON
 # hookSpecificOutput.additionalContext (the only channel that reaches the agent at exit 0).
 import sys, json, os, re, subprocess
@@ -78,10 +84,9 @@ except Exception:                           # noqa: BLE001 — a broken sibling 
 # counter-probed at rc=2).
 _SRC_EXT = {"py", "sh", "bash", "ts", "js", "tsx", "jsx", "go", "rs", "java", "kt", "rb"}
 _TEST_DIR = re.compile(r"/tests?/")
-_OVERRIDE = "/tmp/cto-allow-direct-write"
 
 
-# The five ALLOW+WARN texts, as module-level literals emitted through an INLINE json.dumps at
+# The six ALLOW+WARN texts, as module-level literals emitted through an INLINE json.dumps at
 # each branch. Not a style choice: the injected-text ratchet (test/loc-budget.test.sh)
 # weighs literals AT the sink and resolves one local per sink, so a message routed through a
 # `warn(text)` helper's parameter would be spent entirely unweighed — the exact blind spot that
@@ -109,6 +114,11 @@ _W_IDENTITY = (
 _W_SUBAGENT = (
     "WARN (cto-guard E1): 子 agent %s 写源码面 %s——派出去写的产物放行留痕；若这是编排位借子 agent "
     "绕道，按 SKILL 铁律① 自查。"
+)
+_W_ORCH = (
+    "WARN (cto-guard E1): 编排位直写源码面 %s——该仓正在被编排（%s）且无活体席位持有这棵树"
+    "（call cwd %s）。留痕不阻断：按 SKILL.md §0 铁律① 车道分工，实现派出去"
+    "写——`agentctl start <engine> <session> <cwd> --goal <abs>`。"
 )
 
 
@@ -260,9 +270,8 @@ def main():
 
     # THE CALLER IS A SUB AGENT (header clause, owner ruling 2026-09-18): a payload carrying a
     # non-empty `agent_id` is a worker that was DISPATCHED to write — the shape 铁律① protects,
-    # not the shape it forbids. Placed HERE, at the DENY point, so every branch
-    # above keeps its own verdict and no case draws two WARN lines; and ABOVE the override, so
-    # a verdict nobody reached cannot silently spend an approval. `agent_type` is the label only.
+    # not the shape it forbids. Placed HERE, at the judged point, so every branch above keeps
+    # its own verdict and no case draws two WARN lines. `agent_type` is the label only.
     sub = data.get("agent_id")
     if isinstance(sub, str) and sub:
         kind = data.get("agent_type")
@@ -271,28 +280,13 @@ def main():
                 kind if isinstance(kind, str) and kind else sub, path)}}))
         return 0
 
-    # The override is the LEGITIMATE direct-write path, not a bypass: SKILL.md §2 licenses the
-    # orchestrator to write the shipped face (教义 / 门 / guard) itself, with a minimal contract.
-    # Consumption IS the approval (same one-shot shape as cto-guard-bash's markers), so it can
-    # never linger as a standing grant; an unremovable object at the marker path denies.
-    try:
-        os.remove(_OVERRIDE)
-        return 0
-    except OSError:
-        pass
-    sys.stderr.write(
-        "DENY: 编排位直写源码面 — %s, a work tree that IS being orchestrated (%s) and that no "
-        "LIVE agentctl seat holds (call cwd %s), so this is the orchestrator typing product code "
-        "(铁律① 车道分工, n=2: the seat hand-coded what it had just briefed and lost the review "
-        "lane it was paying for). Fix: dispatch it — `agentctl start <engine> <session> <cwd> "
-        "--goal <abs>` — and let the worker edit inside its own worktree; writes into a live "
-        "seat's work tree pass untouched. Directly writing the SHIPPED face (教义 / 门 / guard) "
-        "is a licensed path for ANY verified motive, and needs only the minimal contract "
-        "(Done-when + 坏样本来源 + scope): write it, then `touch %s` (one-shot, consumed on use) "
-        "and re-run. Read: cto-orchestration/SKILL.md §0.\n"
-        % (path, why, cwd, _OVERRIDE)
-    )
-    return 2
+    # THE JUDGED BRANCH (owner ruling 2026-09-30, header): an orchestrated work tree, no LIVE
+    # seat holding it, no sub-agent field — the orchestrator typing product code. One WARN line
+    # at rc 0, the same channel the five blind branches use, so the slip is countable in retro
+    # without costing a dispatched round when the extension guessed wrong.
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "additionalContext": _W_ORCH % (path, why, cwd)}}))
+    return 0
 
 
 if __name__ == "__main__":

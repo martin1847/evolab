@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # cto-guard-edit.py — PreToolUse·Edit|Write|MultiEdit guard, ONE rule (E1): the orchestrator
-# writing product code by hand is DENIED unless the write comes from a LIVE agentctl seat's cwd
-# or carries the one-shot override marker.
+# writing product code by hand draws ONE WARN line at rc 0 (owner ruling 2026-09-30 — the DENY
+# and the one-shot marker that lifted it are both gone), while a write from a LIVE agentctl
+# seat's cwd stays silent.
 #
 # Every case below drives the REAL hook contract: a JSON payload on stdin, verdict read off the
 # exit code and stderr/stdout — not a python-level call into a helper. The two cases the forensic
@@ -28,7 +29,7 @@ FIX="$(mktemp -d /tmp/ctoedit.XXXXXX)"
 RUN="$FIX/run"
 BIN="$FIX/bin"
 mkdir -p "$RUN" "$BIN"
-trap 'rm -rf "$FIX"; rm -f /tmp/cto-allow-direct-write' EXIT
+trap 'rm -rf "$FIX"' EXIT
 
 # Fake tmux: `has-session -t =<name>` succeeds only for a session named in $TMUX_LIVE.
 cat > "$BIN/tmux" <<'EOF'
@@ -56,7 +57,7 @@ git -C "$SEAT" init -q
 # 2026-09-06: E1 judges only a repo THIS BOX IS ORCHESTRATING (a LIVE seat, or a phase-ledger
 # `start` row of today/yesterday, in the same repo by git common dir). A checkout with neither
 # is silently none of the gate's business — asserted as its own arm at the end of this file, so
-# the rows written here are what makes the DENY arms discriminate at all.
+# the rows written here are what makes the WARN arms discriminate at all.
 ledger_row() { # $1 cwd — one `start` row in today's shard of THIS fixture's run dir
   python3 -c 'import json, os, sys
 print(json.dumps({"ts": "2026-09-06T00:00:00.000Z", "event": "start", "name": "fixture",
@@ -87,6 +88,11 @@ ctx() { printf '%s' "$1" | python3 -c 'import sys,json
 try: d=json.load(sys.stdin)
 except Exception: print(""); sys.exit()
 print(d.get("hookSpecificOutput",{}).get("additionalContext",""))'; }
+warned_orch() { # 1 when the last run is the 编排位 verdict: rc 0, silent stderr, that one line
+  local c; c="$(ctx "$OUT")"
+  if [ "$RC" = 0 ] && [ -z "$ERR" ] \
+     && [ "${c#*"WARN (cto-guard E1): 编排位直写源码面"}" != "$c" ]; then echo 1; else echo 0; fi
+}
 
 chk_eq "script is executable" 1 "$([ -x "$GUARD" ] && echo 1 || echo 0)"
 
@@ -100,32 +106,38 @@ run Read "$ORCH/test/loc-budget.limits" "$ORCH"
 chk_eq "E2 allows a limits read" 0 "$RC"
 
 # ── E1 BAD SAMPLES: the orchestrator hand-writing source outside every live seat ───────────
-rm -f "$RUN"/*.duplex.meta /tmp/cto-allow-direct-write
+rm -f "$RUN"/*.duplex.meta
 run Write "$ORCH/skills/foo.py" "$ORCH"
-chk_eq "orchestrator writing a .py denied (exit 2)" 2 "$RC"
-chk_contains "deny names the disease" "编排位直写源码面" "$ERR"
-chk_contains "deny gives the正路 dispatch command" "agentctl start <engine> <session> <cwd>" "$ERR"
-chk_contains "deny names the override marker" "/tmp/cto-allow-direct-write" "$ERR"
-chk_contains "deny carries the doc pointer" "Read: cto-orchestration/SKILL.md" "$ERR"
-chk_eq "a deny writes no hook response on stdout" "" "$OUT"
+# damage: the judged branch could go silent, leaving the 车道分工 slip uncountable in retro.
+chk_eq "orchestrator writing a .py warns (rc 0, stderr silent)" 1 "$(warned_orch)"
+# damage: a line naming no path cannot be audited back to the write it saw.
+chk_contains "the warn names the target it judged" "$ORCH/skills/foo.py" "$(ctx "$OUT")"
+# damage: without the正路 the caller is told off and handed nothing to do.
+chk_contains "the warn gives the正路 dispatch command" "agentctl start <engine> <session> <cwd>" \
+  "$(ctx "$OUT")"
+# damage: a nag with no doctrine pointer is ceremony nobody can check.
+chk_contains "the warn carries the doc pointer" "SKILL.md §0 铁律①" "$(ctx "$OUT")"
+# damage: rc 2 or a word on stderr IS the blocked tool call this downgrade exists to remove.
+chk_eq "and the tool call is never blocked" "0|" "$RC|$ERR"
 
+# damage: a channel that silently stops being judged is a rule nobody notices losing.
 run Edit "$ORCH/scripts/deploy.sh" "$ORCH"
-chk_eq "Edit on a .sh denied" 2 "$RC"
+chk_eq "Edit on a .sh warns" 1 "$(warned_orch)"
 run MultiEdit "$ORCH/src/app.ts" "$ORCH"
-chk_eq "MultiEdit on a .ts denied" 2 "$RC"
+chk_eq "MultiEdit on a .ts warns" 1 "$(warned_orch)"
 # the whole declared extension set ships tested: an unexercised entry could be a silent typo
 for ext in py sh bash ts js tsx jsx go rs java kt rb; do
   run Write "$ORCH/src/unit.$ext" "$ORCH"
-  chk_eq "source extension .$ext is guarded" 2 "$RC"
+  chk_eq "source extension .$ext is guarded" 1 "$(warned_orch)"
 done
 # extension-less file under a test dir — the shape the extension list cannot see
 run Write "$ORCH/test/fixtures/golden" "$ORCH"
-chk_eq "a file under /test/ is the test face, guarded" 2 "$RC"
+chk_eq "a file under /test/ is the test face, guarded" 1 "$(warned_orch)"
 run Write "$ORCH/tests/helper" "$ORCH"
-chk_eq "and /tests/ too" 2 "$RC"
+chk_eq "and /tests/ too" 1 "$(warned_orch)"
 # case: uppercase extension is the same file type to every toolchain
 run Write "$ORCH/src/Main.PY" "$ORCH"
-chk_eq "extension match is case-insensitive" 2 "$RC"
+chk_eq "extension match is case-insensitive" 1 "$(warned_orch)"
 
 # ── E1 GOOD SAMPLES: non-source faces are never this rule's business ──────────────────────
 for f in docs/GOAL.md docs/data.json config/app.yaml pyproject.toml notes.txt README; do
@@ -147,11 +159,12 @@ run Write "$SEAT/src/app.py" "$SEAT/src/deep/dir"
 chk_eq "live seat cd'd deeper is still that seat" 0 "$RC"
 # PAIRED RED: the same live seat does not license the ORCHESTRATOR's cwd
 run Write "$ORCH/src/app.py" "$ORCH"
-chk_eq "a live seat elsewhere does not license the orchestrator's cwd" 2 "$RC"
+# damage: a seat's licence could leak to the checkout that OWNS it, which is the judged face.
+chk_eq "a live seat elsewhere does not license the orchestrator's cwd" 1 "$(warned_orch)"
 # THE DIRECTION: the seat's worktree lives inside $ORCH, so the very same live seat must not
 # license a write from its PARENT — that parent is the orchestrator's checkout.
 run Write "$ORCH/src/app.py" "$ORCH"
-chk_eq "the seat's parent directory is not the seat" 2 "$RC"
+chk_eq "the seat's parent directory is not the seat" 1 "$(warned_orch)"
 
 # ── E1 THE _STOP_KEPT TRAP: a stopped seat's surviving meta must not grant write rights ───
 # `agentctl stop` keeps <s>.duplex.meta AND <s>.duplex.rc for post-mortem, and kills the tmux
@@ -159,12 +172,13 @@ chk_eq "the seat's parent directory is not the seat" 2 "$RC"
 seat_meta worker "$SEAT" 0
 TMUX_LIVE=""
 run Write "$SEAT/src/app.py" "$SEAT"
-chk_eq "stopped seat (rc file present) is NOT live — denied" 2 "$RC"
+# damage: a finished worktree's surviving meta would hold write rights forever.
+chk_eq "stopped seat (rc file present) is NOT live — judged" 1 "$(warned_orch)"
 # rc file absent but the tmux session is gone (crashed pane, killed shell): also not live
 seat_meta worker "$SEAT"
 TMUX_LIVE="someone-else"
 run Write "$SEAT/src/app.py" "$SEAT"
-chk_eq "meta without a tmux session is NOT live — denied" 2 "$RC"
+chk_eq "meta without a tmux session is NOT live — judged" 1 "$(warned_orch)"
 # UNDECIDABLE LIVENESS FAILS OPEN, on purpose. Targeted mutation rather than PATH surgery: an
 # unexecutable `tmux` on PATH is SKIPPED by execvp, which then finds the real binary and answers
 # a decidable "no" — so only killing the tmux call itself reproduces "the probe never answered".
@@ -185,26 +199,10 @@ chk_eq "and that allow is silent" "" "$err$out"
 printf 'engine=omp\nround=1\n' > "$RUN/nocwd.duplex.meta"
 TMUX_LIVE="nocwd"
 run Write "$ORCH/src/app.py" "$ORCH"
-chk_eq "a meta without cwd= grants nothing" 2 "$RC"
+# damage: a meta with no cwd= could be read as a seat that licenses everything.
+chk_eq "a meta without cwd= grants nothing" 1 "$(warned_orch)"
 rm -f "$RUN/nocwd.duplex.meta" "$RUN"/worker.duplex.*
 TMUX_LIVE=""
-
-# ── E1 OVERRIDE: one-shot, consumed on use ───────────────────────────────────────────────
-touch /tmp/cto-allow-direct-write
-run Write "$ORCH/skills/guard.py" "$ORCH"
-chk_eq "override marker lifts the deny" 0 "$RC"
-chk_eq "override is silent (permission flow applies)" "" "$ERR$OUT"
-chk_eq "override marker consumed (one-shot)" 0 \
-  "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
-run Write "$ORCH/skills/guard.py" "$ORCH"
-chk_eq "the next write denies again (no standing bypass)" 2 "$RC"
-# consumption IS the approval: an unremovable object at the marker path must not become one
-mkdir /tmp/cto-allow-direct-write
-run Write "$ORCH/skills/guard.py" "$ORCH"
-chk_eq "a directory at the marker path still denies" 2 "$RC"
-run Write "$ORCH/skills/guard.py" "$ORCH"
-chk_eq "and denies repeatably" 2 "$RC"
-rmdir /tmp/cto-allow-direct-write
 
 # ── E1 DEGRADE: ALLOW + WARN, never a checker-error that bricks the Edit tool ─────────────
 run Write "$ORCH/src/app.py" "$ORCH" "$FIX/no-such-run-dir"
@@ -259,22 +257,23 @@ chk_contains "internal failure marker" "CHECKER-ERROR" "$err"
 # R1 classified the target from `file_path` but attributed repo/seat ownership from payload `cwd`
 # alone, so it never proved the write lands in a governed repo. Both counter-probes are pinned
 # here as a red/green PAIR, because a blanket allow or a blanket deny satisfies neither.
-rm -f "$RUN"/*.duplex.meta "$RUN"/*.duplex.rc /tmp/cto-allow-direct-write
+rm -f "$RUN"/*.duplex.meta "$RUN"/*.duplex.rc
 OTHER="$FIX/other-checkout"
 mkdir -p "$OTHER"
 git -C "$OTHER" init -q
 ledger_row "$OTHER"            # the foreign checkout is orchestrated too — see the premise above
 seat_meta worker "$SEAT"; TMUX_LIVE="worker"
 run Write "$OTHER/src/app.py" "$SEAT"
-chk_eq "R2-1.1 a LIVE seat writing source into ANOTHER checkout is denied" 2 "$RC"
-chk_contains "R2-1.1 and the deny names the target it judged" "$OTHER/src/app.py" "$ERR"
+# damage: a seat writing source into a checkout it does not hold is the same disease, unjudged.
+chk_eq "R2-1.1 a LIVE seat writing source into ANOTHER checkout is judged" 1 "$(warned_orch)"
+chk_contains "R2-1.1 and the warn names the target it judged" "$OTHER/src/app.py" "$(ctx "$OUT")"
 run Write "/tmp/cto-e1-outside.py" "$ORCH"
 chk_eq "R2-1.1 a target no work tree owns is outside this rule's face (exit 0)" 0 "$RC"
 chk_eq "R2-1.1 and never lands on stderr" "" "$ERR"
 chk_contains "R2-1.1 the unjudged write is announced" "WARN (cto-guard E1)" "$(ctx "$OUT")"
 chk_contains "R2-1.1 and the warn names the TARGET" "/tmp/cto-e1-outside.py" "$(ctx "$OUT")"
 run Write "$ORCH/src/app.py" "$ORCH"
-chk_eq "R2-1.1 control: the same cwd writing INSIDE its own repo is still denied" 2 "$RC"
+chk_eq "R2-1.1 control: the same cwd writing INSIDE its own repo is still judged" 1 "$(warned_orch)"
 
 # §1.4 a seat launched in a SUBDIRECTORY owns its whole work tree — R1 denied that legal worker.
 # Root equality is the mechanism, and the DIRECTION still holds: $ORCH is a different work tree.
@@ -284,7 +283,7 @@ run Write "$SEAT/src/app.py" "$SEAT"
 chk_eq "R2-1.4 a seat launched in a subdirectory still owns its repo root" 0 "$RC"
 chk_eq "R2-1.4 and silently" "" "$ERR$OUT"
 run Write "$ORCH/src/app.py" "$ORCH"
-chk_eq "R2-1.4 and it still does not own the parent checkout" 2 "$RC"
+chk_eq "R2-1.4 and it still does not own the parent checkout" 1 "$(warned_orch)"
 
 # §1.2 the test-dir shape catches ONLY what the extension list cannot see: data and docs under
 # `test/` are the non-source face the contract puts through, and R1 denied every one of them.
@@ -297,9 +296,10 @@ for f in test/fixtures/data.json tests/config.yaml test/README.md test/fixtures/
   chk_eq "R2-1.2 and silent: $f" "" "$ERR$OUT"
 done
 run Write "$ORCH/test/fixtures/helper.py" "$ORCH"
-chk_eq "R2-1.2 control: a .py under the same test dir is still guarded" 2 "$RC"
+# damage: the extension list is what makes the test-dir clause narrow; losing it swallows code.
+chk_eq "R2-1.2 control: a .py under the same test dir is still guarded" 1 "$(warned_orch)"
 run Write "$ORCH/test/fixtures/runner" "$ORCH"
-chk_eq "R2-1.2 control: an EXTENSION-LESS file under it is still guarded" 2 "$RC"
+chk_eq "R2-1.2 control: an EXTENSION-LESS file under it is still guarded" 1 "$(warned_orch)"
 
 # §1.3 a listable run dir is NOT a readable census: a meta that cannot be OPENED must degrade to
 # ALLOW+WARN, never silently drop the seat it belongs to (R1 could DENY that seat's own worker).
@@ -309,7 +309,10 @@ run Write "$ORCH/src/app.py" "$ORCH"
 META_RC=$RC; META_OUT=$OUT; META_ERR=$ERR
 chmod 644 "$RUN/worker.duplex.meta"
 chk_eq "R2-1.3 an unopenable meta degrades to ALLOW (exit 0)" 0 "$META_RC"
-chk_eq "R2-1.3 and never to a DENY" "" "$META_ERR"
+chk_eq "R2-1.3 and stderr stays empty" "" "$META_ERR"
+# damage: a short census could be read as a verdict and warn about the wrong thing.
+chk_eq "R2-1.3 and never the judged line" 0 \
+  "$(printf '%s\n' "$(ctx "$META_OUT")" | grep -c '编排位直写源码面')"
 chk_contains "R2-1.3 the short census is announced" "WARN (cto-guard E1)" "$(ctx "$META_OUT")"
 # and the rc-file probe: a stat that cannot ANSWER reads as LIVE, it does not drop the seat.
 # Targeted mutation, `.duplex.rc` only — `os.path.exists` reported a stat ERROR as False, which
@@ -331,21 +334,21 @@ rm -f "$tmpe"
 chk_eq "R2-1.3 an unanswerable rc stat keeps the seat LIVE (allowed)" 0 "$rc"
 chk_eq "R2-1.3 and that allow is silent" "" "$err$out"
 # PAIRED RED, same fixture unmutated: with the rc file merely ABSENT and tmux dead, the seat is
-# dead and the write denied — so the allow above comes from the unanswerable probe, not the setup.
+# dead and the write draws the 编排位 WARN — so the silent allow above comes from the unanswerable probe, not the setup.
 run Write "$SEAT/src/app.py" "$SEAT"
-chk_eq "R2-1.3 control: an ANSWERED probe with tmux dead still denies" 2 "$RC"
+chk_eq "R2-1.3 control: an ANSWERED probe with tmux dead is judged" 1 "$(warned_orch)"
 seat_meta worker "$SEAT" 0
 run Write "$SEAT/src/app.py" "$SEAT"
-chk_eq "R2-1.3 control: a real rc file still means dead (denied)" 2 "$RC"
+chk_eq "R2-1.3 control: a real rc file still means dead (judged)" 1 "$(warned_orch)"
 rm -f "$RUN"/worker.duplex.* /tmp/cto-e1-outside.py
 TMUX_LIVE=""
 
 # ── THE IDENTITY PREDICATE (audit §1, 2026-09-06): which REPO is this gate's business ───────
 # Every arm below drives the same hook contract; the three-state predicate is observed through
-# the only faces it has — a silent rc 0 (`not`: nobody is orchestrating here), a DENY (`orches-
-# trated`), and the ALLOW+WARN (`undecidable`). No python-level call into the helper.
+# the only faces it has — a silent rc 0 (`not`: nobody is orchestrating here), the 编排位 WARN
+# (`orchestrated`), and the undecidable ALLOW+WARN. No python-level call into the helper.
 SHARD="$RUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
-rm -f "$RUN"/*.duplex.meta "$RUN"/*.duplex.rc /tmp/cto-allow-direct-write
+rm -f "$RUN"/*.duplex.meta "$RUN"/*.duplex.rc
 TMUX_LIVE=""
 
 # i3/e1/i6 — a repo with NO live seat and NO ledger row: the single-agent lane the SKILL
@@ -356,13 +359,14 @@ NOORCH="$FIX/plain-checkout"; mkdir -p "$NOORCH"; git -C "$NOORCH" init -q
 run Edit "$NOORCH/src/app.py" "$NOORCH"
 chk_eq "e1/i3 an unorchestrated repo's .py edit is allowed" 0 "$RC"
 chk_eq "e1/i3 and the gate says NOTHING at all (no WARN, no deny)" "" "$ERR$OUT"
-chk_eq "i6 DAMAGE ORACLE: a literal \`.git\` compare would have denied this (repo id is the "\
-"realpath'd common dir)" 0 "$RC"
+# damage: unifying two repos by a literal `.git` string would drag every plain checkout in.
+chk_eq "i6 DAMAGE ORACLE: a literal \`.git\` compare would have warned here (repo id is the "\
+"realpath'd common dir)" "" "$ERR$OUT"
 
 # i1/i2/e2/e4 — the normal shape: orchestrator in the main checkout, seat in a SIBLING worktree
 # of the SAME repo. Root equality (the holder test) says "not this seat's tree", repo identity
-# (the predicate) says "this repo is being orchestrated" — so the main checkout is denied while
-# the seat's own worktree passes.
+# (the predicate) says "this repo is being orchestrated" — so the main checkout is judged while
+# the seat's own worktree passes in silence.
 WTREPO="$FIX/wt-main"; mkdir -p "$WTREPO"; git -C "$WTREPO" init -q
 git -C "$WTREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 WTLINK="$FIX/wt-sibling"
@@ -371,9 +375,9 @@ chk_eq "i1 fixture: the sibling worktree really exists" 1 \
   "$([ -e "$WTLINK/.git" ] && echo 1 || echo 0)"
 seat_meta sib "$WTLINK"; TMUX_LIVE="sib"
 run Write "$WTREPO/src/app.py" "$WTREPO"
-chk_eq "i1 a LIVE seat in a SIBLING worktree makes the repo orchestrated → main checkout denied" \
-  2 "$RC"
-chk_contains "i1 and the deny names the live-seat evidence" "LIVE agentctl seat" "$ERR"
+chk_eq "i1 a LIVE seat in a SIBLING worktree makes the repo orchestrated → main checkout judged" \
+  1 "$(warned_orch)"
+chk_contains "i1 and the warn names the live-seat evidence" "LIVE agentctl seat" "$(ctx "$OUT")"
 run Write "$WTLINK/src/app.py" "$WTLINK"
 chk_eq "e4 the same live seat writing inside its OWN worktree still passes" 0 "$RC"
 chk_eq "e4 and silently" "" "$ERR$OUT"
@@ -383,15 +387,16 @@ chk_eq "i1 PAIRED GREEN: with that seat gone and no ledger row, the same write i
 chk_eq "i1 PAIRED GREEN: and silently" "" "$ERR$OUT"
 ledger_row "$WTLINK"
 run Write "$WTREPO/src/app.py" "$WTREPO"
-chk_eq "i2/e2 a ledger \`start\` row in a sibling worktree denies the main checkout" 2 "$RC"
-chk_contains "i2/e2 and the deny names the ledger evidence" "phase ledger" "$ERR"
+chk_eq "i2/e2 a ledger \`start\` row in a sibling worktree judges the main checkout" 1 \
+  "$(warned_orch)"
+chk_contains "i2/e2 and the warn names the ledger evidence" "phase ledger" "$(ctx "$OUT")"
 
 # i7 — a symlinked spelling of a repo is the same repo (realpath, both sides)
 SYMREPO="$FIX/sym-real"; mkdir -p "$SYMREPO"; git -C "$SYMREPO" init -q
 ln -s "$SYMREPO" "$FIX/sym-link"
 ledger_row "$FIX/sym-link"
 run Write "$SYMREPO/src/app.py" "$SYMREPO"
-chk_eq "i7 a ledger row spelled through a symlink still names this repo" 2 "$RC"
+chk_eq "i7 a ledger row spelled through a symlink still names this repo" 1 "$(warned_orch)"
 
 # i8 — a corrupt ledger line is SKIPPED, it does not make the day unanswerable
 JUNK="$FIX/junk-repo"; mkdir -p "$JUNK"; git -C "$JUNK" init -q
@@ -399,8 +404,8 @@ printf '{ this is not json\n\n' >> "$SHARD"
 ledger_row "$JUNK"
 printf 'neither is this\n' >> "$SHARD"
 run Write "$JUNK/src/app.py" "$JUNK"
-chk_eq "i8 a broken JSONL line is skipped, the good row still decides" 2 "$RC"
-chk_eq "i8 and it is a DENY, never the undecidable WARN" "" "$OUT"
+chk_eq "i8 a broken JSONL line is skipped, the good row still decides" 1 "$(warned_orch)"
+chk_contains "i8 and it is the 编排位 line, never the undecidable one" "该仓正在被编排" "$(ctx "$OUT")"
 
 # i9 — yesterday's shard counts (the window is today + yesterday, by shard NAME)
 YDAY="$FIX/yday-repo"; mkdir -p "$YDAY"; git -C "$YDAY" init -q
@@ -409,7 +414,7 @@ print(json.dumps({"ts": "y", "event": "start", "name": "fixture", "session_id": 
                   "attempt": "a", "cwd": os.path.realpath(sys.argv[1])}))' "$YDAY" \
   > "$RUN/phase-ledger-$(python3 -c 'import time; print(time.strftime("%Y%m%d", time.gmtime(time.time()-86400)))').jsonl"
 run Write "$YDAY/src/app.py" "$YDAY"
-chk_eq "i9 yesterday's shard still names this repo as orchestrated" 2 "$RC"
+chk_eq "i9 yesterday's shard still names this repo as orchestrated" 1 "$(warned_orch)"
 
 # e5 — the judged face is the TARGET's repo, not the caller's: a LIVE seat writing source into
 # an UNORCHESTRATED checkout is allowed, while the same write into an orchestrated one denies
@@ -476,8 +481,9 @@ print(json.dumps({"ts": "2026-09-06T00:00:01.000Z", "event": "start", "name": "f
                   "session_id": "s", "attempt": "a", "cwd": os.path.realpath(sys.argv[1])}))' \
   "$TOTGT" >> "$TORUN/phase-ledger-$(date -u +%Y%m%d).jsonl"
 run_gitto Write "$TOTGT/src/app.py" "$TOTGT" "$TORUN" "$TOREAL"
-chk_eq "i10 an unresolvable row cannot take back a CONFIRMED ledger positive → DENY" 2 "$RC"
-chk_contains "i10 and the deny names the ledger evidence" "phase ledger" "$ERR"
+chk_eq "i10 an unresolvable row cannot take back a CONFIRMED ledger positive → judged" 1 \
+  "$(warned_orch)"
+chk_contains "i10 and the warn names the ledger evidence" "phase ledger" "$(ctx "$OUT")"
 
 # i12/i13 — THE COST. Liveness is a subprocess per seat, so the predicate must compare repos
 # FIRST (a foreign seat costs zero tmux) and every probe it does start must be bounded by the
@@ -637,11 +643,11 @@ chk_contains "sc5 CONTROL: and keeps the blind clause" "could not be attributed"
 # The contract this change shipped under said "enforcement is unchanged". That sentence is FALSE
 # and the review proved it with this shape: a shard full of residue rows AHEAD of a real `start`
 # row of the target repo. Base spends one `git rev-parse` per residue, exhausts the shared 8s
-# budget before it ever reads the last row, and answers UNDECIDABLE → E1 ALLOW+WARN. HEAD skips
-# the residue for free and reads the positive → ORCHESTRATED → E1 DENY.
-# The orchestrator's ruling: that DENY is not a false positive. The shard really does hold a
+# budget before it ever reads the last row, and answers UNDECIDABLE → the blind WARN. HEAD skips
+# the residue for free and reads the positive → ORCHESTRATED → the 编排位 WARN.
+# The orchestrator's ruling: that verdict is not a false positive. The shard really does hold a
 # `start` row naming this work tree; the base merely never got far enough to say so. So the
-# contract clause is now: NO NEW FALSE-POSITIVE DENY, and a TRUE positive that newly fits in the
+# contract clause is now: NO NEW FALSE POSITIVE, and a TRUE positive that newly fits in the
 # budget is an IMPROVEMENT — pinned here, so a later reviewer reading "enforcement drift" cannot
 # revert it as a regression without deleting a named assertion.
 # Row count is EMPIRICAL, not decorative (measured on the dev box, base identity.py):
@@ -673,20 +679,22 @@ chk_contains "sc-budget and the positive is the ledger row, not a guess" "phase 
 SCB_T0="$(date +%s)"
 run Write "$SCTGT/src/app.py" "$SCTGT" "$SCBRUN"
 SCB_T1="$(date +%s)"
-chk_eq "sc-budget so E1 DENIES the hand-write it used to allow unjudged (exit 2)" 2 "$RC"
-chk_contains "sc-budget and the deny names the disease" "编排位直写源码面" "$ERR"
+# damage: a budget eaten by residue would answer "unjudged" where the shard names this tree.
+chk_eq "sc-budget so E1 names the hand-write it used to allow unjudged" 1 "$(warned_orch)"
+chk_contains "sc-budget and the warn names the disease" "编排位直写源码面" "$(ctx "$OUT")"
 chk_eq "sc-budget and the whole verdict lands in seconds, not at the 8s budget wall" 1 \
   "$([ "$((SCB_T1 - SCB_T0))" -le 2 ] && echo 1 || echo 0)"
 
-# ── sa1–sa7 (2026-09-18) — A SUB AGENT'S WRITE IS ONE WARN, NEVER A DENY ────────────────────
+# ── sa1–sa7 (2026-09-18) — A SUB AGENT'S WRITE DRAWS ITS OWN LINE ───────────────────────────
 # FIELD (downstream seats 2026-09-18): a Playwright read-back sub agent whose whole task was to
 # write `scripts/fe-verify/probes/*.probe.ts` was denied here once and by rule (20) once. The
 # trigger was ANOTHER worktree's ledger `start` row; the sub agent's cwd was the umbrella root
 # and its target sat in no LIVE seat tree. Dispatching a worker to write IS the SKILL §0 shape,
-# so the gate was firing on the wrong caller and the only exit was the one-shot override plus a
+# so the gate was firing on the wrong caller and the only exit was a one-shot override plus a
 # self-report. OWNER RULING 2026-09-18: a non-empty top-level `agent_id` — the field Claude Code
-# sends ONLY inside a sub agent's tool call — turns this DENY into one WARN line (rc 0); a
-# payload without it is judged exactly as before.
+# sends ONLY inside a sub agent's tool call — draws the CALLER-CLASS line; a payload without it
+# draws the 编排位 line (rc 0 for both since 2026-09-30, and the two texts stay distinct because
+# only one of them is a 车道分工 slip a retro counts).
 SARUN="$FIX/run-subagent"; mkdir -p "$SARUN"
 SATGT="$FIX/subagent-target"; mkdir -p "$SATGT"; git -C "$SATGT" init -q
 SANO="$FIX/subagent-plain"; mkdir -p "$SANO"; git -C "$SANO" init -q   # no row: not orchestrated
@@ -710,7 +718,6 @@ run_sa() { # $1 tool  $2 path  $3 cwd  $4 agent_id JSON  $5 agent_type JSON  [$6
         | AGENT_WATCH_DIR="${6:-$SARUN}" python3 "$GUARD" 2>"$tmpe")"; RC=$?
   ERR="$(cat "$tmpe")"; rm -f "$tmpe"
 }
-rm -f /tmp/cto-allow-direct-write
 
 # sa1 — THE FIELD SHAPE: an orchestrated repo, no live seat, a sub agent writing source
 run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '"playwright-probe"'
@@ -729,17 +736,22 @@ run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '""'
 chk_eq "sa1 an EMPTY agent_type falls back too" 0 "$RC"
 chk_contains "sa1 …to the id" "agent_01H" "$(ctx "$OUT")"
 
-# sa2 — PAIRED RED, same payload minus the field: the orchestrator's own write still denies
+# sa2 — PAIRED RED, same payload minus the field: the orchestrator's own write draws the OTHER
+# line, so the field really is what selects the caller class (a single shared text would pass
+# every sa1 assertion above while saying nothing about who wrote).
 run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" - -
-chk_eq "sa2 the SAME write with no agent_id is still denied (exit 2)" 2 "$RC"
-chk_contains "sa2 and the deny is unchanged" "编排位直写源码面" "$ERR"
-chk_eq "sa2 and writes no hook response on stdout" "" "$OUT"
+# damage: one text for both callers would make the retro count worker output as orchestrator slips.
+chk_eq "sa2 the SAME write with no agent_id is the 编排位 line" 1 "$(warned_orch)"
+chk_eq "sa2 and it is NOT the sub-agent line" 0 \
+  "$(printf '%s\n' "$(ctx "$OUT")" | grep -c '子 agent')"
 
 # sa3 — a field that is not a non-empty STRING is no sub-agent evidence at all
 for _sa in '""' '42' 'null' '["agent_x"]' '{"id":"x"}' 'true'; do
   run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" "$_sa" '"probe"'
-  chk_eq "sa3 agent_id $_sa is treated as absent — denied" 2 "$RC"
-  chk_eq "sa3 and it is a DENY, never a hook response: $_sa" "" "$OUT"
+  # damage: a truthy non-string would let any payload claim worker status.
+  chk_eq "sa3 agent_id $_sa is treated as absent — the 编排位 line: $_sa" 1 "$(warned_orch)"
+  chk_eq "sa3 and never the caller-class one: $_sa" 0 \
+    "$(printf '%s\n' "$(ctx "$OUT")" | grep -c '子 agent')"
 done
 
 # sa4 — an UNORCHESTRATED repo was never this gate's business: the sub-agent branch must not
@@ -748,7 +760,7 @@ run_sa Write "$SANO/src/app.py" "$SANO" '"agent_01H"' '"probe"'
 chk_eq "sa4 a sub agent writing in an unorchestrated repo is allowed" 0 "$RC"
 chk_eq "sa4 and the gate says NOTHING at all" "" "$ERR$OUT"
 
-# sa5 — NO DOUBLE REPORT. Every UNDECIDABLE branch returns its own ALLOW+WARN BEFORE the DENY
+# sa5 — NO DOUBLE REPORT. Every UNDECIDABLE branch returns its own ALLOW+WARN BEFORE the judged
 # point, and the sub-agent branch sits AT that point: so a blind run dir carrying an `agent_id`
 # draws exactly the run-dir WARN and not a second line about the caller.
 run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '"probe"' "$FIX/no-such-sa-run-dir"
@@ -762,20 +774,6 @@ chk_eq "sa5 and the sub-agent line is NOT added to it" 0 \
 run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" - - "$FIX/no-such-sa-run-dir"
 chk_contains "sa5 CONTROL: the undecidable WARN is untouched by this change" \
   "LIVE seat set is unknown" "$(ctx "$OUT")"
-
-# sa6 — THE OVERRIDE IS NOT SPENT on a verdict nobody reached (rule (20)'s own doctrine for its
-# unjudgeable targets): a sub agent's write never reaches the DENY, so the one-shot marker must
-# survive it and still be there for the orchestrator's next hand-write.
-touch /tmp/cto-allow-direct-write
-run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" '"agent_01H"' '"probe"'
-chk_eq "sa6 a sub agent's write still warns with the marker present" 0 "$RC"
-chk_contains "sa6 and it is the sub-agent line" "子 agent" "$(ctx "$OUT")"
-chk_eq "sa6 and the marker is NOT consumed" 1 \
-  "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
-run_sa Write "$SATGT/scripts/probe.ts" "$SATGT" - -
-chk_eq "sa6 …so the orchestrator's own next write still spends it (allowed)" 0 "$RC"
-chk_eq "sa6 …and consumes it, one-shot as before" 0 \
-  "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
 
 # sa7 — SCOPE: the field decides nothing outside the source face or outside this event/tool set
 run_sa Write "$SATGT/docs/notes.md" "$SATGT" '"agent_01H"' '"probe"'

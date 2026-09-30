@@ -1909,7 +1909,7 @@ chk_eq "19 an unlistable cwd is silent, not an accusation" "" "$OUT"
 chk_eq "19 and still exit 0" 0 "$RC"
 GUARD_CWD="$ISO_REPO"
 
-# ── (20) 编排位经 bash 直写源码面 (DENY) ─────────────────────────────────────────────────────
+# ── (20) 编排位经 bash 直写源码面 (WARN since 2026-09-30) ────────────────────────────────────
 # E1 on the Bash channel. Preflight 2026-09-02: a heredoc write, an append redirect, a `tee` and
 # a `sed -i` onto a repo `.py` all returned rc=0 from this guard — auto mode prefers Bash for
 # editing files, so E1's Edit|Write matcher never saw them. The seat attribution AND the
@@ -1953,91 +1953,98 @@ run20() { # $1 command  [$2 run-dir override]; payload carries cwd only (no tran
   OUT="$(mkcmd_tp "$1" "$GUARD20_CWD" - | AGENT_WATCH_DIR="${2:-$RUN20}" python3 "$GUARD" 2>"$tmpe")"; RC=$?
   ERR="$(cat "$tmpe")"; rm -f "$tmpe"
 }
-rm -f /tmp/cto-allow-direct-write
+warned20() { # 1 when the last run20 is (20)'s 编排位 verdict: rc 0, silent stderr, that one line
+  local c; c="$(ctx "$OUT")"
+  if [ "$RC" = 0 ] && [ -z "$ERR" ] \
+     && [ "${c#*"WARN (cto-guard 20): 编排位经 bash 直写源码面"}" != "$c" ]; then echo 1; else echo 0; fi
+}
 
 # RECALL — one assertion per declared spelling in the closed set. A channel with no assertion
 # here is a channel nobody proved is wired.
 for _sp in '>' '>>' '&>' '&>>' '2>' '2>>'; do
   run20 "echo x $_sp $R20/x.py"
-  chk_eq "r20-recall-redirect '$_sp' into a source path denied" 2 "$RC"
+  # damage: a spelling that stops being judged is a channel nobody notices going dark.
+  chk_eq "r20-recall-redirect '$_sp' into a source path warns" 1 "$(warned20)"
 done
-chk_contains "r20 the deny names the channel" "编排位经 bash 直写源码面" "$ERR"
-chk_contains "r20 the deny names the target" "$R20/x.py" "$ERR"
-chk_contains "r20 the deny hands over the dispatch fix" "agentctl start <engine>" "$ERR"
-chk_contains "r20 the deny hands over the one-shot override" "/tmp/cto-allow-direct-write" "$ERR"
-chk_contains "r20 the deny carries the doc pointer" "agentctl/README.md §强制层" "$ERR"
+# damage: a line naming neither target nor正路 can be neither acted on nor counted in retro.
+chk_contains "r20 the warn names the channel" "编排位经 bash 直写源码面" "$(ctx "$OUT")"
+chk_contains "r20 the warn names the target" "$R20/x.py" "$(ctx "$OUT")"
+chk_contains "r20 the warn hands over the dispatch fix" "agentctl start <engine>" "$(ctx "$OUT")"
+chk_contains "r20 the warn carries the doc pointer" "agentctl/README.md §强制层" "$(ctx "$OUT")"
 run20 "echo x | tee $R20/a.sh"
-chk_eq "r20-recall-tee denied" 2 "$RC"
+chk_eq "r20-recall-tee warns" 1 "$(warned20)"
 run20 "echo x | tee -a $R20/a.sh"
-chk_eq "r20-recall-tee -a denied" 2 "$RC"
+chk_eq "r20-recall-tee -a warns" 1 "$(warned20)"
 run20 "echo x | tee -- $R20/a.sh"
-chk_eq "r20-recall-tee -- denied" 2 "$RC"
+chk_eq "r20-recall-tee -- warns" 1 "$(warned20)"
 run20 "echo x | tee /tmp/ok.log $R20/b.py"
-chk_eq "r20-recall-tee judges EVERY target, not just the first" 2 "$RC"
+chk_eq "r20-recall-tee judges EVERY target, not just the first" 1 "$(warned20)"
 run20 "sed -i 's/a/b/' $R20/m.py"
-chk_eq "r20-recall-sed -i (GNU bare) denied" 2 "$RC"
+chk_eq "r20-recall-sed -i (GNU bare) warns" 1 "$(warned20)"
 run20 "sed -i '' 's/a/b/' $R20/m.py"
-chk_eq "r20-recall-sed -i '' (BSD empty suffix) denied" 2 "$RC"
+chk_eq "r20-recall-sed -i '' (BSD empty suffix) warns" 1 "$(warned20)"
 run20 "sed -i .bak 's/a/b/' $R20/m.py"
-chk_eq "r20-recall-sed -i .bak (BSD separated suffix) denied" 2 "$RC"
+chk_eq "r20-recall-sed -i .bak (BSD separated suffix) warns" 1 "$(warned20)"
 run20 "sed -i.bak 's/a/b/' $R20/m.py"
-chk_eq "r20-recall-sed -i.bak (attached suffix) denied" 2 "$RC"
+chk_eq "r20-recall-sed -i.bak (attached suffix) warns" 1 "$(warned20)"
 run20 "sed --in-place 's/a/b/' $R20/m.py"
-chk_eq "r20-recall-sed --in-place denied" 2 "$RC"
+chk_eq "r20-recall-sed --in-place warns" 1 "$(warned20)"
 run20 "sed --in-place=.bak 's/a/b/' $R20/m.py"
-chk_eq "r20-recall-sed --in-place=.bak denied" 2 "$RC"
+chk_eq "r20-recall-sed --in-place=.bak warns" 1 "$(warned20)"
 run20 "$(printf "cat > %s/x.py <<'EOF'\nprint(1)\nEOF" "$R20")"
-chk_eq "r20-recall-heredoc write denied" 2 "$RC"
+chk_eq "r20-recall-heredoc write warns" 1 "$(warned20)"
 # a RELATIVE target resolves against the payload cwd, exactly as the shell would resolve it
 run20 'echo x > x.py'
-chk_eq "r20-recall-relative target resolved against the payload cwd denied" 2 "$RC"
+chk_eq "r20-recall-relative target resolved against the payload cwd warns" 1 "$(warned20)"
 # R1 F1 (BLOCKING): a path with a SPACE is still an ordinary literal filename. Both spellings the
 # shell accepts were silently allowed before, because `_pipe_view` blanked the quoted span to
 # `ARG` and stripped the escaping backslash — rule (20) now reads its target off the ORIGINAL
 # bytes at the operator's offset.
 mkdir -p "$R20/space dir"
 run20 "echo x > \"$R20/space dir/x.py\""
-chk_eq "r20-recall-quoted-space target denied" 2 "$RC"
-chk_contains "r20-recall-quoted-space names the unquoted path" "$R20/space dir/x.py" "$ERR"
-chk_contains "r20-recall-quoted-space carries the doc pointer" "agentctl/README.md §强制层" "$ERR"
+chk_eq "r20-recall-quoted-space target warns" 1 "$(warned20)"
+chk_contains "r20-recall-quoted-space names the unquoted path" "$R20/space dir/x.py" "$(ctx "$OUT")"
+chk_contains "r20-recall-quoted-space carries the doc pointer" "agentctl/README.md §强制层" \
+  "$(ctx "$OUT")"
 run20 "echo x > $R20/space\\ dir/y.py"
-chk_eq "r20-recall-escaped-space target denied" 2 "$RC"
-chk_contains "r20-recall-escaped-space names the unescaped path" "$R20/space dir/y.py" "$ERR"
-chk_contains "r20-recall-escaped-space hands over the override" "/tmp/cto-allow-direct-write" "$ERR"
+chk_eq "r20-recall-escaped-space target warns" 1 "$(warned20)"
+chk_contains "r20-recall-escaped-space names the unescaped path" "$R20/space dir/y.py" \
+  "$(ctx "$OUT")"
 run20 "echo x | tee \"$R20/space dir/t.sh\""
-chk_eq "r20-recall-tee quoted-space target denied" 2 "$RC"
+chk_eq "r20-recall-tee quoted-space target warns" 1 "$(warned20)"
 run20 "sed -i '' 's/a/b/' \"$R20/space dir/m.py\""
-chk_eq "r20-recall-sed quoted-space target denied" 2 "$RC"
+chk_eq "r20-recall-sed quoted-space target warns" 1 "$(warned20)"
 # R2-2 (BLOCKING): a DUPLICATION (`2>&1`, `>&2`) carries its operand inside the operator, so it
 # consumes no word — treating it like every other redirect swallowed the real argv behind it and
 # let a `tee`/`sed` source target through. The `ls`-only negatives could not see this: the
 # duplication has to sit in FRONT of a real write target for the arm to be exercised.
 run20 "tee 2>&1 $R20/dup-tee.py"
-chk_eq "r20-recall-dup-before-tee target denied" 2 "$RC"
-chk_contains "r20-recall-dup-before-tee names the target" "$R20/dup-tee.py" "$ERR"
-chk_contains "r20-recall-dup-before-tee carries the doc pointer" "agentctl/README.md §强制层" "$ERR"
+chk_eq "r20-recall-dup-before-tee target warns" 1 "$(warned20)"
+chk_contains "r20-recall-dup-before-tee names the target" "$R20/dup-tee.py" "$(ctx "$OUT")"
+chk_contains "r20-recall-dup-before-tee carries the doc pointer" "agentctl/README.md §强制层" \
+  "$(ctx "$OUT")"
 run20 "sed 2>&1 -i s/a/b/ $R20/dup-sed.py"
-chk_eq "r20-recall-dup-before-sed target denied" 2 "$RC"
-chk_contains "r20-recall-dup-before-sed names the target" "$R20/dup-sed.py" "$ERR"
+chk_eq "r20-recall-dup-before-sed target warns" 1 "$(warned20)"
+chk_contains "r20-recall-dup-before-sed names the target" "$R20/dup-sed.py" "$(ctx "$OUT")"
 run20 "tee >&2 $R20/dup-bare.py"
-chk_eq "r20-recall-dup-bare-fd before tee target denied" 2 "$RC"
-chk_contains "r20-recall-dup-bare-fd hands over the override" "/tmp/cto-allow-direct-write" "$ERR"
+chk_eq "r20-recall-dup-bare-fd before tee target warns" 1 "$(warned20)"
 # R2-3 (BLOCKING): the word recovery must be the SHELL's. Inside double quotes a backslash
 # escapes `$`, so `"\$literal.py"` is an ordinary filename that happens to contain a dollar —
 # recovering the body first and then searching it for `$` downgraded a real target to a WARN.
 run20 "echo x > \"$R20/\\\$literal.py\""
-chk_eq "r20-recall-escaped-dollar is a literal name, denied" 2 "$RC"
-chk_contains "r20-recall-escaped-dollar names the path with its dollar" "$R20/\$literal.py" "$ERR"
+chk_eq "r20-recall-escaped-dollar is a literal name, judged" 1 "$(warned20)"
+chk_contains "r20-recall-escaped-dollar names the path with its dollar" "$R20/\$literal.py" \
+  "$(ctx "$OUT")"
 # PAIRED CONTROL, the other direction: an UNESCAPED `$` inside the same quotes really does
-# expand, and that stays 不可判 (WARN, never a DENY about a path nobody read).
+# expand, and that stays 不可判 (the blind WARN, never a line about a path nobody read).
 run20 "echo x > \"$R20/\$literal.py\""
 chk_eq "r20-opaque an unescaped dollar inside dquotes stays unjudgeable" 0 "$RC"
 chk_contains "r20-opaque and warns about it" "not literal" "$(ctx "$OUT")"
 # …and a backslash-NEWLINE is a line continuation the shell removes before it lexes anything, so
 # the two halves are ONE word naming one file (parity: only an odd run of backslashes continues).
 run20 "$(printf 'echo x > %s\\\n/probe.py' "$R20")"
-chk_eq "r20-recall-line-continuation target denied" 2 "$RC"
-chk_contains "r20-recall-line-continuation names the folded path" "$R20/probe.py" "$ERR"
+chk_eq "r20-recall-line-continuation target warns" 1 "$(warned20)"
+chk_contains "r20-recall-line-continuation names the folded path" "$R20/probe.py" "$(ctx "$OUT")"
 # …and the same spelling on a NON-source path stays silent: the space is not what decides
 run20 "echo x > \"/tmp/some dir/out.log\""
 chk_eq "r20-neg a quoted space path with no source extension is allowed" 0 "$RC"
@@ -2128,8 +2135,8 @@ chk_eq "r20-doc-comment-heredoc-opener-uncovered: pinned at rc 0 (known gap, ano
 chk_eq "r20-doc-comment-heredoc-opener-uncovered writes nothing to stderr" "" "$ERR"
 
 # UNJUDGEABLE TARGETS — the shell expands them, so this guard does not know the path. ALLOW and
-# say so; a silent pass would hide the blind spot and a DENY would be an accusation about a path
-# nobody read. The override marker must NOT be spent on a verdict that was never reached.
+# say so; a silent pass would hide the blind spot and naming a path nobody read would be an
+# accusation the guard cannot stand behind.
 run20 'dst=/x/y.py; echo x > "$dst"'
 chk_eq "r20-opaque a variable target is allowed" 0 "$RC"
 chk_eq "r20-opaque writes nothing to stderr" "" "$ERR"
@@ -2139,17 +2146,6 @@ run20 "echo x > $R20/*.py"
 chk_eq "r20-opaque a glob target is allowed" 0 "$RC"
 chk_contains "r20-opaque the glob warns too" "not literal" "$(ctx "$OUT")"
 chk_eq "r20-opaque the glob writes nothing to stderr" "" "$ERR"
-touch /tmp/cto-allow-direct-write
-run20 'dst=/x/y.py; echo x > "$dst"'
-chk_eq "r20-opaque does NOT consume the override marker" 1 "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
-
-# OVERRIDE — the licensed direct-write path; consumption IS the approval, so it can never linger.
-run20 "echo x > $R20/x.py"
-chk_eq "r20-override lifts the DENY" 0 "$RC"
-chk_eq "r20-override consumes the marker" 0 "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
-rm -f /tmp/cto-allow-direct-write
-run20 "echo x > $R20/x.py"
-chk_eq "r20-override is one-shot: the next write is denied again" 2 "$RC"
 
 # SEAT ATTRIBUTION — a LIVE seat writing inside its OWN worktree is the whole point of the
 # census; a STOPPED seat's surviving meta (watchctl keeps it) must not grant write rights.
@@ -2164,7 +2160,8 @@ run20 "sed -i '' 's/a/b/' $SEAT20/m.py"
 chk_eq "r20-live-seat in-place sed inside its own worktree passes too" 0 "$RC"
 printf '0\n' > "$RUN20/g20seat.duplex.rc"
 run20 "echo x > $SEAT20/x.py"
-chk_eq "r20-stopped-seat: a surviving meta with an rc file grants nothing" 2 "$RC"
+# damage: a finished worktree's surviving meta would license bash writes forever.
+chk_eq "r20-stopped-seat: a surviving meta with an rc file grants nothing" 1 "$(warned20)"
 rm -f "$RUN20/g20seat.duplex.meta" "$RUN20/g20seat.duplex.rc"
 TMUX_LIVE=""
 GUARD20_CWD="$R20"
@@ -2190,8 +2187,11 @@ run20 "sed -i '' -e s/a/b/ $PLAIN20/y.py"
 chk_eq "r20-identity in-place sed there is allowed too" 0 "$RC"
 ledger20 "$PLAIN20"
 run20 "echo x > $PLAIN20/x.py"
-chk_eq "r20-identity PAIRED RED: one ledger start row in that repo restores the DENY" 2 "$RC"
-chk_contains "r20-identity and the deny names the channel" "编排位经 bash 直写源码面" "$ERR"
+# damage: without this arm the identity clause could be satisfied by never judging anything.
+chk_eq "r20-identity PAIRED RED: one ledger start row in that repo restores the verdict" 1 \
+  "$(warned20)"
+chk_contains "r20-identity and the warn names the channel" "编排位经 bash 直写源码面" \
+  "$(ctx "$OUT")"
 PATH="$OLDPATH20"; export PATH
 GUARD_CWD="$ISO_REPO"
 
@@ -2386,8 +2386,8 @@ chk_eq "(22g) a non-repo cwd never denies" 0 "$RC"
 chk_eq "(22g) and writes nothing to stderr" "" "$ERR"
 chk_contains "(22g) and reports it unmeasured" "UNMEASURED (cto-guard 22)" "$(ctx "$OUT")"
 
-# ⑧ DENY PRECEDENCE: a command that rule (20) denies keeps its exit 2 and its stderr, and this
-#    WARN must not ride along on stdout (exit 2 + a hook response would be one malformed reply).
+# ⑧ TWO WARNS, ONE RESPONSE: a command that rule (20) judges is rc 0 since 2026-09-30, and this
+#    WARN rides the SAME additionalContext as (20)'s line (two hook responses would be one malformed reply).
 #    Driven on the r20 fixture — its ledger row and run dir are what make that rule speak.
 PATH="$BIN20:$PATH"; export PATH
 run22d() { # $1 command — the r20 fixture's runner: cwd = the orchestrator's own checkout
@@ -2395,14 +2395,16 @@ run22d() { # $1 command — the r20 fixture's runner: cwd = the orchestrator's o
   OUT="$(mkcmd_tp "$1" "$R20" - | AGENT_WATCH_DIR="$RUN20" python3 "$GUARD" 2>"$tmpe")"; RC=$?
   ERR="$(cat "$tmpe")"; rm -f "$tmpe"
 }
-rm -f /tmp/cto-allow-direct-write
 run22d "git -C $G22/multi stash"
 chk_eq "(22h) control: the stash half of that command warns on its own" 0 "$RC"
 chk_contains "(22h) control names this rule" "WARN (cto-guard 22)" "$(ctx "$OUT")"
 run22d "echo x > $R20/x.py && git -C $G22/multi stash"
-chk_eq "(22h) a (20) DENY still wins" 2 "$RC"
-chk_contains "(22h) and the stderr is (20)'s" "编排位经 bash 直写源码面" "$ERR"
-chk_eq "(22h) and nothing rides along on stdout" "" "$OUT"
+# damage: two rules speaking in one reply must produce one document, not a swallowed line.
+chk_eq "(22h) a (20) verdict no longer blocks the pair (exit 0)" 0 "$RC"
+chk_eq "(22h) and nothing lands on stderr" "" "$ERR"
+chk_contains "(22h) (20)'s line is there" "编排位经 bash 直写源码面" "$(ctx "$OUT")"
+chk_contains "(22h) …and (22)'s rides with it" "WARN (cto-guard 22)" "$(ctx "$OUT")"
+chk_eq "(22h) in exactly one hook response" 1 "$(printf '%s' "$OUT" | grep -c 'hookSpecificOutput')"
 PATH="$OLDPATH20"; export PATH
 
 # ⑨ the `cd <ABS> &&` anchor rule (8) prescribes is where the stash really lands, so it decides
@@ -2412,11 +2414,11 @@ chk_eq "(22i) a cd-anchored stash never denies" 0 "$RC"
 chk_eq "(22i) and writes nothing to stderr" "" "$ERR"
 chk_contains "(22i) and is judged in the cd target" "本仓 2 棵 worktree 在飞" "$(ctx "$OUT")"
 
-# ── (20) sub agent identity: the DENY becomes one WARN (owner ruling 2026-09-18) ─────────────
+# ── (20) sub agent identity: the caller class picks the line (owner ruling 2026-09-18) ───────
 # Same field case as cto-guard-edit's sa battery — the 0918 read-back sub agent was stopped once
 # HERE too, on a heredoc write. A non-empty top-level `agent_id` (sent only inside a sub agent's
-# tool call) downgrades rule (20)'s DENY to one WARN line; every other rule keeps its verdict,
-# which is the property the (18) arms below pin.
+# tool call) selects rule (20)'s caller-class line instead of its 编排位 one; every other rule
+# keeps its verdict, which is the property the (18) arms below pin.
 PATH="$BIN20:$PATH"; export PATH
 mkcmd_sa() { # $1 command  $2 cwd  $3 agent_id JSON  $4 agent_type JSON ("-" omits the key)
   python3 -c 'import json,sys
@@ -2431,9 +2433,8 @@ run_sa20() { # $1 command  $2 agent_id JSON  $3 agent_type JSON  [$4 cwd, defaul
         | AGENT_WATCH_DIR="$RUN20" python3 "$GUARD" 2>"$tmpe")"; RC=$?
   ERR="$(cat "$tmpe")"; rm -f "$tmpe"
 }
-rm -f /tmp/cto-allow-direct-write
 
-# ⑥ the fixture rule (20) denies, plus the field: allowed with one WARN, nothing on stderr
+# ⑥ the fixture rule (20) judges, plus the field: the caller-class line, nothing on stderr
 run_sa20 "echo x > $R20/x.py" '"agent_01H"' '"playwright-probe"'
 chk_eq "(20-sa) a sub agent's redirect write is allowed (exit 0)" 0 "$RC"
 chk_eq "(20-sa) and writes nothing to stderr" "" "$ERR"
@@ -2450,21 +2451,18 @@ run_sa20 "sed -i '' 's/a/b/' $R20/m.py" '"agent_01H"' -
 chk_eq "(20-sa) an in-place sed warns as well" 0 "$RC"
 chk_contains "(20-sa) …and falls back to the id as its label" "agent_01H" "$(ctx "$OUT")"
 
-# ⑦ PAIRED RED: the same commands with no field are denied exactly as before
+# ⑦ PAIRED RED: the same commands with no field draw the OTHER line — the field is what selects
+# the caller class, and one shared text would pass every arm above while saying nothing.
 run_sa20 "echo x > $R20/x.py" - -
-chk_eq "(20-sa) PAIRED RED: no agent_id, the DENY stands (exit 2)" 2 "$RC"
-chk_contains "(20-sa) PAIRED RED: and the stderr is unchanged" "编排位经 bash 直写源码面" "$ERR"
-chk_eq "(20-sa) PAIRED RED: with nothing on stdout" "" "$OUT"
+# damage: one text for both callers would make the retro count worker output as orchestrator slips.
+chk_eq "(20-sa) PAIRED RED: no agent_id, the 编排位 line stands (exit 0)" 1 "$(warned20)"
+chk_eq "(20-sa) PAIRED RED: and never the caller-class one" 0 \
+  "$(printf '%s\n' "$(ctx "$OUT")" | grep -c '子 agent')"
 for _sa in '""' '42' 'null' '["a"]'; do
   run_sa20 "echo x > $R20/x.py" "$_sa" '"probe"'
-  chk_eq "(20-sa) agent_id $_sa is no evidence — still denied" 2 "$RC"
+  # damage: a truthy non-string would let any payload claim worker status.
+  chk_eq "(20-sa) agent_id $_sa is no evidence — the 编排位 line" 1 "$(warned20)"
 done
-# the override is not spent on a verdict nobody reached (the r20-opaque doctrine)
-touch /tmp/cto-allow-direct-write
-run_sa20 "echo x > $R20/x.py" '"agent_01H"' '"probe"'
-chk_eq "(20-sa) a sub agent does NOT consume the override marker" 1 \
-  "$([ -e /tmp/cto-allow-direct-write ] && echo 1 || echo 0)"
-rm -f /tmp/cto-allow-direct-write
 
 # ⑧ EVERY OTHER RULE KEEPS ITS VERDICT: this field is rule (20)'s business alone. Driven in the
 # single-repo cwd where rule (8) is silent by construction, so the DENY below is (18)'s.
@@ -2500,11 +2498,18 @@ chk_contains "(20-sa7) and the source path it let through" "$R20/x.py" "$(ctx "$
 chk_eq "(20-sa7) exactly one hookSpecificOutput document" 1 \
   "$(printf '%s' "$OUT" | grep -c 'hookSpecificOutput')"
 
-# ⑩ PAIRED RED: strip the field and the write is denied exactly as before — (7) is never reached
+# ⑩ PAIRED RED: strip the field and the OTHER (20) line rides (7)'s allow — the early-return
+# seam has to carry the orchestrator verdict too, or a write that used to be blocked here passes
+# with zero trace, which is the whole safety boundary of the 2026-09-30 downgrade.
 run_sa20 "$SA7_CMD" - -
-chk_eq "(20-sa7) PAIRED RED: no agent_id, (20) still denies (exit 2)" 2 "$RC"
-chk_contains "(20-sa7) PAIRED RED: on (20)'s grounds" "编排位经 bash 直写源码面" "$ERR"
-chk_eq "(20-sa7) PAIRED RED: with nothing on stdout" "" "$OUT"
+# damage: an early-return allow could swallow the only record of an unattributed source write.
+chk_eq "(20-sa7) PAIRED RED: no agent_id, (7) allows (exit 0)" 0 "$RC"
+chk_eq "(20-sa7) PAIRED RED: stderr stays empty" "" "$ERR"
+chk_contains "(20-sa7) PAIRED RED: (7)'s permission survives" '"permissionDecision": "allow"' "$OUT"
+chk_contains "(20-sa7) PAIRED RED: and (20)'s 编排位 line rides it" "编排位经 bash 直写源码面" \
+  "$(ctx "$OUT")"
+chk_eq "(20-sa7) PAIRED RED: never the caller-class line" 0 \
+  "$(printf '%s\n' "$(ctx "$OUT")" | grep -c '子 agent')"
 
 # ⑪ BYTE IDENTITY with no note to carry: the splat is `{}`, so both early-return responses must
 # be what the PRE-FIX base (2e98ca2, pinned: origin/main moves and would make this vacuous) printed, byte for byte. Control = the BASE guard, exported next to copies

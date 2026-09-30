@@ -26,7 +26,7 @@
 #       spellings (redirection / `tee` / in-place `sed`) — cto-guard-edit's E1 on this channel,
 #       because auto mode prefers Bash over Edit|Write for editing files and E1 is dark there
 #       (four spellings measured at rc=0, 2026-09-02). Seat attribution is IMPORTED from that
-#       guard, never copied; uncovered channels are listed in README §强制层 [DENY]
+#       guard, never copied; uncovered channels are listed in README §强制层 [WARN]
 #  (21) `agentctl steer … -m <inline text>` carrying a backtick or `$(` -> the shell expands it
 #       BEFORE agentctl sees it: a quoted example command inside the steer body RUNS (2026-08-30
 #       a `gh api …` example hit the real repo; the `>` in the same text truncated the message,
@@ -1036,11 +1036,16 @@ def _worktree_live(repo):
     return (live, "") if live else (None, "porcelain 里没有 `worktree ` 行：%s" % repo)
 
 
-# ── rule (20): the orchestrator writing SOURCE through bash (DENY) ────────────────────────
+# ── rule (20): the orchestrator writing SOURCE through bash (WARN) ────────────────────────
 # KILL CRITERION (slug `g20-bash-direct-write`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill;
-# plus two of its own — a LIVE seat falsely denied inside its own worktree even once means the
+# plus two of its own — a LIVE seat falsely WARNED inside its own worktree even once means the
 # attribution is broken before the rule is worth keeping, and a non-literal WARN that fires
 # >=10 times in a week without ever standing over a real source write goes silent.
+# THE VERDICT IS A WARN since 2026-09-30 (owner ruling, taken together with E1): an extension
+# test cannot tell product code from a 3-line forensic script, and every false stop cost a
+# dispatched round (downstream, 2026-09-29). The line still names the target and the rule, so a
+# retro can COUNT the 车道分工 slips; the one-shot marker that existed only to lift the block
+# is gone with the block.
 # WHY THIS EXISTS: E1 (cto-guard-edit.py) is the SAME rule on the Edit|Write channel, and in
 # auto mode the harness explicitly prefers Bash (heredoc / sed / a script) for editing files —
 # so E1 is a paper door there. Measured 2026-09-02, by the orchestrator and again by a cold
@@ -1052,14 +1057,12 @@ def _worktree_live(repo):
 # read-back sub agent, dispatched to write probe files, was stopped here on a HEREDOC write (and
 # once by E1) because another worktree's ledger row made the repo orchestrated. JUDGED: the
 # payload's top-level `agent_id`, non-empty STRING only (absent / empty / non-string ⇒ unchanged
-# verdict, byte for byte) ⇒ this rule's DENY becomes ONE WARN line at rc 0 on the shared
-# additionalContext channel. NOT JUDGED: `agent_type` is the warn's label, never the predicate;
-# no product-directory exemption; `transcript_path` unread. Every OTHER rule keeps its verdict —
-# a sub agent's command that also trips (18) is still denied by (18). A FORK sub agent is
-# undocumented on this field: carrying `agent_id` it warns, without it it denies as today.
-# The override marker is NOT consumed here, same reason as the unjudgeable-target path below.
-# KILL CRITERION: one observed case within 30 days of the orchestrator routing a hand-write
-# through a fork sub agent ⇒ fork is judged by `agent_type` and rises back to DENY.
+# verdict, byte for byte) ⇒ the CALLER-CLASS line instead of the 编排位 one, both rc 0 and both
+# on the shared additionalContext channel. NOT JUDGED: `agent_type` is the warn's label, never
+# the predicate; no product-directory exemption; `transcript_path` unread. Every OTHER rule
+# keeps its verdict — a sub agent's command that also trips (18) is still denied by (18). A
+# FORK sub agent is undocumented on this field: carrying `agent_id` it draws the sub-agent
+# line, without it the 编排位 line.
 # THE CLOSED SET, enumerated HERE because README §强制层 keeps only the reader's three sentences —
 # it is a set of SPELLINGS this file can parse, never a claim about shell writes in general:
 #  (a) REDIRECTIONS naming a path: `>` `>>` `&>` `&>>` `N>` `N>>`. `_R20_OP` locates every
@@ -1963,13 +1966,13 @@ def main():
     #      that follows (rule (7)'s benign-prune allow, rule (3)'s reminder branch), so a write
     #      chained after a legal dispatch is still judged.
     lit20, opaque20 = _write_targets(raw_hd)
-    note20 = note20b = note20c = ""
+    note20 = note20b = note20c = note20d = ""
     if lit20:
         g20 = _edit_guard()
         tgt20, why20 = _r20_judge(g20, lit20, cwd8)
         # SUB AGENT (header clause, owner ruling 2026-09-18): the same write, judged the same
         # way, but the caller is a worker that was DISPATCHED to write — one WARN line, rc 0.
-        # Placed BEFORE the override so a verdict nobody reached cannot spend an approval, and
+        # Placed FIRST so the two caller classes never draw two lines, and
         # carried in a THIRD local for the reason the note20/note20b pair exists: the
         # injected-text ratchet resolves ONE literal per local name.
         sub20 = data.get("agent_id")
@@ -1982,30 +1985,17 @@ def main():
             )
             tgt20 = None
         if tgt20 is not None and g20 is not None:
-            # The override is the LICENSED direct-write path (SKILL.md §2: the orchestrator may
-            # write the shipped 教义 / 门 / guard face itself), and consumption IS the approval —
-            # the same one-shot marker E1 consumes, so one `touch` can never become a standing
-            # bypass and an unremovable object at that path still denies.
-            try:
-                os.remove(g20._OVERRIDE)
-                tgt20 = None
-            except OSError:
-                pass
-        if tgt20 is not None and g20 is not None:
-            sys.stderr.write(
-                "DENY: 编排位经 bash 直写源码面 — this command writes %s (a source/test path) "
-                "through a redirect / tee / in-place sed, and no LIVE agentctl seat holds that "
-                "work tree (call cwd %s): that is the orchestrator typing product code (铁律① "
-                "车道分工, n=2 — the seat hand-coded what it had just briefed and lost the "
-                "review lane it was paying for). Fix: dispatch it — `agentctl start <engine> "
-                "<session> <cwd> --goal <abs>` — and let the worker edit inside its own "
-                "worktree; writes into a live seat's work tree pass untouched. Writing the "
-                "SHIPPED face (教义 / 门 / guard) yourself is licensed for ANY verified motive: "
-                "`touch %s` (one-shot, consumed on use) and re-run. "
-                "Read: cto-orchestration/references/agentctl/README.md §强制层.\n"
-                % (tgt20, cwd8, g20._OVERRIDE)
+            # THE JUDGED BRANCH, a WARN since 2026-09-30 (header): an orchestrated work tree,
+            # no LIVE seat holding it, no sub-agent field. A FOURTH local, not a second arm of
+            # note20/note20b/note20c — the injected-text ratchet resolves ONE literal per local
+            # name, so an arm sharing a name would ship entirely unweighed.
+            note20d = (
+                "WARN (cto-guard 20): 编排位经 bash 直写源码面 %s——重定向 / tee / sed -i 写到"
+                "源码或测试路径，且无活体席位持有那棵树（call cwd %s）。留痕不阻断：按铁律① "
+                "车道分工，实现派出去写——`agentctl start <engine> <session> <cwd> --goal <abs>`。"
+                "Read: cto-orchestration/references/agentctl/README.md §强制层."
+                % (tgt20, cwd8)
             )
-            return 2
         if why20:
             note20 = (
                 # TWO locals for this rule, not one with two assignment arms: the injected-text
@@ -2019,9 +2009,8 @@ def main():
     if opaque20 and not note20:
         note20b = (
             "WARN (cto-guard 20): write target not literal (%s) — the shell expands it, so 席位"
-            "归属未判 and the override marker was NOT consumed. If you are the orchestrator and "
-            "that path is source, dispatch it (`agentctl start … --goal <abs>`) or `touch "
-            "/tmp/cto-allow-direct-write` and re-send with a LITERAL path." % opaque20[0]
+            "归属未判. If you are the orchestrator and that path is source, dispatch it "
+            "(`agentctl start … --goal <abs>`) or re-send with a LITERAL path." % opaque20[0]
         )
 
     # NOTE: git-push governance (local-E2E-before-push, base-branch protection) intentionally lives in
@@ -2053,11 +2042,17 @@ def main():
         # entire safety boundary. Being placed above these returns was never enough; the message
         # has to ride them. Carried as a dict the two sinks splat: empty without a top-level
         # `agent_id`, and splatting {} leaves both responses BYTE-IDENTICAL to before.
-        # ONLY note20c rides: note8 / note20 / note20b fire with no `agent_id` too, so merging
-        # them would move output this batch is contracted to leave untouched — that swallow
-        # predates the sub-agent field and is not this batch's. METER: the text is weighed once,
-        # at the assembly sink it was written for; loc-budget counts per sink, not per reader.
-        ctx20 = {"additionalContext": note20c} if note20c else {}
+        # ONLY (20)'s two REPLACED-A-DENY lines ride — note20c (sub agent) and note20d (the
+        # orchestrator, WARN since 2026-09-30): both are the whole trace of a write that used to
+        # be blocked here, and losing it on an early return is losing the downgrade's only
+        # safety boundary. note8 / note20 / note20b fire with no write verdict at all, so
+        # merging them would move output this batch is contracted to leave untouched — that
+        # swallow predates the sub-agent field and is not this batch's. At most one of the two
+        # is ever set (the sub-agent branch clears `tgt20`), joined anyway so neither can be
+        # dropped by a later reader. METER: each text is weighed once, at the assembly sink it
+        # was written for; loc-budget counts per sink, not per reader.
+        ride20 = "\n".join(t for t in (note20c, note20d) if t)
+        ctx20 = {"additionalContext": ride20} if ride20 else {}
         destroy = [w for w in wts
                    if w.group(1) == "prune" or re.search(r"(?:^|\s)(?:--force|-f)\b", w.group(2))]
         if destroy:
@@ -2461,20 +2456,21 @@ def main():
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
     # (8)'s undecidable-scope warn, (13), (14)/(15)'s instrument warnings, (16)'s counter,
-    # (19)'s drift warn, (20)'s two unjudged-write warns plus its sub-agent line, and (22)'s
-    # stash warn plus its unmeasured line ride (3)'s channel: on exit 0 only additionalContext
-    # reaches the agent, and two JSON documents on stdout would be one malformed hook response.
-    # All thirteen strings stay LOCAL to this frame so the injected-text ratchet can weigh what a
+    # (19)'s drift warn, (20)'s two unjudged-write warns plus its sub-agent and orchestrator
+    # lines, and (22)'s stash warn plus its unmeasured line ride (3)'s channel: on exit 0 only
+    # additionalContext reaches the agent, and two JSON documents on stdout would be one
+    # malformed hook response.
+    # All fourteen strings stay LOCAL to this frame so the injected-text ratchet can weigh what a
     # worker is actually handed. (8) is set far above and can be swallowed by a later DENY —
     # correct: a denial's stderr is the message that matters.
     if (reminder or note8 or note13 or note13b or note14 or note15 or note16 or note19
-            or note20 or note20b or note20c or note22 or note22b):
+            or note20 or note20b or note20c or note20d or note22 or note22b):
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
                     t for t in (reminder, note8, note13, note13b, note14, note15, note16,
-                                note19, note20, note20b, note20c, note22, note22b)
+                                note19, note20, note20b, note20c, note20d, note22, note22b)
                     if t),
             }
         }))

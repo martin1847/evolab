@@ -223,12 +223,12 @@ hook 进程 = 任意仓库可执行代码，红线）。「单 SoT」按**规则
   [frontend-verify](../frontend-verify.md)）· ⑩ 裸 `codex exec|e|review`（正路 lane `--review`）· ⑪ typed 命令在管道非末端 ·
   ⑫ 门命令 `;` 后接 `git commit` · ⑬ codex brief 含攻击词 → WARN · ⑭ 派工 cwd 脏 · ⑮ `<cwd>/BLOCKED.md` 未收割 ·
   ⑯ 保姆轮计数 → WARN · ⑰ 评审派发无 `--max-rounds` · ⑱ 历史重写与他步同链 · ⑲ 验证批跨仓 cd → WARN ·
-  ⑳ 编排位经 bash 三类字面写入（重定向族 / `tee` / `sed -i`）触及源码面（= E1 的 bash 通道；`cp`/`mv`/`git apply`
-  等 accepted-uncovered；不可判目标 ALLOW+WARN；一次性 `touch /tmp/cto-allow-direct-write`）· (21) `steer -m` 含反引号或
+  ⑳ 编排位经 bash 三类字面写入（重定向族 / `tee` / `sed -i`）触及源码面 → WARN 留痕（= E1 的 bash 通道；`cp`/`mv`/`git apply`
+  等 accepted-uncovered；不可判目标同样 ALLOW+WARN）· (21) `steer -m` 含反引号或
   `$(`（正路 `-f`）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。
-- **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：**本仓正在被编排时**，编排位对源码/测试文件的写入 → DENY
+- **`cto-guard-edit.py`（PreToolUse·Edit|Write|MultiEdit）** — E1：**本仓正在被编排时**，编排位对源码/测试文件的写入 → WARN 留痕（复盘按次数审）
   （「正在被编排」= 同仓有 LIVE 席位或今/昨相位账本 `start` 行，同仓 = git common dir；判 not 则零输出放行，不打扰单 agent 会话；
-  活体席位自己的 cwd 放行；`/tmp/cto-allow-direct-write` 一次性放行；run dir / 账本不可读 → ALLOW+WARN）。
+  活体席位自己的 cwd 零输出放行；run dir / 账本不可读 → ALLOW+WARN）。
 - **`cto-guard-agent.py`（Pre·Agent|Task|TaskStop|KillShell + Post·Agent|Task）** — Pre·Agent：browser/E2E 派发含
   `mcp__chrome-devtools` → DENY（逼 Playwright）；派发未显式钉 `model` 档 → DENY；e2e-runner 派发 model 非便宜档 → DENY；prompt 里的绝对路径若是落后 upstream 的 git 树 → WARN+UNMEASURED（P0e `stale-scout-cwd`，≤4 树 / 6s 预算，永不 DENY）。**只管主位**：agentctl 起的席位（env `AGENTCTL_SESSION`）模型已由派发者钉死，P0c/P0d 在那里静默；两级同接按 `tool_use_id` 去重，一次派发只判一次。
   Pre·TaskStop|KillShell：目标 `.output` 与 subagent transcript 取最鲜 mtime，120s 内还在长 = 活的 → DENY（override
