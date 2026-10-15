@@ -261,7 +261,7 @@ if [ "$lessons" -eq 0 ]; then
 elif [ "$lfail" -gt 0 ]; then
   fail "$lfail gateless/dead-pointer lesson(s) — 升门或 accepted 后再收口"
 else
-  ok "$lessons lesson line(s), none past the prose limit"
+  ok "$lessons candidate LESSON line(s) checked for syntax/path existence; gate execution/effect unverified"
 fi
 
 # 8) gate-effect audit (GATE-AUDIT 行) — 形态与 FAIL 判据单源: retrospective.md §3「门效果审计」条。

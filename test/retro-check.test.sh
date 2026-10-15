@@ -229,7 +229,7 @@ r="$(mkrepo)"; mkdir -p "$r/test"; : > "$r/test/some-gate.sh"
 printf -- '- LESSON: gated-lesson n=4 gate=test/some-gate.sh\n' > "$r/docs/LESSONS.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "U/gated rc"
-assert_has "$out" "none past the prose limit" "U/gated counted clean"
+assert_has "$out" "candidate LESSON line(s) checked for syntax/path existence; gate execution/effect unverified" "U/path proxy does not claim effective enforcement"
 
 # Case V — claimed gate file does not exist → FAIL (dead pointer reads as protection)
 r="$(mkrepo)"; printf 'LESSON: ghost-gate n=2 gate=test/never-written.sh\n' > "$r/docs/LESSONS.md"
