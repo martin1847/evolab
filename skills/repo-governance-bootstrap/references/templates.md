@@ -368,6 +368,10 @@ dependency-cruiser）→ 周期 doc-vs-code 漂移审计。门清单归各仓 CI
 
 ## GOV 文档模板（`docs/governance/GOV-NNN-<slug>.md`）
 
+文档寿命域可选：结论与原始证据分开存放，由项目明确保留期与 `keep-until`；缓存、依赖、临时目录放在 docs 之外。
+寿命扫描只产出待处置候选，不授予自动搬迁或删除权；处置后用既有 docs-check 核指针，不假定 archive 目标可自动愈合。
+可选伴随 `cto-orchestration` 提供 Markdown 回执与 living 段的只读候选清单；本 skill 不附带该扫描器，它也不是原始证据或缓存回收器。采用时沿用工具既有退出判据，不另建一套寿命门。
+
 ```markdown
 # GOV-NNN — <域名>现行规则
 

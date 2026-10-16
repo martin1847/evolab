@@ -68,6 +68,7 @@ usage() {
   echo "       agentctl steer <session> (-m TEXT | -f FILE) [--interrupt] [-d G]  # default = deliver ASAP" >&2
   echo "       agentctl status <session> | watch <session> [--inline] [--expect MINUTES] | stop <session> | capabilities [--json] | states [--json]" >&2
   echo "       agentctl phases [--since <N>m|<N>h|<N>d|RFC3339] [--repo <abs>] [--json]   # read-only ledger readings" >&2
+  echo "       agentctl closeout <absolute-worktree> --archive <new-absolute-directory> --keep <relative-file> [...] --source-head OID --acceptance FILE --integrated-as OID --base-ref <local-branch>   # see closeout --help for caller preconditions" >&2
   printf '%s\n' "       agentctl inventory --dry-run   # read-only; no other spelling exists" "       default model without --model: AGENTCTL_MODEL_<E>_REVIEW (--review only) > AGENTCTL_MODEL_<E>_DEEP (non-review deep-Tier goal only) > AGENTCTL_MODEL_<E> > engine default; E = OMP|CODEX|CLAUDE" >&2
   exit 1
 }
@@ -881,6 +882,7 @@ case "${1:-}" in
   # phase-ledger readings. Argument JUDGEMENT is duplexctl's (`--since` grammar, `--repo`
   # containment): this shell forwards argv untouched and the strict parser refuses the rest.
   phases) shift; exec "$PY" "$CTL" --run-dir "$DIR" phases "$@" ;;
+  closeout) shift; exec "$PY" "$CTL" --run-dir "$DIR" closeout "$@" ;;
   stop)   shift; cmd_stop "$@" ;;
   ""|-h|--help) usage ;;
   *) echo "ERR: unknown subcommand '${1}'" >&2; usage ;;

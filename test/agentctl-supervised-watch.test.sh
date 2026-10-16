@@ -2800,7 +2800,7 @@ print(" ".join(bad) if bad else "AGREES %d observe=%d"
 VBPY
 )"
 chk_eq "prog-neg-codex-inventory-silent: parity: bash dispatch == AGENTCTL_VERBS (two definitions, one gate)" \
-  "AGREES 9 observe=6" "$pg_verbs"
+  "AGREES 10 observe=6" "$pg_verbs"
 unset AGENT_WATCH_STALL_MINS
 sw_clean
 

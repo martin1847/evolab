@@ -2017,6 +2017,7 @@ def progress_fingerprint(sess: Session, budget: ProbeBudget) -> tuple[str | None
 #     forensic seat reading logs is working. Accepted boundary, not an oversight.
 AGENTCTL_VERBS: tuple[tuple[str, bool], ...] = (
     ("start", False), ("steer", False), ("stop", False),           # they change the session
+    ("closeout", False),
     ("status", True), ("watch", True), ("states", True),           # they only look at it
     ("capabilities", True), ("inventory", True), ("phases", True),
 )
@@ -4340,6 +4341,28 @@ def main() -> None:
     p_inv.add_argument("--dry-run", action="store_true", required=True, dest="dry_run",
                        help="the ONLY accepted spelling; this verb never acts")
     p_inv.set_defaults(func=watchctl.cmd_inventory)
+
+    p_close = sub.add_parser("closeout", help="archive explicit files and non-force remove one "
+                            "accepted/integrated linked worktree; keep its branch",
+                            description="Caller: orchestrator outside the target tree. First "
+                            "verify the existing exact-HEAD acceptance/integration original and "
+                            "stop ALL writers. This command neither proves squash history nor "
+                            "discovers/signals processes. DONE/fresh/dirty=0 is not acceptance.")
+    p_close.add_argument("worktree", help="absolute linked-worktree path in the caller's repository")
+    p_close.add_argument("--archive", required=True,
+                         help="new absolute directory outside the target, with an existing parent; "
+                              "files/<relative-path> and acceptance/<original-name> are retained "
+                              "on failure; no overwrite or force fallback")
+    p_close.add_argument("--keep", action="append", required=True,
+                         help="exact relative regular file; repeat for every untracked/ignored "
+                              "file to preserve; no glob/directory/link authority")
+    p_close.add_argument("--source-head", required=True, help="exact current source HEAD OID")
+    p_close.add_argument("--acceptance", required=True,
+                         help="existing evidence original, copied verbatim, not parsed as approval")
+    p_close.add_argument("--integrated-as", required=True, help="exact integration commit OID")
+    p_close.add_argument("--base-ref", required=True,
+                         help="existing local branch name or refs/heads/name; checked without fetch")
+    p_close.set_defaults(func=watchctl.cmd_closeout)
 
     # The phase ledger's reader. Read-only about the WORK and about the LANE: it opens no
     # session state at all, only <run>/phase-ledger-*.jsonl.

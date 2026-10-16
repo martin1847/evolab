@@ -18,6 +18,7 @@ import glob as globmod
 import json
 import math
 import os
+from pathlib import Path
 import re
 import shlex
 import shutil
@@ -1320,6 +1321,131 @@ def _install_supervisor_traps(run_dir: str, name: str) -> None:
         return _handler
     signal.signal(signal.SIGTERM, _leave("signalled", 143))
     signal.signal(signal.SIGINT, _leave("interrupted", 130))
+
+def _closeout_git(cwd: Path, *argv: str) -> bytes:
+    result = subprocess.run(["git", "-C", str(cwd), *argv], capture_output=True)
+    if result.returncode:
+        raise ValueError(result.stderr.decode(errors="replace").strip()
+                         or f"git {argv[0]} failed (rc={result.returncode})")
+    return result.stdout
+
+
+def _closeout_directory(path: Path) -> None:
+    for parent in (path, *path.parents):
+        if not stat.S_ISDIR(parent.lstat().st_mode):
+            raise ValueError(f"unsupported directory/link: {parent}")
+
+
+def _closeout_read(path: Path) -> bytes:
+    _closeout_directory(path.parent)
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError(f"unsupported file/link: {path}")
+    return path.read_bytes()
+
+
+def _closeout_extras(tree: Path, kept: set[str]) -> set[str]:
+    if _closeout_git(tree, "status", "--porcelain=v1", "-z", "--untracked-files=no",
+                     "--ignore-submodules=none"):
+        raise ValueError("tracked edits present")
+    staged = _closeout_git(tree, "ls-files", "--stage", "-v", "-z").split(b"\0")
+    if any(row and (row[:1] != b"H" or row[2:].startswith((b"120000 ", b"160000 ")))
+           for row in staged):
+        raise ValueError("tracked links/submodules or hidden index entries are unsupported")
+    extra: set[str] = set()
+    for flags in (("--others", "--exclude-standard"),
+                  ("--others", "--ignored", "--exclude-standard")):
+        extra.update(os.fsdecode(name) for name in
+                     _closeout_git(tree, "ls-files", "-z", *flags).split(b"\0") if name)
+    if extra - kept:
+        raise ValueError(f"undeclared untracked/ignored files: {sorted(extra - kept)!r}")
+    return extra
+
+
+def cmd_closeout(args: argparse.Namespace) -> int:
+    """An explicit archival handoff, not a stop mode or an approval/history inference."""
+    try:
+        if any(os.environ.get(key) for key in
+               ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")):
+            raise ValueError("Git directory/index overrides are unsupported")
+        tree, archive, caller = Path(args.worktree), Path(args.archive), Path.cwd()
+        if not tree.is_absolute() or not archive.is_absolute():
+            raise ValueError("worktree and archive must be absolute paths")
+        _closeout_directory(tree)
+        _closeout_directory(archive.parent)
+        tree = tree.resolve()
+        archive = archive.parent.resolve() / archive.name
+        if tree == caller or tree in caller.parents:
+            raise ValueError("cannot close the caller's current directory or an ancestor")
+        if archive == tree or tree in archive.parents:
+            raise ValueError("archive must be outside the source tree")
+        if os.path.lexists(archive):
+            raise ValueError("archive destination already exists; no overwrite")
+        common = _closeout_git(caller, "rev-parse", "--path-format=absolute",
+                               "--git-common-dir").strip()
+        registrations = [Path(os.fsdecode(row[9:])) for row in
+                         _closeout_git(caller, "worktree", "list", "--porcelain", "-z").split(b"\0")
+                         if row.startswith(b"worktree ")]
+        if not registrations or tree == registrations[0] or tree not in registrations[1:]:
+            raise ValueError("target must be a registered linked tree, not the main checkout")
+        _closeout_read(tree / ".git")
+        if (_closeout_git(tree, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+                != common or Path(os.fsdecode(_closeout_git(tree, "rev-parse",
+                                                           "--show-toplevel").strip())) != tree):
+            raise ValueError("target does not belong to the caller's repository")
+        for oid in (args.source_head, args.integrated_as):
+            if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", oid):
+                raise ValueError("source-head and integrated-as must be exact full OIDs")
+        base = args.base_ref if args.base_ref.startswith("refs/heads/") else "refs/heads/" + args.base_ref
+        _closeout_git(caller, "check-ref-format", base)
+        if _closeout_git(caller, "rev-parse", "--verify", args.integrated_as + "^{commit}").strip() \
+                != args.integrated_as.encode():
+            raise ValueError("integrated-as must name the exact integration commit")
+        kept = set(args.keep)
+        if len(kept) != len(args.keep):
+            raise ValueError("duplicate keep path")
+        for relative in kept:
+            if (not relative or Path(relative).is_absolute() or "\0" in relative
+                    or any(part in ("", ".", "..") for part in relative.split("/"))
+                    or relative.split("/")[0] == ".git"):
+                raise ValueError(f"keep requires an exact relative file path: {relative!r}")
+        acceptance = Path(os.path.abspath(args.acceptance))
+        evidence = _closeout_read(acceptance)
+        sources = {relative: _closeout_read(tree / relative) for relative in sorted(kept)}
+
+        def check_source() -> set[str]:
+            if _closeout_git(tree, "rev-parse", "--verify", "HEAD").strip() != args.source_head.encode():
+                raise ValueError("source HEAD does not match --source-head")
+            base_oid = _closeout_git(caller, "show-ref", "--verify", "--hash", base).strip().decode()
+            _closeout_git(caller, "merge-base", "--is-ancestor", args.integrated_as, base_oid)
+            return _closeout_extras(tree, kept)
+
+        extra = check_source()
+        archive.mkdir(mode=0o700)
+        copies = [(tree / relative, archive / "files" / relative, data)
+                  for relative, data in sources.items()]
+        copies.append((acceptance, archive / "acceptance" / acceptance.name, evidence))
+        for source, destination, data in copies:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("xb") as stream:
+                stream.write(data)
+            if _closeout_read(destination) != data:
+                raise ValueError(f"archive byte mismatch: {source}")
+        if check_source() != extra:
+            raise ValueError("source file coverage changed")
+        for source, destination, data in copies:
+            if _closeout_read(source) != data or _closeout_read(destination) != data:
+                raise ValueError(f"source/archive bytes changed: {source}")
+        # Tracked keeps are archived too, but left to Git; unlinking them would dirty the tree.
+        for relative in sorted(extra):
+            (tree / relative).unlink()
+        _closeout_git(caller, "worktree", "remove", "--", str(tree))
+        print(f"closed {str(tree)!r}; archive={str(archive)!r}; branch retained")
+        return 0
+    except (OSError, ValueError) as exc:
+        print(f"ERR: closeout: {exc}; archive and remaining source retained", file=sys.stderr)
+        return 1
+
 
 def _stop_sample_path(run_dir: str, name: str) -> str:
     return os.path.join(run_dir, f".{name}.stop-sample.tmp")

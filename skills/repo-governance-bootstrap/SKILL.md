@@ -92,7 +92,7 @@ ACCESS.local.md / .env                # gitignored — 元数据+名字+gotcha /
   历史 + 误删恢复 + 派工漂移审计（无版本时 agent 误删关键 docs 不可恢复）；加 remote 前先 secrets sweep。
 - **GOV 正典不入最小骨架**：bootstrap 不建空 `docs/governance/`；第一条会被反复引用的
   判据/SOP 出现时 → 建 `docs/governance/INDEX.md` + `docs/governance/GOV-001-<slug>.md`
-  （此前该判据散在时间目录与 archive 里长不出主线，就是该建的信号）。
+  （文档寿命也可作为可选域，规则示例见 `references/templates.md`；不默认生成生命周期脚本或自动删除任务）。
 - **伞仓（umbrella）场景三件套**：①`NORTH_STAR.md` 放伞仓 `docs/`，子仓 AGENTS.md 指向它（按 NS-ID
   引用）；②AGENTS.md 覆盖检查——每个含自有 `.git` 的一级子仓必须有根 AGENTS.md（Tier-1 活跃仓用
   `PROJECT_AGENT.md` 全量宪法，维护型仓用 templates.md 的 **minimal 变体** <60 行即达标），一行

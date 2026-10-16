@@ -107,6 +107,9 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   无 pane、无 meta 的会话再跑一次 `agentctl stop <s>` = inventory 报 `lineage-orphan` 后的唯一出口。
 - **`agentctl inventory --dry-run`** = 三块只读普查（控制态 vs tmux 漂移 / PID 1 收养的引擎孤儿 / lineage census），永不发信号；
   终态后**立即 stop 是编排者纪律**（retro-check 第 6 检兜底）。
+- **`closeout` 显式收尾单棵已收货/合入的 linked worktree**：编排者先核精确 HEAD 对应的收货/合入原件、停全部写入者，再从目标树外调用。
+  命令核源 HEAD 一致、合入提交属于指定本地 base 历史，不证明 squash 对应关系或语义批准；声明文件归档、字节核对后才非 force remove，分支保留。
+  未声明文件（含 ignored）或核对失败即停，不扩大删除范围；普通 `stop` 仍只管席位进程与运行态，不隐式删树。
 - **`agentctl phases [--since …] [--repo <abs>] [--json]`** = 相位账本读数（batch_span / seat_wall / review_wall / idle_span / 逐 terminal
   dispatch_latency + `coverage: ok|partial|unknown`）——**只出数，不出裁决**，台账的 `wall=` / `avoidable=` 仍是你的判断。
 
