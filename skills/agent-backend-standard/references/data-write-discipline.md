@@ -39,18 +39,24 @@
 ## 2. 业务关键写 —— 保留事务/同步/强一致
 订单、支付、状态机扭转、余额、任何需与其它写原子绑定或"不能丢"的写。**判不准时按"关键写"处理。**
 
-**⚠️ 但"保留事务"≠"持锁跨 LLM/外部/async"——这条对关键写同样是 MUST。**
-"关键写"保留的是**原子性/一致性**,不是"把事务/行锁持开很久"。§1.2「绝不在 LLM/外部调用期间持有 DB 事务」
-**对业务关键写(含状态机扭转)一样适用**——最易误读的点:把写判成"关键"→"保留事务"→就把 `FOR UPDATE`/事务
-**持过了下游执行/LLM/外部调用**,正中 idle-in-transaction 反模式。**§2 只说"保留事务"、不重复这条 caveat 时,反而
-把状态机写指向这个坑。**
+**共享持久状态并发优先 DB 原语**:项目已有 PostgreSQL,且涉及跨请求/跨实例的共享状态竞争时,先用约束、条件原子写和短事务,确有需要才显式加锁;进程内锁不替代跨实例一致性。
 
-**正确姿势 = 短原子写 + 锁外执行**:
-- 状态机扭转用**单条原子语句**完成 claim/迁移,拿 `RETURNING` 判成败、**立即释放**;队列 claim 用
-  `UPDATE ... WHERE id=(SELECT id ... WHERE status='queued' ... FOR UPDATE SKIP LOCKED) RETURNING *`
-  ——`FOR UPDATE` 只活在这一条语句内(微秒),绝不跨 app await。
-- LLM / 执行 / task-status 同步之类下游工作,一律在**原子写提交之后、任何持锁之外**做。
-- 需与其它写原子绑定 → 用**短事务**包住那几个写即可,同样不跨任何 LLM/外部/async。
+| 要保护的业务不变量/操作 | 最轻选择与边界 |
+|---|---|
+| 业务键唯一、重复创建/幂等键占位 | 非空业务键 + `UNIQUE`,配合 `INSERT ... ON CONFLICT`;先查后插不防并发重复 |
+| 计数、余额/库存扣减、单行状态转移 | 服务端增量/条件 `UPDATE ... WHERE ... RETURNING`;把资格、旧状态或版本放进条件 |
+| 多个写同成败、必要的读后再改 | 短事务,需要时 `SELECT ... FOR UPDATE`;多对象按一致顺序锁,查不到的行不受行锁保护 |
+| 多 worker 领取可跳过的任务 | 短事务内 `FOR UPDATE SKIP LOCKED` + 原子认领;不是一般一致读,不保证严格 FIFO |
+| 无自然行可锁的短资源互斥 | 必要时用事务级 advisory lock;参与者共同遵守,事务结束释放,不保护提交后的工作 |
+| 单进程内存/普通 CPU/IO 并行 | 语言/运行时内置、有界的任务/池/信号量;不为本地并行引入 DB 锁 |
+
+**短原子写 + 提交后执行**:
+- 条件迁移/claim 检查 `RETURNING` 或影响行数;零行不是成功。单行原子写不能替代跨行不变量所需的约束、锁或隔离级别。
+- `FOR UPDATE` 通常持锁至事务结束,不是单条 SQL 结束就释放;明确 autocommit 或短事务提交边界,不承诺微秒时长。session advisory lock 不随事务结束自动释放,不能把连接还池当成解锁。
+- 原子写**成功提交后**才做 LLM/HTTP/外部执行;关键写同样不跨这些等待持有事务。短事务内的异步 DB 调用不受此禁令限制。
+- claim 不等于完成,也不保证外部副作用恰好一次;幂等沿用 `resilience.md` §1。业务写与可靠外发意图必须同成败时,才用同事务任务表/outbox。
+
+**控制自有协议,不设硬行数门**:需要持久任务恢复/重试调度时优先成熟 PostgreSQL-backed 组件;出现自造锁管理、租约、心跳或恢复协议时先复用组件或简化需求,不因底层用了 PG 就继续堆框架。
 
 **实证(某 agent 服务的委派队列)**:worker claim 用 `SELECT ... FOR UPDATE` 持锁后 await 执行 / task-status
 同步,行锁横跨整段——线程模式下直接死锁;prefork(多进程)部署下持 idle-in-transaction 事务 **279s+ 不释放**。
@@ -58,11 +64,16 @@
 **机械判据(可 lint,进硬层)**:任何 `with_for_update()` / `FOR UPDATE` 之后、同一事务作用域内 `await` 非 DB 工作
 (LLM/tool/http/子任务)= 反模式,不论是不是"关键写";`@transaction` 方法体内 `await` 外部调用同理。
 
+**PG 并发验收按不变量,不默认铺变异矩阵**:
+- [ ] 实现依赖 DB 并发保证 → 用真实 PostgreSQL 的独立连接、可控交错验证选定不变量(如唯一性、扣减边界、同一任务在一轮竞争中只有一个成功领取者);不 mock 数据库的并发语义,不重证 DB 内部机制。
+- [ ] 功能承诺涉及重试、回滚或认领后恢复 → 验对应路径;只验证领取不代表验证了完整任务生命周期。
+- 默认不铺变异/全组合矩阵;减负不免验实际承诺,不删除既有回归,也不新增日常门禁。
+
 ## 3. 一句话
 > 读查询:**弱事务 / autocommit,连接用完即释放**;只交易核心链路用强事务。框架"连接交容器管"(MANAGED+closeConnection=false)时,每条读路径也必须有事务边界,否则漏连接。
 > 记账型写(计数/时间戳/统计,best-effort 可丢):**移出主链路 + 不借业务事务 + per-statement 提交 + 批量服务端增量**;热行列不加索引。
-> 业务关键写:保留原子性/一致性 —— 但**同样不持锁跨 LLM/外部/async**(短原子写 `... FOR UPDATE SKIP LOCKED ... RETURNING` + 锁外执行)。
+> 业务关键写:共享状态优先 DB 原语;保留原子性/一致性,**短事务提交后才做 LLM/外部执行**,不禁事务内异步 DB 调用;并发验收按选定不变量。
 > "去事务" = 显式 autocommit,不是省 BEGIN;批量计数 = 服务端 `+= delta`,不是写绝对值。
 
 ## 来源
-PG 锁持到事务尾:postgresql.org/docs/current/explicit-locking.html;idle-in-transaction 反模式;write-behind/cache-aside(AWS/MS,显式划"关键写不适用");lost-update:baeldung.com/cs/concurrency-control-lost-update-problem;HOT:postgresql.org/docs/current/storage-hot.html。
+PG [锁寿命/advisory](https://www.postgresql.org/docs/current/explicit-locking.html)、[条件更新/隔离](https://www.postgresql.org/docs/current/transaction-iso.html)、[ON CONFLICT](https://www.postgresql.org/docs/current/sql-insert.html)、[SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html);idle-in-transaction 反模式;write-behind/cache-aside(AWS/MS,显式划"关键写不适用");lost-update:baeldung.com/cs/concurrency-control-lost-update-problem;HOT:postgresql.org/docs/current/storage-hot.html。
