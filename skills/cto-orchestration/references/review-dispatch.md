@@ -76,10 +76,10 @@
 ```
 Read first: <review-brief-preamble.md 绝对路径>（常驻合同）。
 独立代码评审。评审集 = `origin/<base>...HEAD`（three-dot = merge-base 差分；commits <sha…>），
-分支 <branch>，worktree <server root>。Context docs（先读）：<goal.md>、<findings.md>（同目录）。
+分支 <branch>，worktree <server root>。Context docs（先读）：<goal.md>、<必要事实材料>（不含作者结论）。
 评审焦点：(1) <该变更最危险的轴，点名：旗标关路径零行为泄漏 / 崩溃恢复 / 并发竞态 /
 降级语义 / 安全契约>；(2) <次轴>；(3) 测试充分性；(4) scope 纪律 vs goal guardrails；
-(5) <作者声明的可疑点，要求独立验证>。
+(5) 有作者说明时，独立检查后再读 <作者说明路径>，核对解释与已知疑点。
 跳过：生成代码 / lockfile / CI 已强制项 / <项目排除面>。
 评审写到 <REVIEW_codex.md 绝对路径>（`--review` 档下必须在 session cwd 内）。
 ```
@@ -111,10 +111,10 @@ Read first: <review-brief-preamble.md 绝对路径>（常驻合同）。
 ## 修复派回 omp 模板
 
 ```
-codex 第 <N> 轮：request-changes——读 <REVIEW_codex.md>，在本分支一个后续 commit 里
-处理全部 findings：[<severity>] <一句话> — <修复方向，含「镜像 <同场景既有路径> 的
-既有行为」类对齐要求>；… 加测试：<修复前必须红的回归测试>。复跑测试套、commit、
-把变更说明追加进 findings 文档。
+codex 第 <N> 轮：request-changes——读 <REVIEW_codex.md>；以下只列编排位裁为 fix 的项，
+在本分支一个后续 commit 里修复：[<severity>] <问题> — <修复方向/验收要求，含「镜像同场景既有路径的既有行为」类对齐要求>；…
+其余项由编排位记录不修理由，不进入本轮实现；需回归测试的 fix 项：<修前必须红的对应测试>。
+复跑测试套、commit，把逐项变更说明追加进 findings 文档。
 ```
 
 修复涉及**资源界限 / 生命周期**（锁、超时、marker、句柄）时，模板必须加一句：先枚举**全部**够得到
