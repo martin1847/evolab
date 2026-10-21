@@ -40,6 +40,20 @@ run_check "$goal"
 # damage: a measured count is a fact, not a prescription, and must stay silent. The C17 wording on a defect goal is the sanctioned shape and stays silent too.
 chk_eq "measured count passes silently" "0:" "$rc:$out"
 
+# damage: restrictive assertion promises must emit C17's advisory without becoming dispatch failures.
+for clause in 'Keep existing tests verbatim.' 'rewrite only X, keep every other assertion' 'keep all other assertions' '只改 X，其余断言保留'; do
+  printf 'Preflight: static inspection => inspected rc=0\nChange-Type: defect\n%s\n' "$clause" > "$goal"
+  run_check "$goal"
+  chk_eq "C17 restriction remains WARN-only: $clause" 0 "$rc"
+  chk_contains "C17 restriction points to owning clause: $clause" 'goal-clauses C17' "$out"
+done
+# damage: ordinary scope or absent behaviour markers must not produce unrelated C17 warnings.
+for body in 'Change-Type: defect\nonly edit docs, keep other files untouched' 'Change-Type: defect\nkeep assertions readable' 'keep every other assertion'; do
+  printf 'Preflight: static inspection => inspected rc=0\n%b\n' "$body" > "$goal"
+  run_check "$goal"
+  chk_eq "C17 unrelated scope or absent behaviour marker stays silent: $body" '0:' "$rc:$out"
+done
+
 for unresolved in 'not run' pending unknown N/A; do
   printf 'Preflight: query metrics => %s\n' "$unresolved" > "$goal"
   run_check "$goal"

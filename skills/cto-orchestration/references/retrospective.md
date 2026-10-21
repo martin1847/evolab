@@ -36,7 +36,8 @@
    `/tmp/agent-watch-run` 与 tmux server 都是全席位共享，账内 ≠ 你的、不认识的名字一律不动，
    零派工记录 ≠ 全场可清；机器面 retro-check FOREIGN 行只报不杀，但账内他席位会话它不报——散文是
    该格唯一承重面）+ **扫孤儿**（见 SKILL §5「孤儿扫」纪律：`docker ps`/`ps`/后台 job + compose
-   trap/finally + repro 禁裸 `while True`）+ **worktree 核对**（已合分支的 worktree 必清 `git worktree remove`）+
+   trap/finally + repro 禁裸 `while True`）+ **worktree 核对**（先核成果与证据保留；未合入先保全，已收货/合入且
+   停全部写入者后，按 `agentctl/README.md` 的 `closeout` 流程收尾 linked worktree；不满足前提则保留并停报）+
    **base 对齐**（squash 集成仓的长驻 checkout：base 分支与 origin 分叉〔ahead 且 behind〕→ 核实
    ahead 内容已被 squash 合并后 backup ref + `reset --hard origin/<base>`；真未合并的工作先救——
    retro-check 1b 只检测告警，reset 归编排者）+

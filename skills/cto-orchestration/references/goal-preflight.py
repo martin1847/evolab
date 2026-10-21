@@ -97,7 +97,8 @@ COUNT_RE = re.compile(r"(?:≤|<=|≈|不超过|以内|上限|最多|至多)\s*\
 # 2026-09-28 (downstream n=2): a verbatim-tests clause on a behaviour-changing goal contradicts itself — the old
 # assertions pin the very behaviour being changed and the seat can only BLOCK. WARN, never a verdict: a legitimate
 # shape exists (the change never touches an old assertion). False WARNs over 10% of hits ⇒ delete the pair.
-VERBATIM_RE = re.compile(r"逐字不改|\bverbatim\b", re.I)
+VERBATIM_RE = re.compile(
+    r"逐字不改|\bverbatim\b|\bkeep\s+(?:every|all)\s+other\s+assertions?\b|其余断言(?:保留|不动|不改)", re.I)
 BEHAVIOUR_RE = re.compile(r"Change-Type\s*[:：]\s*defect|修复前红.{0,8}修复后绿|\bred\s*(?:→|->)\s*green\b", re.I)
 # WARN-class smell only: an acceptance row asserting INTERNAL agreement (table vs registry)
 # instead of observable behaviour is where same-source self-proof hides. Never blocks — this
@@ -685,8 +686,8 @@ def main():
     if pinned:
         advise(f"goal 写了祈使数字『{pinned.group(0)}』——规模估计就删（合同不写行数 / 条数预估、上限或比值，SKILL §2），接口约定就留")
     if VERBATIM_RE.search(body) and BEHAVIOUR_RE.search(body):
-        advise("「既有测试逐字不改」与行为改动同现——旧断言编码的正是被改行为时席位无出路；"
-               "改写为 goal-clauses C17「既有测试不动；其断言正是被改行为的可改/删，回执逐条列出旧断言→新断言→为何编码旧合同」")
+        advise("「既有测试逐字不改」与行为改动同现（含其余断言保留）——旧断言编码本次被改行为时，"
+               "按 goal-clauses C17 明确裁决可改/删，回执逐条列旧断言→新断言→为何编码旧合同；无关断言不动")
     line = LINE_RE.search(body).group(0)
     if ABSENCE_RE.search(line) and not SCOPE_RE.search(_URL_RE.sub("", line)):
         return fail(

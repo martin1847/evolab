@@ -13,8 +13,8 @@ Tier: <deep | light>（判档在 SKILL §2：goal 新增判据 / 门 / 状态 / 
 Goal-Review: <回执路径 | SKIPPED: <理由>>（仅 deep；review-dispatch §goal-review）
 ## Context (read first)
 
-<前置研究/诊断文档列表（每项写 `/absolute/path/to/...`）+ 一段话现状。来自外部的观测事实（运维/QA）原样列出并标注
-"ground truth：与假设矛盾时事实赢">
+<合同作者先读目标仓及适用子目录规则，在此并列规则与前置研究/诊断文档的绝对路径，再写现状。
+外部观测事实（运维/QA）标注 "ground truth：与假设矛盾时事实赢">
 <凭据/环境入口给**绝对路径**（如 `ACCESS.local.md`——worker cwd 在 worktree，相对搜找不到）；
 build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
 <可选（实现/评审类默认保留）：worktree 就绪先 `codegraph init`，代码定位 / blast radius 优先
@@ -56,7 +56,9 @@ Value gate: <existing gap → incremental value>; Preflight: <cheapest read-only
 ## Task / Deliverables
 
 1. <可验证的具体产出，含交付物绝对路径>
-2. **Tests**: <要求的测试形态——回归测试必须"修复前红、修复后绿">
+2. **Tests**: <要求的测试形态——回归测试必须"修复前红、修复后绿"；仅机制替换时，按实际调用方与路径
+   写保留行为，不以测试名代替契约；仅库/SDK 改持久化或外部可观察行为时，点名受影响消费者并绑定相关
+   现有套件或最小真实调用证明，不要求全量下游测试>
 3. **E2E**: <环境 + 数据约束（哪个 DB 批准了写）+ 做不到时的诚实降级路径>
 4. 文档：findings 写入 `/absolute/path/to/worktree/docs/orchestration/<NAME>_<FINDINGS|IMPL>_omp.md`，
    含 what-changed / what-verified(真跑过) / NOT-verified / 剩余假设 / 意外发现与关键决策（含理由）。

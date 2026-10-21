@@ -231,6 +231,41 @@ out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "U/gated rc"
 assert_has "$out" "candidate LESSON line(s) checked for syntax/path existence; gate execution/effect unverified" "U/path proxy does not claim effective enforcement"
 
+# damage: resolving an umbrella ledger against the child repo falsely reports an existing gate as missing.
+r="$(mkrepo)"; child="$r/child"; git init -q -b main "$child"
+cp "$r/AGENTS.md" "$child/AGENTS.md"; mkdir -p "$child/scripts"; : > "$child/scripts/gate.sh"
+printf 'LESSON: umbrella-gate n=2 gate=child/scripts/gate.sh\n' > "$r/docs/LESSONS.md"
+old="$(mktemp -d)/retro-check.sh"
+git -C "$HERE/.." show 56cb6a98e1c181c7d4070ea91bb0de7d7e02e1e0:skills/cto-orchestration/references/retro-check.sh > "$old"
+# Keep ancillary checkers available: a missing copied sibling must not manufacture the old red.
+for checker in goal-preflight.py doc-lifecycle.py session-economics.py; do
+  ln -s "$(dirname "$SCRIPT")/$checker" "$(dirname "$old")/$checker"
+done
+run_child(){ ( cd "$r" && AGENT_WATCH_DIR="$r/.none" bash "$1" --base main --repo "$child" --docs docs 2>&1 ); }
+out="$(run_child "$old")"; rc=$?
+assert_rc "$rc" 1 "U1/pinned baseline misreports real gate"
+assert_has "$out" "claims gate 'child/scripts/gate.sh' but no such file" "U1/old public CLI exposes wrong root"
+out="$(run_child "$SCRIPT")"; rc=$?
+assert_rc "$rc" 0 "U1/candidate resolves umbrella-relative gate"
+assert_has "$out" "candidate LESSON line(s) checked for syntax/path existence" "U1/real gate located"
+# damage: a decoy under the wrong root must not hide a missing real gate.
+rm "$child/scripts/gate.sh"; mkdir -p "$child/child/scripts"; : > "$child/child/scripts/gate.sh"
+out="$(run_child "$SCRIPT")"; rc=$?
+assert_rc "$rc" 1 "U2/missing real gate still fails"
+assert_has "$out" "claims gate 'child/scripts/gate.sh' but no such file" "U2/decoy cannot green the check"
+# damage: prefixing an absolute gate path with either repo root falsely reports a real gate as missing.
+printf 'LESSON: absolute-gate n=2 gate=%s\n' "$child/child/scripts/gate.sh" > "$r/docs/LESSONS.md"
+out="$(run_child "$SCRIPT")"; rc=$?
+assert_rc "$rc" 0 "U3/absolute gate checked directly"
+# damage: an unresolved docs Git root must report UNKNOWN, not guess --repo and falsely pass.
+outside="$(mktemp -d)"; cp "$r/docs/ACTIVE_CONTEXT.md" "$outside/ACTIVE_CONTEXT.md"
+printf 'LESSON: unknown-root n=2 gate=child/scripts/gate.sh\n' > "$outside/LESSONS.md"
+out="$( cd "$r" && AGENT_WATCH_DIR="$r/.none" bash "$SCRIPT" --base main --repo "$child" --docs "$outside" 2>&1 )"; rc=$?
+assert_rc "$rc" 1 "U4/unresolved docs root fails"
+assert_has "$out" "ERROR: docs Git root unresolved" "U4/instrument error explicit"
+assert_has "$out" "gate verification UNKNOWN" "U4/no guessed root"
+assert_no "$out" "candidate LESSON line(s) checked" "U4/no false checked verdict"
+
 # Case V — claimed gate file does not exist → FAIL (dead pointer reads as protection)
 r="$(mkrepo)"; printf 'LESSON: ghost-gate n=2 gate=test/never-written.sh\n' > "$r/docs/LESSONS.md"
 out="$(run "$r")"; rc=$?

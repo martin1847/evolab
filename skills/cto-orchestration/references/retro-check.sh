@@ -52,11 +52,11 @@ if [ -n "$BASE" ] && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
       branch\ *) br="${line#branch refs/heads/}"
         # skip the main checkout (its path == toplevel) — it's not a disposable worktree
         if [ -n "$br" ] && [ "$cur" != "$TOP" ] && git -C "$REPO" merge-base --is-ancestor "$br" "origin/$BASE" 2>/dev/null; then
-          echo "  [FAIL] stray worktree on MERGED branch '$br' → $cur  (git worktree remove)"; stray=$((stray+1))
+          echo "  [FAIL] stray worktree on MERGED branch '$br' → $cur  (closeout prerequisites below)"; stray=$((stray+1))
         fi;;
     esac
   done <<< "$(git -C "$REPO" worktree list --porcelain 2>/dev/null)"
-  if [ "$stray" -gt 0 ]; then fail "$stray stray linked worktree(s) on merged branches — remove them"; else ok "no linked worktree on a merged branch"; fi
+  if [ "$stray" -gt 0 ]; then fail "$stray stray linked worktree(s) — preserve results/evidence first; preserve unintegrated work; verify acceptance/integration and stop all writers, then follow agentctl/README.md closeout (otherwise retain and report)"; else ok "no linked worktree on a merged branch"; fi
 
   # 1b) base checkouts diverged from origin (post-squash shape: local side keeps the
   # pre-squash originals, upstream has the squashed result — ff can never happen again).
@@ -208,12 +208,13 @@ else echo "  [skip] no agentctl run dir / not a git repo"; fi
 # 7) typed lesson ledger — 教训要与门同形态 (retrospective.md §3): a lesson line is
 # machine-countable data; prose lessons can't drive decisions and nobody counts their
 # recurrences. Grammar (line start, optional "- " list marker):
-#   LESSON: <slug> n=<int> gate=<none|accepted(<reason>)|<repo-relative-path>>
+#   LESSON: <slug> n=<int> gate=<none|accepted(<reason>)|<docs-repo-relative-or-absolute-path>>
 # FAIL = n>=2 still gateless (a lesson may live as prose at most twice), or a claimed
 # gate file that does not exist (a dead pointer reads as protection). No LESSON lines
 # at all = ledger not adopted → note only: can't count what was never typed.
 echo "7) 教训同形态 (LESSON 行: n≥2 须 gate 或显式 accepted):"
 lessons=0; lfail=0
+DOCS_ROOT="$(git -C "$DOCS" rev-parse --show-toplevel 2>/dev/null)"
 while IFS= read -r ln; do
   lfile="${ln%%:*}"; body="${ln#*LESSON:}"
   lessons=$((lessons+1))
@@ -245,7 +246,16 @@ while IFS= read -r ln; do
     accepted*)
       echo "  [warn] lesson '$slug': accepted needs a reason — accepted(<why>)"; warns=$((warns+1));;
     *)
-      if [ ! -e "$REPO/$gate" ]; then
+      case "$gate" in
+        /*) gate_path="$gate";;
+        *)
+          if [ -z "$DOCS_ROOT" ]; then
+            echo "  [FAIL] lesson '$slug': ERROR: docs Git root unresolved for '$DOCS' — gate verification UNKNOWN"
+            lfail=$((lfail+1)); continue
+          fi
+          gate_path="$DOCS_ROOT/$gate";;
+      esac
+      if [ ! -e "$gate_path" ]; then
         echo "  [FAIL] lesson '$slug' claims gate '$gate' but no such file — dead pointer reads as protection"
         lfail=$((lfail+1))
       fi;;
@@ -259,7 +269,7 @@ done < <(find "$DOCS" -name '*.md' -type f -exec awk '
 if [ "$lessons" -eq 0 ]; then
   echo "  [skip] no LESSON lines under $DOCS — 教训台账未 typed 化，复发计数不可机检（形态见 retrospective.md §3）"
 elif [ "$lfail" -gt 0 ]; then
-  fail "$lfail gateless/dead-pointer lesson(s) — 升门或 accepted 后再收口"
+  fail "$lfail gateless/dead-pointer/UNKNOWN lesson(s) — 修路径、升门或 accepted 后再收口"
 else
   ok "$lessons candidate LESSON line(s) checked for syntax/path existence; gate execution/effect unverified"
 fi
