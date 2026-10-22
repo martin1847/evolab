@@ -22,10 +22,8 @@ mkrepo(){
     mkdir -p docs/roadmap
     printf 'Last rewritten: %s\n' "$TODAY" > docs/ACTIVE_CONTEXT.md
     printf '# active roadmap\n' > docs/roadmap/active-roadmap.md
-    # check 9's ledger: the repo's AGENTS.md. The green fixture carries ONE billed 批 entry of
-    # this cycle, so every case that does not touch it exercises check 9's pass path rather
-    # than its absence path (an absent ledger is a FAIL — see case TL3).
-    printf '# agents\n- 批 %s hermetic-fixture：绿基线 wall=10m avoidable=0m\n' "$TODAY" > AGENTS.md
+    # Check 9 reads the selected docs directory's ledger; one billed entry keeps it green.
+    printf '# ledger\n- 批 %s hermetic-fixture：绿基线 wall=10m avoidable=0m\n' "$TODAY" > docs/batch-ledger.md
     printf 'a\nb\nc\n' > MEMORY.md
     git add -A; git commit -qm init
     git clone -q --bare "$work" "$d/origin.git"
@@ -35,7 +33,7 @@ mkrepo(){
 }
 # AGENT_WATCH_DIR points at a nonexistent dir so check 6 skips — cases that exercise
 # it seed their own dir (the real /tmp run dir would leak machine state into cases).
-run(){ ( cd "$1" && AGENT_WATCH_DIR="$1/.no-agent-watch" bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 ); }
+run(){ ( cd "$1" && AGENT_WATCH_DIR="$1/.no-agent-watch" bash "$SCRIPT" --base main --docs docs --memory MEMORY.md "${@:2}" 2>&1 ); }
 
 echo "== retro-check.test =="
 
@@ -233,7 +231,7 @@ assert_has "$out" "candidate LESSON line(s) checked for syntax/path existence; g
 
 # damage: resolving an umbrella ledger against the child repo falsely reports an existing gate as missing.
 r="$(mkrepo)"; child="$r/child"; git init -q -b main "$child"
-cp "$r/AGENTS.md" "$child/AGENTS.md"; mkdir -p "$child/scripts"; : > "$child/scripts/gate.sh"
+cp "$r/docs/batch-ledger.md" "$child/AGENTS.md"; mkdir -p "$child/scripts"; : > "$child/scripts/gate.sh"
 printf 'LESSON: umbrella-gate n=2 gate=child/scripts/gate.sh\n' > "$r/docs/LESSONS.md"
 old="$(mktemp -d)/retro-check.sh"
 git -C "$HERE/.." show 56cb6a98e1c181c7d4070ea91bb0de7d7e02e1e0:skills/cto-orchestration/references/retro-check.sh > "$old"
@@ -259,6 +257,7 @@ out="$(run_child "$SCRIPT")"; rc=$?
 assert_rc "$rc" 0 "U3/absolute gate checked directly"
 # damage: an unresolved docs Git root must report UNKNOWN, not guess --repo and falsely pass.
 outside="$(mktemp -d)"; cp "$r/docs/ACTIVE_CONTEXT.md" "$outside/ACTIVE_CONTEXT.md"
+cp "$r/docs/batch-ledger.md" "$outside/batch-ledger.md"
 printf 'LESSON: unknown-root n=2 gate=child/scripts/gate.sh\n' > "$outside/LESSONS.md"
 out="$( cd "$r" && AGENT_WATCH_DIR="$r/.none" bash "$SCRIPT" --base main --repo "$child" --docs "$outside" 2>&1 )"; rc=$?
 assert_rc "$rc" 1 "U4/unresolved docs root fails"
@@ -391,12 +390,12 @@ out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "Z5/trailing-prose rc"
 assert_has "$out" "trailing text after gate=none" "Z5/trailing prose rejected"
 
-# --- 9) 批时间记账 (台账 = <repo>/AGENTS.md; 本周期「批」行须带 wall= / avoidable=) --------
+# --- 9) 批时间记账 (<docs-dir>/batch-ledger.md or --ledger; wall= / avoidable= required) ---
 # 提效没有强制层时，退化只能靠主理人发火才被发现（本周实证 n=2）；这一检把 wall/avoidable
 # 两个数从"记得写"变成收口条件。
 
 # Case TL1 — a 批 entry of THIS cycle with no accounting → blocking FAIL, the line is named
-r="$(mkrepo)"; printf '# agents\n- 批 %s effgate：效率强制层四件\n' "$TODAY" > "$r/AGENTS.md"
+r="$(mkrepo)"; printf '# agents\n- 批 %s effgate：效率强制层四件\n' "$TODAY" > "$r/docs/batch-ledger.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 1 "TL1/unbilled batch rc"
 assert_has "$out" "批条目缺时间记账" "TL1/the offending line is listed"
@@ -405,7 +404,7 @@ assert_has "$out" "wall=95m avoidable=30m" "TL1/the accounting format is shown"
 
 # Case TL2 — the same entry, billed → green
 r="$(mkrepo)"
-printf '# agents\n- 批 %s effgate：效率强制层四件 wall=95m avoidable=30m\n' "$TODAY" > "$r/AGENTS.md"
+printf '# agents\n- 批 %s effgate：效率强制层四件 wall=95m avoidable=30m\n' "$TODAY" > "$r/docs/batch-ledger.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "TL2/billed batch rc"
 assert_has "$out" "均记了 wall/avoidable" "TL2/counted clean"
@@ -413,7 +412,7 @@ assert_no  "$out" "批条目缺时间记账" "TL2/nothing flagged"
 
 # Case TL3 — no ledger at all → 量具坏 = FAIL, never a silent green (a ledger nobody can read
 # is not a clean accounting surface; same reading check 2 gives a missing ACTIVE_CONTEXT)
-r="$(mkrepo)"; rm "$r/AGENTS.md"
+r="$(mkrepo)"; rm "$r/docs/batch-ledger.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 1 "TL3/missing ledger rc"
 assert_has "$out" "不可读" "TL3/instrument failure is named"
@@ -422,9 +421,9 @@ assert_no  "$out" "均记了" "TL3/no clean-accounting line is printed"
 
 # Case TL4 — an unreadable (mode 000) ledger reads the same as an absent one, never as clean
 if [ "$(id -u)" != "0" ]; then
-  r="$(mkrepo)"; chmod 000 "$r/AGENTS.md"
+  r="$(mkrepo)"; chmod 000 "$r/docs/batch-ledger.md"
   out="$(run "$r")"; rc=$?
-  chmod 644 "$r/AGENTS.md"
+  chmod 644 "$r/docs/batch-ledger.md"
   assert_rc "$rc" 1 "TL4/unreadable ledger rc"
   assert_has "$out" "不可读" "TL4/instrument failure is named"
 else
@@ -433,7 +432,7 @@ fi
 
 # Case TL5 — a 批 entry from an EARLIER cycle is out of the window: not judged, and with no
 # in-window entry left the check says so instead of reporting a green it did not measure
-r="$(mkrepo)"; printf '# agents\n- 批 2020-01-01 old-batch：上个纪元\n' > "$r/AGENTS.md"
+r="$(mkrepo)"; printf '# agents\n- 批 2020-01-01 old-batch：上个纪元\n' > "$r/docs/batch-ledger.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "TL5/out-of-window entry rc"
 assert_no  "$out" "批条目缺时间记账" "TL5/an old entry is not re-judged"
@@ -442,17 +441,97 @@ assert_has "$out" "本周期无「批」条目" "TL5/absence is named, not silen
 # Case TL6 — a fenced format example is documentation, not a ledger record (same boundary
 # checks 7 and 8 hold; kills: fence skip dropped from check 9's awk)
 r="$(mkrepo)"
-printf '# agents\n```text\n- 批 %s example-only：格式示例\n```\n' "$TODAY" > "$r/AGENTS.md"
+printf '# agents\n```text\n- 批 %s example-only：格式示例\n```\n' "$TODAY" > "$r/docs/batch-ledger.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "TL6/fenced-example rc"
 assert_no  "$out" "example-only" "TL6/fenced example not consumed"
 assert_has "$out" "本周期无「批」条目" "TL6/reads as no in-window entry"
 
 # Case TL7 — half the accounting is not accounting: wall= without avoidable= still FAILs
-r="$(mkrepo)"; printf '# agents\n- 批 %s half：只记了墙钟 wall=95m\n' "$TODAY" > "$r/AGENTS.md"
+r="$(mkrepo)"; printf '# agents\n- 批 %s half：只记了墙钟 wall=95m\n' "$TODAY" > "$r/docs/batch-ledger.md"
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 1 "TL7/half-billed rc"
 assert_has "$out" "批条目缺时间记账" "TL7/half accounting is unbilled"
+
+# damage: the pinned CLI rejects an independent ledger by still reading AGENTS.md, not by rejecting a new option.
+r="$(mkrepo)"; old="$(mktemp -d)/retro-check.sh"
+git -C "$HERE/.." show 81c329ce345e5d71f7a5bc31fcaf444695747b93:skills/cto-orchestration/references/retro-check.sh > "$old"
+for checker in goal-preflight.py doc-lifecycle.py session-economics.py; do
+  ln -s "$(dirname "$SCRIPT")/$checker" "$(dirname "$old")/$checker"
+done
+out="$( cd "$r" && AGENT_WATCH_DIR="$r/.none" bash "$old" --base main --docs docs 2>&1 )"; rc=$?
+assert_rc "$rc" 1 "TL8/pinned CLI misses independent ledger"
+assert_has "$out" "台账 ./AGENTS.md 不可读" "TL8/old red is the wrong source"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "TL8/candidate reads the same independent ledger"
+assert_has "$out" "均记了 wall/avoidable" "TL8/new CLI bills the entry"
+
+# damage: AGENTS.md must not mask a missing default ledger or cause the checker to create one.
+cp "$r/docs/batch-ledger.md" "$r/AGENTS.md"; rm "$r/docs/batch-ledger.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "TL9/no AGENTS fallback"
+assert_has "$out" "台账 docs/batch-ledger.md 不可读" "TL9/actual path named"
+assert_has "$out" "用 --docs" "TL9/docs configuration named"
+assert_has "$out" "或 --ledger" "TL9/ledger configuration named"
+assert_rc "$([ -e "$r/docs/batch-ledger.md" ]; printf '%s' "$?")" 1 "TL9/no ledger created"
+
+# damage: --docs and relative --ledger resolve from the caller, never from --repo; explicit selection wins in either form.
+r="$(mkrepo)"; mkdir "$r/child"; mv "$r/docs" "$r/governance docs"
+out="$(run "$r" --repo "$r/child" --docs 'governance docs')"; rc=$?
+assert_rc "$rc" 0 "TL10/default follows explicit docs from caller cwd"
+cp "$r/governance docs/batch-ledger.md" "$r/external ledger.md"
+printf -- '- 批 %s default-unbilled\n' "$TODAY" > "$r/governance docs/batch-ledger.md"
+for ledger in 'external ledger.md' "$r/external ledger.md"; do
+  out="$(run "$r" --repo "$r/child" --ledger "$ledger" --docs 'governance docs')"; rc=$?
+  assert_rc "$rc" 0 "TL10/explicit ledger overrides docs: $ledger"
+  assert_has "$out" "均记了 wall/avoidable" "TL10/selected ledger checked: $ledger"
+done
+
+# damage: a good default must not hide a missing or unreadable explicitly selected ledger.
+r="$(mkrepo)"
+out="$(run "$r" --ledger missing.md)"; rc=$?
+assert_rc "$rc" 1 "TL11/missing explicit ledger fails"
+assert_has "$out" "台账 missing.md 不可读" "TL11/explicit path named"
+assert_no "$out" "均记了 wall/avoidable" "TL11/no fallback verdict"
+if [ "$(id -u)" != 0 ]; then
+  cp "$r/docs/batch-ledger.md" "$r/private.md"; chmod 000 "$r/private.md"
+  out="$(run "$r" --ledger private.md)"; rc=$?; chmod 644 "$r/private.md"
+  assert_rc "$rc" 1 "TL11/unreadable explicit ledger fails"
+  assert_has "$out" "台账 private.md 不可读" "TL11/unreadable selection named"
+fi
+
+# damage: missing, empty, or option-shaped values are CLI errors, never requests for the default.
+for shape in missing empty next-option; do
+  case "$shape" in
+    missing) out="$(run "$r" --ledger)"; rc=$?;;
+    empty) out="$(run "$r" --ledger '')"; rc=$?;;
+    next-option) out="$(run "$r" --ledger --docs docs)"; rc=$?;;
+  esac
+  assert_rc "$rc" 2 "TL12/reject $shape value"
+  assert_has "$out" "requires a non-empty path" "TL12/actionable error for $shape"
+done
+
+# damage: yesterday remains in the accounting window after the source moves out of AGENTS.md.
+r="$(mkrepo)"; yesterday="$(date -v-1d +%F 2>/dev/null || date -d yesterday +%F)"
+printf -- '- 批 %s yesterday-unbilled\n' "$yesterday" > "$r/docs/batch-ledger.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "TL13/yesterday still requires accounting"
+assert_has "$out" "yesterday-unbilled" "TL13/in-window entry named"
+
+# damage: root and nested archive directories must not be judged, but a directory merely named archived stays active.
+r="$(mkrepo)"; mkdir -p "$r/docs/archive" "$r/docs/nested/archive" "$r/docs/archived"
+printf 'LESSON: archive-selection n=2 gate=none\nGATE-AUDIT: archive-selection hits=0 false=2 action=keep\n' > "$r/docs/archived/bad.md"
+cp "$r/docs/archived/bad.md" "$r/docs/archive/bad.md"; cp "$r/docs/archived/bad.md" "$r/docs/nested/archive/bad.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 1 "AR1/active bad samples still fail beside archived copies"
+assert_has "$out" "lesson 'archive-selection'" "AR1/lesson known positive"
+assert_has "$out" "gate 'archive-selection'" "AR1/audit known positive"
+printf 'LESSON: active-good n=1 gate=none\nGATE-AUDIT: active-good hits=1 false=2 action=keep\n' > "$r/docs/archived/bad.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "AR2/only archived bad samples remain"
+assert_no "$out" "archive-selection" "AR2/archived records not consumed"
+assert_has "$out" "1 candidate LESSON line(s)" "AR2/active good lesson checked"
+assert_has "$out" "1 gate-audit line(s)" "AR2/active good audit checked"
 
 # --- 第 9 检的读数面 (MECHANICAL INPUT): 只出数, 不出裁决, 不动 PASS/FAIL --------------
 # The pane's whole risk is that a printed number gets read as a ruling, so these cases pin the
@@ -509,7 +588,7 @@ assert_has "$out" "均记了 wall/avoidable" "PH1/the accounting check still rep
 # Case PH2 — the pane must not manufacture a pass: an UNBILLED entry still FAILs with the
 # readings printed right above it (that is the whole point — input, not verdict)
 r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_OK"
-printf '# agents\n- 批 %s effgate：效率强制层四件\n' "$TODAY" > "$r/AGENTS.md"
+printf '# agents\n- 批 %s effgate：效率强制层四件\n' "$TODAY" > "$r/docs/batch-ledger.md"
 out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
         bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
 assert_rc "$rc" 1 "PH2/readings never bill an entry for the human"

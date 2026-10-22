@@ -827,7 +827,7 @@ chk_not_contains "[CLAIMS] ⑧ and raises no write-set WARN" "$LIVE" "$err"
 RETRO="$REPO_ROOT/skills/cto-orchestration/references/retro-check.sh"
 rdocs="$SANDBOX/retro/docs"; mkdir -p "$rdocs"
 RTODAY="$(date +%F)"
-printf '# agents\n- 批 %s claims-fixture：绿基线 wall=1m avoidable=0m\n' "$RTODAY" > "$SANDBOX/retro/AGENTS.md"
+printf '# ledger\n- 批 %s claims-fixture：绿基线 wall=1m avoidable=0m\n' "$RTODAY" > "$rdocs/batch-ledger.md"
 retro_run(){ out="$( cd "$SANDBOX/retro" && AGENT_WATCH_DIR="$SANDBOX/retro/.none" \
   bash "$RETRO" --docs docs 2>&1 )"; rc=$?; }
 printf 'Last rewritten: %s\n' "$RTODAY" > "$rdocs/ACTIVE_CONTEXT.md"

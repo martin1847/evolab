@@ -5,19 +5,25 @@
 # live-session findings are warnings and do not block.
 #
 # Usage:
-#   bash retro-check.sh --base <branch> --docs <docs-dir> [--memory <MEMORY.md>] [--memory-cap N] [--repo <git-dir>]
-# Defaults: --base auto-detected (origin/HEAD → main/master/develop); --docs docs; --memory-cap 45.
+#   bash retro-check.sh --base <branch> --docs <docs-dir> [--ledger <path>] [--memory <MEMORY.md>] [--memory-cap N] [--repo <git-dir>]
+# Defaults: --base auto-detected (origin/HEAD → main/master/develop); --docs docs; --ledger <docs-dir>/batch-ledger.md; --memory-cap 45.
 set -uo pipefail
 
-BASE=""; DOCS="docs"; MEMORY=""; MEMCAP=45; REPO="."
+BASE=""; DOCS="docs"; LEDGER=""; MEMORY=""; MEMCAP=45; REPO="."
 while [ $# -gt 0 ]; do case "$1" in
   --base) BASE="$2"; shift 2;;
   --docs) DOCS="$2"; shift 2;;
+  --ledger)
+    if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" = --* ]]; then
+      echo "--ledger requires a non-empty path" >&2; exit 2
+    fi
+    LEDGER="$2"; shift 2;;
   --memory) MEMORY="$2"; shift 2;;
   --memory-cap) MEMCAP="$2"; shift 2;;
   --repo) REPO="$2"; shift 2;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
+[ -n "$LEDGER" ] || LEDGER="$DOCS/batch-ledger.md"
 
 TODAY="$(date +%F)"
 # THE CYCLE WINDOW, single-sourced: today or yesterday. A retro session routinely crosses
@@ -260,7 +266,7 @@ while IFS= read -r ln; do
         lfail=$((lfail+1))
       fi;;
   esac
-done < <(find "$DOCS" -name '*.md' -type f -exec awk '
+done < <(find "$DOCS" -type d -name archive -prune -o -name '*.md' -type f -exec awk '
   FNR==1 { fence=0 }
   /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
   fence { next }
@@ -302,7 +308,7 @@ while IFS= read -r ln; do
         gfail=$((gfail+1))
       fi;;
   esac
-done < <(find "$DOCS" -name '*.md' -type f -exec awk '
+done < <(find "$DOCS" -type d -name archive -prune -o -name '*.md' -type f -exec awk '
   FNR==1 { fence=0 }
   /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
   fence { next }
@@ -318,7 +324,7 @@ fi
 
 # 9) 批时间记账 — SKILL §2「提效是显式目标」的收口半边: 批 overhead 计入杠杆账，收口在台账
 # 记 wall/avoidable 两个数。没有这两个数，"越搞越慢" 只能靠主理人发火才被发现（本周实证 n=2）。
-# 台账 = 该仓 AGENTS.md（`--repo` 定位，不新增入参）；判据只看本复盘周期（TODAY/YDAY）的「批」行。
+# Ledger: --ledger or <docs-dir>/batch-ledger.md; judge only this cycle's (TODAY/YDAY) 批 lines.
 # 量具坏 = FAIL：台账读不到时这一面根本没检查，而一个看不见的记账面不是一个干净的记账面
 # （与 check 2 的 "$AC not found" 同判、与 guard (14)/(15) 的 instrument 面同源）。
 # KILL CRITERION (slug `retro-time-ledger`, 复盘按 GATE-AUDIT 结账): hits=0 ∧ false>=2 ⇒ kill,
@@ -416,9 +422,8 @@ except (KeyError, TypeError, IndexError, ValueError):
 print("\n".join(lines))
 '
 fi
-LEDGER="$REPO/AGENTS.md"
 if [ ! -f "$LEDGER" ] || [ ! -r "$LEDGER" ]; then
-  fail "台账 $LEDGER 不可读 — 批 overhead 记账面未检查（量具坏 ≠ 绿）；建台账或用 --repo 指对仓"
+  fail "台账 $LEDGER 不可读 — 批 overhead 记账面未检查（量具坏 ≠ 绿）；用 --docs 选择治理目录或 --ledger 指定台账文件"
 else
   unbilled=0; billed=0
   # one pass, two verdicts: `B` = a billed entry, `U<line>` = an entry with no accounting.

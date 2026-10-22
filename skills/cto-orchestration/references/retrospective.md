@@ -49,6 +49,10 @@
 
 收尾跑 SKILL §5 的 **`retro-check.sh`**（FAIL / warning 项以脚本输出为准；warning 按任务语义人工裁决；脚本只验机械代理，不证复盘语义完成）。
 
+**检查数据源**：批台账默认是所选 `--docs` 目录下的 `batch-ledger.md`（`--docs` 默认 `docs`）；外置时用 `--ledger <path>` 显式指定唯一账本。相对路径从调用者 cwd 解释，不随 `--repo` 改变；不回退读 `AGENTS.md`，不自动迁移或创建账本。本周期「批」条目记 `wall=` / `avoidable=`，phases 读数只是输入、不代写裁决。
+第7/8检只扫描所选 docs 的活动 Markdown，排除目录名恰为 `archive` 的目录及后代（根层、嵌套同规）；第10/11检范围不变。
+最小调用例（在项目根运行，脚本路径按安装位置替换）：治理目录 `bash retro-check.sh --docs docs/orchestration`；外置台账 `bash retro-check.sh --docs docs/orchestration --ledger /path/to/batch-ledger.md`。
+
 ## memory 治理（步骤 6 展开）
 
 - COMPLETED workstream 精简到 ≤10 行（结论 + 关键教训 + 指针），删掉过程细节。
