@@ -17,8 +17,10 @@ Goal-Review: <回执路径 | SKIPPED: <理由>>（仅 deep；review-dispatch §g
 外部观测事实（运维/QA）标注 "ground truth：与假设矛盾时事实赢">
 <凭据/环境入口给**绝对路径**（如 `ACCESS.local.md`——worker cwd 在 worktree，相对搜找不到）；
 build/test 关键命令若该仓 AGENTS.md 未列，在此内联一行>
-<可选（实现/评审类默认保留）：worktree 就绪先 `codegraph init`，代码定位 / blast radius 优先
-`codegraph explore "<符号或问题>"`；未装或无索引 = **非 blocker**，回退 grep/通读，不停下问。>
+<可选：codegraph 仅作定位加速器；已接 Git hook 时不重复 init/sync。仅本 worktree 已有索引、允许维护且未在构建时，才用
+`codegraph status` 诊断（可能写库，exit 0/mtime 不证就绪）；确认归属本树、已完成且无待同步/未解析/需重建提示，才用 `codegraph explore "<符号或问题>"`。
+否则（含未装/无索引/失败/不可判）回退仓根 rg/源码阅读，非 blocker，不等待或补跑 sync；
+删除/迁移/退役依赖零引用/无调用时，须源码 rg 或适用 AST 复核；普通定位不默认双扫。>
 
 > 取证 / 机械改动 / 纯研究且不新增防御层或复杂度的 goal → 删下一行、派发加 `--no-preflight`；
 > 其余 goal（含所有新增防御层/复杂度的）→ 先跑最便宜证伪、保留下一行（preflight 门校验其形态，

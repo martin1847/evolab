@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# codegraph git hooks — one script, three events, so a worktree's index keeps matching the
-# worktree it describes.
+# codegraph git hooks — three events schedule best-effort index updates.
 #
-# Dispatch creates one worktree per seat; with this wired, every seat lands in a worktree whose
-# codegraph index is already building (post-checkout), and that index is re-synced after every
-# commit and merge. codegraph 1.5.0 does NOT sync before a query, so without the two write
-# events a seat's `codegraph explore` reports the blast radius of the tree as it was at init —
-# stale, and silently so.
+# Linked worktrees without an index attempt init after checkout; trees with an index
+# attempt sync after checkout, commit, or merge. Detached startup does not guarantee
+# completion, freshness, or coverage; failures remain in the /tmp log.
+# Multiple events may contend. Callers must assess readiness or use source search.
 #
 # Wire it (per repo, hooks are not cloned):
 #   for h in post-checkout post-commit post-merge; do

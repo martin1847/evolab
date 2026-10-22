@@ -20,11 +20,9 @@
    （多编排者场景装了 `agent-mail` 的，其席位注册 + 收信 hook 由该 skill 自己的「接入」节自包含，不在本清单。）
 4. 建 `docs/orchestration/` + `docs/orchestration/archive/` 目录（生命周期见 SKILL §5）。
    装了 codegraph 的仓可选：`for h in post-checkout post-commit post-merge; do ln -s
-   <安装根>/references/agentctl/codegraph-hooks.sh <repo>/.git/hooks/$h; done`（派工 worktree 创建即后台
-   建索引，commit / merge / 切分支后后台增量 sync——1.5.0 查询前不自动 sync，不接后两个事件索引就停在 init
-   那一刻；旧名 `post-checkout-codegraph.sh` 仍可用，指向同一脚本）。`.codegraph/` 须进 .gitignore，否则新
-   worktree 立即脏、撞派工门；接线细节见脚本头。**边界**：钩子只保证索引**新鲜**，不保证索引**范围合理**——
-   依赖目录 / 生成物是否被索引是 codegraph 自身 ignore 配置的事，不归本钩子。
+   <安装根>/references/agentctl/codegraph-hooks.sh <repo>/.git/hooks/$h; done`（派工 worktree 初始化和已有索引刷新均为后台尝试，不保证完成、新鲜或完整）。
+   `.codegraph/` 须进 .gitignore；接线与日志见脚本头，索引使用/降级见 `goal-template.md` 的 codegraph 段。
+   索引范围归 codegraph 自身 ignore 配置；这里是 CLI hook，不等同于 MCP 服务的监听/同步能力。
 5. 第一个任务走一遍 SKILL §1 全流程，校准该项目的忙碌标记/工具链差异。
 6. 在项目 memory 里建 working-style 条目（含本 skill 引用 + 项目特有的差异）。
 7. 建主理人的 `docs/DECISION_QUEUE.md`（架构+模板见同目录 `decision-queue.md`）——第一个 T2 决定就进
