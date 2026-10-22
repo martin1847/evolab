@@ -32,13 +32,10 @@ git init -q "$G8ROOT/umb/b"
 ISO_REPO="$G8ROOT/iso/l1/l2/l3/l4/repo"
 UMB_ROOT="$G8ROOT/umb"
 GUARD_CWD="$ISO_REPO"; export GUARD_CWD
-# Rule (16) keeps a per-session tally under AGENT_WATCH_DIR. Point the whole suite at a REGULAR
-# FILE: every read/write there fails, so the counter is deterministically silent and cannot
-# inject a warn into another rule's expected payload (this file re-hangs `s1`/`mysess` 15 times
-# each). That is not a workaround — it IS rule (16)'s contracted broken-meter face, asserted as
-# such in the (16) battery, which drives its own real run dirs.
-BABYSIT_OFF="$G8ROOT/babysit-meter-is-a-file"; : > "$BABYSIT_OFF"
-AGENT_WATCH_DIR="$BABYSIT_OFF"; export AGENT_WATCH_DIR
+AGENT_WATCH_DIR="$G8ROOT/run"; export AGENT_WATCH_DIR
+mkdir -p "$AGENT_WATCH_DIR"
+# Rule (20)'s unreadable-run-dir fixture remains a regular file.
+RUN_DIR_FILE="$G8ROOT/run-dir-is-a-file"; : > "$RUN_DIR_FILE"
 
 mkcmd() { # $1 command, $2 run_in_background (optional "1")
   python3 -c 'import json,os,sys
@@ -1527,103 +1524,16 @@ chk_eq "17-R2 and that dispatch is silent" "" "$ERR"
 
 
 
-# ── (16) babysit-round counter ─────────────────────────────────────────────────────────────
-# Re-hanging a watcher is LEGAL, so this can never be a DENY; the fourth re-hang of the same
-# session in one day is what the orchestrator must see (field: one session re-hung 6 times
-# while the gauge, not the agent, was the problem). Each case drives its own run dir.
-runbs() { # $1 run-dir  $2 command  [$3 "1" = run_in_background]
-  local tmpe; tmpe="$(mktemp)"
-  OUT="$(mkcmd "$2" "${3:-}" | AGENT_WATCH_DIR="$1" python3 "$GUARD" 2>"$tmpe")"; RC=$?
-  ERR="$(cat "$tmpe")"; rm -f "$tmpe"
-}
-BS1="$G8ROOT/bs1"; mkdir -p "$BS1"
-for i in 1 2 3; do runbs "$BS1" 'agentctl watch g16s' 1; done
-chk_eq "16 the third re-hang exits 0" 0 "$RC"
-chk_eq "16 and is SILENT (under the threshold)" "" "$OUT"
-runbs "$BS1" 'agentctl watch g16s' 1
-chk_eq "16 the FOURTH re-hang still exits 0 (never a DENY)" 0 "$RC"
-chk_eq "16 and writes nothing to stderr" "" "$ERR"
-chk_contains "16 the fourth is announced" "WARN (cto-guard 16)" "$(ctx "$OUT")"
-chk_contains "16 the warn names the session" "g16s" "$(ctx "$OUT")"
-chk_contains "16 and the count it reached" "4 times today" "$(ctx "$OUT")"
-chk_contains "16 and points at the instrument before the re-hang" "INSTRUMENT" "$(ctx "$OUT")"
-chk_not_contains "16 the reading is not dressed as undecidable" "不可判" "$(ctx "$OUT")"
-# a steer counts the same way, and it keeps counting past the threshold — never escalating
-runbs "$BS1" 'agentctl steer g16s -m x' 1
-chk_eq "16 a steer on the same session counts too" 0 "$RC"
-chk_contains "16 and the tally advanced" "5 times today" "$(ctx "$OUT")"
-# an --interrupt steer is a deliberate intervention, not a mechanical re-hang: NOT counted.
-# Proved by exhaustion — three of them plus three re-hangs must still read as three.
-BS2="$G8ROOT/bs2"; mkdir -p "$BS2"
-for i in 1 2 3; do runbs "$BS2" 'agentctl steer g16i -m x --interrupt' 1; done
-for i in 1 2; do runbs "$BS2" 'agentctl watch g16i' 1; done
-chk_eq "16 interrupt steers are not re-hangs" "" "$OUT"
-runbs "$BS2" 'agentctl steer g16i -m x --replace' 1
-chk_eq "16 --replace is the same verb under its silent alias" "" "$OUT"
-runbs "$BS2" 'agentctl watch g16i' 1
-chk_eq "16 the third real re-hang stays silent — interrupts never entered the tally" "" "$OUT"
-runbs "$BS2" 'agentctl watch g16i' 1
-chk_contains "16 the fourth REAL re-hang is the one that warns" "4 times today" "$(ctx "$OUT")"
-# one command, one round: the standard `steer …; watch …` pair is a single babysit round
-BS3="$G8ROOT/bs3"; mkdir -p "$BS3"
-for i in 1 2 3; do runbs "$BS3" 'agentctl steer g16p -m x > /tmp/o.log; agentctl watch g16p' 1; done
-chk_eq "16 three steer+watch pairs are three rounds, not six" "" "$OUT"
-runbs "$BS3" 'agentctl steer g16p -m x > /tmp/o.log; agentctl watch g16p' 1
-chk_contains "16 the fourth pair warns exactly once" "4 times today" "$(ctx "$OUT")"
-chk_eq "16 and the response is a single JSON document" 1 \
-  "$(printf '%s\n' "$OUT" | grep -c hookSpecificOutput)"
-# argv DATA is not a re-hang
-BS4="$G8ROOT/bs4"; mkdir -p "$BS4"
-for i in 1 2 3 4 5; do runbs "$BS4" "echo 'agentctl watch g16q'" 1; done
-chk_eq "16 a quoted mention never enters the tally" "" "$OUT"
-# BROKEN METER: a run dir that cannot be read or written stays SILENT — no warn, no deny.
-# This is the fixture the rest of this suite runs on, asserted here so the choice is load-bearing.
-for i in 1 2 3 4 5 6; do runbs "$BABYSIT_OFF" 'agentctl watch g16s' 1; done
-chk_eq "16 an unreadable meter never accuses (exit 0)" 0 "$RC"
-chk_eq "16 and injects nothing at all" "" "$OUT"
-chk_eq "16 and writes nothing to stderr" "" "$ERR"
-# DEGRADED METER: the tally can be READ but not persisted -> the count is a FLOOR and the warn
-# says so, instead of publishing a floor as a measurement.
-if [ "$(id -u)" != "0" ]; then
-  BS5="$G8ROOT/bs5"; mkdir -p "$BS5"
-  printf '{"floor": false, "n": {"g16d": 3}}' > "$BS5/babysit-$(id -u)-$(date +%Y%m%d).json"
-  chmod 500 "$BS5"
-  runbs "$BS5" 'agentctl watch g16d' 1
-  chk_eq "16 an unpersistable bump is not a DENY" 0 "$RC"
-  chk_contains "16 the seen count is still reported" "4 times today" "$(ctx "$OUT")"
-  chk_contains "16 and is admitted as a floor" "不可判" "$(ctx "$OUT")"
-  chmod 700 "$BS5"
-else
-  echo "  [skip] running as root — the unwritable-run-dir case cannot be built"
-fi
-# ── (16) STICKY FLOOR (cold review F2, the reviewer's repro as a standing arm) ──────────────
-# A corrupt ledger loses the day's history. The process that resets it knew that; the NEXT
-# process read a well-formed file and published `4 times today` as an exact reading of a day
-# whose start it never saw. The day's record now carries the fact, so the admission survives
-# ACROSS PROCESSES — four separate guard invocations here, exactly as the field has them.
-BS6="$G8ROOT/bs6"; mkdir -p "$BS6"
-printf '{bad json' > "$BS6/babysit-$(id -u)-$(date +%Y%m%d).json"
-for i in 1 2 3 4; do
-  runbs "$BS6" 'agentctl watch g16corrupt' 1
-  chk_eq "16-F2 call $i on a corrupt ledger never crashes or denies" 0 "$RC"
+# ── repeated normal controls ─────────────────────────────────────────────────────────────
+# damage: normal watch/steer calls on one session could regain a count-based warning.
+for sample in 'agentctl watch retired-controls' 'agentctl watch retired-controls' \
+              'agentctl watch retired-controls' 'agentctl watch retired-controls' \
+              'agentctl steer retired-controls -f /tmp/fix.md'; do
+  run "$sample" 1
+  chk_eq "repeated control remains allowed" 0 "$RC"
+  chk_eq "repeated control injects no warning" "" "$OUT"
+  chk_eq "repeated control writes no stderr" "" "$ERR"
 done
-chk_contains "16-F2 the threshold warn still arrives" "4 times today" "$(ctx "$OUT")"
-chk_contains "16-F2 and STILL admits the floor, three processes after the reset" "不可判" "$(ctx "$OUT")"
-chk_eq "16-F2 and nothing reaches stderr" "" "$ERR"
-# PAIRED CONTROL: a ledger that was never corrupt reports the SAME count with no floor wording,
-# so the admission is carried by the record and not stapled to every warn
-BS7="$G8ROOT/bs7"; mkdir -p "$BS7"
-for i in 1 2 3 4; do runbs "$BS7" 'agentctl watch g16clean' 1; done
-chk_contains "16-F2 control: a healthy ledger reaches the same count" "4 times today" "$(ctx "$OUT")"
-chk_not_contains "16-F2 control: and claims no floor" "不可判" "$(ctx "$OUT")"
-# the pre-flag FLAT shape is unknown history, not a count to adopt: it resets AND raises the flag
-BS8="$G8ROOT/bs8"; mkdir -p "$BS8"
-printf '{"g16flat": 3}' > "$BS8/babysit-$(id -u)-$(date +%Y%m%d).json"
-runbs "$BS8" 'agentctl watch g16flat' 1
-chk_eq "16-F2 a legacy flat ledger is not adopted as a count" "" "$OUT"
-for i in 2 3 4; do runbs "$BS8" 'agentctl watch g16flat' 1; done
-chk_contains "16-F2 it counts from zero" "4 times today" "$(ctx "$OUT")"
-chk_contains "16-F2 and says the history is unknown" "不可判" "$(ctx "$OUT")"
 
 
 # ── (8) heredoc BODY is document text, not commands (量具校准, GATE-AUDIT false+2) ───────────
@@ -2168,7 +2078,7 @@ GUARD20_CWD="$R20"
 
 # DEGRADE FACES — an unlistable run dir and a target no work tree owns are both UNANSWERABLE:
 # ALLOW + WARN, exactly E1's口径. A guard that cannot answer must not brick the Bash tool.
-run20 "echo x > $R20/x.py" "$BABYSIT_OFF"
+run20 "echo x > $R20/x.py" "$RUN_DIR_FILE"
 chk_eq "r20-rundir a run dir that is a regular FILE cannot be listed: allowed" 0 "$RC"
 chk_eq "r20-rundir writes nothing to stderr" "" "$ERR"
 chk_contains "r20-rundir warns that the seat set is unknown" "LIVE seat set is unknown" "$(ctx "$OUT")"

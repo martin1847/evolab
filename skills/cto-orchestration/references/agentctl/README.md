@@ -192,7 +192,7 @@ job 会呈 idle 但没完成——`沉默 ≠ 交付`。
   ⑨ `playwright-cli attach` 接管旗标（已批走 `touch /tmp/cto-allow-browser-attach`；正路 `open` 起隔离浏览器，见
   [frontend-verify](../frontend-verify.md)）· ⑩ 裸 `codex exec|e|review`（正路 lane `--review`）· ⑪ typed 命令在管道非末端 ·
   ⑫ 门命令 `;` 后接 `git commit` · ⑬ codex brief 含攻击词 → WARN · ⑭ 派工 cwd 脏 · ⑮ `<cwd>/BLOCKED.md` 未收割 ·
-  ⑯ 保姆轮计数 → WARN · ⑰ 评审派发无 `--max-rounds` · ⑱ 历史重写与他步同链 · ⑲ 验证批跨仓 cd → WARN ·
+  ⑰ 评审派发无 `--max-rounds` · ⑱ 历史重写与他步同链 · ⑲ 验证批跨仓 cd → WARN ·
   ⑳ 编排位经 bash 三类字面写入（重定向族 / `tee` / `sed -i`）触及源码面 → WARN 留痕（= E1 的 bash 通道；`cp`/`mv`/`git apply`
   等 accepted-uncovered；不可判目标同样 ALLOW+WARN）· (21) `steer -m` 含反引号或
   `$(`（正路 `-f`）。git-push 治理归 `git-workflow-standard` + 服务端 ruleset，不在此。

@@ -44,7 +44,7 @@
 # hookSpecificOutput.additionalContext (only that reaches the agent). All-Python: the
 # job is parsing arbitrary command content out of hook JSON — stdlib json is correct where shell-regex
 # extraction would be fragile in a guard.
-import sys, json, re, os, shlex, stat, subprocess, time
+import sys, json, re, os, shlex, stat, subprocess
 
 
 def checker_error(message):
@@ -524,100 +524,6 @@ def _brief_review(raw, vpipe, cwd):
             path)
 
 
-# ── rule (16): babysit-round counter (WARN, never DENY) ───────────────────────────────────
-# KILL CRITERION (slug `g16-babysit-counter`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill.
-# FIELD: a session whose classify said 14 with the gauge blind was re-hung SIX times in a row
-# (2026-08/09) — each re-hang cost a round and none of them looked at the instrument. Re-hanging
-# a watcher is LEGAL (that is why this can never be a DENY); doing it a fourth time on the same
-# session in one day is the signal that the orchestrator is babysitting instead of diagnosing.
-# COUNTED: command-position `agentctl watch <s>` and `agentctl steer <s>`. An `--interrupt`
-# steer (and its silent alias `--replace`) is a deliberate intervention, not a re-hang, so it is
-# NOT counted. A session is counted ONCE per command: the standard `steer …; watch …` pair is
-# one babysit round, not two.
-# METER: `<AGENT_WATCH_DIR|/tmp/agent-watch-run>/babysit-<YYYYMMDD>.json`, a day-stamped
-# `{session: count}` map — the DATE IS THE ROLL (yesterday's file is simply never read) and the
-# uid keeps two users on one host out of each other's tally. Every read and write is wrapped:
-# an exception escaping here is CHECKER-ERROR (exit 2) at the __main__ wrapper, i.e. a broken
-# tally would take the orchestrator's whole Bash tool with it. A meter that cannot count is
-# SILENT (no warn, no deny); a count that could not be persisted still warns and says the
-# number is a floor — 不可判, never dressed as a measurement.
-_R16_WARN_AT = 4
-_SEG_BABYSIT = re.compile(r"^\s*(?:" + _ENV_ASSIGN + r"\s+)*" + _WRAPPER
-                          + _AGENTCTL + r"\s+(?P<verb>watch|steer)(?:\s+(?P<sess>\S+))?")
-_R16_INTERRUPT = re.compile(r"(?:^|\s)--(?:interrupt|replace)(?=\s|$)")
-
-
-def _babysit_sessions(raw):
-    """Sessions this command re-hangs, in order, deduped. Same segmenter + command-position
-    head as rules (14)/(15) — a quoted mention (`echo 'agentctl watch s1'`) is DATA and is
-    never counted. A session token that is a flag, or the blanked `ARG` of a quoted span with
-    spaces, is UNREADABLE and dropped rather than counted under a made-up name."""
-    out = []
-    for seg in _cmd_segments(raw):
-        view = _pipe_view(seg)
-        m = _SEG_BABYSIT.match(view)
-        if not m:
-            continue
-        sess = m.group("sess")
-        if not sess or sess == "ARG" or sess.startswith("-"):
-            continue
-        # the flag sits AFTER the session, so the exclusion reads the whole segment, never the
-        # matched head (`m.group(0)` stops at the session and every steer looked mechanical)
-        if m.group("verb") == "steer" and _R16_INTERRUPT.search(view):
-            continue
-        if sess not in out:
-            out.append(sess)
-    return out
-
-
-def _babysit_bump(session):
-    """(count, degraded) for today's tally of one session, INCLUDING this call.
-    `count` None = the meter could not answer at all -> the caller stays silent. `degraded`
-    True = the number is a FLOOR, which the warn says out loud instead of publishing a floor
-    as a count.
-
-    THE FLOOR FLAG IS PERSISTED, not per-process (cold review F2): a corrupt ledger loses the
-    day's history, and the process that resets it knows that — but the NEXT process reads a
-    perfectly well-formed file and would publish `4 times today` as an exact reading of a day
-    it never saw the start of. So the day's record carries the fact: `{"floor": <bool>,
-    "n": {session: count}}`, and `floor` is STICKY for the rest of that day (it is read back
-    in and written back out). One shape consequence, deliberate: any file that is not this
-    shape — including the pre-flag flat map — is UNKNOWN HISTORY, so it resets AND raises the
-    flag rather than being adopted as a count. The file is day-stamped, so the cost is bounded
-    to one day's tally on the machine that upgrades mid-day.
-    The unwritable-meter path cannot persist anything BY DEFINITION; it returns the floor
-    verdict for its own call, and the next call re-reads whatever the file still says."""
-    run_dir = os.environ.get("AGENT_WATCH_DIR") or "/tmp/agent-watch-run"
-    path = os.path.join(run_dir, "babysit-%d-%s.json" % (os.getuid(), time.strftime("%Y%m%d")))
-    soft = False
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            record = json.load(fh)
-        counts = record.get("n") if isinstance(record, dict) else None
-        if isinstance(counts, dict):
-            tally, soft = counts, bool(record.get("floor"))
-        else:
-            tally, soft = {}, True   # unknown shape = unknown history
-    except FileNotFoundError:
-        tally = {}
-    except (ValueError, UnicodeDecodeError):
-        tally, soft = {}, True   # corrupt ledger: rebuild it, and admit the count is a floor
-    except Exception:
-        return None, True
-    n = tally.get(session)
-    n = (n if isinstance(n, int) and n >= 0 else 0) + 1
-    tally[session] = n
-    try:
-        os.makedirs(run_dir, exist_ok=True)
-        tmp = "%s.%d.tmp" % (path, os.getpid())
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"floor": soft, "n": tally}, fh)
-        os.replace(tmp, path)   # one rename: a concurrent guard never reads a half-written map
-    except Exception:
-        return n, True
-    return n, soft
-
-
 # ── rule (17): review dispatch without a round budget (DENY) ──────────────────────────────
 # KILL CRITERION (slug `g17-review-budget`, retro GATE-AUDIT): hits=0 ∧ false>=2 ⇒ kill.
 # FIELD: a review loop with no declared ceiling is an arms race — the reviewer keeps finding,
@@ -819,7 +725,7 @@ def _rewrite_in_chain(raw):
 # REGISTER: the mechanically available face only — the umbrella root's immediate children that
 # carry a `.git` (which is also where `git worktree list`'s roots land: a worktree umbrella's
 # children each carry a `.git` FILE). No subprocess, one `listdir`. A gauge that cannot list is
-# SILENT — never a guess, same contract as rules (14)/(15)/(16).
+# SILENT — never a guess, same contract as rules (14)/(15).
 # BOUNDARY: `here` is only set by a `cd` whose target IS a registered repo root or lies INSIDE
 # one, decided by PATH (review F5/finding 5), and a later `cd` elsewhere CLEARS it — the premise
 # of this rule is "you told me which repo you are in". An earlier cut asked whether any COMPONENT
@@ -994,7 +900,7 @@ def _cwd_drift(raw, repos, base):
 # command that really invokes a stash (that invocation is the cost gate; at most 3 probes, so a
 # pathological chain cannot stall the tool call). Unmeasurable — no git, timeout, not a repo,
 # undecodable output, a porcelain with no `worktree ` line at all — is neither a warn nor a
-# silent pass but ONE `UNMEASURED` line, the contract rules (8)/(14)/(16) already carry.
+# silent pass but ONE `UNMEASURED` line, the contract rules (8)/(14) already carry.
 def _r22_stash_repos(raw, base):
     """Repo path per command-position `git stash` in this command, in order, deduped."""
     out = []
@@ -2000,7 +1906,7 @@ def main():
             note20 = (
                 # TWO locals for this rule, not one with two assignment arms: the injected-text
                 # ratchet resolves ONE literal per local name, so a second assignment to `note20`
-                # would go entirely unweighed. Held near (14)/(15)/(16)/(19)'s length — they join
+                # would go entirely unweighed. Held near (14)/(15)/(19)'s length — they join
                 # in ONE assembled response, and that assembly is what `BUDGET_GUARD_SINGLE` weighs.
                 "WARN (cto-guard 20): 席位归属未判 — %s, so a write to a source path was allowed "
                 "unjudged. 铁律① 车道分工 still holds: the orchestrator dispatches product code, "
@@ -2372,27 +2278,6 @@ def main():
             )
             return 2
 
-    # (16) babysit-round counter: the tally is bumped HERE, below every DENY above it, so a
-    #      command that never runs is never counted (rule (5) kills a foreground watch, and a
-    #      denied re-hang is not a re-hang). Doctrine, meter and its failure modes:
-    #      `_babysit_bump`. WARN only — re-arming a watcher is legal, and this rule exists to
-    #      make the FOURTH one on the same session visible, not to stop it.
-    note16 = ""
-    for sess in _babysit_sessions(raw):
-        n16, degraded = _babysit_bump(sess)
-        if n16 is None or n16 < _R16_WARN_AT or note16:
-            continue   # a meter that cannot count stays silent; one warn per command is enough
-        note16 = (
-            # Held near (14)/(15)'s warn length on purpose: it joins them in ONE assembled
-            # response, and that assembly is what `BUDGET_GUARD_SINGLE` weighs.
-            "WARN (cto-guard 16): 保姆轮 ≥%d — session '%s' re-hung %d times today "
-            "(watch/steer). Read the INSTRUMENT before the next one (a 14 with all three "
-            "progress sources blind is a gauge fault), or go to one long-interval wakeup.%s"
-            # the suffix covers BOTH floor causes — this bump could not be persisted, or the
-            # day's ledger was corrupt and the reset is remembered (`_babysit_bump`'s flag)
-            % (_R16_WARN_AT, sess, n16, "读数是下限、不可判（台账当日坏过或未落盘）。" if degraded else "")
-        )
-
     # (19) verification batch drifting across repos: WARN only, by owner ruling for this batch.
     #      Doctrine, register and its boundary: `_registered_repos` / `_cwd_drift`. Judged on
     #      `raw_hd` so a path named inside a heredoc document is not read as an invocation; an
@@ -2402,7 +2287,7 @@ def main():
     here19, tok19 = _cwd_drift(raw_hd, _registered_repos(base19), base19)
     if here19:
         note19 = (
-            # Held to (16)'s length: it joins (3)/(13)/(14)/(15)/(16) in ONE assembled response,
+            # It joins (3)/(13)/(14)/(15) in ONE assembled response,
             # and that assembly is what `BUDGET_GUARD_SINGLE` weighs.
             "WARN (cto-guard 19): 验证批一条命令一个 cwd — this command cd's into '%s', then names "
             "'%s' — a DIFFERENT registered repo (n=4). A relative path against the wrong repo "
@@ -2455,21 +2340,21 @@ def main():
                 f"signal now: `agentctl watch {session}` via Bash run_in_background:true (NOT "
                 f"shell &, which orphans). A ScheduleWakeup timer is only the backstop."
             )
-    # (8)'s undecidable-scope warn, (13), (14)/(15)'s instrument warnings, (16)'s counter,
+    # (8)'s undecidable-scope warn, (13), (14)/(15)'s instrument warnings,
     # (19)'s drift warn, (20)'s two unjudged-write warns plus its sub-agent and orchestrator
     # lines, and (22)'s stash warn plus its unmeasured line ride (3)'s channel: on exit 0 only
     # additionalContext reaches the agent, and two JSON documents on stdout would be one
     # malformed hook response.
-    # All fourteen strings stay LOCAL to this frame so the injected-text ratchet can weigh what a
+    # All thirteen strings stay LOCAL to this frame so the injected-text ratchet can weigh what a
     # worker is actually handed. (8) is set far above and can be swallowed by a later DENY —
     # correct: a denial's stderr is the message that matters.
-    if (reminder or note8 or note13 or note13b or note14 or note15 or note16 or note19
+    if (reminder or note8 or note13 or note13b or note14 or note15 or note19
             or note20 or note20b or note20c or note20d or note22 or note22b):
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": "\n".join(
-                    t for t in (reminder, note8, note13, note13b, note14, note15, note16,
+                    t for t in (reminder, note8, note13, note13b, note14, note15,
                                 note19, note20, note20b, note20c, note20d, note22, note22b)
                     if t),
             }
