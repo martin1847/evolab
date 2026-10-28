@@ -153,6 +153,41 @@ chk_contains "WAITING surfaces the question" "confirm" "$out"
 bash "$AGENTCTL" stop dxQ >/dev/null 2>&1
 unset FAKE_OMP_ASK FAKE_PROVIDER_LOG
 
+echo "== duplex: omp queued work cannot hide this round's error =="
+# damage: an idle queue used to return RUNNING before the existing round-error scan, so a
+# failed turn waited for the progress timeout. These are synthetic protocol inputs, not a
+# real provider failure or proof of queue consumption; the no-queue case proves visibility.
+OMP_ERROR_FRAME='{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"ECONNRESET synthetic probe"}}'
+bash "$AGENTCTL" start omp dxErr "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+printf '%s\n' "$OMP_ERROR_FRAME" >> "$WATCH_RUN_DIR/dxErr.duplex.events.jsonl"
+out="$(bash "$AGENTCTL" status dxErr 2>&1)"; rc=$?
+chk_eq "error control: no-queue current error is FAILED 2" 2 "$rc"
+chk_contains "error control: the scanner sees the synthetic evidence" \
+  "FAILED: engine reported an error result" "$out"
+chk_contains "error control: failure carries the selected evidence" "ECONNRESET synthetic probe" "$out"
+bash "$AGENTCTL" stop dxErr >/dev/null 2>&1
+export FAKE_OMP_QUEUED=1
+bash "$AGENTCTL" start omp dxErrQ "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
+out="$(bash "$AGENTCTL" status dxErrQ 2>&1)"; rc=$?
+chk_eq "queue control: without a current error stays RUNNING 10" 10 "$rc"
+chk_contains "queue control: idle queue detail is unchanged" "idle but queued=1" "$out"
+printf '%s\n' "$OMP_ERROR_FRAME" >> "$WATCH_RUN_DIR/dxErrQ.duplex.events.jsonl"
+out="$(bash "$AGENTCTL" status dxErrQ 2>&1)"; rc=$?
+chk_eq "queued error: the same current error is FAILED 2, not RUNNING 10" 2 "$rc"
+chk_contains "queued error: failure carries the same evidence" "FAILED: engine reported an error result" "$out"
+out="$(bash "$AGENTCTL" steer dxErrQ -m "synthetic next round" 2>&1)"; rc=$?
+chk_eq "queued error: ordinary steer still accepts a new round" 0 "$rc"
+out="$(bash "$AGENTCTL" status dxErrQ 2>&1)"; rc=$?
+# damage: scanning the whole history would resurrect the previous round's error after steer.
+chk_eq "queue control: old error after ordinary steer stays RUNNING 10" 10 "$rc"
+chk_contains "queue control: the new round still has queued work" "idle but queued=1" "$out"
+printf '%s\n' "$OMP_ERROR_FRAME" >> "$WATCH_RUN_DIR/dxErrQ.duplex.events.jsonl"
+out="$(bash "$AGENTCTL" status dxErrQ 2>&1)"; rc=$?
+chk_eq "queued error: an error in the new round is FAILED 2" 2 "$rc"
+chk_contains "queued error: the new round's evidence is published" "ECONNRESET synthetic probe" "$out"
+bash "$AGENTCTL" stop dxErrQ >/dev/null 2>&1
+unset FAKE_OMP_QUEUED OMP_ERROR_FRAME
+
 echo "== duplex: claude lifecycle =="
 export AGENTCTL_BIN_CLAUDE="$FIX/fake_claude_duplex.py"
 export FAKE_PROVIDER_LOG="$SANDBOX/claude.log"

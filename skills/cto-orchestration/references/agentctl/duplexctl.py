@@ -1123,12 +1123,7 @@ def project_omp(sess: Session) -> tuple[str, str]:
         return "RUNNING", f"{why} — kept non-terminal, queued={sess.queued}"
     if active:
         return "RUNNING", f"streaming, queued={sess.queued}"
-    if sess.queued:
-        # the DEPTH goes in the detail on this half too: `queued=N` is what the steer-log
-        # listing below is indexed by, and an operator reading only the typed line otherwise
-        # saw "messages queued" with no idea how many
-        return "RUNNING", f"idle but queued={sess.queued}"
-    # not streaming, nothing queued: what did THIS ROUND end on? An error frame with no
+    # not streaming: what did THIS ROUND end on? An error frame with no
     # recovery after it is a failed turn (the engine is alive, so this is not AGENT-DEAD), and
     # an ask that arrived AFTER the error is what the engine is waiting on now — position, not
     # a fixed precedence, decides between them.
@@ -1152,6 +1147,11 @@ def project_omp(sess: Session) -> tuple[str, str]:
         return "RUNNING", "auto-retry in flight after a recoverable engine error"
     if kind == "error" and omp_pending_ask(frames)[1] < err_at:
         return "ERROR", evidence
+    if sess.queued:
+        # the DEPTH goes in the detail on this half too: `queued=N` is what the steer-log
+        # listing below is indexed by, and an operator reading only the typed line otherwise
+        # saw "messages queued" with no idea how many
+        return "RUNNING", f"idle but queued={sess.queued}"
     # idle: is there an unanswered real question? Scanned over the tail window rather than this
     # round's frames — an ask raised before the last steer and never answered is still pending.
     pending, _at = omp_pending_ask(tail_frames(sess))
@@ -1757,12 +1757,12 @@ def stream_stalled(sess: Session, engine: str) -> tuple[bool, str]:
 # that dirty set, the newest mtime under the declared deliverable glob, and BLOCKED.md's
 # mtime. The dirty-set mtime is not redundant: porcelain reports WHICH files are dirty and
 # never what is in them, so half an hour of edits to one already-untracked file left the
-# hash bit-identical (caught by this batch's own paired-green fixture). A probe that cannot
-# be JUDGED (git missing, cwd not a repo, command error, a dirty set past the bounded scan)
-# reads as PROGRESS — the window restarts and this state never fires. 宁钝勿敏, the same rule
-# the stream probe follows: the honest fallback for a session nobody can judge is
-# WATCH-TIMEOUT, never a fabricated verdict. An ABSENT file is not a broken probe: absence is
-# a decided fact and participates in the fingerprint.
+# hash bit-identical (caught by this batch's own paired-green fixture). This repo fingerprint
+# joins the tools and pane sources: one unjudgeable source is NOT progress. With no source
+# judged, the window restarts and STALLED-PROGRESS is withheld; judged sources that stay still
+# can fire once the window fills, with `unknown-source` if a gauge is unreadable. A wholly
+# unjudgeable union falls back to WATCH-TIMEOUT. An ABSENT file is not a broken probe: absence
+# is a decided fact and participates in the fingerprint.
 PROGRESS_DIRTY_MAX = 500      # more dirty paths than this ⇒ UNJUDGEABLE, never a silent prefix
 PROGRESS_MINS_DEFAULT = 30
 
