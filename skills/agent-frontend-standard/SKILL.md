@@ -8,9 +8,6 @@ description: "agent 时代前端工程手册——写/评审前端代码(React/R
 
 > 姊妹篇：后端归 `agent-backend-standard`(hub)；Git 归 `git-workflow-standard`；护栏供给回路
 > canonical = `cto-orchestration` 的 shock-in-the-loop 篇（电在回路/能电不文）。
-> 本手册条目均有 2026 调研证据背书（Anthropic / Figma / Atlassian 等公开来源，二手数据已标注）。
-> 铁律同 hub：**"In nearly 100% of cases the prompt will win over the guidelines"（Figma 实证）——
-> 声明式规则是软的，只有编译器、lint=error 和 CI 是硬的。能电不文。**
 
 ## 1. 设计系统即 agent 契约
 

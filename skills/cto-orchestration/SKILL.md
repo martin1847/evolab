@@ -55,9 +55,7 @@ metadata:
    受控后台跑 `agentctl watch`；先接线 `references/agentctl/guard-hooks.json`（高频机械失误归 guard，
    主干不复制其规则表）。理解门与 BLOCKED 协议由 runtime footer 固定追加（`agentctl` `append_footer` 为真源，本文不复述）。
 4. **只消费 typed status**：`agentctl status`（一次性）或 `agentctl watch`（阻塞终态）。不直接读私有 rc/events，也不把 watcher/agent 自报当完成。任何沉默、超时、外部停滞或缺交付物都按对应 typed 分支处理；词表跑 `agentctl states`，处置见 agentctl README。
-5. **steering 走 `agentctl steer`**：默认**尽快送达**（turn 进行中原生 mid-turn：omp/codex；claude
-   降级 turn 边界并明说；空闲即刻开新 turn）、`--interrupt` 打断当前 turn 以本条重开；
-   引擎能力差异查 `agentctl capabilities`。投递成功 ≠ 模型照做，验收仍看交付物。每个后续 turn 都重挂 `agentctl watch`（stop guard S1：本仓有 RUNNING 席位且无活 watcher 时拦收工）。
+5. **steering 走 `agentctl steer`**：路由、降级与 `--interrupt` 语义见 `references/agentctl/README.md`「steer 语义」；能力查 `agentctl capabilities`。投递成功 ≠ 模型照做，验收仍看交付物。每个后续 turn 都重挂 `agentctl watch`（stop guard S1）。
 6. **Implemented → Verified**：fresh 正向交付证据 + 独立评审 + 真实用户路径 E2E 三件齐，**深度按 §2 档位**（轻档 = 1 轮冷评审或编排位抽查 + 子集门；部署与部署环境 E2E 仅当交付物真有部署面）。先本机真路径，再部署，最后才关单；git 集成与 push 门禁归 Git workflow 标准。
 
 ## 2. 对抗式评审循环

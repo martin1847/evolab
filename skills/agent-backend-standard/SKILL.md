@@ -18,7 +18,7 @@ agent 时代后端工程规范的集中入口。**本文件是目录(ToC):每章
 
 ## Book II — Engineering Concerns
 - **II-3 上下文与 prompt 工程** → `references/prompt-context.md` —— 含 **prompt 内容生命周期**(写死值绑 eval、模型耦合打 `REVISIT-WHEN`)。
-- **II-4 工具 / 函数设计(ACI)** → `references/tool-design.md` —— 质量定义="只拿工具能答多跳真问题";描述/示例杠杆大于实现(Tool Search 49→74%、Examples 72→90%);命名空间/token 效率(response_format、~25k 上限、中间结果不过模型可省 98%)/错误为 LLM 而写;有状态 handle 四约束(MCP 2026-07-28)。(交叉引 A2A 对外契约规范)
+- **II-4 工具 / 函数设计(ACI)** → `references/tool-design.md` §1–4 —— 多跳任务质量定义、描述/示例、命名空间与 token 效率、可自纠错误、有状态 handle 四约束、eval 回归门。（交叉引 A2A 对外契约规范）
 - **II-5 记忆 / 状态 / 持久** → `references/state-durability.md` —— workflow 首次 runnable / 首个副作用前原子固化 immutable effective-config snapshot(`snapshot_id` + digest);step / resume / recovery 只读该 snapshot,缺失 / 损坏 / digest mismatch fail-closed。
 - **II-6 检索 / RAG / grounding** —— chunking、faithfulness、向量弱点。*TBD*
 - **II-7 韧性 / 错误 / 幂等** → `references/resilience.md` —— 每个外部/LLM/工具调用:超时 + 有界重试 + 幂等 + 熔断 + 池/并发;**事件循环不阻塞**(async 运行时承重条,五层门禁:lint→测试期检测→staging 阈值→生产 lag 遥测→部署断言)。
