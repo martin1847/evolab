@@ -1,7 +1,7 @@
 ---
 name: agent-backend-standard
 version: 1.4.2
-description: "生产级 agent 时代后端工程手册(hub)——建 / 评审 agent·LLM 后端、**任何碰 DB 的持久层后端**、或为任何后端建立 / 评审 repo 工程门禁时加载。覆盖架构、prompt、工具(ACI)、记忆、检索/RAG、韧性幂等、人在环、安全护栏与有界执行、评估、成本、依赖生命周期,及**数据访问 / 缓存 / 秘密接触面三纪律**与 Python/Go/Java/Rust 统一 `fix/check/test` 门禁。本文件是目录,深度按需读 references/;可观测性/Git/A2A 是独立 skill,本 hub 只交叉引用。Use when building or reviewing agent/LLM backends, ANY backend touching a database, or establishing/reviewing backend repo engineering gates."
+description: "后端架构与工程规范。适用于构建或评审 agent/LLM 后端、任何涉及数据库（DB）的后端，以及建立或评审后端仓库工程门禁。"
 ---
 
 # Agent Backend — 后端工程手册（hub）

@@ -1,7 +1,7 @@
 ---
 name: orchestrator-core
 version: 0.2.3
-description: "多智能体编排的领域无关内核（A² Supervisor 层的方法论抽象）。把编排者的操作系统从领域里剥出来：萃取式主上下文 + 按『要不要主上下文』切分派工 + 契约化派发 + 分层合并 + 对抗式异构验证 + 降认知负载。领域皮（CTO 写码 / 总编内容 / 未来任意领域）只贴一张薄角色表 + 完成定义，内核整套复用。适用于用户要求抽象编排模式、造新领域编排者、或问『多智能体架构怎么搭』。不要用于：单 agent 一次性小任务（无需内核）、纯文档初始化（用 repo-governance-bootstrap）。派工/评审/状态落盘的领域实现见各皮 skill（cto-orchestration / yangge-ops）。"
+description: "多智能体编排的领域无关内核。适用于抽象编排模式、创建新领域编排者，或设计多智能体架构。实际软件交付编排使用 cto-orchestration。不用于单 agent 一次性小任务或纯文档初始化。"
 metadata:
   distilled-from: ["cto-orchestration", "yangge-ops"]
   layer: "A² Supervisor（七层阶梯第 5 层）"

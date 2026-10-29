@@ -1,7 +1,7 @@
 ---
 name: agent-frontend-standard
 version: 1.0.0
-description: "agent 时代前端工程手册——写/评审前端代码(React/RN/Next/组件/样式/状态/前端测试)、建立或评审前端仓工程门禁、设计系统对接 AI 时加载。覆盖:设计系统即契约(token 语义/受限组件词表/lint 硬门)、类型端到端契约(生成客户端只读/typecheck 主反馈环/封 any 逃逸)、视觉验证环(a11y 树优先+截图双轨/迭代预算/回归重检)、前端测试分时门禁、gotcha 库(use client 幻觉/barrel file/任意值样式)。电在回路前端面:能下沉 lint/CI 的绝不写散文。Use when writing or reviewing frontend/UI code, wiring design systems for AI agents, or establishing frontend repo gates: components, styling, tokens, typed API clients, visual verification, frontend testing."
+description: "前端工程规范。适用于编写或评审前端/UI 代码（React、React Native/RN、Next.js、组件、样式、状态、测试）、建立前端工程门禁或将设计系统对接 AI。不用于仅从新用户视角探索产品卡点；该场景使用 frontend-explorer。"
 ---
 
 # Agent Frontend — 前端工程手册
