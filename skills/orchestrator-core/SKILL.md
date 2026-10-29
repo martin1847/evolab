@@ -1,6 +1,6 @@
 ---
 name: orchestrator-core
-version: 0.2.3
+version: 0.2.4
 description: "多智能体编排的领域无关内核。适用于抽象编排模式、创建新领域编排者，或设计多智能体架构。实际软件交付编排使用 cto-orchestration。不用于单 agent 一次性小任务或纯文档初始化。"
 metadata:
   distilled-from: ["cto-orchestration", "yangge-ops"]

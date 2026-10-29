@@ -1,6 +1,6 @@
 ---
 name: agent-backend-standard
-version: 1.4.2
+version: 1.4.3
 description: "后端架构与工程规范。适用于构建或评审 agent/LLM 后端、任何涉及数据库（DB）的后端，以及建立或评审后端仓库工程门禁。"
 ---
 
