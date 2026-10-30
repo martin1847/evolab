@@ -27,13 +27,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Private CLI evidence survives fixture cleanup.
+EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/e2e-onboard-evidence.XXXXXX")" || exit 1
+CLI_STDOUT="$(mktemp "$EVIDENCE_DIR/stdout.XXXXXX")" || exit 1
+CLI_STDERR="$(mktemp "$EVIDENCE_DIR/stderr.XXXXXX")" || exit 1
+printf '  CLI stdout: %s\n  CLI stderr: %s\n' "$CLI_STDOUT" "$CLI_STDERR"
+
 cd "$WT" && git init -q . && printf '# demo-proj\nA tiny demo service.\n' > README.md && git add -A && git commit -qm init
 
 AGENT_MAIL_DIR="$TMPMAIL" timeout 570 claude -p "本项目要接入多 agent 编排开发。请依次完成：
+本测试项目的文档使用中文；AGENTS.md 编排增量保留 cto 模板的「委派 Agent 边界」「编排者行为内核」章节标题及「角色绑定」标签。
 1) 用 repo-governance-bootstrap skill 初始化文档治理（项目名 demo-proj，定位：演示用微服务；capability: demo-api；module: api；需要 AGENTS.md）。所有该问用户的问题都按此给定信息处理，不要等待输入。
 2) 然后按 cto-orchestration 的新项目接入清单（references/onboarding-checklist.md）逐步完成接入，包含 AGENTS.md 编排增量增补 和 hook wiring。
 3) 本项目也要加入多编排者通信：按 agent-mail skill 的「接入」节完成本席位接入（席位 id: demo-proj）。
-4) 只创建文件，不要 push。" --dangerously-skip-permissions < /dev/null >/dev/null 2>&1
+4) 只创建文件，不要 push。" --dangerously-skip-permissions < /dev/null >"$CLI_STDOUT" 2>"$CLI_STDERR"
+rc=$?
+printf '  CLI rc: %s\n' "$rc"
+chk_eq "onboarding CLI completed (rc0)" 0 "$rc"
 
 # ① docs governance tree
 for f in docs/INDEX.md docs/ACTIVE_CONTEXT.md docs/roadmap/active-roadmap.md AGENTS.md ACCESS.local.md; do
