@@ -100,12 +100,13 @@ Evidence: 各证明证到 <决策行|单套件|全量> 为止（缺省 = 单套�
 - [ ] C14 Done-when 含编排者自造量具（非仓内既有套件/CLI 的证明命令）
 - [ ] C15 多 goal 波次 / 父 Goal 接续（本 goal 是某个父 Goal 的一段）
 - [ ] C16 证伪型 goal（spike / 对照 / 候选比较）的采用与弃用
-- [ ] C17 行为改动类 goal（`Change-Type: defect` / 改变可观察行为）的既有测试条款
+- [ ] C17 行为改动类 goal（`Change-Type: defect` / 改变可观察行为）的既有行为与测试条款
 
 ## Guardrails
 
-- Scope = <精确边界>；**out of scope（枚举）**= <明确不做的相邻项>。No refactors of neighboring
-  code, no format changes.
+- Scope = <精确边界>；**out of scope（枚举）**= <明确不做的相邻项>。合同作者写禁止项前对照已知根因候选；
+  若排除候选修复路径，派工前核必要性并裁决冲突；涉及权限、安全或主理人明示约束的冲突须上报，不自行豁免。
+  No refactors of neighboring code, no format changes.
 - 禁止删 / 改 / 跳过测试、断言或 grader（命中 C17 的按其清单例外），禁止压制错误顶替修 root cause——测试集对执行者只读
   （成功标准"红→绿"最易被 game）。
 - 复述 / 立即开工 / BLOCKED 协议由 runtime 固定追加，本 GOAL 不复制；高风险任务升级为先交
