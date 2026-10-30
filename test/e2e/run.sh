@@ -2,13 +2,14 @@
 # E2E runner (tier 2) — LIVE tests that spawn real headless `claude` sessions.
 #
 # Why a separate tier: the hermetic suite (../run.sh) proves script LOGIC with synthetic
-# payloads, but harness-contract outputs (hook deny/reminder delivery, skill-driven
-# onboarding) can pass synthetic tests and still silently fail in the real harness
+# payloads, but harness-contract outputs (hook deny/reminder delivery)
+# can pass synthetic tests and still silently fail in the real harness
 # (proven twice: PostToolUse plain-stdout black-hole; frontmatter hooks not registering).
 # This tier is the forcing function for "合成测 ≠ 真送达，发布前真 wire 跑一遍".
 #
 # COST: each test starts real `claude -p` sessions (minutes + API tokens). Run manually
 # BEFORE a release/push, not in a loop:  bash test/e2e/run.sh
+# Long onboarding journey runs separately: bash test/e2e/onboard.e2e.sh (not release smoke).
 # Requires: `claude` CLI on PATH + working credentials; skills installed (symlink or copy)
 # so the harness can activate them.
 set -u
@@ -20,7 +21,7 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 total_pass=0; total_fail=0
-for t in guard-wire.e2e.sh onboard.e2e.sh agentctl-duplex.e2e.sh; do
+for t in guard-wire.e2e.sh agentctl-duplex.e2e.sh; do
   echo; echo "==== $t ===="
   if bash "$HERE/$t"; then
     printf '[PASS] %s\n' "$t"; total_pass=$((total_pass+1))
