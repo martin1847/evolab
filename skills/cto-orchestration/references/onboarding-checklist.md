@@ -2,6 +2,7 @@
 
 > SKILL.md §6 路由表「新项目接入」行的展开 = 整段操作清单。主干只留一行指针。
 
+仅文档骨架与既有 hook 接线的接入 → 按 SKILL §2 轻改车道，由当前会话直接完成。
 1. 项目无治理结构 → 先跑 `/repo-governance-bootstrap` 生成 docs/AGENTS.md 骨架。
    **已有骨架的存量仓不短路**：对照 bootstrap 目标结构逐项核缺（伞仓 NORTH_STAR / docs-check·
    pre-commit 门 / hooks 接线），缺则单项补、不整仓重跑。
@@ -23,7 +24,7 @@
    <安装根>/references/agentctl/codegraph-hooks.sh <repo>/.git/hooks/$h; done`（派工 worktree 初始化和已有索引刷新均为后台尝试，不保证完成、新鲜或完整）。
    `.codegraph/` 须进 .gitignore；接线与日志见脚本头，索引使用/降级见 `goal-template.md` 的 codegraph 段。
    索引范围归 codegraph 自身 ignore 配置；这里是 CLI hook，不等同于 MCP 服务的监听/同步能力。
-5. 第一个任务走一遍 SKILL §1 全流程，校准该项目的忙碌标记/工具链差异。
+5. 接入完成后、首个真实任务到来时 → 走一遍 SKILL §1 全流程，校准该项目的忙碌标记/工具链差异。
 6. 在项目 memory 里建 working-style 条目（含本 skill 引用 + 项目特有的差异）。
 7. 建主理人的 `docs/DECISION_QUEUE.md`（架构+模板见同目录 `decision-queue.md`）——第一个 T2 决定就进
    队列；可选 wire 新鲜度 hook（entry 真源 `queue-hooks.json`，同步骤 3 的接入方式）。
