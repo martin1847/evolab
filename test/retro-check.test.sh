@@ -22,7 +22,7 @@ mkrepo(){
     mkdir -p docs/roadmap
     printf 'Last rewritten: %s\n' "$TODAY" > docs/ACTIVE_CONTEXT.md
     printf '# active roadmap\n' > docs/roadmap/active-roadmap.md
-    # Check 9 reads the selected docs directory's ledger; one billed entry keeps it green.
+    # Retained for historical control fixtures; current checks require no manual ledger.
     printf '# ledger\n- 批 %s hermetic-fixture：绿基线 wall=10m avoidable=0m\n' "$TODAY" > docs/batch-ledger.md
     printf 'a\nb\nc\n' > MEMORY.md
     git add -A; git commit -qm init
@@ -43,12 +43,12 @@ assert_rc "$rc" 0 "A/all-green rc"
 assert_has "$out" "0 FAIL" "A/all-green result"
 assert_no  "$out" "[FAIL]" "A/all-green no fail lines"
 
-# Case B — stale ACTIVE_CONTEXT → FAIL, exit non-zero
+# damage: an old truthful snapshot/roadmap must not require a status rewrite.
 r="$(mkrepo)"; printf 'Last rewritten: 2020-01-01\n' > "$r/docs/ACTIVE_CONTEXT.md"
+touch -t 202001010000 "$r/docs/roadmap/active-roadmap.md"
 out="$(run "$r")"; rc=$?
-assert_rc "$rc" 1 "B/stale-AC rc"
-assert_has "$out" "ACTIVE_CONTEXT" "B/stale-AC names AC"
-assert_has "$out" "stale" "B/stale-AC flags stale"
+assert_rc "$rc" 0 "B/unchanged old status rc"
+assert_has "$out" "0 FAIL, 0 warn" "B/age alone causes no findings"
 
 # Case C — stray worktree on MERGED branch → FAIL, exit non-zero
 r="$(mkrepo)"
@@ -67,17 +67,17 @@ assert_rc "$rc" 0 "D/mem-overcap rc (warn≠fail)"
 assert_has "$out" "[warn]" "D/mem-overcap warns"
 assert_has "$out" "> 45" "D/mem-overcap shows cap"
 
-# Case E — missing ACTIVE_CONTEXT → FAIL
-r="$(mkrepo)"; rm "$r/docs/ACTIVE_CONTEXT.md"
+# damage: absent optional status files must not block ordinary closeout.
+r="$(mkrepo)"; rm "$r/docs/ACTIVE_CONTEXT.md" "$r/docs/roadmap/active-roadmap.md"
 out="$(run "$r")"; rc=$?
-assert_rc "$rc" 1 "E/missing-AC rc"
-assert_has "$out" "not found" "E/missing-AC flagged"
+assert_rc "$rc" 0 "E/optional status absent rc"
+assert_has "$out" "0 FAIL, 0 warn" "E/no optional-status findings"
 
-# Case F — DECISION_QUEUE.md present but stale → warn only (opt-in soft check), exit 0
+# damage: an unchanged active decision queue must not be stale solely by mtime.
 r="$(mkrepo)"; printf '# queue\n' > "$r/docs/DECISION_QUEUE.md"; touch -t 202001010000 "$r/docs/DECISION_QUEUE.md"
 out="$(run "$r")"; rc=$?
-assert_rc "$rc" 0 "F/stale-queue rc (warn≠fail)"
-assert_has "$out" "DECISION_QUEUE.md not touched" "F/stale-queue warns"
+assert_rc "$rc" 0 "F/old active queue rc"
+assert_has "$out" "0 FAIL, 0 warn" "F/queue age causes no findings"
 
 # Case G — no DECISION_QUEUE.md → skip (opt-in), still exit 0
 r="$(mkrepo)"; out="$(run "$r")"; rc=$?
@@ -390,116 +390,36 @@ out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "Z5/trailing-prose rc"
 assert_has "$out" "trailing text after gate=none" "Z5/trailing prose rejected"
 
-# --- 9) 批时间记账 (<docs-dir>/batch-ledger.md or --ledger; wall= / avoidable= required) ---
-# 提效没有强制层时，退化只能靠主理人发火才被发现（本周实证 n=2）；这一检把 wall/avoidable
-# 两个数从"记得写"变成收口条件。
+# --- 9) Manual accounting retired; --ledger remains accepted for old callers. ---
 
-# Case TL1 — a 批 entry of THIS cycle with no accounting → blocking FAIL, the line is named
-r="$(mkrepo)"; printf '# agents\n- 批 %s effgate：效率强制层四件\n' "$TODAY" > "$r/docs/batch-ledger.md"
-out="$(run "$r")"; rc=$?
-assert_rc "$rc" 1 "TL1/unbilled batch rc"
-assert_has "$out" "批条目缺时间记账" "TL1/the offending line is listed"
-assert_has "$out" "effgate" "TL1/and quoted verbatim"
-assert_has "$out" "wall=95m avoidable=30m" "TL1/the accounting format is shown"
+# damage: missing or partial manual timing fields must not block completed work.
+for entry in "effgate" "half wall=95m"; do
+  r="$(mkrepo)"; printf -- '- 批 %s %s\n' "$TODAY" "$entry" > "$r/docs/batch-ledger.md"
+  out="$(run "$r")"; rc=$?
+  assert_rc "$rc" 0 "TL1/manual fields optional: $entry"
+  assert_has "$out" "0 FAIL, 0 warn" "TL1/no accounting findings: $entry"
+done
 
-# Case TL2 — the same entry, billed → green
-r="$(mkrepo)"
-printf '# agents\n- 批 %s effgate：效率强制层四件 wall=95m avoidable=30m\n' "$TODAY" > "$r/docs/batch-ledger.md"
-out="$(run "$r")"; rc=$?
-assert_rc "$rc" 0 "TL2/billed batch rc"
-assert_has "$out" "均记了 wall/avoidable" "TL2/counted clean"
-assert_no  "$out" "批条目缺时间记账" "TL2/nothing flagged"
-
-# Case TL3 — no ledger at all → 量具坏 = FAIL, never a silent green (a ledger nobody can read
-# is not a clean accounting surface; same reading check 2 gives a missing ACTIVE_CONTEXT)
+# damage: closeout must work without a ledger and must not create a replacement.
 r="$(mkrepo)"; rm "$r/docs/batch-ledger.md"
 out="$(run "$r")"; rc=$?
-assert_rc "$rc" 1 "TL3/missing ledger rc"
-assert_has "$out" "不可读" "TL3/instrument failure is named"
-assert_has "$out" "量具坏" "TL3/and called what it is"
-assert_no  "$out" "均记了" "TL3/no clean-accounting line is printed"
+assert_rc "$rc" 0 "TL3/missing ledger rc"
+assert_has "$out" "0 FAIL, 0 warn" "TL3/no missing-ledger finding"
+assert_rc "$([ -e "$r/docs/batch-ledger.md" ]; printf '%s' "$?")" 1 "TL3/no ledger created"
 
-# Case TL4 — an unreadable (mode 000) ledger reads the same as an absent one, never as clean
-if [ "$(id -u)" != "0" ]; then
-  r="$(mkrepo)"; chmod 000 "$r/docs/batch-ledger.md"
-  out="$(run "$r")"; rc=$?
-  chmod 644 "$r/docs/batch-ledger.md"
-  assert_rc "$rc" 1 "TL4/unreadable ledger rc"
-  assert_has "$out" "不可读" "TL4/instrument failure is named"
+# damage: legacy --ledger callers must not inherit an accounting/readability requirement.
+r="$(mkrepo)"
+out="$(run "$r" --ledger 'missing ledger.md')"; rc=$?
+assert_rc "$rc" 0 "TL4/missing explicit ledger accepted"
+if [ "$(id -u)" != 0 ]; then
+  # Keep this outside --docs: unreadable scanned Markdown remains a check-11 error.
+  cp "$r/docs/batch-ledger.md" "$r/private.md"; chmod 000 "$r/private.md"
+  out="$(run "$r" --ledger private.md)"; rc=$?
+  chmod 644 "$r/private.md"
+  assert_rc "$rc" 0 "TL4/unreadable ledger ignored"
 else
   echo "  [skip] running as root — the unreadable-ledger case cannot be built"
 fi
-
-# Case TL5 — a 批 entry from an EARLIER cycle is out of the window: not judged, and with no
-# in-window entry left the check says so instead of reporting a green it did not measure
-r="$(mkrepo)"; printf '# agents\n- 批 2020-01-01 old-batch：上个纪元\n' > "$r/docs/batch-ledger.md"
-out="$(run "$r")"; rc=$?
-assert_rc "$rc" 0 "TL5/out-of-window entry rc"
-assert_no  "$out" "批条目缺时间记账" "TL5/an old entry is not re-judged"
-assert_has "$out" "本周期无「批」条目" "TL5/absence is named, not silently green"
-
-# Case TL6 — a fenced format example is documentation, not a ledger record (same boundary
-# checks 7 and 8 hold; kills: fence skip dropped from check 9's awk)
-r="$(mkrepo)"
-printf '# agents\n```text\n- 批 %s example-only：格式示例\n```\n' "$TODAY" > "$r/docs/batch-ledger.md"
-out="$(run "$r")"; rc=$?
-assert_rc "$rc" 0 "TL6/fenced-example rc"
-assert_no  "$out" "example-only" "TL6/fenced example not consumed"
-assert_has "$out" "本周期无「批」条目" "TL6/reads as no in-window entry"
-
-# Case TL7 — half the accounting is not accounting: wall= without avoidable= still FAILs
-r="$(mkrepo)"; printf '# agents\n- 批 %s half：只记了墙钟 wall=95m\n' "$TODAY" > "$r/docs/batch-ledger.md"
-out="$(run "$r")"; rc=$?
-assert_rc "$rc" 1 "TL7/half-billed rc"
-assert_has "$out" "批条目缺时间记账" "TL7/half accounting is unbilled"
-
-# damage: the pinned CLI rejects an independent ledger by still reading AGENTS.md, not by rejecting a new option.
-r="$(mkrepo)"; old="$(mktemp -d)/retro-check.sh"
-git -C "$HERE/.." show 81c329ce345e5d71f7a5bc31fcaf444695747b93:skills/cto-orchestration/references/retro-check.sh > "$old"
-for checker in goal-preflight.py doc-lifecycle.py session-economics.py; do
-  ln -s "$(dirname "$SCRIPT")/$checker" "$(dirname "$old")/$checker"
-done
-out="$( cd "$r" && AGENT_WATCH_DIR="$r/.none" bash "$old" --base main --docs docs 2>&1 )"; rc=$?
-assert_rc "$rc" 1 "TL8/pinned CLI misses independent ledger"
-assert_has "$out" "台账 ./AGENTS.md 不可读" "TL8/old red is the wrong source"
-out="$(run "$r")"; rc=$?
-assert_rc "$rc" 0 "TL8/candidate reads the same independent ledger"
-assert_has "$out" "均记了 wall/avoidable" "TL8/new CLI bills the entry"
-
-# damage: AGENTS.md must not mask a missing default ledger or cause the checker to create one.
-cp "$r/docs/batch-ledger.md" "$r/AGENTS.md"; rm "$r/docs/batch-ledger.md"
-out="$(run "$r")"; rc=$?
-assert_rc "$rc" 1 "TL9/no AGENTS fallback"
-assert_has "$out" "台账 docs/batch-ledger.md 不可读" "TL9/actual path named"
-assert_has "$out" "用 --docs" "TL9/docs configuration named"
-assert_has "$out" "或 --ledger" "TL9/ledger configuration named"
-assert_rc "$([ -e "$r/docs/batch-ledger.md" ]; printf '%s' "$?")" 1 "TL9/no ledger created"
-
-# damage: --docs and relative --ledger resolve from the caller, never from --repo; explicit selection wins in either form.
-r="$(mkrepo)"; mkdir "$r/child"; mv "$r/docs" "$r/governance docs"
-out="$(run "$r" --repo "$r/child" --docs 'governance docs')"; rc=$?
-assert_rc "$rc" 0 "TL10/default follows explicit docs from caller cwd"
-cp "$r/governance docs/batch-ledger.md" "$r/external ledger.md"
-printf -- '- 批 %s default-unbilled\n' "$TODAY" > "$r/governance docs/batch-ledger.md"
-for ledger in 'external ledger.md' "$r/external ledger.md"; do
-  out="$(run "$r" --repo "$r/child" --ledger "$ledger" --docs 'governance docs')"; rc=$?
-  assert_rc "$rc" 0 "TL10/explicit ledger overrides docs: $ledger"
-  assert_has "$out" "均记了 wall/avoidable" "TL10/selected ledger checked: $ledger"
-done
-
-# damage: a good default must not hide a missing or unreadable explicitly selected ledger.
-r="$(mkrepo)"
-out="$(run "$r" --ledger missing.md)"; rc=$?
-assert_rc "$rc" 1 "TL11/missing explicit ledger fails"
-assert_has "$out" "台账 missing.md 不可读" "TL11/explicit path named"
-assert_no "$out" "均记了 wall/avoidable" "TL11/no fallback verdict"
-if [ "$(id -u)" != 0 ]; then
-  cp "$r/docs/batch-ledger.md" "$r/private.md"; chmod 000 "$r/private.md"
-  out="$(run "$r" --ledger private.md)"; rc=$?; chmod 644 "$r/private.md"
-  assert_rc "$rc" 1 "TL11/unreadable explicit ledger fails"
-  assert_has "$out" "台账 private.md 不可读" "TL11/unreadable selection named"
-fi
-
 # damage: missing, empty, or option-shaped values are CLI errors, never requests for the default.
 for shape in missing empty next-option; do
   case "$shape" in
@@ -511,12 +431,12 @@ for shape in missing empty next-option; do
   assert_has "$out" "requires a non-empty path" "TL12/actionable error for $shape"
 done
 
-# damage: yesterday remains in the accounting window after the source moves out of AGENTS.md.
+# damage: the retired accounting window must not require yesterday's manual fields either.
 r="$(mkrepo)"; yesterday="$(date -v-1d +%F 2>/dev/null || date -d yesterday +%F)"
 printf -- '- 批 %s yesterday-unbilled\n' "$yesterday" > "$r/docs/batch-ledger.md"
 out="$(run "$r")"; rc=$?
-assert_rc "$rc" 1 "TL13/yesterday still requires accounting"
-assert_has "$out" "yesterday-unbilled" "TL13/in-window entry named"
+assert_rc "$rc" 0 "TL13/yesterday accounting optional"
+assert_has "$out" "0 FAIL, 0 warn" "TL13/no accounting findings"
 
 # damage: root and nested archive directories must not be judged, but a directory merely named archived stays active.
 r="$(mkrepo)"; mkdir -p "$r/docs/archive" "$r/docs/nested/archive" "$r/docs/archived"
@@ -534,9 +454,8 @@ assert_has "$out" "1 candidate LESSON line(s)" "AR2/active good lesson checked"
 assert_has "$out" "1 gate-audit line(s)" "AR2/active good audit checked"
 
 # --- 第 9 检的读数面 (MECHANICAL INPUT): 只出数, 不出裁决, 不动 PASS/FAIL --------------
-# The pane's whole risk is that a printed number gets read as a ruling, so these cases pin the
-# three properties that stop it: the banner is present, no `wall≈`/`avoidable≈` suggestion is
-# printed, and the existing accounting verdict is byte-identical with the pane on or off.
+# Readings remain advisory: known coverage renders measured values, unknown coverage
+# cannot manufacture numbers, and neither path changes independent verdicts.
 # A fake `agentctl` on PATH keeps the readings deterministic — the machine's real run dir must
 # never leak into a test case (same rule case J..M follow for check 6).
 mkphases(){ # $1 dir, $2 json body -> a PATH bin holding a fake `agentctl phases`
@@ -565,8 +484,7 @@ PH_DARK='{"coverage":"unknown","shards_missing":[],"shards_unreadable":["2026090
 # a report whose shape this pane does not know (an older/newer verb): degrade, never traceback
 PH_ALIEN='{"coverage":"ok","sessions":[],"readings":{"batch_span_s":1}}'
 
-# Case PH1 — readings available: the banner leads, the numbers follow, no suggestion is made,
-# and the accounting check keeps its own verdict (the green fixture is billed)
+# Case PH1 — measured values remain labelled machine-time, never an avoidable-cost ruling.
 r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_OK"
 out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
         bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
@@ -583,17 +501,15 @@ assert_has "$out" "clock_regressed=2" "PH1/the excluded edges are surfaced, not 
 assert_has "$out" "future_dropped=3" "PH1/so are rows dropped for claiming a future instant"
 assert_no  "$out" "wall≈" "PH1/no wall suggestion is offered"
 assert_no  "$out" "avoidable≈" "PH1/no avoidable suggestion is offered"
-assert_has "$out" "均记了 wall/avoidable" "PH1/the accounting check still reports its own verdict"
 
-# Case PH2 — the pane must not manufacture a pass: an UNBILLED entry still FAILs with the
-# readings printed right above it (that is the whole point — input, not verdict)
+# damage: available readings must not impose manual timing fields on a batch.
 r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_OK"
 printf '# agents\n- 批 %s effgate：效率强制层四件\n' "$TODAY" > "$r/docs/batch-ledger.md"
 out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch" \
         bash "$SCRIPT" --base main --docs docs --memory MEMORY.md 2>&1 )"; rc=$?
-assert_rc "$rc" 1 "PH2/readings never bill an entry for the human"
+assert_rc "$rc" 0 "PH2/readings impose no accounting requirement"
 assert_has "$out" "MECHANICAL INPUT" "PH2/the pane still printed"
-assert_has "$out" "批条目缺时间记账" "PH2/and the accounting FAIL is untouched"
+assert_has "$out" "0 FAIL, 0 warn" "PH2/no accounting findings"
 
 # Case PH3 — coverage unknown: one n/a line, no numbers, verdict unchanged
 r="$(mkrepo)"; mkphases "$r/.fakebin" "$PH_UNKNOWN"
@@ -604,7 +520,6 @@ assert_has "$out" "phases: n/a (coverage unknown" "PH3/it says it cannot vouch f
 assert_has "$out" "20260901" "PH3/and names the shard it is missing"
 assert_no  "$out" "MECHANICAL INPUT" "PH3/no banner over numbers it did not measure"
 assert_no  "$out" "batch_span" "PH3/and no numbers at all"
-assert_has "$out" "均记了 wall/avoidable" "PH3/the accounting verdict is byte-identical"
 
 # Case PH4 — `agentctl` is on PATH but has no ledger to answer from (silent, nonzero exit):
 # the same one-line degradation. The truly-absent-verb branch cannot be built by stripping
@@ -617,7 +532,6 @@ out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch"
 assert_rc "$rc" 0 "PH4/a verb with nothing to say does not change rc"
 assert_has "$out" "phases: n/a" "PH4/a silent verb degrades to one n/a line"
 assert_no  "$out" "MECHANICAL INPUT" "PH4/and prints no readings"
-assert_has "$out" "均记了 wall/avoidable" "PH4/the accounting verdict is byte-identical"
 
 # Case PH5 — a verb that answers with garbage is not a reading either
 r="$(mkrepo)"; mkphases "$r/.fakebin" "not json at all"
@@ -636,7 +550,6 @@ assert_rc "$rc" 0 "PH6/an unreadable shard does not change rc"
 assert_has "$out" "phases: n/a (coverage unknown" "PH6/it still refuses to vouch"
 assert_has "$out" "unreadable 20260902" "PH6/and names the day it could not read"
 assert_no  "$out" "MECHANICAL INPUT" "PH6/no banner over data it never read"
-assert_has "$out" "均记了 wall/avoidable" "PH6/the accounting verdict is byte-identical"
 
 # Case PH7 — a report of a shape this pane does not know (an older or newer verb): degrade to
 # n/a. A traceback in the middle of a retro is not an advisory, and this pane is only advisory.
@@ -646,7 +559,6 @@ out="$( cd "$r" && PATH="$r/.fakebin:$PATH" AGENT_WATCH_DIR="$r/.no-agent-watch"
 assert_rc "$rc" 0 "PH7/an unknown report shape does not change rc"
 assert_has "$out" "phases: n/a" "PH7/it degrades to one n/a line"
 assert_no  "$out" "Traceback" "PH7/and never leaks a traceback into the retro"
-assert_has "$out" "均记了 wall/avoidable" "PH7/the accounting verdict is byte-identical"
 
 # ---- check 11: 文档年龄清单 (doc-lifecycle 只读扫描) --------------------------------------
 # 三态: 没有扫描面 ⇒ skip; 清单非空 ⇒ warn (搬与不搬人拍, 机器不代拍); 清单空 ⇒ ok.
@@ -668,11 +580,10 @@ assert_rc "$rc" 0 "DL2/清单非空是 warn, 不是 FAIL"
 assert_has "$out" "expire: docs/OLD_RECEIPT.md" "DL2/清单点名到期回执"
 assert_has "$out" "项待裁" "DL2/verdict 说明谁来拍"
 
-# Case DL3 — 既无 archive 落点也无任何 living 登记簿 ⇒ skip (opt-in)。rc=1 是第 2 检的判决
-# (ACTIVE_CONTEXT not found), 不是这一检的。
+# Case DL3 — no archive or living registry ⇒ skip; absent optional status is not a failure.
 r="$(mkrepo)"; rm "$r/docs/ACTIVE_CONTEXT.md"
 out="$(run "$r")"; rc=$?
-assert_rc "$rc" 1 "DL3/rc 由第 2 检决定"
+assert_rc "$rc" 0 "DL3/absent optional status keeps rc green"
 assert_has "$out" "doc-lifecycle 是 opt-in" "DL3/没有扫描面就跳过"
 assert_no  "$out" "件到期" "DL3/跳过时不打印清单"
 

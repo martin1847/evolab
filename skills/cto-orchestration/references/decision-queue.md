@@ -4,7 +4,7 @@
 > 这是 SKILL 铁律③（主理人持判断，不持状态）的操作化：不是每事问，而是把"该谁决"事先设计掉。
 > 审批流与工作记忆是两种东西，拆开——**三档委派应下沉 harness 权限层，
 > 队列文件只装人脑的判断题（🔴/💤）**。这是目标架构，不冒充当前通用实现：本 bundle 已落地的是
-> 可选 freshness reminder 与 retro warning，尚无通用 T1 自动记账 / T2 deny；散文规则随长上下文稀释，
+> 可选 freshness reminder 与已清区残留检查，尚无通用 T1 自动记账 / T2 deny；散文规则随长上下文稀释，
 > 权限只有 harness 强制才算数。
 
 ## 架构：三层各归其位
@@ -39,14 +39,14 @@
 2. **静默默认**：主理人没回 → **可逆按写明默认前进；不可逆一律 HOLD，永不自动越过**（这条不可破）。
 3. **聚合绊线**：一串可逆小步累积成不可逆（lock-in / 蔓延花费 / scope drift）时升 T2 并点名。
 4. **批处理 + 升级包**：不每事件 ping，攒到检查点成批给；每个 T2 带议题/影响/已做步骤/需你啥+推荐+默认。
-5. **心跳 + revisit**：每检查点刷新队列、无事也给全局图；HELD/💤 项到 revisit 触发点主动重浮。
+5. **变化 + revisit**：事实/待决项变化时更新；HELD/💤 项到 revisit 触发点主动重浮，不为检查点改写未变状态。
 
 ## 已落地兜底（提醒，不冒充权限门）
 
 - **平时 / 新上下文**：`queue-freshness.py`（SessionStart + UserPromptSubmit，wiring 真源
   `queue-hooks.json`，可选接入）检出已清区残留与 stale queue。SessionStart 每次冒泡，运行中提醒
   按 `QUEUE_NAG_INTERVAL_SECS` 节流（默认 1 小时）。hook 不删数据；它明确标注残留项已关闭，禁止再活化。
-- **收口**：`retro-check.sh` 对“已清区仍有正文”返回 blocking FAIL；队列仅不新鲜仍只告警、exit 0。队列里的事实句（PARKED 理由、revisit 触发、状态断言）可跟一行 ``PREMISE: <claim> verify=`cmd` => rc=N``，复盘第 10 检实跑、死账当场红——状态可信靠实跑，不靠刷新时照抄。
+- **复盘检查**：`retro-check.sh` 对“已清区仍有正文”返回 blocking FAIL，不按队列年龄告警。队列里的事实句可跟一行 ``PREMISE: <claim> verify=`cmd` => rc=N``，第 10 检实跑；状态可信靠事实，不靠刷新日期。
 - **为什么是提醒不是 Stop-block**：block 需要"本 turn 存在未记账 T2"的确定性信号，当前无此信号源——
   伪精确的门比诚实的提醒更糟（误拦 + Stop hook 8 次连 block 熔断）。若未来 T2 拦截落 marker 文件，
   可升级为门。
@@ -61,7 +61,7 @@
 # Decision Queue — <principal> 的 cockpit
 > 🔴需你 / 💤parked / ✅已清（🟡在飞的事归 ACTIVE_CONTEXT，不在此维护）。我维护、你只读。
 > 完整性保证：这是唯一面，不在别处另存、不静默丢。每🔴带推荐+静默默认；每💤带 revisit 触发。
-> 聚合绊线：可逆累积变不可逆时我升🔴。心跳：每检查点刷新给你全局图。Last updated: <date>.
+> 聚合绊线：可逆累积变不可逆时我升🔴。事实/待决项变化才更新；revisit 到期重浮。Last updated: <date>.
 
 ## 🔴 NEEDS YOU
 | # | 决定 | 为何归你 | 我的推荐 | 静默默认 | revisit 触发 |

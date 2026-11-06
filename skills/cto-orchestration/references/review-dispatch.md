@@ -1,14 +1,14 @@
 # codex 评审派发模板（brief 文本）
 
-> **固定样板单源** = `references/review-brief-preamble.md`（输出契约 / Tally 格式 / 只读纪律 /
-> 直写合同要求）：每份 brief 首行写 `Read first: <该文件绝对路径>`，brief 本体只写本批
-> scope、per-unit 合同与评审轴——样板不再逐份复制。
+> **固定样板单源** = `references/review-brief-preamble.md`（输出契约 / Tally 格式 / 只读纪律）：
+> brief 首行写 `Read first: <该文件绝对路径>`，本体只带本批 scope、验收、风险与评审轴；
+> 任务信息复用见 SKILL §2，不另造直写合同。
 
 > 目录：[goal-review](#goal-review派发前白名单免评--其余必评) · [轮数预算](#轮数预算) · [首轮评审](#首轮评审) · [复审](#复审第-n-轮) ·
 > [收敛准则注入](#收敛准则注入防乒乓第-3-轮左右仍未收敛时) · [修复派回模板](#修复派回-omp-模板) ·
 > [评审轴](#评审轴主干-2-的展开)
 
-> 首轮：brief 写成文件（`docs/orchestration/*_REVIEW_BRIEF.md`），
+> 首轮：brief 可复用现有任务/评审 note，或写成 `docs/orchestration/*_REVIEW_BRIEF.md`；
 > `agentctl start codex <proj>-<task>-codex <同一worktree> --goal <brief.md> --review
 > --deliverable <REVIEW_codex.md> --workflow review-loop --max-rounds <N>`——与 omp 派发同构
 > （`--review` 进评审档、`--deliverable` 给产物 freshness gate，缺一即无 typed 交付）。
@@ -17,7 +17,6 @@
 > - [ ] 投给引擎的评审 brief / steer 用中性工程措辞、避 forged / impostor / bypass 类攻击词（`start codex --goal` 时 guard ⑬ WARN；被读文件不进内容过滤判定）。
 > - [ ] codex 轮被 cyberPolicy 拦 → 重投前先净化 prompt：敏感细节移入被读文件、prompt 只留
 >   中性指针；仍被拦 → 开新会话兜底（失败轮照常计入轮数预算）。
-> - [ ] 变更集含编排位直写单元（教义 / 门 / guard）→ Context docs 附其最小合同（SKILL §2「直写也要合同」）。
 
 ## goal-review（派发前，白名单免评 + 其余必评）
 
@@ -25,7 +24,7 @@
 > 停止规则 / 行为契约），任一新增即出白名单。派发前逐条判：
 >
 > - [ ] 纯只读取证类（只产出**数据 / 读数**，不下「该不该做 / 根因是什么」类判断）→ 免评
-> - [ ] 调研 / 研究类产出**结论或裁决** → goal 本身仍免评（只读不写），但其 RESULT 是 scout
+> - [ ] 调研 / 研究类产出**结论或裁决** → goal 本身仍免评（只读不写），但其交付物是 scout
 >   结论、不是判决：下游任何以它作 Value gate / 前提的 goal，须把该结论列进 goal-template
 >   §Premises 逐条独立验证——改一行代码要过冷评审，「要不要改」的判断不得零检验直通派工
 > - [ ] 轻档 goal（不新增判据 / 门 / 状态 / 接口 / 解析面：纯删、纯搬迁、有参考实现；判档在 SKILL §2）→ 免 goal-review，但仍过 1 轮冷评审或编排位抽查
@@ -76,9 +75,9 @@
 ```
 Read first: <review-brief-preamble.md 绝对路径>（常驻合同）。
 独立代码评审。评审集 = `origin/<base>...HEAD`（three-dot = merge-base 差分；commits <sha…>），
-分支 <branch>，worktree <server root>。Context docs（先读）：<goal.md>、<必要事实材料>（不含作者结论）。
+分支 <branch>，worktree <server root>。Context docs（先读）：<已批准请求或派工 goal>、<必要事实材料>（不含作者结论）。
 评审焦点：(1) <该变更最危险的轴，点名：旗标关路径零行为泄漏 / 崩溃恢复 / 并发竞态 /
-降级语义 / 安全契约>；(2) <次轴>；(3) 测试充分性；(4) scope 纪律 vs goal guardrails；
+降级语义 / 安全契约>；(2) <次轴>；(3) 测试充分性；(4) scope 纪律 vs 已批准范围；
 (5) 有作者说明时，独立检查后再读 <作者说明路径>，核对解释与已知疑点。
 跳过：生成代码 / lockfile / CI 已强制项 / <项目排除面>。
 评审写到 <REVIEW_codex.md 绝对路径>（`--review` 档下必须在 session cwd 内）。
@@ -94,7 +93,7 @@ Read first: <review-brief-preamble.md 绝对路径>（常驻合同）。
 
 - [ ] review-loop 续派任何一轮前 → 先过**杠杆线分诊**：①逐轮新增 blocking 计数衰减（内容轮 ≥3 且
   最近两轮不升、各 ≤1）②本轮 remedy 撤销上轮 remedy 引入的行 ③同一「评审轴 + 路径簇」连续 ≥3 轮
-  出 finding——任一命中 → 本轮不续派，转编排者杠杆账（SKILL §2）；裁定续派 = 显式追加预算并在 ledger 记账。
+  出 finding——任一命中 → 本轮不续派，转编排者杠杆账（SKILL §2）；裁定续派 = 显式追加预算，理由留在现有评审 note。
 - [ ] 评审 closure-requirement 要求新增/扩大守卫机械（断言 / 变异样本 / manifest / 自证层）→
   **默认 advisory 不得 blocking**；升 blocking 须编排位显式裁定并记账（防评审棘轮把合同逐轮加码）。
 - **复审轮只审封闭性**（上轮 finding 是否真闭 + 修复引入的新洞 + 无夹带改动），别让同一会话重扫全量——

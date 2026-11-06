@@ -63,8 +63,7 @@ metadata:
 - 按风险定深度：低风险走轻量 review；鉴权、迁移、基建、大重构走 `references/review-dispatch.md` 的完整循环。
 - **goal 评审：白名单免评，其余必评**——命中免评白名单（唯一清单在 `references/review-dispatch.md` §goal-review，共同硬门=不新增任何决策面）→ 跳过；未命中或拿不准 → 派发前 1 轮冷上下文 goal-review（仪器六问 + 契约三问，同节）。
 - **档位只有两档，按派工前能看见的事实判，不按行数、不按文件类型**：**深档** = goal 新增判断面（判据 / 门 / 状态 / 接口 / 解析面）→ goal-review 1 轮 + 冷评审 blocking 驱动；跨模块 / 新状态机的深档批派工前方案预审给主理人（goal 抬头 `Tier:` 行声明档位，deep 带 `Goal-Review:` 回执，preflight 缺则 WARN）。**轻档** = 其余（纯删、纯搬迁、有参考实现、本地文档）→ 不做 goal-review，1 轮冷评审或编排位抽查闭合；轻改车道（下文）是轻档的子集。**档位同时决定执行席模型**：轻档 = 基础变量、深档 = `_DEEP`（README §start 默认模型），派工不手打 `--model`。规模由评审看真实 diff 事后判；goal 里不写行数预估、上限或比值（写了 = finding）。写深档合同、裁大批阻断 findings 时建议高推理档（`xhigh` 或者 `max`）。
-- **直写也要合同**：编排位自己直写 shipped 面（教义 / 门 / guard）动手前，同样先写最小合同——
-  Done-when + 坏样本来源 + scope 三行即可，评审 brief 随附；无合同的直写单元评审者当 finding 报。
+- **任务信息复用**：轻量直写以已批准请求 + diff 为据，无需独立 GOAL/RESULT，也不把已完成评审复制成完工报告；需要评审时，一份简短 brief 带齐 scope / 验收 / 风险即可。派工仍用自包含 goal + 声明交付物，尽量复用同一任务/评审 note；复杂或新增决策面显式写清 scope 与验收。
 - brief 冷上下文，不喂实现者结论；只审主路径 + 零变异 + 已知阳性（边界口径归 review-brief-preamble，brief 点名边界词 guard ⑬ WARN），出口用 file:line、confidence 与失败探针过滤。
 - 先枚举执行分叉；轴装配先查 path→轴映射表（表命中必进 brief，判断只增补），再点名 `缺失消费者`、
   under-fire、并发 / 恢复等高风险轴；完整轴表与映射表留在 reference。
@@ -72,9 +71,7 @@ metadata:
   复现抽查闭合；任何续派评审须在 brief 写 `SHIP-BLOCKING: <依据>`（runtime 从第 3 次投递起强制：start = 第 1 轮、首次 steer = 第 2 轮）。深档（门禁/
   量具/状态机/安全面）保留 blocking 驱动续轮；同一 finding 的修复连续 2 轮只新增 finding，则止损走三选项之一：换机制 / accept-documented / **向主理人请示需求降级**——两轮催生的是**更大机制**（本轮 remedy 比上轮新增更多防御面/配置/状态，diff 面数在涨）
   而非更小需求 ⇒ 强制走第三选项，请示时附上原需求与两轮 remedy 的净增面（止损空间含需求层）。
-- **提效是显式目标**：批 overhead（评审轮数 × 门分钟数 × 保姆轮）计入杠杆账，收口在台账记
-  wall/avoidable 两个数（retro-check 第 9 检缺记即 FAIL）。仪器（自证 / 变异 / 矩阵）墙钟超过实现墙钟 = 倒挂，下批该仪器降档（binding → advisory → 删；不降 §3 三态门底线）。**轻改车道**（教义/注释/指针，零产品代码）：不派席、不派评审席——
-  编排位直改，子集门 + CI 兜底，单 commit 落。非深档迭代只跑**改动面子集门**（选择机械推导；
+- **提效是显式目标**：wall/avoidable 仅在实际延误/返工调查或用户要求的复盘需要时记录，不逐批手工记账。仪器（自证 / 变异 / 矩阵）墙钟超过实现墙钟 = 倒挂，下批该仪器降档（binding → advisory → 删；不降 §3 三态门底线）。**轻改车道**：编排位直改教义/注释/指针，跑子集门 + CI；shipped skill Markdown 与可执行改动仍做聚焦冷评审，不重审未变内容。非深档迭代只跑**改动面子集门**（选择机械推导；
   同名歧义 / rename / 量具坏一律回退全量），全量留合并前一次 + CI 兜底。**证据到层即停**：
   拒绝/回退类行为证到**决策行**为止，全量只在运行本身是验收对象时跑——合同写明证到哪层，
   不写则席位会用最贵的方式证。
@@ -114,12 +111,11 @@ metadata:
 
 ## 5. 状态、收口与主理人注意力
 
-- `docs/orchestration/` 是共享 SoT：live 只留在跑/在等事项，完结物归档；memory 只存编排者私有教训和入口，不替代共享 docs。
+- `docs/orchestration/` 是共享 SoT：只在事实/下一步变化时更新权威任务入口；完成的改动/测试事实查 Git/CI，不逐次 push 重写多份状态。live 只留在跑/在等事项，完结物归档；memory 只存私有教训和入口。
 - runtime evidence 推翻 audit/scout 时，同轮回写源文档 `REFUTED CLAIMS`（claim / evidence / pointer），不只记在摘要。
 - 外部任务系统存在时，它是状态 SoT；roadmap 只做映射，不养第二套账。
-- **复盘仪式**（触发词：复盘 / 收口 / retro；事件点：收口 / 压缩前 / ReOpen 后）：读
-  `references/retrospective.md` 七步逐条勾，再跑 `references/retro-check.sh`；不即兴发挥。
-  压缩点自动提醒 wiring 真源 = `references/retro-hooks.json`（可选接入）。
+- **普通收口**：确认实际交付/验证、Git/CI 状态，只清本席位已完成的 agent；压缩只在一个既有入口保留未完状态/决策，不触发全套复盘。压缩提醒 wiring 真源 = `references/retro-hooks.json`（可选接入）。
+- **完整复盘**：显著返工、交付失败或用户明确要求复盘时，按 `references/retrospective.md` 七步 + `references/retro-check.sh` 执行。
 - **盘点仪式**（触发词：盘点 / 接下来做什么 / 规划下一批）：读 `references/stocktake.md`
   四步逐条勾；选题取舍判据单源在该文件，不即兴。
 - 主理人只决战略、不可逆、钱与价值。决策队列、T0/T1/T2 语义和静默默认见 `references/decision-queue.md`。

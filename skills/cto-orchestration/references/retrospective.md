@@ -1,10 +1,7 @@
 # 复盘仪式操作手册
 
-> SKILL.md §5「复盘仪式」的展开 = **本文件是 checklist 本体，逐条勾**。触发词：复盘 / 复盘仪式 /
-> 收口 / retro——听到即走本 checklist，不即兴。事件触发：收口 / 压缩前 / 已关单被打回（ReOpen，
-> 复盘问的是"上轮为什么敢关、验收哪层漏了"）后主动提议（压缩点自动提醒接 `retro-hooks.json`）。
-> 三个事件不重叠；刚跑过复盘则只补增量，不整套重来。
-> SKILL §5 是入口（纪律 + 机械检查 `retro-check.sh`）；这里是七步全文 + 后两步操作细节。
+> 显著返工、交付失败或用户明确要求复盘时，按本 checklist 执行；刚跑过只补增量。
+> 普通收口与压缩按 SKILL.md §5，不触发全套复盘。
 
 ## 七步 checklist
 
@@ -42,16 +39,14 @@
    ahead 内容已被 squash 合并后 backup ref + `reset --hard origin/<base>`；真未合并的工作先救——
    retro-check 1b 只检测告警，reset 归编排者）+
    **敞口清单**（=下会话入口；敞口要变下一批选题时走盘点仪式 `stocktake.md`，取舍判据单源在彼）；本周期各会话的 ctx/req 读数见 retro-check 第 12 检。
-5. **治理同步（与 memory 更新同级、不可省）**：文档归档（→ `orchestration/archive/` + 索引行；归档候选不靠人记——retro-check 第 11 检跑 `doc-lifecycle.py` 按 git 年龄出清单，搬与不搬人拍）+
-   **ACTIVE_CONTEXT 整篇重写**（非追加，~60 行）+ **roadmap 翻状态** + **决策队列先清再刷**（规则单源 `decision-queue.md` §队列机制：先移除已处理项，再重浮 revisit 到期项、给周期全局图）+ **治理文档 PREMISE 行 0 DEAD**（retro-check 第 10 检把事实句实跑一遍；死账改事实或改声明，别只改时间戳）。
+5. **状态维护**：事实/下一步有变化才更新权威任务入口，不同步重写多份状态；完成的改动/测试查 Git/CI。纠正失效事实，保留真待裁事项（队列机制见 `decision-queue.md`）。治理文档 PREMISE 行须 0 DEAD（第 10 检实跑）；第 11 检的归档候选只供人工裁决。
 6. **memory 治理**：见下「memory 治理」。
 7. **session 切换决策**：见下「session 切换决策」。
 
 收尾跑 SKILL §5 的 **`retro-check.sh`**（FAIL / warning 项以脚本输出为准；warning 按任务语义人工裁决；脚本只验机械代理，不证复盘语义完成）。
 
-**检查数据源**：批台账默认是所选 `--docs` 目录下的 `batch-ledger.md`（`--docs` 默认 `docs`）；外置时用 `--ledger <path>` 显式指定唯一账本。相对路径从调用者 cwd 解释，不随 `--repo` 改变；不回退读 `AGENTS.md`，不自动迁移或创建账本。本周期「批」条目记 `wall=` / `avoidable=`，phases 读数只是输入、不代写裁决。
-第7/8检只扫描所选 docs 的活动 Markdown，排除目录名恰为 `archive` 的目录及后代（根层、嵌套同规）；第10/11检范围不变。
-最小调用例（在项目根运行，脚本路径按安装位置替换）：治理目录 `bash retro-check.sh --docs docs/orchestration`；外置台账 `bash retro-check.sh --docs docs/orchestration --ledger /path/to/batch-ledger.md`。
+**检查数据源**：`--docs` 默认 `docs`；第 7/8 检扫描其活动 Markdown，排除名为 `archive` 的目录及后代；第 10/11 检范围不变。第 9 检保留 advisory phases 读数；`--ledger <path>` 仅兼容旧调用，不读取或要求人工账本。时间记录条件见 SKILL §2。
+最小调用例（项目根运行，脚本路径按安装位置替换）：`bash retro-check.sh --docs docs/orchestration`。
 
 ## memory 治理（步骤 6 展开）
 

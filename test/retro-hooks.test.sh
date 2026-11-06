@@ -13,7 +13,7 @@
 # Its predicate is deliberately ONLY "the repo root of payload cwd has docs/ACTIVE_CONTEXT.md" —
 # NOT the orchestration predicate above, because right after a session switch there is usually no
 # LIVE seat yet and an AND would go silent exactly when continuity matters most. Asserted below by
-# firing it in a repo nobody orchestrates, and by pinning the two older branches byte-for-byte.
+# firing it in a repo nobody orchestrates; compression reminders retain channels/predicates.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SH="$HERE/../skills/cto-orchestration/references/retro-reminder.sh"
@@ -68,8 +68,6 @@ out="$(payload SessionStart compact "$ORCH" | bash "$SH")"; rc=$?
 chk_eq "SessionStart(compact) exits 0" 0 "$rc"
 chk_has "SessionStart(compact) injects model context" '"additionalContext"' "$out"
 chk_has "SessionStart(compact) declares its event name" '"hookEventName":"SessionStart"' "$out"
-chk_has "reminder routes to the seven-step checklist" 'retrospective.md' "$out"
-chk_has "reminder routes to the hard gate" 'retro-check.sh' "$out"
 json_ok "SessionStart(compact) output is valid JSON" "$out"
 out="$(printf '{"hook_event_name":"SessionStart","source":"startup"}' | bash "$SH")"; rc=$?
 chk_eq "SessionStart(startup) stays silent, exit 0" "0|" "$rc|$out"
@@ -123,25 +121,37 @@ out="$(printf '{"hook_event_name":"UserPromptSubmit","source":"startup","cwd":"%
   | bash "$SH")"; rc=$?
 chk_eq "p7 指针只在 SessionStart 说话（同 source 同 cwd 的别的事件零字节）" "0|" "$rc|$out"
 
-echo "== retro-reminder: 既有 compact / PreCompact 输出逐字节不变 =="
-# 对照 = 本批之前的脚本，钉 SHA（不用 origin/main 这种会动的参照物）。它按 dirname "$0"/agentctl 找
-# identity，所以要导出到一个带 agentctl 兄弟目录的临时目录——孤零零一个文件是另一个程序（导出法同
-# cto-guard-bash.test.sh 的 E13）。
-BASE_REV="d6e03ef853e586a0a5c3522f76f8dff27d3025f2"
+echo "== retro-reminder: compression wording changes, channels/predicates stay fixed =="
+# damage: reminder reduction must not change delivery channels, event filtering or opening pointers.
+# Export the approved pinned baseline with its identity dependency, not a lone script.
+BASE_REV="036a8a4af3650681682511ed72600445e5b9cad0"
 BASE_DIR="$FIX/base"; mkdir -p "$BASE_DIR"
 cp -R "$HERE/../skills/cto-orchestration/references/agentctl" "$BASE_DIR/agentctl"
 git -C "$HERE/.." show "$BASE_REV:skills/cto-orchestration/references/retro-reminder.sh" \
   > "$BASE_DIR/retro-reminder.sh" 2>/dev/null
 BASE="$BASE_DIR/retro-reminder.sh"
-chk_eq "b0 control: 导出的对照确实早于本批（没有开场指针）" 0 \
-  "$(grep -c 'ACTIVE_CONTEXT' "$BASE" 2>/dev/null || true)"
 cmp_case() { # $1 event  $2 source  $3 cwd  $4 label — 原始字节，不过命令替换（会吃掉尾换行）
   pl="$(payload "$1" "$2" "$3")"
   pfx="$FIX/cmp-$4"
   printf '%s' "$pl" | bash "$BASE" >"$pfx.base.out" 2>"$pfx.base.err"; echo $? >"$pfx.base.rc"
   printf '%s' "$pl" | bash "$SH"   >"$pfx.new.out"  2>"$pfx.new.err";  echo $? >"$pfx.new.rc"
   for part in out err rc; do
-    if cmp -s "$pfx.base.$part" "$pfx.new.$part"; then
+    if [ "$part" = out ] && [ -s "$pfx.base.out" ] && { [ "$1" = PreCompact ] || [ "$2" = compact ]; }; then
+      # Only the two message bodies may change; the JSON envelope remains the harness API.
+      if python3 - "$pfx.base.out" "$pfx.new.out" <<'PY'
+import json, sys
+def envelope(value):
+    if isinstance(value, dict):
+        return {k: "<message>" if k in ("systemMessage", "additionalContext") and isinstance(v, str)
+                else envelope(v) for k, v in value.items()}
+    return value
+with open(sys.argv[1]) as old, open(sys.argv[2]) as new:
+    raise SystemExit(0 if envelope(json.load(old)) == envelope(json.load(new)) else 1)
+PY
+      then ok "b $4 unchanged JSON delivery envelope"
+      else bad "b $4 changed JSON delivery envelope"
+      fi
+    elif cmp -s "$pfx.base.$part" "$pfx.new.$part"; then
       ok "b $4 $part 与 $BASE_REV 逐字节相同"
     else
       bad "b $4 $part 与 $BASE_REV 不同"
@@ -151,6 +161,10 @@ cmp_case() { # $1 event  $2 source  $3 cwd  $4 label — 原始字节，不过�
 cmp_case SessionStart compact "$ORCH" compact-orch
 cmp_case SessionStart compact "$PLAIN" compact-plain
 cmp_case PreCompact auto "$ORCH" precompact-orch
+cmp_case PreCompact auto "$PLAIN" precompact-plain
+cmp_case SessionStart startup "$POINT" startup-pointer
+cmp_case SessionStart clear "$POINT" clear-pointer
+cmp_case SessionStart resume "$POINT" resume-silent
 # 空对空不算绿：两个本该说话的旧输出先证非空（对照若因缺 identity 整体失效，cmp 会假绿）
 chk_eq "b control: 对照在 compact/被编排仓确实有输出" 1 \
   "$([ -s "$FIX/cmp-compact-orch.base.out" ] && echo 1 || echo 0)"

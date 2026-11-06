@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # retro-check.sh — deterministic mechanical check for cto-orchestration 复盘 (SKILL.md §5).
-# Verifies mechanical proxies only, not semantic quality. Worktree, ACTIVE_CONTEXT and
-# dead-agent-session failures return non-zero; roadmap, decision-queue, memory and
-# live-session findings are warnings and do not block.
+# Verifies mechanical proxies only, not semantic quality. Independent invalid-state checks
+# return non-zero; optional status files have no age or rewrite requirement.
 #
 # Usage:
 #   bash retro-check.sh --base <branch> --docs <docs-dir> [--ledger <path>] [--memory <MEMORY.md>] [--memory-cap N] [--repo <git-dir>]
-# Defaults: --base auto-detected (origin/HEAD → main/master/develop); --docs docs; --ledger <docs-dir>/batch-ledger.md; --memory-cap 45.
+# Defaults: --base auto-detected (origin/HEAD → main/master/develop); --docs docs; --memory-cap 45.
 set -uo pipefail
 
-BASE=""; DOCS="docs"; LEDGER=""; MEMORY=""; MEMCAP=45; REPO="."
+BASE=""; DOCS="docs"; MEMORY=""; MEMCAP=45; REPO="."
 while [ $# -gt 0 ]; do case "$1" in
   --base) BASE="$2"; shift 2;;
   --docs) DOCS="$2"; shift 2;;
@@ -17,19 +16,16 @@ while [ $# -gt 0 ]; do case "$1" in
     if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" = --* ]]; then
       echo "--ledger requires a non-empty path" >&2; exit 2
     fi
-    LEDGER="$2"; shift 2;;
+    shift 2;; # compatibility only; no manual accounting requirement
   --memory) MEMORY="$2"; shift 2;;
   --memory-cap) MEMCAP="$2"; shift 2;;
   --repo) REPO="$2"; shift 2;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
-[ -n "$LEDGER" ] || LEDGER="$DOCS/batch-ledger.md"
 
 TODAY="$(date +%F)"
-# THE CYCLE WINDOW, single-sourced: today or yesterday. A retro session routinely crosses
-# midnight, so a one-day window is what "本复盘周期" means to every date-judging check here
-# (2 = ACTIVE_CONTEXT freshness, 9 = 批 time accounting). An empty YDAY (no BSD and no GNU
-# date) narrows the window to today rather than widening it silently.
+# Advisory phases window: yesterday 00:00 local through now (or today if date arithmetic
+# is unavailable). Status truth is not inferred from this window or document age.
 YDAY="$(date -v-1d +%F 2>/dev/null || date -d 'yesterday' +%F 2>/dev/null)"
 fails=0; warns=0
 ok(){ echo "  [ok]   $*"; }
@@ -101,26 +97,16 @@ if [ -n "$BASE" ] && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   fi
 fi
 
-# 2) ACTIVE_CONTEXT rewritten today
-echo "2) ACTIVE_CONTEXT 整篇重写 (今日):"
-AC="$DOCS/ACTIVE_CONTEXT.md"
-if [ -f "$AC" ]; then
-  lr="$(grep -m1 -iE 'Last rewritten' "$AC" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
-  if [ "$lr" = "$TODAY" ] || [ -n "$YDAY" -a "$lr" = "$YDAY" ]; then ok "Last rewritten: $lr (today/yesterday — session may cross midnight)"; else fail "ACTIVE_CONTEXT 'Last rewritten'=${lr:-none}, stale (>1d vs $TODAY) — rewrite the snapshot"; fi
-else fail "$AC not found (pass --docs)"; fi
+# 2–3) Status updates follow changed facts, not dates. Keep numbered slots for consumers.
+echo "2) ACTIVE_CONTEXT 状态 (按事实更新，不判年龄):"
+echo "  [skip] no mandatory snapshot rewrite; validate factual claims in check 10"
+echo "3) roadmap 状态 (按事实更新，不判 mtime):"
+echo "  [skip] completed change/test facts belong in Git/CI"
 
-# 3) roadmap touched recently (soft)
-echo "3) roadmap 翻状态 (近期动过):"
-RM="$DOCS/roadmap/active-roadmap.md"
-if [ -f "$RM" ]; then
-  if [ -n "$(find "$RM" -mtime -1 2>/dev/null)" ]; then ok "roadmap modified within 24h"; else warn "roadmap not touched in 24h — confirm status-flip not skipped (ok if genuinely unchanged)"; fi
-else warn "$RM not found — skip"; fi
-
-# 4) decision-queue freshness (soft, opt-in — only if DECISION_QUEUE.md present; §9 mechanism)
-echo "4) 决策队列刷新 (DECISION_QUEUE.md 在则近期动过):"
+# 4) decision-queue sanity (opt-in — only if DECISION_QUEUE.md present)
+echo "4) 决策队列 (仅活跃/待裁项，不判年龄):"
 DQ="$DOCS/DECISION_QUEUE.md"
 if [ -f "$DQ" ]; then
-  if [ -n "$(find "$DQ" -mtime -1 2>/dev/null)" ]; then ok "DECISION_QUEUE.md modified within 24h"; else warn "DECISION_QUEUE.md not touched in 24h — refresh (清 ✅ / revisit 到期重浮 / 全局图); 队列腐烂是 §9 最弱点"; fi
   cleared_history="$(awk '
     /^##[[:space:]]+/ {
       if (inside) exit
@@ -322,31 +308,10 @@ else
   ok "$gaudits gate-audit line(s), no unjustified zero-catch gate"
 fi
 
-# 9) 批时间记账 — SKILL §2「提效是显式目标」的收口半边: 批 overhead 计入杠杆账，收口在台账
-# 记 wall/avoidable 两个数。没有这两个数，"越搞越慢" 只能靠主理人发火才被发现（本周实证 n=2）。
-# Ledger: --ledger or <docs-dir>/batch-ledger.md; judge only this cycle's (TODAY/YDAY) 批 lines.
-# 量具坏 = FAIL：台账读不到时这一面根本没检查，而一个看不见的记账面不是一个干净的记账面
-# （与 check 2 的 "$AC not found" 同判、与 guard (14)/(15) 的 instrument 面同源）。
-# KILL CRITERION (slug `retro-time-ledger`, 复盘按 GATE-AUDIT 结账): hits=0 ∧ false>=2 ⇒ kill,
-# 外加一条本检独有的——**记数从未改变过任何决策**（连续两个周期两个数都记了、没有一次因此
-# 改派发/砍轮数/换车道）⇒ kill：一个只被填写、从不被读的字段是仪式，不是门。
-echo "9) 批时间记账 (本周期「批」行须记 wall= / avoidable=):"
-# ── the READ-OUT half (2026-09-03) ────────────────────────────────────────────────────
-# This check's input used to be entirely human: both numbers were computed by hand off the
-# session transcripts, so all the check could verify was that SOMEBODY had typed two numbers.
-# `agentctl phases` gives the first of them a machine source, and this block prints it BEFORE
-# the accounting check — as INPUT to the person writing the entry.
-# It is deliberately not a verdict and not a suggestion: no `wall≈` / `avoidable≈` line is
-# printed. Avoidable minutes are a judgement about what a batch should have cost, and a machine
-# guess would be pasted into the ledger as if a machine had made that judgement. The banner
-# says which of the two this is, in the one place a reader cannot miss.
-# It never touches PASS/FAIL. Coverage `unknown` (a missing ledger shard, an empty ledger, no
-# `agentctl` on PATH, no python3) prints ONE `n/a` line and the accounting check below runs
-# byte-identically — a reading nobody can vouch for must not look like a measurement.
-# Window start comes from the SAME TODAY/YDAY cycle source as every other date-judging check
-# here (yesterday 00:00 local, or today 00:00 on a box with no date arithmetic), carried with
-# the local UTC offset: ledger rows are UTC, so a naive instant would skew by the timezone
-# without saying a word.
+# 9) Advisory agentctl phases readings; no per-batch manual ledger requirement.
+echo "9) 相位读数 (advisory，不要求人工记账):"
+# Machine-time is input, not a judgement about avoidable cost. Missing/unknown coverage
+# prints n/a and never changes PASS/FAIL. UTC phase rows use a local-offset cycle start.
 PH_OFF="$(date +%z 2>/dev/null)"
 case "$PH_OFF" in
   [+-][0-9][0-9][0-9][0-9]) PH_SINCE="${YDAY:-$TODAY}T00:00:00${PH_OFF%??}:${PH_OFF#???}" ;;
@@ -414,50 +379,21 @@ try:
         lines.append("      +%s after %s %s → %s %s"
                      % (mins(hop["seconds"]), hop["name"], hop["class"], hop["next_event"],
                         hop["next_name"]))
-    lines.append("    ^ numbers only. wall= / avoidable= remain YOUR judgement about "
-                 "this batch.")
+    lines.append("    ^ readings only; no manual accounting required.")
 except (KeyError, TypeError, IndexError, ValueError):
     print("  phases: n/a (agentctl phases produced no readable report)")
     raise SystemExit(0)
 print("\n".join(lines))
 '
 fi
-if [ ! -f "$LEDGER" ] || [ ! -r "$LEDGER" ]; then
-  fail "台账 $LEDGER 不可读 — 批 overhead 记账面未检查（量具坏 ≠ 绿）；用 --docs 选择治理目录或 --ledger 指定台账文件"
-else
-  unbilled=0; billed=0
-  # one pass, two verdicts: `B` = a billed entry, `U<line>` = an entry with no accounting.
-  # The loop runs in THIS shell (process substitution, as check 1 does) so both counters survive.
-  while IFS= read -r ln; do
-    case "$ln" in
-      B) billed=$((billed+1));;
-      U*) echo "  [FAIL] 批条目缺时间记账: ${ln#U}"; unbilled=$((unbilled+1));;
-    esac
-  done < <(awk -v today="$TODAY" -v yday="$YDAY" '
-    FNR==1 { fence=0 }
-    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
-    fence { next }
-    index($0, "批") == 0 { next }
-    index($0, today) == 0 && (yday == "" || index($0, yday) == 0) { next }
-    index($0, "wall=") && index($0, "avoidable=") { print "B"; next }
-    { print "U" $0 }
-  ' "$LEDGER")
-  if [ "$unbilled" -gt 0 ]; then
-    fail "$unbilled 条本周期批条目没记 wall/avoidable — 记账格式一行示例：'批 $TODAY <名> … wall=95m avoidable=30m'（avoidable = 本可避免的返工/空转分钟）"
-  elif [ "${billed:-0}" -gt 0 ]; then
-    ok "$billed 条本周期批条目均记了 wall/avoidable"
-  else
-    echo "  [skip] $LEDGER 本周期无「批」条目 — 无 overhead 可核（形态见 SKILL.md §2 提效条）"
-  fi
-fi
 
-# 10) 治理 claim 核账 (retrospective.md §5「治理同步」) — 治理文档里的事实句复盘时机械实跑。
-# 病: 事实句只有人能复核, 于是「整篇重写」退化成照抄 + 换时间戳, 错的那句反而拿到新鲜度背书。
+# 10) 治理 claim 核账 (retrospective.md §5「状态维护」) — 治理文档里的事实句复盘时机械实跑。
+# Re-run facts rather than treating a new timestamp as evidence.
 # 形态与 goal 的继承断言单源 (goal-preflight.py 的 PREMISE 语法: `PREMISE: <claim>
 # verify=\`cmd\` => rc=N count=N`), 这里只是换了消费者 — `--claims` 模式做形态 + 实跑 + 记号
 # 比对, 不要求 Preflight 行、不判写集活树 (治理 claim 锚活世界正是它可证伪的原因)。
 # opt-in: 文档里没有 PREMISE 行就跳过 — 没 typed 的事实句机检不了 (同第 7 / 8 检的口径)。
-# 量具坏 = FAIL: claim 已 typed 却读不到脚本 / 没 python3, 这一面根本没检查 (同第 2 / 9 检)。
+# 量具坏 = FAIL: claim 已 typed 却读不到脚本 / 没 python3, 这一面根本没检查。
 # 未判 (超时 / 不可执行 / 非命令形态 / 无记号) 只透传 WARN, 从不算 DEAD: 本机跑不动一条命令,
 # 说明不了那句事实。KILL CRITERION (GATE-AUDIT slug `doc-claims`): 连续两个复盘周期 0 DEAD
 # 且 0 新增 claim ⇒ 降为教义。
