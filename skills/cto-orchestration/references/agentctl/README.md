@@ -29,7 +29,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 - **steer 队列可见**：`queued=N` 只是引擎报的深度，lane 自己记 sidecar `<s>.steer-log.jsonl`；
   `status` 在 N>0 时按深度列出末 N 条，无队列面的引擎零输出。stop 随控制态一起清。
 - **typed exit 三引擎同词汇**（词表 `agentctl states`，处置见下节）；
-  **8 = ENGINE-SILENT**（steer 已投递、引擎 ~2min 零输出——诚实报，不猜）。
+  **8 = ENGINE-SILENT**（含控制面超时；classify 超时不判任务生死，处置见下节）。
 - **`start` 默认模型来自环境变量**（`agentctl` usage 列优先级）：显式 `--model` > `AGENTCTL_MODEL_<E>_REVIEW`（仅 `--review`）
   > `AGENTCTL_MODEL_<E>_DEEP`（仅**非 review** 且 goal `Tier:` 判 deep，口径 = goal-preflight `TIER_LINE`；review 席未设 `_REVIEW` 即直接落基础变量）> `AGENTCTL_MODEL_<E>` > 引擎默认；
   start 回显标来源 `(from AGENTCTL_MODEL_<E>…)`；`--resume-thread` 忽略（线程保留创建时的模型）。omp 依旧只传 EXACT id（见 §引擎级注意）。
@@ -127,7 +127,7 @@ exit code、名字、语义、二级子原因词（`reason=<word>`，闭集）�
 | STALLED-EXTERNAL | 修凭据/额度再重启；见引擎级注意 |
 | IDLE-NO-DELIVERABLE | poke（steer），别信幻影 DONE、别 stop |
 | WATCH-TIMEOUT | 重挂或人工核证，**绝不按 DONE 消费**。行尾 `progress=changed\|unchanged\|unknown` 是进展源的观察结论，不是工作量判决：`unknown` = 探针关闭 / 未测 / 末次读零可判源 / 整段窗口从未测到过一次可判的**移动**（窗口由不可判读开启或重建，恢复后只重建基线），绝不读成「没进展」 |
-| ENGINE-SILENT | 查 stderr.log；必要时 stop+resume |
+| ENGINE-SILENT | classify 超时 → 任务状态 **UNKNOWN**：查 stderr.log、独立核实进展，核查期间保留任务；进程存活不等于执行健康，超时本身不支持 stop/restart。其他原因仍查 stderr.log；必要时 stop+resume |
 | BUDGET-EXHAUSTED | 转人工裁决 |
 | RUNNING | 继续等 |
 | STALLED-STREAM | **先从 checkout/commits 抢救成果，再 stop**；探针任一不确定按 RUNNING 处理（宁钝勿敏）。窗口用 `AGENT_WATCH_STALL_MINS` 调、0 关 |

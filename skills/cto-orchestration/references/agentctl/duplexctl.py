@@ -3967,8 +3967,8 @@ def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
     blocking call underneath is nominally bounded (wait_for / the 5s+30s fifo
     deadlines) except the kernel-fair LOCK_EX, and bounds can be defeated by a wedged
     host — field hit: one `agentctl status` hung and pinned an orchestrator's whole
-    polling loop. Timing out is reported with the EXISTING exit-8 vocabulary
-    (ENGINE-SILENT), disposition identical: read stderr, stop + resume if needed.
+    polling loop. The EXISTING exit-8 vocabulary (ENGINE-SILENT) is retained for
+    classify compatibility; its timeout leaves task state UNKNOWN, not failed or healthy.
     Armed BEFORE any Session() is built — the constructor stats and reads the meta
     file, so a wedged run-dir used to hang outside the watchdog — hence the stderr
     path is derived from run_dir/name here instead of from a Session.
@@ -3985,9 +3985,10 @@ def arm_watchdog(run_dir: str, name: str, secs: int, verb: str) -> None:
     stderr_log = os.path.join(run_dir, f"{name}.duplex.stderr.log")
     if verb == "classify":
         msg = (
-            f"ENGINE-SILENT: classify timeout after {secs}s — the control-plane query never "
-            f"came back (engine or writer lock unresponsive); inspect {stderr_log}, then "
-            "agentctl stop + restart with the engine's resume args if it stays stuck\n"
+            f"ENGINE-SILENT: classify timeout after {secs}s — control-plane classification "
+            "timed out; task state UNKNOWN. Process liveness is not proof of healthy execution. "
+            f"Inspect {stderr_log} and verify task progress independently; preserve the task "
+            "while checking — this timeout alone does not justify stopping or restarting it\n"
         ).encode("utf-8")
     elif verb == "wait-ready":
         msg = (

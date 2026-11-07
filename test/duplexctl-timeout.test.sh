@@ -53,7 +53,13 @@ chk_eq "returns inside the deadline (<=5s), never hangs" 1 "$([ "$elapsed" -le 5
 chk_contains "verdict names the timeout" "classify timeout" "$out"
 chk_contains "verdict reuses the ENGINE-SILENT vocabulary" "ENGINE-SILENT" "$out"
 chk_contains "verdict points at the stderr log" "stderr.log" "$out"
-chk_contains "verdict names the recovery path" "agentctl stop" "$out"
+chk_contains "timeout leaves task state UNKNOWN" "task state UNKNOWN" "$out"
+chk_contains "timeout is a control-plane classification failure" "control-plane classification timed out" "$out"
+chk_contains "timeout recommends preserving the task while checking" "preserve the task while checking" "$out"
+chk_contains "timeout alone cannot justify destructive recovery" "this timeout alone does not justify stopping or restarting" "$out"
+chk_contains "liveness does not establish healthy execution" "Process liveness is not proof of healthy execution" "$out"
+chk_not_contains "timeout never prescribes stop" "agentctl stop" "$out"
+chk_not_contains "timeout never prescribes restart" "restart with" "$out"
 
 # the lock is STILL held: a second query must be just as bounded (no latched state)
 start=$(date +%s)
