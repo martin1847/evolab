@@ -205,6 +205,23 @@ chk_contains "N2 PAIRED GREEN: verdict names the answer path" "agentctl steer" "
 python3 "$WS1/forge_blocked.py" "$WT/BLOCKED.md" --no-stamp >/dev/null
 out="$(bash "$AGENTCTL" status n2 2>&1)"; rc=$?
 chk_eq "N2 PAIRED GREEN: an unstamped legacy blocker still reaches WAITING-INPUT 4" 4 "$rc"
+
+# Actual interrupt path: even a published WAITING record must not replay into the replacement.
+out="$(AGENT_WATCH_SYNC=1 bash "$AGENTCTL" watch n2 2>&1)"; rc=$?
+chk_eq "N2 old round: watch publishes the legacy blocker as WAITING-INPUT 4" 4 "$rc"
+out="$(bash "$AGENTCTL" steer n2 --interrupt -m "continue in a replacement round" 2>&1)"; rc=$?
+chk_eq "N2 interrupt delivery succeeds" 0 "$rc"
+chk_eq "N2 interrupt rotates the attempt" 1 \
+  "$([ "$CUR_A" != "$(id_field n2 attemptId)" ] && echo 1 || echo 0)"
+out="$(AGENT_WATCH_SYNC=1 AGENT_WATCH_MAX_POLLS=1 AGENT_WATCH_FOLLOW_MAX=0 \
+  AGENT_WATCH_POLL_SECS=0.1 bash "$AGENTCTL" watch n2 2>&1)"; rc=$?
+chk_eq "N2 immediate watch: old blocker leaves replacement non-terminal, timeout 7" 7 "$rc"
+chk_not_contains "N2 immediate watch: no stale WAITING record replay" "WAITING-INPUT" "$out"
+python3 "$WS1/forge_blocked.py" "$WT/BLOCKED.md" \
+  --attempt "$(id_field n2 attemptId)" --incarnation "$(id_field n2 processIncarnation)" >/dev/null
+out="$(AGENT_WATCH_SYNC=1 bash "$AGENTCTL" watch n2 2>&1)"; rc=$?
+chk_eq "N2 fresh replacement blocker: supervised watch still returns WAITING-INPUT 4" 4 "$rc"
+chk_contains "N2 fresh replacement blocker: answer path is preserved" "agentctl steer" "$out"
 rm -f "$WT/BLOCKED.md"
 bash "$AGENTCTL" stop n2 >/dev/null 2>&1
 teardown

@@ -13,7 +13,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 命令面由 CLI 自述（裸跑 `agentctl` 出 usage、`capabilities` 出能力契约、`states` 出状态词表），此处只写语义、失败形态、判断。
 
 - **steer 语义 = 两个动词**（能力差异拒绝制，不分叉车道）：默认 `agentctl steer` **尽快送达**——
-  引擎有轮中路由且正在跑 turn 就进 turn（omp `steer` / codex `turn/steer`），空闲就立刻开下一轮
+  引擎有轮中路由且正在跑 turn 就投递轮中帧（omp `steer` / codex `turn/steer`），空闲就投递下一轮帧
   （omp `follow_up` / codex `turn/start` / claude `user`）；**选路只看活体 turn 态，没有 flag 可忘传**
   （`--replace` = `--interrupt` 别名）。
   `--interrupt` = 弃当前 turn 以本条重开（omp `abort_and_prompt` / codex `turn/interrupt+turn/start`；
@@ -21,10 +21,10 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
   **降级/判不出都是 typed 出口，不是 stdout 散文**：turn 运行中却进不去 turn 时，`steer` 出
   **`DELIVERED-NEXT-TURN`**（词表见 `agentctl states`）并带 reason——`reason=capability`
   = 引擎无轮中帧（claude degraded）、`reason=undecidable` = 活体 turn 态判不出（omp get_state
-  非布尔/失败、codex events 不可解析）。**真进 turn 或 idle 立刻开下一轮 = exit 0**。
+  非布尔/失败、codex events 不可解析）。**轮中或已判 idle 的投递成功 = exit 0，不证明新 turn 已开始**。
   判不出按「开下一轮」走（宁钝勿敏：晚一个边界 > 丢一条指令）。三引擎能力矩阵由 runtime 生成，
-  `agentctl capabilities` 是唯一真源（同一张表既驱动路由、又出拒绝文案）。投递成功 ≠ 模型照做，
-  验收仍看交付物。
+  `agentctl capabilities` 是唯一真源（同一张表既驱动路由、又出拒绝文案）。accepted 只证引擎确认接收，
+  不证开始执行或模型照做；idle 也可能仍有 `queued=N`，验收仍看交付物。
   **`-m` 正文禁命令替换**（反引号 / `$(` 在 shell 阶段就展开、例子命令真被执行；单引号内同拦，`<<'EOF'` 正文是 DATA）：guard ㉑ DENY，正路 `-f <file>`。
 - **steer 队列可见**：`queued=N` 只是引擎报的深度，lane 自己记 sidecar `<s>.steer-log.jsonl`；
   `status` 在 N>0 时按深度列出末 N 条，无队列面的引擎零输出。stop 随控制态一起清。
@@ -85,8 +85,8 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 ## Launch
 
-- `agentctl start … --goal <f>` 在 goal 帧被引擎接受后返回（omp 有 correlated response；claude 为
-  送达即返，无逐帧 ack——诚实边界）；**不会自动 watch**，紧接着用宿主受控后台能力挂
+- `agentctl start … --goal <f>` 在 goal 帧被引擎确认接收后返回（omp 有 correlated response；claude 为
+  送达即返，无逐帧 ack；不证明已开始执行）；**不会自动 watch**，紧接着用宿主受控后台能力挂
   `agentctl watch <session>`（guard ⑤ 强制宿主后台、拦 shell `&` 与前台阻塞；同步 shell 编排者
   前缀 `AGENT_WATCH_SYNC=1` 显式放行并自读 exit code）。
 - **preflight 门默认开**：起引擎前于席位 cwd 调 `../goal-preflight.py`——`Preflight:` 行缺失 / 占位未解、或 PREMISE 行实跑与作者 `rc=` / `count=` 记号不符即拒发（形态规则见 `goal-template.md` §Premises 与脚本头注）；`--no-preflight` 显式豁免（判据归 SKILL.md §1）；命中本 goal 写集（Task 路径 ∪ `--deliverable`）且未锚 pinned base 的活树探针只 WARN。
@@ -131,7 +131,7 @@ exit code、名字、语义、二级子原因词（`reason=<word>`，闭集）�
 | BUDGET-EXHAUSTED | 转人工裁决 |
 | RUNNING | 继续等 |
 | STALLED-STREAM | **先从 checkout/commits 抢救成果，再 stop**；探针任一不确定按 RUNNING 处理（宁钝勿敏）。窗口用 `AGENT_WATCH_STALL_MINS` 调、0 关 |
-| STALLED-PROGRESS | 流还活着，但整个窗口内可判的进展源（仓库痕迹 / 引擎工具帧计数 / pane 进程组；三源细则归源码头注）在每个采样点都没动。窗口 `AGENT_WATCH_PROGRESS_MINS`（默认 30min）、0 关；探针超预算按不可判计。**处置按 `reason=` 分支**：<br>· `repo-silent+tools-silent` → **先读 events 尾**——无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认走死 → 抢救成果再 stop。<br>· `unknown-source` → 有源量具坏（detail 点名哪个）：先修那个源或人工核证，别当「席位停滞」直接 steer/stop。<br>· RUNNING 行上的 `progress_reason=repo-silent+tools-active` → 引擎在动（长测试 / docker / 取证）：**继续等**。<br>量具坏后恢复的第一次可判读只重建基线、不算移动 |
+| STALLED-PROGRESS | 会话仍未终结（可能 streaming，也可能 idle+queued），但整个窗口内可判的进展源（仓库痕迹 / 引擎工具帧计数 / pane 进程组；三源细则归源码头注）在每个采样点都没动。窗口 `AGENT_WATCH_PROGRESS_MINS`（默认 30min）、0 关；探针超预算按不可判计。**处置按 `reason=` 分支**：<br>· `repo-silent+tools-silent` → **先读 events 尾**——无效循环 → `steer` 给具体下一步；方向已错 → `--interrupt` 重开；确认走死 → 抢救成果再 stop。<br>· `unknown-source` → 有源量具坏（detail 点名哪个）：先修那个源或人工核证，别当「席位停滞」直接 steer/stop。<br>· RUNNING 行上的 `progress_reason=repo-silent+tools-active` → 引擎在动（长测试 / docker / 取证）：**继续等**。<br>量具坏后恢复的第一次可判读只重建基线、不算移动 |
 | OVER-BUDGET | **等待**超预算（`--expect`×1.5），不是工作没进展：读行后事件尾 → `steer` 给下一步 / `--interrupt` 重开 / `watch --expect <更大值>` 重挂继续等（新阈值再报一次，同值不重报；at-least-once）。预算是否合理是你的估计问题 |
 | SUPERVISOR-LOST | `reason=dead` → 直接重挂。`reason=unknown` → **先读 detail**：只有它点名 rogue/wedged `<s>-watchd` 时才 `tmux kill-session -t <s>-watchd` 再重挂；其余 unknown（canonical 读超时 / `ps` 不可用 / 租约损坏 / pid 复用嫌疑）**只重挂，绝不杀**——那些情况下杀掉的是一个活着的守护环 |
 | DELIVERED-NEXT-TURN | **steer verb 的出口，不是会话状态**（watch/status 永不产它）：指令已送达但落在 turn 边界。`reason=capability` → 引擎无轮中帧，等边界即可，别重发；`reason=undecidable` → 量具坏（detail 点名哪个），**先修量具或读 events 尾**再决定要不要 `--interrupt`。两者都**已送达**，重发会得到两条指令 |

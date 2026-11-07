@@ -129,8 +129,8 @@ TYPED_STATES: tuple[tuple[int, str, str], ...] = (
      "no fenced terminal record for this attempt+round, and the sensing supervisor cannot "
      "be shown to be running (reason=dead) or cannot be judged at all (reason=unknown)"),
     (EXIT_STALLED_PROGRESS, "STALLED-PROGRESS",
-     "the engine keeps streaming, but at no sampling point of a whole window was any progress "
-     "source observed to have moved: the repo trace (HEAD, the dirty-tree hash and its file "
+     "the session remains non-terminal (streaming or idle with queued work), but no progress "
+     "source was observed to move at any sampling point of a whole window: the repo trace (HEAD, the dirty-tree hash and its file "
      "mtimes, the deliverable's mtime, BLOCKED.md), the engine's own tool/command frames, and "
      "the process set in the pane's group — see the reason= word for which of them were judged"),
     (EXIT_DELIVERED_NEXT_TURN, "DELIVERED-NEXT-TURN",
@@ -2465,7 +2465,7 @@ def progress_verdict(sess: Session) -> tuple[bool, str, str, str, str]:
     if frozen_for < mins * 60:
         return False, "", at, "", ""
     still = "; ".join(PROGRESS_TRACE[name] for name in judged)
-    why = (f"still streaming, but no progress source was OBSERVED to move for "
+    why = ("no progress source was OBSERVED to move for "
            f"{int(frozen_for // 60)}min — {still}: unchanged at every sampling point since "
            f"{_stamp(since)}")
     if blind:
@@ -2948,7 +2948,7 @@ def classify(sess: Session) -> int:
                    if reason == SUB_REASON_UNKNOWN_SOURCE else
                    "read the events tail FIRST, then steer a concrete next step or interrupt "
                    "the turn")
-            print(f"STALLED-PROGRESS: reason={reason} {why} — {act}; never read this as DONE "
+            print(f"STALLED-PROGRESS: reason={reason} {detail}; {why} — {act}; never read this as DONE "
                   "(AGENT_WATCH_PROGRESS_MINS tunes the window; 0 disables)")
             print_steer_queue(sess, engine)
             return EXIT_STALLED_PROGRESS
@@ -3329,7 +3329,7 @@ def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
         if "error" in reply:
             print(f"ERR: engine rejected the frame: {clip(json.dumps(reply['error'], ensure_ascii=False), 300)}")
             return EXIT_FAILED
-        print(f"OK: {args.verb} accepted by engine (correlated JSON-RPC response)")
+        print(f"OK: {args.verb} accepted by engine (correlated JSON-RPC response; receipt only, not proof a turn started)")
         if args.deliverable:
             _deliverable_moved(args.run_dir, args.session, args.deliverable)
         return delivered_rc()
@@ -3348,7 +3348,7 @@ def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
         if reply.get("success") is not True:
             print(f"ERR: engine rejected the frame: {clip(json.dumps(reply, ensure_ascii=False), 300)}")
             return EXIT_FAILED
-        print(f"OK: {args.verb} accepted by engine (correlated response)")
+        print(f"OK: {args.verb} accepted by engine (correlated response; receipt only, not proof a turn started)")
         if args.deliverable:
             _deliverable_moved(args.run_dir, args.session, args.deliverable)
         return delivered_rc()

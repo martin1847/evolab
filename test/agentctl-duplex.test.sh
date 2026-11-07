@@ -1070,10 +1070,10 @@ export FAKE_PROVIDER_LOG="$SANDBOX/sv-omp.log"
 rm -f "$FAKE_OMP_STATE_FILE"
 bash "$AGENTCTL" start omp svA "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
 
-# ① IDLE session: the default steer opens the next turn AT ONCE — no flag, no waiting
+# ① IDLE session: default steer delivers the next-turn frame, without waiting for execution.
 : > "$SANDBOX/sv-omp.log"
 out="$(bash "$AGENTCTL" steer svA -m "first ruling" 2>&1)"; rc=$?
-chk_eq "① idle default steer rc0 — opening the next turn AT ONCE is not a degradation" 0 "$rc"
+chk_eq "① idle default steer rc0 — next-turn delivery while idle is not a degradation" 0 "$rc"
 chk_not_contains "① and no typed boundary verdict is published" "DELIVERED-NEXT-TURN" "$out"
 chk_contains "① it used the next-turn route" '"type":"follow_up"' "$(cat "$SANDBOX/sv-omp.log")"
 chk_eq "① and never the mid-turn route" 0 "$(grep -c '"type":"steer"' "$SANDBOX/sv-omp.log")"
