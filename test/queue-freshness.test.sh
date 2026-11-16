@@ -76,5 +76,22 @@ printf '# queue\n## ✅ CLEARED（保持为空）\n' > "$r/docs/DECISION_QUEUE.m
 out="$(run "$r" SessionStart)"
 assert_empty "$out" "I/empty cleared section"
 
+# damage: large table queues must remind on both events, with prompt throttling even without orchestration.
+for orch in absent present; do
+  r="$(mktemp -d)"; mkdir -p "$r/docs" "$r/tmp"
+  [ "$orch" = present ] && mkdir -p "$r/docs/orchestration"
+  python3 -c 'print(("| "+"决"*70+" |\n")*80,end="")' > "$r/docs/DECISION_QUEUE.md"
+  out="$(run "$r" SessionStart)"; rc=$?
+  [ "$rc" -eq 0 ] && ok || no "J/$orch SessionStart rc=$rc"
+  assert_has "$out" '"hookEventName": "SessionStart"' "J/$orch session event"
+  assert_has "$out" "additionalContext" "J/$orch reminder channel"
+  assert_has "$out" "17200 bytes (cap 16384)" "J/$orch byte warning"
+  out="$(run "$r")"; rc=$?
+  [ "$rc" -eq 0 ] && ok || no "J/$orch prompt rc=$rc"
+  assert_has "$out" "17200 bytes (cap 16384)" "J/$orch first prompt reminds"
+  out="$(run "$r")"; assert_empty "$out" "J/$orch second prompt throttled"
+  out="$(run "$r" SessionStart)"; assert_has "$out" "additionalContext" "J/$orch session bypasses throttle"
+done
+
 echo "== queue-freshness: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

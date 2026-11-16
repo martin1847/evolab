@@ -45,7 +45,7 @@
 
 收尾跑 SKILL §5 的 **`retro-check.sh`**（FAIL / warning 项以脚本输出为准；warning 按任务语义人工裁决；脚本只验机械代理，不证复盘语义完成）。
 
-**检查数据源**：`--docs` 默认 `docs`；第 7/8 检扫描其活动 Markdown，排除名为 `archive` 的目录及后代；第 10/11 检范围不变。第 9 检保留 advisory phases 读数；`--ledger <path>` 仅兼容旧调用，不读取或要求人工账本。时间记录条件见 SKILL §2。
+**检查数据源**：`--docs` 默认 `docs`；第 7/8 检扫描其活动 Markdown，排除名为 `archive` 的目录及后代；第 10 检范围不变；第 11 检并扫未忽略的 orchestration/ 子目录。第 9 检保留 advisory phases 读数；`--ledger <path>` 仅兼容旧调用，不读取或要求人工账本。时间记录条件见 SKILL §2。
 最小调用例（项目根运行，脚本路径按安装位置替换）：`bash retro-check.sh --docs docs/orchestration`。
 
 ## memory 治理（步骤 6 展开）

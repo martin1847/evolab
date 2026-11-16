@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """queue-freshness — SessionStart/UserPromptSubmit hook for DECISION_QUEUE hygiene.
 
-It surfaces two deterministic conditions:
-1. entries remain under the cleared-history section and must never be rehydrated as active work;
-2. docs/DECISION_QUEUE.md is staler than the newest docs/orchestration/ activity.
+It surfaces cleared-history residue, queue byte bloat and staleness against orchestration activity.
 
 Reminder-only, never blocks: there is no deterministic per-turn "unlogged T2 decision" signal
 to gate on, and a pseudo-precise block is worse than a reminder (false denies + the 8-strike
@@ -54,6 +52,9 @@ def main():
         return
     event = data.get("hook_event_name") or "UserPromptSubmit"
     issues = []
+    size = os.path.getsize(queue)
+    if size > 16384:
+        issues.append(f"DECISION_QUEUE.md is {size} bytes (cap 16384); prune or archive stale entries.")
     if has_cleared_history(queue):
         issues.append(
             "DECISION_QUEUE.md still contains entries under its cleared-history section. "

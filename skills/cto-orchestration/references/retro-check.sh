@@ -118,16 +118,32 @@ if [ -f "$DQ" ]; then
   ' "$DQ")"
   if [ -n "$cleared_history" ]; then
     fail "DECISION_QUEUE.md retains cleared history — remove it before handoff/compact; git history is the audit trail"
-  else
+  fi
+  dq_bytes="$(wc -c < "$DQ" | tr -d ' ')"
+  if [ "$dq_bytes" -gt 16384 ]; then
+    warn "DECISION_QUEUE.md $dq_bytes bytes > 16384 — prune or archive resolved/stale entries"
+  elif [ -z "$cleared_history" ]; then
     ok "decision queue contains active/parked items only"
   fi
 else echo "  [skip] no $DQ (decision-queue 是 opt-in)"; fi
 
 # 5) MEMORY.md size (soft)
-echo "5) memory 治理 (索引行数):"
+echo "5) memory 治理 (索引行数 / 字节):"
 if [ -n "$MEMORY" ] && [ -f "$MEMORY" ]; then
   n="$(wc -l < "$MEMORY" | tr -d ' ')"
-  if [ "$n" -le "$MEMCAP" ]; then ok "MEMORY.md $n lines (≤$MEMCAP)"; else warn "MEMORY.md $n lines > $MEMCAP — trim/group COMPLETED"; fi
+  mem_bytes="$(wc -c < "$MEMORY" | tr -d ' ')"
+  read -r mem_line mem_long < <(LC_ALL=C awk '
+    NR==1 || length($0)>max { max=length($0); line=NR }
+    END { print line+0, max+0 }
+  ' "$MEMORY")
+  mem_lines="$n lines (≤$MEMCAP)"
+  [ "$n" -gt "$MEMCAP" ] && mem_lines="$n lines > $MEMCAP"
+  mem_counts="MEMORY.md $mem_lines; $mem_bytes bytes (cap 12288); longest line $mem_line: $mem_long bytes (cap 512)"
+  if [ "$n" -le "$MEMCAP" ] && [ "$mem_bytes" -le 12288 ] && [ "$mem_long" -le 512 ]; then
+    ok "$mem_counts"
+  else
+    warn "$mem_counts"
+  fi
 elif [ -n "$MEMORY" ]; then warn "$MEMORY not found — skip"; else echo "  [skip] no --memory given"; fi
 
 # 6) agent sessions of THIS repo left uncleaned — backstop for "terminal state ⇒
@@ -445,6 +461,14 @@ echo "11) 文档年龄清单 (回执到期 / 无断言陈段; 只读, 只出清�
 LIFECYCLE="$HERE/doc-lifecycle.py"
 DOCFACE=0
 [ -d "$DOCS/archive" ] && DOCFACE=1
+ORCHSCAN=0
+if [ "$(basename "$DOCS")" != orchestration ] && [ -d "$DOCS/orchestration" ]; then
+  git -C "$DOCS" check-ignore -q orchestration 2>/dev/null; orch_ignore_rc=$?
+  if [ "$orch_ignore_rc" -eq 1 ]; then
+    ORCHSCAN=1
+    [ -d "$DOCS/orchestration/archive" ] && DOCFACE=1
+  fi
+fi
 for lf in "$DOCS/ACTIVE_CONTEXT.md" "$DOCS/DECISION_QUEUE.md" "$DOCS/LESSONS.md"; do
   [ -e "$lf" ] && DOCFACE=1
 done
@@ -452,7 +476,21 @@ if [ "$DOCFACE" -eq 0 ]; then
   echo "  [skip] no $DOCS/archive and no living 登记簿 (doc-lifecycle 是 opt-in)"
 else
   life_out="$(python3 "$LIFECYCLE" --docs "$DOCS" 2>&1)"; life_rc=$?
-  [ -n "$life_out" ] && printf '%s\n' "$life_out" | sed 's/^/  /'
+  if [ "$ORCHSCAN" -eq 1 ]; then
+    orch_out="$(python3 "$LIFECYCLE" --docs "$DOCS/orchestration" --living "" 2>&1)"; orch_rc=$?
+    life_out+=$'\n'"$orch_out"
+    [ "$orch_rc" -ne 0 ] && life_rc="$orch_rc"
+  fi
+  life_exp="$(printf '%s\n' "$life_out" | grep -c '^expire:')"
+  [ -n "$life_out" ] && printf '%s\n' "$life_out" | awk -v total="$life_exp" '
+    /^expire:/ {
+      n++; age=$NF; sub(/^age=/, "", age); sub(/d$/, "", age)
+      if (age+0>oldest) oldest=age+0
+      if (total>10 && n>5) next
+    }
+    { print "  " $0 }
+    END { if (total>10) printf "  fold: %d expired total, oldest age=%dd (5 samples)\n", total, oldest }
+  '
   life_n="$(printf '%s\n' "$life_out" | grep -c '^\(expire\|cool\):' | tr -d ' ')"
   if [ "$life_rc" -ne 0 ]; then
     fail "文档年龄面未检查 — 量具坏 ($LIFECYCLE rc=$life_rc); 扫不到 ≠ 干净"

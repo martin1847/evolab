@@ -67,6 +67,30 @@ assert_rc "$rc" 0 "D/mem-overcap rc (warn≠fail)"
 assert_has "$out" "[warn]" "D/mem-overcap warns"
 assert_has "$out" "> 45" "D/mem-overcap shows cap"
 
+# damage: multibyte long lines can pass the line cap and leak private content in diagnostics.
+r="$(mkrepo)"; printf 'safe\n' > "$r/MEMORY.md"
+python3 -c 'print("索"*171)' >> "$r/MEMORY.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "MB1/long UTF-8 line is advisory"
+assert_has "$out" "[warn] MEMORY.md" "MB1/memory warns"
+assert_has "$out" "519 bytes (cap 12288); longest line 2: 513 bytes (cap 512)" "MB1/byte counts and line number"
+assert_no "$out" "索索索" "MB1/line content stays private"
+
+# damage: many short UTF-8 lines can exceed autoload bytes without exceeding either other cap.
+r="$(mkrepo)"; python3 -c 'print(("索"*110+"\n")*40,end="")' > "$r/MEMORY.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "MB2/total bytes advisory"
+assert_has "$out" "[warn] MEMORY.md 40 lines" "MB2/total alone warns"
+assert_has "$out" "13240 bytes (cap 12288); longest line 1: 330 bytes" "MB2/total counts UTF-8 bytes"
+assert_no "$out" "索索索" "MB2/content stays private"
+
+# damage: safe multibyte indexes must not receive false byte-budget warnings.
+r="$(mkrepo)"; python3 -c 'print(("索"*100+"\n")*40,end="")' > "$r/MEMORY.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "MB3/under-cap rc"
+assert_has "$out" "[ok]   MEMORY.md 40 lines" "MB3/under-cap memory ok"
+assert_has "$out" "12040 bytes (cap 12288); longest line 1: 300 bytes" "MB3/under-cap counts"
+
 # damage: absent optional status files must not block ordinary closeout.
 r="$(mkrepo)"; rm "$r/docs/ACTIVE_CONTEXT.md" "$r/docs/roadmap/active-roadmap.md"
 out="$(run "$r")"; rc=$?
@@ -96,6 +120,13 @@ r="$(mkrepo)"; printf '# queue\n## ✅ CLEARED（保持为空）\n' > "$r/docs/D
 out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "I/empty-cleared rc"
 assert_has "$out" "active/parked items only" "I/empty-cleared clean"
+
+# damage: active Markdown-table queues can grow beyond the byte cap without cleared history.
+r="$(mkrepo)"; python3 -c 'print(("| "+"决"*70+" |\n")*80,end="")' > "$r/docs/DECISION_QUEUE.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "QB/oversized queue advisory"
+assert_has "$out" "[warn] DECISION_QUEUE.md 17200 bytes > 16384" "QB/table bytes warn"
+assert_no "$out" "active/parked items only" "QB/no false queue ok"
 
 # --- check 6: 本仓 duplex 会话收口 (fake tmux on PATH keeps liveness deterministic) --
 mkaw(){ mktemp -d; }
@@ -586,6 +617,45 @@ out="$(run "$r")"; rc=$?
 assert_rc "$rc" 0 "DL3/absent optional status keeps rc green"
 assert_has "$out" "doc-lifecycle 是 opt-in" "DL3/没有扫描面就跳过"
 assert_no  "$out" "件到期" "DL3/跳过时不打印清单"
+
+# damage: a nested archive face must activate receipt scanning when root living files are absent.
+r="$(mkrepo)"; rm "$r/docs/ACTIVE_CONTEXT.md"; mkdir -p "$r/docs/orchestration/archive"
+printf '# receipt\n' > "$r/docs/orchestration/OLD.md"
+( cd "$r" && git add docs && GIT_AUTHOR_DATE="$DL_OLD" GIT_COMMITTER_DATE="$DL_OLD" git commit -qm nested )
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "DL4/nested receipt advisory"
+assert_has "$out" "expire: docs/orchestration/OLD.md" "DL4/nested receipt surfaced"
+assert_has "$out" "[warn] 1 项待裁" "DL4/receipt counted"
+
+# damage: ignored orchestration receipts must neither flood no-git output nor activate an absent face.
+r="$(mkrepo)"; mkdir -p "$r/docs/orchestration/archive"
+printf 'docs/orchestration/\n' > "$r/.gitignore"; printf '# receipt\n' > "$r/docs/orchestration/IGNORED.md"
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "DL5/ignored nested scan rc"
+assert_no "$out" "IGNORED.md" "DL5/ignored receipts not scanned"
+assert_no "$out" "no-git" "DL5/no ignored-file noise"
+rm "$r/docs/ACTIVE_CONTEXT.md"; out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "DL5/no public face rc"
+assert_has "$out" "doc-lifecycle 是 opt-in" "DL5/ignored archive does not activate"
+
+# damage: folding must retain aggregate findings, oldest age beyond the samples, and non-expire output.
+r="$(mkrepo)"; mkdir -p "$r/docs/orchestration/archive"
+for i in 1 2 3 4 5 6; do printf '# receipt\n' > "$r/docs/R$i.md"; done
+for i in 1 2 3 4 5; do printf '# receipt\n' > "$r/docs/orchestration/R$i.md"; done
+printf '# status\n## cold\nold prose\n' > "$r/docs/ACTIVE_CONTEXT.md"
+( cd "$r" && git add docs && GIT_AUTHOR_DATE="$DL_OLD" GIT_COMMITTER_DATE="$DL_OLD" git commit -qm old )
+older="$(date -v-90d -u +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%S)"
+printf '# oldest\n' > "$r/docs/orchestration/Z.md"
+( cd "$r" && git add docs && GIT_AUTHOR_DATE="$older" GIT_COMMITTER_DATE="$older" git commit -qm oldest )
+out="$(run "$r")"; rc=$?
+assert_rc "$rc" 0 "DL6/fold remains advisory"
+assert_rc "$(printf '%s\n' "$out" | grep -c '^  expire:')" 5 "DL6/exactly five samples"
+assert_has "$out" "fold: 12 expired total, oldest age=90d" "DL6/total and oldest across scans"
+assert_has "$out" "[warn] 13 项待裁" "DL6/all expire and cool items counted"
+assert_has "$out" "cool: docs/ACTIVE_CONTEXT.md#cold" "DL6/cool retained"
+assert_has "$out" "skip: DECISION_QUEUE.md (missing)" "DL6/skip retained"
+assert_has "$out" "doc-lifecycle: 6 件到期，1 段可降温" "DL6/root summary retained"
+assert_has "$out" "doc-lifecycle: 6 件到期，0 段可降温" "DL6/nested summary retained"
 
 echo "== retro-check: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]
