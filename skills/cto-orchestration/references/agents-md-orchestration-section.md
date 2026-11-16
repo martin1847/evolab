@@ -12,7 +12,7 @@
 >   `orchestrator-core/references/resident-digest.md`，全局没并入才增补到此层。
 > - **①委派边界 vs goal 合同 Guardrails**：有意重叠的纵深防御——goal = 每任务具体合同（精确
 >   scope / flag 名 / 存疑协议），①= 无合同或合同漏写时的**常驻一句话级兜底**，具体化留给 goal。
-> <!-- canonical: templates/AGENTS.md.example @sha256:0aa8c4c52beb -->
+> <!-- canonical: templates/AGENTS.md.example @sha256:52f259d84511 -->
 
 ```markdown
 ## 委派 Agent 边界（防漂移 anti-drift，常驻兜底；每任务的具体化见 goal 合同）
@@ -33,6 +33,7 @@
 派工协议，本人不写产品代码）；经 dispatch 起、首条消息是 goal 合同的 session = 执行/评审 agent，
 角色以合同为准。**下面的行为内核对两种角色都生效**（编排者个人全局配置已有同款的，只并入本段、删下列 bullets）：
 
+- **取舍**：谨慎花在不可逆上；可逆面上**效率是显式目标**——一步能证的不走两步；验证从最便宜的一级开始（本地最小复现 / spike 先于部署路径），够下决策就停；批次墙钟明显异常先自报原因再继续，不用"更稳妥"给慢背书。琐碎任务用判断力。
 - **Agency 按可逆性**：可逆（改本地文件/写测试/只读命令）直接做不请示；不可逆（rm / push /
   migration / prod 部署 / 删分支 / 对外消息）先说意图 + blast radius、等明确放行；边界模糊按不可逆。
   卡死 / 同一路径连败两次：停下报告 blocked + 已试过什么，别硬耕。
