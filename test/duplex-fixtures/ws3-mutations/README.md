@@ -57,7 +57,7 @@ the property, not sloppiness:
 - **M3** also reds one **C8** row: the runtime stops announcing the degradation, which is the
   behavioural half of the same lie.
 - **M4** also reds C2/C3/C7/C8: a flattened "common" contract is not merely cosmetically
-  wrong, it is mechanically unroutable — codex ends up declaring omp's `steer|follow_up` /
+  wrong, it is mechanically unroutable — codex ends up declaring omp's `steer|prompt` /
   `abort_and_prompt` routes, whose branches it cannot even invoke.
 - **N3** also reds every claude C8 row, because a provider whose launch name drifted from the
   contract cannot be started at all — which is the whole point.

@@ -14,7 +14,7 @@ codex app-server），能力差异不分叉车道、由接口干净拒绝。tmux
 
 - **steer 语义 = 两个动词**（能力差异拒绝制，不分叉车道）：默认 `agentctl steer` **尽快送达**——
   引擎有轮中路由且正在跑 turn 就投递轮中帧（omp `steer` / codex `turn/steer`），空闲就投递下一轮帧
-  （omp `follow_up` / codex `turn/start` / claude `user`）；**选路只看活体 turn 态，没有 flag 可忘传**
+  （omp `prompt` / codex `turn/start` / claude `user`）；**选路只看活体 turn 态，没有 flag 可忘传**
   （`--replace` = `--interrupt` 别名）。
   `--interrupt` = 弃当前 turn 以本条重开（omp `abort_and_prompt` / codex `turn/interrupt+turn/start`；
   claude 无此帧 → 拒绝并指 stop+resume），并回收 supervisor、轮转 attempt。

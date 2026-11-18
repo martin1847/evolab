@@ -16,7 +16,7 @@ Java-interface style — instead of silently degrading). ONE steering verb, and 
 DELIVER AS SOON AS THE ENGINE ALLOWS: the LIVE TURN STATE picks the route, never a flag
 (field 2026-08-28: with a queue-vs-now-vs-replace triple the operator queued behind a
 35-60min turn and the engine then executed a ruling the batch had already overtaken).
-  omp    : --mode=rpc JSON-lines. steer = `steer` frame mid-turn / `follow_up` when idle;
+  omp    : --mode=rpc JSON-lines. steer = `steer` frame mid-turn / `prompt` when idle;
            interrupt = abort_and_prompt; prompt delivers the goal, get_state reads status.
   claude : -p --input-format stream-json. ONE `user` frame: it opens the next turn at once
            when idle, and lands at the turn BOUNDARY while a turn runs — degraded, and said
@@ -410,10 +410,9 @@ def _cap(state: str, route: str = "", note: str = "", refusal: str = "",
     refusal  — what a refused verb prints.
     detect   — projector-side recognition data (ask frame noise / ask method names), read
                BACK by the projector so the contract owns it too.
-    queue_routes — the subset of `route`'s halves whose delivery really enters an engine-held
-               QUEUE. Read back by the steer-log listing, which a queue DEPTH indexes: a
-               mid-turn frame and a turn-opening frame both leave the lane without queueing
-               anything, so neither may be listed as a queued item.
+    queue_routes — the steer route halves that can enter an engine-held queue. A queue DEPTH
+               indexes only deliveries by these routes, not mid-turn frames or routes that
+               always open a turn directly.
     start_flag — the `agentctl start` flag that drives this capability, if any.
     """
     published = note or refusal
@@ -561,6 +560,9 @@ def build_frame(engine: str, verb: str, text: str, req_id: str, route: str = "")
         frame = {"id": req_id, "type": omp_type}
         if omp_type != "get_state":
             frame["message"] = text
+        if verb == "steer" and omp_type == "prompt":
+            # The idle probe can race a running turn; queue rather than reject then.
+            frame["streamingBehavior"] = "followUp"
         return json.dumps(frame, ensure_ascii=False)
     if engine == "claude":
         claude_type = "user" if verb == "prompt" else route
@@ -2509,10 +2511,8 @@ def steer_log_append(sess: Session, mode: str, text: str) -> None:
 
 
 def queue_routes(engine: str) -> tuple[str, ...]:
-    """The wire routes whose delivery really ENTERS the engine's queue. Declared by the steer
-    cell, because only the cell knows WHICH half is a queue at all: omp's next-turn half is
-    `follow_up`, an engine-held queue, while codex's is `turn/start`, which opens a turn
-    immediately and holds nothing."""
+    """Steer routes that can queue: omp's `prompt` opens a turn if idle, but can enqueue
+    via `followUp` if busy; codex's `turn/start` opens a turn and holds nothing."""
     return tuple(capability(engine, "steer").get("queue_routes") or ())
 
 
@@ -2520,11 +2520,9 @@ def print_steer_queue(sess: Session, engine: str) -> None:
     """List what the engine still holds, newest last. ONLY a live depth opens this listing:
     an engine with no queue surface reports 0 and prints nothing at all.
 
-    The depth indexes the QUEUED deliveries alone. steer-log records EVERY delivery on the
-    lane — mid-turn steers and interrupts included — and neither of those ever entered the
-    queue, so tailing the raw log listed a mid-turn steer as a queued item and pushed the
-    real one out of the window (cold review R1). The filter is the declared queue route, not
-    the verb: only the route the selector actually used can say where the message went."""
+    The depth indexes only routes that can queue. Tailing the raw steer-log counted
+    mid-turn steers as queued items and pushed the actual queued items out (cold review R1).
+    Filter by the declared queue route, not by the verb."""
     depth = sess.queued
     if depth <= 0:
         return
@@ -3285,7 +3283,7 @@ def send_frame(args: argparse.Namespace, started: dict[str, str]) -> int:
             # steer delivery log: the queue's contents, since the engine only reports a
             # depth. Same commit point as the round journal above (delivery is starting), but
             # best effort: a queue LISTING nobody can write does not make a round unjudgeable.
-            # `prompt` is goal delivery, not a steer, and is not logged.
+            # The `prompt` verb delivers the goal; it is not a logged steer.
             if args.verb in ("steer", "interrupt"):
                 steer_log_append(sess, f"{args.verb}:{wire}", text)
                 # THE steer commit point of the phase ledger: the round counter has moved, so
@@ -3604,11 +3602,10 @@ PROVIDERS: dict[str, dict] = {
         "sandbox": {},
         "projector": project_omp,
         "capabilities": {
-            # both halves are native: `steer` reaches INSIDE the running turn, `follow_up`
-            # opens the next one when the session is idle — and `follow_up` is the half that
-            # lands in the engine's QUEUE, which is what the depth-indexed listing counts
-            "steer": _cap(SUPPORTED, route="steer|follow_up",
-                          queue_routes=("follow_up",), impl=build_frame),
+            # `steer` reaches the running turn; `prompt` opens a turn if idle
+            # and can queue via `followUp` when the engine is already streaming.
+            "steer": _cap(SUPPORTED, route="steer|prompt",
+                          queue_routes=("prompt",), impl=build_frame),
             "interruptTurn": _cap(SUPPORTED, route="abort_and_prompt", impl=build_frame),
             # engine questions arrive as extension_ui_request frames and project as
             # WAITING-INPUT; the connect-time setWidget push is UI chrome, not a question

@@ -114,9 +114,9 @@ chk_eq "C2 DAMAGE ORACLE: every declared non-unsupported capability resolves to 
 # route is an ALTERNATION, so BOTH halves are pinned — with the live turn state (the one
 # input the selector reads) stubbed to each value in turn.
 chk_eq "C2 omp steer reaches INSIDE a running turn with the mid-turn half it declares" \
-  "declared=steer|follow_up emitted=steer" "$(probe wire omp steer active)"
+  "declared=steer|prompt emitted=steer" "$(probe wire omp steer active)"
 chk_eq "C2 omp steer opens the NEXT turn when the session is idle" \
-  "declared=steer|follow_up emitted=follow_up" "$(probe wire omp steer idle)"
+  "declared=steer|prompt emitted=prompt" "$(probe wire omp steer idle)"
 chk_eq "C2 omp interruptTurn emits the frame type it declares" \
   "declared=abort_and_prompt emitted=abort_and_prompt" "$(probe wire omp interrupt)"
 chk_eq "C2 claude steer emits its one declared frame when idle" \

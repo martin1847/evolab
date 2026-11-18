@@ -10,6 +10,7 @@ Env controls:
                            `0` a falsy one, so a truthiness reader invents a turn or invents
                            an idle out of a reading that never happened)
   FAKE_OMP_QUEUED          integer reported as get_state.queuedMessageCount (default 0)
+  FAKE_OMP_STALL_IDLE_FOLLOW_UP=1  accept idle follow_up into the queue without starting a turn
   FAKE_OMP_DELIVERABLE     path written (with fresh mtime) after each prompt/steer
   FAKE_OMP_ASK=1           emit a real extension_ui_request (confirm) after prompt
   FAKE_OMP_TOOL_FRAMES     path of a SWITCH file: while it exists and is non-empty, every
@@ -146,6 +147,8 @@ def emit_tool_frames() -> None:
 
 
 log_path = os.environ.get("FAKE_PROVIDER_LOG")
+prompt_seen = False
+stalled_follow_ups = 0
 emit({"type": "ready"})
 emit({"type": "extension_ui_request", "id": "ui-widget", "method": "setWidget",
       "widget": {"kind": "statusline"}})
@@ -169,9 +172,18 @@ for line in sys.stdin:
               "success": True,
               "data": {"isStreaming": stream_value(), "isCompacting": False,
                        "sessionId": "fake-omp-1", "messageCount": 2,
-                       "queuedMessageCount": queued()}})
+                       "queuedMessageCount": queued() + stalled_follow_ups}})
     elif command in {"prompt", "steer", "follow_up", "abort_and_prompt"}:
+        if command == "prompt":
+            if prompt_seen and streaming() and message.get("streamingBehavior") not in ("steer", "followUp"):
+                emit({"id": request_id, "type": "response", "command": command,
+                      "success": False, "error": "prompt requires streamingBehavior while streaming"})
+                continue
+            prompt_seen = True
         emit({"id": request_id, "type": "response", "command": command, "success": True})
+        if command == "follow_up" and not streaming() and os.environ.get("FAKE_OMP_STALL_IDLE_FOLLOW_UP") == "1":
+            stalled_follow_ups += 1
+            continue
         emit({"type": "agent_start"})
         emit_delta_frames()
         deliverable = os.environ.get("FAKE_OMP_DELIVERABLE")

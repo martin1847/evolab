@@ -93,7 +93,9 @@ chk_contains "same refusal for the ordinary specimen" "goal file is empty" "$out
 
 export AGENTCTL_BIN_OMP="$FIX/fake_omp_duplex.py"
 export FAKE_PROVIDER_LOG="$SANDBOX/omp.log"
+export FAKE_OMP_STALL_IDLE_FOLLOW_UP=1 FAKE_OMP_DELIVERABLE="$WT/steer-fresh.md"
 out="$(bash "$AGENTCTL" start omp dxA "$WT" --goal "$SANDBOX/goal.md" 2>&1)"; rc=$?
+unset FAKE_OMP_STALL_IDLE_FOLLOW_UP FAKE_OMP_DELIVERABLE
 chk_eq "omp start rc0" 0 "$rc"
 chk_contains "omp start announces duplex" "duplex session 'dxA'" "$out"
 chk_contains "omp ready handshake observed" "ready: omp rpc handshake" "$out"
@@ -104,6 +106,7 @@ chk_contains "prompt frame carries BLOCKED footer" "BLOCKED.md" "$(cat "$SANDBOX
 chk_contains "prompt frame carries contract-gate clause" "stop and wait for the orchestrator" "$(cat "$SANDBOX/omp.log")"
 chk_contains "prompt frame carries promised-review branch" "Unless the goal contract promises to review" "$(cat "$SANDBOX/omp.log")"
 chk_eq "prompt frame is omp type=prompt" 1 "$(grep -c '"type":"prompt"' "$SANDBOX/omp.log")"
+chk_not_contains "start prompt omits streamingBehavior" '"streamingBehavior"' "$(cat "$SANDBOX/omp.log")"
 
 # no-deliverable start must NOT carry the file-delivery contract (review R2 M1: the helper
 # test alone let the production call-point wiring regress unseen — this pins the REAL frame)
@@ -114,9 +117,15 @@ chk_eq "omp idle no-gate → DONE rc0" 0 "$rc"
 chk_contains "omp DONE message" "DONE: engine idle" "$out"
 chk_not_contains "setWidget chrome does not read as WAITING" "WAITING-INPUT" "$out"
 
-out="$(bash "$AGENTCTL" steer dxA -m "adjust course" 2>&1)"; rc=$?
+# damage: idle follow_up is acknowledged but never runs; only the steer may create this output.
+rm -f "$WT/steer-fresh.md"
+out="$(bash "$AGENTCTL" steer dxA -m "adjust course" -d "steer-fresh.md" 2>&1)"; rc=$?
 chk_eq "steer default rc0" 0 "$rc"
-chk_contains "idle steer → next-turn frame" '"type":"follow_up"' "$(cat "$SANDBOX/omp.log")"
+chk_contains "idle steer → next-turn frame" \
+  '"type":"prompt","message":"adjust course","streamingBehavior":"followUp"' "$(cat "$SANDBOX/omp.log")"
+out="$(bash "$AGENTCTL" status dxA 2>&1)"; rc=$?
+chk_eq "idle steer starts a turn and produces a fresh deliverable" 0 "$rc"
+chk_contains "DONE names the steer deliverable" "steer-fresh.md" "$out"
 out="$(bash "$AGENTCTL" steer dxA -m "start over" --interrupt 2>&1)"
 chk_contains "steer --interrupt → abort_and_prompt frame" '"type":"abort_and_prompt"' "$(cat "$SANDBOX/omp.log")"
 
@@ -1075,7 +1084,7 @@ bash "$AGENTCTL" start omp svA "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
 out="$(bash "$AGENTCTL" steer svA -m "first ruling" 2>&1)"; rc=$?
 chk_eq "① idle default steer rc0 — next-turn delivery while idle is not a degradation" 0 "$rc"
 chk_not_contains "① and no typed boundary verdict is published" "DELIVERED-NEXT-TURN" "$out"
-chk_contains "① it used the next-turn route" '"type":"follow_up"' "$(cat "$SANDBOX/sv-omp.log")"
+chk_contains "① it used the next-turn route" '"type":"prompt"' "$(cat "$SANDBOX/sv-omp.log")"
 chk_eq "① and never the mid-turn route" 0 "$(grep -c '"type":"steer"' "$SANDBOX/sv-omp.log")"
 
 # ② RUNNING turn: the SAME verb now reaches INSIDE it (this is the whole point of the batch)
@@ -1088,7 +1097,7 @@ chk_not_contains "② a steer that REACHED the turn publishes no boundary verdic
 chk_contains "② the same verb reached inside the running turn" '"type":"steer"' \
   "$(cat "$SANDBOX/sv-omp.log")"
 chk_eq "② and did NOT fall back to the queue route" 0 \
-  "$(grep -c '"type":"follow_up"' "$SANDBOX/sv-omp.log")"
+  "$(grep -c '"type":"prompt"' "$SANDBOX/sv-omp.log")"
 
 # ④ the retired opt-in flag: a typed refusal that teaches the default and delivers NOTHING
 : > "$SANDBOX/sv-omp.log"
@@ -1120,7 +1129,7 @@ bash "$AGENTCTL" start omp svB "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
 : > "$SANDBOX/sv-blind.log"
 out="$(bash "$AGENTCTL" steer svB -m "ruling the operator must not lose" 2>&1)"; rc=$?
 chk_eq "⑥ 量具坏: DELIVERED-NEXT-TURN 15 — delivered, not refused" 15 "$rc"
-chk_contains "⑥ 量具坏: by the next-turn route, which always lands" '"type":"follow_up"' \
+chk_contains "⑥ 量具坏: by the next-turn route, which always lands" '"type":"prompt"' \
   "$(cat "$SANDBOX/sv-blind.log")"
 chk_eq "⑥ 量具坏: and never by the mid-turn route it could not justify" 0 \
   "$(grep -c '"type":"steer"' "$SANDBOX/sv-blind.log")"
@@ -1143,7 +1152,7 @@ for raw in '"false"' '0'; do
   out="$(bash "$AGENTCTL" steer "$s" -m "ruling that must not go mid-turn" 2>&1)"; rc=$?
   chk_eq "⑥b 量具坏 isStreaming=$raw: DELIVERED-NEXT-TURN 15 — delivered, not refused" 15 "$rc"
   chk_contains "⑥b 量具坏 isStreaming=$raw: by the next-turn route, which always lands" \
-    '"type":"follow_up"' "$(cat "$SANDBOX/sv-$s.log")"
+    '"type":"prompt"' "$(cat "$SANDBOX/sv-$s.log")"
   chk_eq "⑥b DAMAGE ORACLE isStreaming=$raw: a non-boolean never buys the mid-turn route" 0 \
     "$(grep -c '"type":"steer"' "$SANDBOX/sv-$s.log")"
   chk_contains "⑥b 量具坏 isStreaming=$raw: the typed class is on stdout" \
@@ -1169,7 +1178,7 @@ bash "$AGENTCTL" start omp svBool "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&
 : > "$SANDBOX/sv-bool.log"
 out="$(bash "$AGENTCTL" steer svBool -m "decided idle" 2>&1)"; rc=$?
 chk_eq "⑥b PAIRED GREEN: a real JSON false steers rc0 — a MEASUREMENT, not a refusal" 0 "$rc"
-chk_contains "⑥b PAIRED GREEN: by the next-turn route" '"type":"follow_up"' \
+chk_contains "⑥b PAIRED GREEN: by the next-turn route" '"type":"prompt"' \
   "$(cat "$SANDBOX/sv-bool.log")"
 chk_not_contains "⑥b PAIRED GREEN: and publishes no typed boundary verdict at all" \
   "DELIVERED-NEXT-TURN" "$out"
@@ -1303,8 +1312,7 @@ chk_contains "③ the omp union has a judged source, so it publishes a reading" 
 chk_not_contains "③ and no longer admits an unmeasured union" "progress=unknown" "$out"
 bash "$AGENTCTL" stop svA >/dev/null 2>&1
 export FAKE_OMP_QUEUED=2 FAKE_PROVIDER_LOG="$SANDBOX/sv-q.log"
-# IDLE, so every steer below takes the QUEUE half (`follow_up`): a queue DEPTH can only be an
-# index into deliveries that really entered the queue.
+# Synthetic depth: idle probes select `prompt`, the route that can queue if the engine is busy.
 rm -f "$FAKE_OMP_STATE_FILE"
 bash "$AGENTCTL" start omp svQ "$WT" --goal "$SANDBOX/goal.md" >/dev/null 2>&1
 # a long MULTI-LINE steer first (it ages out of the listing): the log must keep a bounded
@@ -1321,7 +1329,7 @@ chk_eq "③ exactly queue-depth entries are listed (the older ones age out)" 2 \
   "$(printf '%s\n' "$out" | grep -c '^queued: ')"
 chk_contains "③ the OLDER of the two is visible by its first line" "older ruling: use plan A" "$out"
 chk_contains "③ and the NEWER one too" "newer ruling: plan A is dead" "$out"
-chk_contains "③ each entry names the QUEUE route it was delivered by" "steer:follow_up" "$out"
+chk_contains "③ each entry names the QUEUE route it was delivered by" "steer:prompt" "$out"
 chk_eq "③ every logged line has one bounded head, never a body" "ok" \
   "$(python3 -c '
 import json, sys
@@ -1357,7 +1365,7 @@ chk_contains "③b together with the newest queued one" "newer ruling: plan A is
 chk_eq "③b still exactly queue-depth entries" 2 \
   "$(printf '%s\n' "$out" | grep -c '^queued: ')"
 chk_eq "③b and EVERY listed entry names the queue route" 2 \
-  "$(printf '%s\n' "$out" | grep -c '^queued: .*steer:follow_up')"
+  "$(printf '%s\n' "$out" | grep -c '^queued: .*steer:prompt')"
 rm -f "$FAKE_OMP_STATE_FILE"
 # 量具坏 (the listing's gauge): with the record gone the depth is still real, so the listing
 # must say it cannot answer and point at the raw stream — silence would read as "queue empty"
